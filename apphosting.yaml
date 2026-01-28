@@ -1,28 +1,22 @@
-# Settings to manage and configure a Firebase App Hosting backend.
-# https://firebase.google.com/docs/app-hosting/configure
-
 runConfig:
-  # Increase this value if you'd like to automatically spin up
-  # more instances in response to increased traffic.
   maxInstances: 1
 
-# Environment variables (temporarily hardcoded, move to Secret Manager later)
 env:
-  - name: NODE_ENV
+  - variable: NODE_ENV
     value: production
-  - name: NEXT_PUBLIC_BASE_URL
+  - variable: NEXT_PUBLIC_BASE_URL
     value: https://hearmeout.web.app
-  - name: LIVEKIT_API_KEY
+  - variable: LIVEKIT_API_KEY
     value: APIAwZ334Q2bBhP
-  - name: LIVEKIT_API_SECRET
+  - variable: LIVEKIT_API_SECRET
     value: 8R3gHBz6pIxk1fCM7rOfKfnSyVGoNlmfHwBlY0eFTajD
-  - name: NEXT_PUBLIC_LIVEKIT_URL
+  - variable: NEXT_PUBLIC_LIVEKIT_URL
     value: wss://hearmeout-6ntnbsdm.livekit.cloud
-  - name: NEXT_PUBLIC_DISCORD_CLIENT_ID
+  - variable: NEXT_PUBLIC_DISCORD_CLIENT_ID
     value: "1279582181768957963"
-  - name: DISCORD_CLIENT_SECRET
+  - variable: DISCORD_CLIENT_SECRET
     value: YefpOYWdIOUkpxDx4t5w17Ms6sOFXOjj
-  - name: NEXT_PUBLIC_TWITCH_CLIENT_ID
+  - variable: NEXT_PUBLIC_TWITCH_CLIENT_ID
     value: 9u0mtc83xeabmguw53c89dehth0gwg
-  - name: TWITCH_CLIENT_SECRET
+  - variable: TWITCH_CLIENT_SECRET
     value: wclfm53vrx76i435p2jhmyv3v1ovrn
