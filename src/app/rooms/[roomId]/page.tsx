@@ -476,6 +476,7 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
     useEffect(() => {
         if (isUserLoading || !user || !roomId || voiceToken || !userInRoomRef) return;
         let isCancelled = false;
+        let tokenTimeout: NodeJS.Timeout;
         
         const setupUserAndToken = async () => {
             setDocumentNonBlocking(userInRoomRef, {
@@ -485,12 +486,39 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
             }, { merge: true });
 
             try {
-                const token = await generateLiveKitToken(roomId, user.uid, user.displayName!, JSON.stringify({ photoURL: user.photoURL || `https://picsum.photos/seed/${user.uid}/100/100` }));
-                if (!isCancelled) setVoiceToken(token);
-            } catch (e) {
+                console.log('[RoomContent] Starting token generation...');
+                
+                // Add timeout for token generation
+                const tokenPromise = generateLiveKitToken(roomId, user.uid, user.displayName!, JSON.stringify({ photoURL: user.photoURL || `https://picsum.photos/seed/${user.uid}/100/100` }));
+                
+                tokenTimeout = setTimeout(() => {
+                    if (!isCancelled && !voiceToken) {
+                        console.error('[RoomContent] Token generation timeout after 10 seconds');
+                        toast({ 
+                            variant: 'destructive', 
+                            title: 'Connection Timeout', 
+                            description: 'LiveKit token generation timed out. Check server logs and environment variables.' 
+                        });
+                    }
+                }, 10000);
+
+                const token = await tokenPromise;
+                clearTimeout(tokenTimeout);
+                
                 if (!isCancelled) {
-                    console.error("Failed to generate voice token", e);
-                    toast({ variant: 'destructive', title: 'Connection Failed', description: 'Could not get voice connection token.' });
+                    console.log('[RoomContent] Token received successfully');
+                    setVoiceToken(token);
+                }
+            } catch (e) {
+                clearTimeout(tokenTimeout);
+                if (!isCancelled) {
+                    const errorMessage = e instanceof Error ? e.message : String(e);
+                    console.error("[RoomContent] Failed to generate voice token:", errorMessage);
+                    toast({ 
+                        variant: 'destructive', 
+                        title: 'Connection Failed', 
+                        description: `Could not get voice connection: ${errorMessage}` 
+                    });
                 }
             }
         };
@@ -498,8 +526,9 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
 
         return () => {
             isCancelled = true;
+            clearTimeout(tokenTimeout);
             if (userInRoomRef) deleteDocumentNonBlocking(userInRoomRef);
-             if (roomRef && isDJ) {
+            if (roomRef && isDJ) {
                 updateDocumentNonBlocking(roomRef, { isPlaying: false });
             }
         };

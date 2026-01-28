@@ -1,4 +1,3 @@
-
 'use client';
 
 import { useEffect, useState } from "react";
@@ -21,7 +20,7 @@ import {
     signInWithEmailAndPassword
 } from 'firebase/auth';
 import { doc, setDoc } from 'firebase/firestore';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 
 
 const DiscordIcon = () => (
@@ -51,7 +50,17 @@ const GoogleIcon = () => (
 export default function LoginPage() {
   const { auth, firestore, user, isUserLoading } = useFirebase();
   const router = useRouter();
+  const searchParams = useSearchParams();
   const [status, setStatus] = useState<'authenticating' | 'idle'>('authenticating');
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const errorParam = searchParams?.get('error');
+    if (errorParam) {
+      setError(decodeURIComponent(errorParam));
+      setStatus('idle');
+    }
+  }, [searchParams]);
 
   useEffect(() => {
     if (user) {
@@ -74,10 +83,38 @@ export default function LoginPage() {
     }
   };
 
-  const handleDiscordLogin = async () => {
+  const handleDiscordOAuth = () => {
+    const clientId = process.env.NEXT_PUBLIC_DISCORD_CLIENT_ID;
+    const redirectUri = `${process.env.NEXT_PUBLIC_BASE_URL}/api/auth/discord/callback`;
+    const scopes = ['identify', 'email'].join('%20');
+    
+    const discordAuthUrl = new URL('https://discord.com/api/oauth2/authorize');
+    discordAuthUrl.searchParams.set('client_id', clientId!);
+    discordAuthUrl.searchParams.set('redirect_uri', redirectUri);
+    discordAuthUrl.searchParams.set('response_type', 'code');
+    discordAuthUrl.searchParams.set('scope', scopes);
+
+    window.location.href = discordAuthUrl.toString();
+  };
+
+  const handleTwitchOAuth = () => {
+    const clientId = process.env.NEXT_PUBLIC_TWITCH_CLIENT_ID;
+    const redirectUri = `${process.env.NEXT_PUBLIC_BASE_URL}/api/auth/twitch/callback`;
+    const scopes = ['user:read:email', 'chat:read', 'chat:edit'].join('%20');
+
+    const twitchAuthUrl = new URL('https://id.twitch.tv/oauth2/authorize');
+    twitchAuthUrl.searchParams.set('client_id', clientId!);
+    twitchAuthUrl.searchParams.set('redirect_uri', redirectUri);
+    twitchAuthUrl.searchParams.set('response_type', 'code');
+    twitchAuthUrl.searchParams.set('scope', scopes);
+
+    window.location.href = twitchAuthUrl.toString();
+  };
+
+  const handleGoogleLogin = async () => {
     if (auth && firestore) {
       setStatus('authenticating');
-      const email = "mtman1987@example.com";
+      const email = "teddy.simulated@example.com";
       const password = "very-secure-simulation-password-123!";
 
       try {
@@ -98,136 +135,29 @@ export default function LoginPage() {
         }
       }
 
-      const user = auth.currentUser;
-      if (user) {
-        const discordInfo = {
-            username: "Mtman1987",
-            discordId: "767875979561009173",
-            profilePicture: "https://cdn.discordapp.com/avatars/767875979561009173/a_e1adf881255d96dfca6a5e11c46b1f6b.png"
-        };
-        try {
-            await updateProfile(user, {
-                displayName: discordInfo.username,
-                photoURL: discordInfo.profilePicture
-            });
-            const userRef = doc(firestore, 'users', user.uid);
-            await setDoc(userRef, {
-                id: user.uid,
-                username: discordInfo.username,
-                email: user.email,
-                displayName: discordInfo.username,
-                profileImageUrl: discordInfo.profilePicture,
-                discordId: discordInfo.discordId,
-            }, { merge: true });
-        } catch (error: any) {
-            console.error("Failed to update profile or Firestore:", error);
-            setStatus('idle');
-        }
-      }
-    }
-  };
-
-  const handleGoogleLogin = async () => {
-    if (auth && firestore) {
-      setStatus('authenticating');
-      // Simulate Teddy's login
-      const email = "teddy.simulated@example.com";
-      const password = "very-secure-simulation-password-123!";
-
-      try {
-        await signInWithEmailAndPassword(auth, email, password);
-      } catch (error: any) {
-        if (error.code === 'auth/user-not-found' || error.code === 'auth/invalid-credential') {
-          try {
-            await createUserWithEmailAndPassword(auth, email, password);
-          } catch (createError: any) {
-            console.error("Simulated user creation for Teddy failed:", createError);
-            setStatus('idle');
-            return;
-          }
-        } else {
-          console.error("Simulated sign-in for Teddy failed:", error);
-          setStatus('idle');
-          return;
-        }
-      }
-
-      const user = auth.currentUser;
-      if (user) {
+      const currentUser = auth.currentUser;
+      if (currentUser) {
         const userInfo = {
             username: "Teddy",
             discordId: "149805185105920000",
             profilePicture: "https://cdn.discordapp.com/avatars/149805185105920000/dcf59f025ac52b6025b700f1bf1ce808.png"
         };
         try {
-            await updateProfile(user, {
+            await updateProfile(currentUser, {
                 displayName: userInfo.username,
                 photoURL: userInfo.profilePicture
             });
-            const userRef = doc(firestore, 'users', user.uid);
+            const userRef = doc(firestore, 'users', currentUser.uid);
             await setDoc(userRef, {
-                id: user.uid,
+                id: currentUser.uid,
                 username: userInfo.username,
-                email: user.email,
+                email: currentUser.email,
                 displayName: userInfo.username,
                 profileImageUrl: userInfo.profilePicture,
                 discordId: userInfo.discordId,
             }, { merge: true });
         } catch (error: any) {
-            console.error("Failed to update profile or Firestore for Teddy:", error);
-            setStatus('idle');
-        }
-      }
-    }
-  };
-
-  const handleTwitchLogin = async () => {
-    if (auth && firestore) {
-      setStatus('authenticating');
-      const email = "madison.reddell.simulated@example.com";
-      const password = "very-secure-simulation-password-123!";
-
-      try {
-        await signInWithEmailAndPassword(auth, email, password);
-      } catch (error: any) {
-        if (error.code === 'auth/user-not-found' || error.code === 'auth/invalid-credential') {
-          try {
-            await createUserWithEmailAndPassword(auth, email, password);
-          } catch (createError: any) {
-            console.error("Simulated user creation for Madi failed:", createError);
-            setStatus('idle');
-            return;
-          }
-        } else {
-          console.error("Simulated sign-in for Madi failed:", error);
-          setStatus('idle');
-          return;
-        }
-      }
-
-      const user = auth.currentUser;
-      if (user) {
-        const userInfo = {
-            username: "Madired29 | MOD",
-            discordId: "1177028432949940244",
-            profilePicture: "https://cdn.discordapp.com/avatars/1177028432949940244/c2d41bae9566783581415508de900f08.png"
-        };
-        try {
-            await updateProfile(user, {
-                displayName: userInfo.username,
-                photoURL: userInfo.profilePicture
-            });
-            const userRef = doc(firestore, 'users', user.uid);
-            await setDoc(userRef, {
-                id: user.uid,
-                username: userInfo.username,
-                email: user.email,
-                displayName: userInfo.username,
-                profileImageUrl: userInfo.profilePicture,
-                discordId: userInfo.discordId,
-            }, { merge: true });
-        } catch (error: any) {
-            console.error("Failed to update profile or Firestore for Madi:", error);
+            console.error("Failed to update profile:", error);
             setStatus('idle');
         }
       }
@@ -259,17 +189,22 @@ export default function LoginPage() {
           <CardDescription>
             Sign in to create rooms and start listening.
           </CardDescription>
+          {error && (
+            <div className="mt-4 text-sm text-red-600 bg-red-50 p-2 rounded">
+              {error}
+            </div>
+          )}
         </CardHeader>
         <CardContent className="grid gap-4">
           <Button variant="outline" className="w-full" onClick={handleGoogleLogin}>
             <GoogleIcon />
             <span className="ml-2">Continue with Google</span>
           </Button>
-          <Button variant="outline" className="w-full" onClick={handleDiscordLogin}>
+          <Button variant="outline" className="w-full" onClick={handleDiscordOAuth}>
             <DiscordIcon />
             <span className="ml-2">Continue with Discord</span>
           </Button>
-          <Button variant="outline" className="w-full" onClick={handleTwitchLogin}>
+          <Button variant="outline" className="w-full" onClick={handleTwitchOAuth}>
             <TwitchIcon />
             <span className="ml-2">Continue with Twitch</span>
           </Button>

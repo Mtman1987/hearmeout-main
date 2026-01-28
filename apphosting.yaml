@@ -5,3 +5,22 @@ runConfig:
   # Increase this value if you'd like to automatically spin up
   # more instances in response to increased traffic.
   maxInstances: 1
+# Environment variables loaded from Google Secret Manager
+envSecrets:
+  # LiveKit configuration
+  LIVEKIT_API_KEY: livekit-api-key
+  LIVEKIT_API_SECRET: livekit-api-secret
+  NEXT_PUBLIC_LIVEKIT_URL: livekit-url
+
+  # Discord OAuth
+  NEXT_PUBLIC_DISCORD_CLIENT_ID: discord-client-id
+  DISCORD_CLIENT_SECRET: discord-client-secret
+
+  # Twitch OAuth
+  NEXT_PUBLIC_TWITCH_CLIENT_ID: twitch-client-id
+  TWITCH_CLIENT_SECRET: twitch-client-secret
+
+# Static environment variables (not secrets)
+env:
+  NODE_ENV: production
+  NEXT_PUBLIC_BASE_URL: https://hearmeout.web.app
