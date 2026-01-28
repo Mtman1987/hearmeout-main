@@ -8,18 +8,21 @@ runConfig:
 
 # Environment variables (temporarily hardcoded, move to Secret Manager later)
 env:
-  NODE_ENV: production
-  NEXT_PUBLIC_BASE_URL: https://hearmeout.web.app
-  
-  # LiveKit configuration
-  LIVEKIT_API_KEY: APIAwZ334Q2bBhP
-  LIVEKIT_API_SECRET: 8R3gHBz6pIxk1fCM7rOfKfnSyVGoNlmfHwBlY0eFTajD
-  NEXT_PUBLIC_LIVEKIT_URL: wss://hearmeout-6ntnbsdm.livekit.cloud
-
-  # Discord OAuth
-  NEXT_PUBLIC_DISCORD_CLIENT_ID: 1279582181768957963
-  DISCORD_CLIENT_SECRET: YefpOYWdIOUkpxDx4t5w17Ms6sOFXOjj
-
-  # Twitch OAuth
-  NEXT_PUBLIC_TWITCH_CLIENT_ID: 9u0mtc83xeabmguw53c89dehth0gwg
-  TWITCH_CLIENT_SECRET: wclfm53vrx76i435p2jhmyv3v1ovrn
+  - name: NODE_ENV
+    value: production
+  - name: NEXT_PUBLIC_BASE_URL
+    value: https://hearmeout.web.app
+  - name: LIVEKIT_API_KEY
+    value: APIAwZ334Q2bBhP
+  - name: LIVEKIT_API_SECRET
+    value: 8R3gHBz6pIxk1fCM7rOfKfnSyVGoNlmfHwBlY0eFTajD
+  - name: NEXT_PUBLIC_LIVEKIT_URL
+    value: wss://hearmeout-6ntnbsdm.livekit.cloud
+  - name: NEXT_PUBLIC_DISCORD_CLIENT_ID
+    value: "1279582181768957963"
+  - name: DISCORD_CLIENT_SECRET
+    value: YefpOYWdIOUkpxDx4t5w17Ms6sOFXOjj
+  - name: NEXT_PUBLIC_TWITCH_CLIENT_ID
+    value: 9u0mtc83xeabmguw53c89dehth0gwg
+  - name: TWITCH_CLIENT_SECRET
+    value: wclfm53vrx76i435p2jhmyv3v1ovrn
