@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, Suspense } from "react";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -47,7 +47,7 @@ const GoogleIcon = () => (
 );
 
 
-export default function LoginPage() {
+function LoginContent() {
   const { auth, firestore, user, isUserLoading } = useFirebase();
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -224,5 +224,17 @@ export default function LoginPage() {
         </CardContent>
       </Card>
     </div>
+  );
+}
+
+export default function LoginPage() {
+  return (
+    <Suspense fallback={
+      <div className="flex min-h-screen w-full items-center justify-center bg-secondary">
+        <LoaderCircle className="h-10 w-10 animate-spin text-primary" />
+      </div>
+    }>
+      <LoginContent />
+    </Suspense>
   );
 }
