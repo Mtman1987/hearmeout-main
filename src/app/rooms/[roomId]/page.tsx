@@ -706,34 +706,9 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
     );
 }
 
-function InitialConnectionScreen({ onJoin, roomName, isUserLoading }: { onJoin: () => void, roomName: string, isUserLoading: boolean }) {
-    const { isMobile } = useSidebar();
-    return (
-        <div className="bg-secondary/30 md:peer-data-[state=collapsed]:peer-data-[variant=inset]:ml-[calc(var(--sidebar-width-icon)_+_1rem)] md:peer-data-[variant=inset]:ml-[calc(var(--sidebar-width)_+_1rem)] duration-200 transition-[margin-left,margin-right]">
-            <SidebarInset>
-                <div className="flex flex-col h-screen relative">
-                    <header className="sticky top-0 z-30 flex h-16 items-center gap-4 border-b bg-background px-4 md:px-6">
-                        <SidebarTrigger className={isMobile ? "" : "hidden md:flex"} />
-                        <h2 className="text-xl font-bold font-headline truncate flex-1">{roomName}</h2>
-                    </header>
-                    <div className="flex-1 flex flex-col items-center justify-center text-center p-4">
-                        <h3 className="text-2xl font-bold font-headline mb-4">You're in the room</h3>
-                        <p className="text-muted-foreground mb-8 max-w-sm">Click the button below to connect your microphone and speakers.</p>
-                        <Button size="lg" onClick={onJoin} disabled={isUserLoading}>
-                            {isUserLoading ? <LoaderCircle className='animate-spin' /> : <Headphones className="mr-2 h-5 w-5" />}
-                            Join Voice Chat
-                        </Button>
-                    </div>
-                </div>
-            </SidebarInset>
-        </div>
-    );
-}
-
 function RoomPageContent() {
     const params = useParams<{ roomId: string }>();
     const { firestore, user, isUserLoading } = useFirebase();
-    const [userHasInteracted, setUserHasInteracted] = useState(false);
 
     const roomRef = useMemoFirebase(() => {
         if (!firestore || !params.roomId) return null;
@@ -772,16 +747,11 @@ function RoomPageContent() {
     }
 
     const livekitUrl = process.env.NEXT_PUBLIC_LIVEKIT_URL;
-    const showInitialConnectScreen = !userHasInteracted || !user || !livekitUrl;
 
     return (
         <>
             <LeftSidebar roomId={params.roomId} />
-            {showInitialConnectScreen ? (
-                 <InitialConnectionScreen onJoin={() => setUserHasInteracted(true)} roomName={room.name} isUserLoading={isUserLoading} />
-            ) : (
-                <RoomContent room={room} roomId={params.roomId} />
-            )}
+            <RoomContent room={room} roomId={params.roomId} />
         </>
     );
 }
