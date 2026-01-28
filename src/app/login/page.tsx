@@ -56,11 +56,25 @@ function LoginContent() {
 
   useEffect(() => {
     const errorParam = searchParams?.get('error');
+    const tokenParam = searchParams?.get('token');
+    
     if (errorParam) {
       setError(decodeURIComponent(errorParam));
       setStatus('idle');
     }
-  }, [searchParams]);
+    
+    if (tokenParam && auth) {
+      import('firebase/auth').then(({ signInWithCustomToken }) => {
+        signInWithCustomToken(auth, tokenParam)
+          .then(() => router.push('/'))
+          .catch((err) => {
+            console.error('Custom token sign-in failed:', err);
+            setError('Authentication failed');
+            setStatus('idle');
+          });
+      });
+    }
+  }, [searchParams, auth, router]);
 
   useEffect(() => {
     if (user) {

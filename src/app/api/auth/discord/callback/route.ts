@@ -1,9 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { adminAuth, adminDb } from '@/firebase/admin';
 
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
   const code = searchParams.get('code');
-  const state = searchParams.get('state');
   const error = searchParams.get('error');
 
   if (error) {
@@ -37,10 +37,11 @@ export async function GET(req: NextRequest) {
     });
 
     if (!tokenResponse.ok) {
-      throw new Error(`Discord token exchange failed: ${tokenResponse.statusText}`);
+      const errorData = await tokenResponse.json();
+      throw new Error(`Discord token exchange failed: ${JSON.stringify(errorData)}`);
     }
 
-    const { access_token, refresh_token, expires_in } = await tokenResponse.json();
+    const { access_token } = await tokenResponse.json();
 
     // Get user info
     const userResponse = await fetch('https://discord.com/api/v10/users/@me', {
@@ -51,36 +52,42 @@ export async function GET(req: NextRequest) {
       throw new Error('Failed to fetch Discord user info');
     }
 
-    const user = await userResponse.json();
+    const discordUser = await userResponse.json();
+    const uid = `discord_${discordUser.id}`;
 
-    // Create redirect response
-    const response = NextResponse.redirect(new URL('/rooms', req.url));
-
-    // Store tokens in secure httpOnly cookies
-    response.cookies.set('discord_access_token', access_token, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: 'lax',
-      maxAge: expires_in,
-    });
-
-    if (refresh_token) {
-      response.cookies.set('discord_refresh_token', refresh_token, {
-        httpOnly: true,
-        secure: process.env.NODE_ENV === 'production',
-        sameSite: 'lax',
-        maxAge: 30 * 24 * 60 * 60, // 30 days
+    // Create or update Firebase user
+    try {
+      await adminAuth.getUser(uid);
+    } catch {
+      await adminAuth.createUser({
+        uid,
+        email: discordUser.email,
+        displayName: discordUser.username,
+        photoURL: discordUser.avatar 
+          ? `https://cdn.discordapp.com/avatars/${discordUser.id}/${discordUser.avatar}.png`
+          : undefined,
       });
     }
 
-    response.cookies.set('discord_user', JSON.stringify(user), {
-      httpOnly: false, // Can be read by client-side code
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: 'lax',
-      maxAge: 30 * 24 * 60 * 60,
-    });
+    // Update Firestore
+    await adminDb.collection('users').doc(uid).set({
+      id: uid,
+      username: discordUser.username,
+      email: discordUser.email,
+      displayName: discordUser.username,
+      profileImageUrl: discordUser.avatar 
+        ? `https://cdn.discordapp.com/avatars/${discordUser.id}/${discordUser.avatar}.png`
+        : null,
+      discordId: discordUser.id,
+    }, { merge: true });
 
-    return response;
+    // Create custom token
+    const customToken = await adminAuth.createCustomToken(uid);
+
+    // Redirect with token
+    return NextResponse.redirect(
+      new URL(`/login?token=${customToken}`, req.url)
+    );
   } catch (error) {
     console.error('Discord OAuth error:', error);
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';
