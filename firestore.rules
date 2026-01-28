@@ -1,0 +1,28 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Rules for the 'rooms' collection
+    match /rooms/{roomId} {
+      // Unauthenticated users can read public rooms.
+      // Authenticated users can read any room.
+      allow read: if request.auth != null || resource.data.isPrivate == false;
+      
+      // Authenticated users can write to rooms.
+      // (More specific rules like ownership can be added later).
+      allow write: if request.auth != null;
+    }
+
+    // Rules for all subcollections of rooms
+    match /rooms/{roomId}/{subcollection}/{docId} {
+        allow read, write: if request.auth != null;
+    }
+    
+    // Rules for the users collection
+    match /users/{userId} {
+        allow read, write: if request.auth != null;
+    }
+  }
+}
+
+    

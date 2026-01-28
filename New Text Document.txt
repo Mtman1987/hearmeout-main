@@ -1,0 +1,3 @@
+LIVEKIT_URL=wss://hearmeout-6ntnbsdm.livekit.cloud
+LIVEKIT_API_KEY=APImFXNHLDKn2ov
+LIVEKIT_API_SECRET=2bvX8qfyTGaEep4t5Np3XXWTmDSpO5iPrGhZeGEEqG7A

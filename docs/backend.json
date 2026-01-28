@@ -1,0 +1,425 @@
+{
+  "entities": {
+    "User": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "title": "User",
+      "type": "object",
+      "description": "Represents a user of the HearMeOut application.",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique identifier for the User entity."
+        },
+        "username": {
+          "type": "string",
+          "description": "The user's chosen username."
+        },
+        "email": {
+          "type": "string",
+          "description": "The user's email address.",
+          "format": "email"
+        },
+        "displayName": {
+          "type": "string",
+          "description": "The user's display name, shown in rooms and overlays."
+        },
+        "profileImageUrl": {
+          "type": "string",
+          "description": "URL to the user's profile image.",
+          "format": "uri"
+        },
+        "discordId": {
+          "type": "string",
+          "description": "The user's Discord ID, if linked."
+        },
+        "twitchId": {
+          "type": "string",
+          "description": "The user's Twitch ID, if linked."
+        }
+      },
+      "required": [
+        "id",
+        "username",
+        "email",
+        "displayName"
+      ]
+    },
+    "Room": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "title": "Room",
+      "type": "object",
+      "description": "Represents a voice chat room within the HearMeOut application.",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique identifier for the Room entity."
+        },
+        "name": {
+          "type": "string",
+          "description": "The name of the room."
+        },
+        "description": {
+          "type": "string",
+          "description": "A description of the room."
+        },
+        "ownerId": {
+          "type": "string",
+          "description": "Reference to User. (Relationship: User 1:N Room). The user ID of the room owner."
+        },
+        "djId": {
+          "type": "string",
+          "description": "The user ID of the current DJ, who claimed control via the UI. This can be empty if no one is the DJ."
+        },
+        "djDisplayName": {
+          "type": "string",
+          "description": "The display name of the current DJ. Denormalized for easy display."
+        },
+        "isPrivate": {
+          "type": "boolean",
+          "description": "Indicates whether the room is private or public."
+        },
+        "createdAt": {
+          "type": "string",
+          "description": "Timestamp of when the room was created.",
+          "format": "date-time"
+        },
+        "playlist": {
+          "type": "array",
+          "description": "The ordered list of media items in the room's playlist.",
+          "items": {
+            "$ref": "#/entities/PlaylistItem"
+          }
+        },
+        "currentTrackId": {
+          "type": "string",
+          "description": "The ID of the currently playing track in the playlist."
+        },
+        "isPlaying": {
+          "type": "boolean",
+          "description": "Indicates if music is currently playing in the room."
+        },
+        "bannedUsers": {
+          "type": "array",
+          "description": "A list of user IDs that are banned from this room.",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "ownerId",
+        "isPrivate",
+        "createdAt"
+      ]
+    },
+    "PlaylistItem": {
+      "title": "Playlist Item",
+      "description": "Represents a single item in a room's playlist.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "artist": {
+          "type": "string"
+        },
+        "artId": {
+          "type": "string"
+        },
+        "url": {
+          "type": "string",
+          "format": "uri"
+        }
+      },
+      "required": [
+        "id",
+        "title",
+        "artist",
+        "artId",
+        "url"
+      ]
+    },
+    "RoomParticipant": {
+      "title": "Room Participant",
+      "description": "Represents a user currently in a voice chat room. A subset of the main User profile.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "description": "The user's unique ID."
+        },
+        "displayName": {
+          "type": "string",
+          "description": "The user's display name."
+        },
+        "photoURL": {
+          "type": "string",
+          "description": "URL to the user's profile image."
+        },
+        "isSpeaking": {
+          "type": "boolean",
+          "description": "Indicates if the user is currently speaking."
+        },
+        "isMutedByHost": {
+          "type": "boolean",
+          "description": "Indicates if the user has been muted by the room host."
+        },
+        "isMuted": {
+          "type": "boolean",
+          "description": "Indicates if the user has muted their own microphone."
+        }
+      },
+      "required": [
+        "uid",
+        "displayName"
+      ]
+    },
+    "Media": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "title": "Media",
+      "type": "object",
+      "description": "Represents media files (YouTube URLs or uploaded files) that can be played in a room.",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique identifier for the Media entity."
+        },
+        "roomId": {
+          "type": "string",
+          "description": "Reference to Room. (Relationship: Room 1:N Media). The ID of the room where the media is played."
+        },
+        "type": {
+          "type": "string",
+          "description": "The type of media (e.g., 'youtube', 'upload')."
+        },
+        "url": {
+          "type": "string",
+          "description": "The URL of the media (YouTube URL or storage URL).",
+          "format": "uri"
+        },
+        "uploadedByUserId": {
+          "type": "string",
+          "description": "Reference to User. (Relationship: User 1:N Media).  The ID of the user who uploaded the media, if applicable."
+        },
+        "title": {
+          "type": "string",
+          "description": "The title of the media."
+        },
+        "duration": {
+          "type": "number",
+          "description": "The duration of the media in seconds."
+        }
+      },
+      "required": [
+        "id",
+        "roomId",
+        "type",
+        "url",
+        "title",
+        "duration"
+      ]
+    },
+    "ModerationLog": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "title": "ModerationLog",
+      "type": "object",
+      "description": "Represents a log entry for moderation events within a room.",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique identifier for the ModerationLog entity."
+        },
+        "roomId": {
+          "type": "string",
+          "description": "Reference to Room. (Relationship: Room 1:N ModerationLog). The ID of the room where the event occurred."
+        },
+        "timestamp": {
+          "type": "string",
+          "description": "Timestamp of when the moderation event occurred.",
+          "format": "date-time"
+        },
+        "sentimentScore": {
+          "type": "number",
+          "description": "The sentiment score of the conversation at the time of the event."
+        },
+        "flaggedTerms": {
+          "type": "array",
+          "description": "A list of terms that triggered the moderation event.",
+          "items": {
+            "type": "string"
+          }
+        },
+        "description": {
+          "type": "string",
+          "description": "A description of the moderation event."
+        }
+      },
+      "required": [
+        "id",
+        "roomId",
+        "timestamp",
+        "sentimentScore"
+      ]
+    },
+    "ChatMessage": {
+      "title": "Chat Message",
+      "description": "Represents a single chat message sent in a room.",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "description": "The UID of the user who sent the message."
+        },
+        "displayName": {
+          "type": "string",
+          "description": "The display name of the user at the time of sending."
+        },
+        "text": {
+          "type": "string",
+          "description": "The content of the message."
+        },
+        "createdAt": {
+          "type": "string",
+          "description": "The server timestamp when the message was created.",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "userId",
+        "displayName",
+        "text",
+        "createdAt"
+      ]
+    }
+  },
+  "auth": {
+    "providers": [
+      "password",
+      "anonymous",
+      "discord",
+      "google.com"
+    ]
+  },
+  "firestore": {
+    "structure": [
+      {
+        "path": "/users/{userId}",
+        "definition": {
+          "entityName": "User",
+          "schema": {
+            "$ref": "#/backend/entities/User"
+          },
+          "description": "Stores user profiles. Uses path-based ownership for user data. The userId path parameter matches the Firebase Auth UID.",
+          "params": [
+            {
+              "name": "userId",
+              "description": "The unique ID of the user, matching their Firebase Auth UID."
+            }
+          ]
+        }
+      },
+      {
+        "path": "/rooms/{roomId}",
+        "definition": {
+          "entityName": "Room",
+          "schema": {
+            "$ref": "#/backend/entities/Room"
+          },
+          "description": "Stores room information. Includes denormalized 'ownerId' for authorization independence.",
+          "params": [
+            {
+              "name": "roomId",
+              "description": "The unique ID of the room."
+            }
+          ]
+        }
+      },
+      {
+        "path": "/rooms/{roomId}/users/{userId}",
+        "definition": {
+          "entityName": "RoomParticipant",
+          "schema": {
+            "$ref": "#/backend/entities/RoomParticipant"
+          },
+          "description": "Stores users who are currently in a room. The userId is the same as the auth UID.",
+          "params": [
+            {
+              "name": "roomId",
+              "description": "The unique ID of the room."
+            },
+            {
+              "name": "userId",
+              "description": "The unique ID of the user."
+            }
+          ]
+        }
+      },
+      {
+        "path": "/rooms/{roomId}/media/{mediaId}",
+        "definition": {
+          "entityName": "Media",
+          "schema": {
+            "$ref": "#/backend/entities/Media"
+          },
+          "description": "Stores media files associated with a room.",
+          "params": [
+            {
+              "name": "roomId",
+              "description": "The unique ID of the room."
+            },
+            {
+              "name": "mediaId",
+              "description": "The unique ID of the media."
+            }
+          ]
+        }
+      },
+      {
+        "path": "/rooms/{roomId}/moderation_logs/{moderationLogId}",
+        "definition": {
+          "entityName": "ModerationLog",
+          "schema": {
+            "$ref": "#/backend/entities/ModerationLog"
+          },
+          "description": "Stores moderation logs for each room.",
+          "params": [
+            {
+              "name": "roomId",
+              "description": "The unique ID of the room."
+            },
+            {
+              "name": "moderationLogId",
+              "description": "The unique ID of the moderation log."
+            }
+          ]
+        }
+      },
+      {
+        "path": "/rooms/{roomId}/messages/{messageId}",
+        "definition": {
+          "entityName": "ChatMessage",
+          "schema": {
+            "$ref": "#/backend/entities/ChatMessage"
+          },
+          "description": "Stores chat messages for a room.",
+          "params": [
+            {
+              "name": "roomId",
+              "description": "The unique ID of the room."
+            },
+            {
+              "name": "messageId",
+              "description": "The unique ID of the chat message."
+            }
+          ]
+        }
+      }
+    ],
+    "reasoning": "The Firestore structure is designed to ensure security, scalability, and ease of debugging. A subcollection for `users` within each `room` (`/rooms/{roomId}/users/{userId}`) is used for efficient querying of participants in real-time. This denormalized approach is better for this app's use case than a separate top-level collection for room-user relationships. Other collections like `media`, `moderation_logs`, and `messages` are also subcollections of rooms, keeping all room-related data logically grouped."
+  }
+}
