@@ -53,6 +53,7 @@ function LoginContent() {
   const searchParams = useSearchParams();
   const [status, setStatus] = useState<'authenticating' | 'idle'>('authenticating');
   const [error, setError] = useState<string | null>(null);
+  const [isProcessingToken, setIsProcessingToken] = useState(false);
 
   useEffect(() => {
     const errorParam = searchParams?.get('error');
@@ -61,30 +62,32 @@ function LoginContent() {
     if (errorParam) {
       setError(decodeURIComponent(errorParam));
       setStatus('idle');
+      return;
     }
     
-    if (tokenParam && auth) {
+    if (tokenParam && auth && !isProcessingToken) {
+      setIsProcessingToken(true);
       import('firebase/auth').then(({ signInWithCustomToken }) => {
         signInWithCustomToken(auth, tokenParam)
-          .then(() => router.push('/'))
+          .then(() => {
+            router.push('/');
+          })
           .catch((err) => {
             console.error('Custom token sign-in failed:', err);
             setError('Authentication failed');
             setStatus('idle');
+            setIsProcessingToken(false);
           });
       });
+      return;
     }
-  }, [searchParams, auth, router]);
-
-  useEffect(() => {
-    if (user) {
+    
+    if (user && !tokenParam) {
       router.push('/');
-    } else {
-      if (!isUserLoading) {
-        setStatus('idle');
-      }
+    } else if (!isUserLoading && !tokenParam) {
+      setStatus('idle');
     }
-  }, [user, isUserLoading, router]);
+  }, [searchParams, auth, router, user, isUserLoading, isProcessingToken]);
 
 
   const handleGuestLogin = () => {
@@ -178,7 +181,7 @@ function LoginContent() {
     }
   };
   
-  if (status === 'authenticating' || isUserLoading) {
+  if (status === 'authenticating' || isUserLoading || isProcessingToken) {
     return (
         <div className="flex min-h-screen w-full items-center justify-center bg-secondary">
             <LoaderCircle className="h-10 w-10 animate-spin text-primary" />
