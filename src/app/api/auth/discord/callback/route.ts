@@ -33,7 +33,6 @@ export async function GET(req: NextRequest) {
         code,
         grant_type: 'authorization_code',
         redirect_uri: redirectUri,
-        scope: 'identify email',
       }),
     });
 

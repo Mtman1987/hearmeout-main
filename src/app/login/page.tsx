@@ -86,7 +86,7 @@ function LoginContent() {
   const handleDiscordOAuth = () => {
     const clientId = process.env.NEXT_PUBLIC_DISCORD_CLIENT_ID;
     const redirectUri = `${process.env.NEXT_PUBLIC_BASE_URL}/api/auth/discord/callback`;
-    const scopes = ['identify', 'email'].join('%20');
+    const scopes = 'identify email';
     
     const discordAuthUrl = new URL('https://discord.com/api/oauth2/authorize');
     discordAuthUrl.searchParams.set('client_id', clientId!);
@@ -100,7 +100,7 @@ function LoginContent() {
   const handleTwitchOAuth = () => {
     const clientId = process.env.NEXT_PUBLIC_TWITCH_CLIENT_ID;
     const redirectUri = `${process.env.NEXT_PUBLIC_BASE_URL}/api/auth/twitch/callback`;
-    const scopes = ['user:read:email', 'chat:read', 'chat:edit'].join('%20');
+    const scopes = 'user:read:email chat:read chat:edit';
 
     const twitchAuthUrl = new URL('https://id.twitch.tv/oauth2/authorize');
     twitchAuthUrl.searchParams.set('client_id', clientId!);
