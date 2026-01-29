@@ -64,13 +64,13 @@ export default function MusicPlayerCard({
   const audioRef = useRef<HTMLAudioElement>(null);
   const musicTrackRef = useRef<LivekitClient.LocalTrackPublication | null>(null);
   const [audioStreamUrl, setAudioStreamUrl] = useState<string | null>(null);
-  const [musicDevices, setMusicDevices] = useState<MediaDeviceInfo[]>([]);
-  const [selectedMusicDevice, setSelectedMusicDevice] = useState<string>('');
   const [isMusicPublished, setIsMusicPublished] = useState(false);
   const [musicAudioLevel, setMusicAudioLevel] = useState(0);
   const audioAnalyzerRef = useRef<AnalyserNode | null>(null);
   const animationFrameRef = useRef<number>();
   const iframeRef = useRef<HTMLIFrameElement>(null);
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const mixedStreamRef = useRef<MediaStream | null>(null);
   
   const [currentTime, setCurrentTime] = React.useState(0);
   const [duration, setDuration] = React.useState(0);
@@ -85,101 +85,105 @@ export default function MusicPlayerCard({
     }
   }, [volume])
 
-  // Get available audio input devices for music
+  // Mix music audio with microphone and publish as single track
   useEffect(() => {
-    navigator.mediaDevices.enumerateDevices().then(devices => {
-      const audioInputs = devices.filter(d => d.kind === 'audioinput');
-      setMusicDevices(audioInputs);
-      
-      // Load saved device from localStorage
-      const saved = localStorage.getItem('musicDevice');
-      if (saved && audioInputs.some(d => d.deviceId === saved)) {
-        setSelectedMusicDevice(saved);
-      }
-    });
-  }, []);
+    if (!isDJ || !room || !playing || !currentTrack) return;
 
-  // Publish music track when device selected and playing
-  useEffect(() => {
-    if (!isDJ || !room || !selectedMusicDevice) return;
-
-    const publishMusicTrack = async () => {
+    const setupMixedAudio = async () => {
       try {
-        if (playing) {
-          // Only publish if not already published
-          if (musicTrackRef.current) {
-            // Update volume on existing track
-            const audioTrack = musicTrackRef.current.audioTrack;
-            if (audioTrack) {
-              await audioTrack.setVolume(volume);
-            }
-            return;
-          }
-          
-          const stream = await navigator.mediaDevices.getUserMedia({
-            audio: { deviceId: { exact: selectedMusicDevice } }
-          });
-          
-          const track = stream.getAudioTracks()[0];
-          
-          // Set up audio analyzer
-          const audioContext = new AudioContext();
-          const source = audioContext.createMediaStreamSource(stream);
-          const analyzer = audioContext.createAnalyser();
-          analyzer.fftSize = 256;
-          source.connect(analyzer);
-          audioAnalyzerRef.current = analyzer;
-          
-          // Monitor audio levels
-          const dataArray = new Uint8Array(analyzer.frequencyBinCount);
-          const updateLevel = () => {
-            analyzer.getByteFrequencyData(dataArray);
-            const average = dataArray.reduce((a, b) => a + b) / dataArray.length;
-            setMusicAudioLevel(average / 255);
-            animationFrameRef.current = requestAnimationFrame(updateLevel);
-          };
-          updateLevel();
-          
-          musicTrackRef.current = await room.localParticipant.publishTrack(track, {
-            name: 'music',
-            source: LivekitClient.Track.Source.Unknown,
-          });
-          
-          // Set initial volume
-          const audioTrack = musicTrackRef.current.audioTrack;
-          if (audioTrack) {
-            await audioTrack.setVolume(volume);
-          }
-          
-          setIsMusicPublished(true);
-          console.log('Music track published with volume:', volume);
-        } else {
-          // Unpublish when paused
-          if (musicTrackRef.current) {
-            await room.localParticipant.unpublishTrack(musicTrackRef.current.track!);
-            musicTrackRef.current = null;
-            setIsMusicPublished(false);
-            setMusicAudioLevel(0);
-            if (animationFrameRef.current) {
-              cancelAnimationFrame(animationFrameRef.current);
-            }
-            console.log('Music track unpublished');
-          }
+        if (musicTrackRef.current) return;
+
+        // Create audio context
+        const audioContext = new AudioContext();
+        audioContextRef.current = audioContext;
+        const destination = audioContext.createMediaStreamDestination();
+
+        // Get microphone stream
+        const micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        const micSource = audioContext.createMediaStreamSource(micStream);
+        
+        // Create audio element for music
+        const audioElement = new Audio();
+        audioElement.crossOrigin = 'anonymous';
+        audioElement.volume = volume;
+        
+        // Get YouTube audio URL
+        const videoId = new URL(currentTrack.url).searchParams.get('v');
+        const response = await fetch(`/api/youtube-audio?videoId=${videoId}`);
+        const data = await response.json();
+        audioElement.src = data.audioUrl;
+        audioElement.play();
+        
+        // Create audio source from element
+        const musicSource = audioContext.createMediaElementSource(audioElement);
+        
+        // Mix both sources
+        micSource.connect(destination);
+        musicSource.connect(destination);
+        
+        // Set up analyzer for visualization
+        const analyzer = audioContext.createAnalyser();
+        analyzer.fftSize = 256;
+        destination.stream.getAudioTracks()[0] && musicSource.connect(analyzer);
+        audioAnalyzerRef.current = analyzer;
+        
+        const dataArray = new Uint8Array(analyzer.frequencyBinCount);
+        const updateLevel = () => {
+          analyzer.getByteFrequencyData(dataArray);
+          const average = dataArray.reduce((a, b) => a + b) / dataArray.length;
+          setMusicAudioLevel(average / 255);
+          animationFrameRef.current = requestAnimationFrame(updateLevel);
+        };
+        updateLevel();
+        
+        // Publish mixed track
+        const mixedTrack = destination.stream.getAudioTracks()[0];
+        mixedStreamRef.current = destination.stream;
+        
+        musicTrackRef.current = await room.localParticipant.publishTrack(mixedTrack, {
+          name: 'music',
+          source: LivekitClient.Track.Source.Microphone,
+        });
+        
+        // Apply volume
+        const audioTrack = musicTrackRef.current.audioTrack;
+        if (audioTrack) {
+          await audioTrack.setVolume(volume);
         }
+        
+        setIsMusicPublished(true);
+        console.log('Mixed audio track published');
+        
+        // Handle audio end
+        audioElement.onended = () => {
+          if (roomId) {
+            // Auto-advance to next track
+          }
+        };
       } catch (e) {
-        console.error('Failed to publish music:', e);
+        console.error('Failed to setup mixed audio:', e);
       }
     };
 
-    publishMusicTrack();
+    setupMixedAudio();
 
     return () => {
+      if (animationFrameRef.current) {
+        cancelAnimationFrame(animationFrameRef.current);
+      }
       if (musicTrackRef.current) {
         room.localParticipant.unpublishTrack(musicTrackRef.current.track!).catch(console.error);
         musicTrackRef.current = null;
       }
+      if (mixedStreamRef.current) {
+        mixedStreamRef.current.getTracks().forEach(track => track.stop());
+      }
+      if (audioContextRef.current) {
+        audioContextRef.current.close();
+      }
+      setIsMusicPublished(false);
     };
-  }, [isDJ, room, selectedMusicDevice, playing, volume]);
+  }, [isDJ, room, playing, currentTrack, volume, roomId]);
 
   const handlePlayPause = () => isPlayerControlAllowed && currentTrack && onPlayPause(!playing);
   const handlePlayNextWithTrack = () => isPlayerControlAllowed && currentTrack && onPlayNext();
@@ -224,40 +228,21 @@ export default function MusicPlayerCard({
                     <Music /> Now Playing
                 </CardTitle>
                 <p className="text-muted-foreground text-sm truncate">{currentTrack ? `${currentTrack.title} - ${currentTrack.artist}` : "No song selected"}</p>
-                {isDJ && (
+                {isDJ && isMusicPublished && (
                   <div className="mt-2 space-y-2">
-                    <select 
-                      value={selectedMusicDevice} 
-                      onChange={(e) => {
-                        setSelectedMusicDevice(e.target.value);
-                        localStorage.setItem('musicDevice', e.target.value);
-                      }}
-                      className="w-full text-xs bg-background border rounded px-2 py-1"
-                    >
-                      <option value="">Select Music Device</option>
-                      {musicDevices.map(device => (
-                        <option key={device.deviceId} value={device.deviceId}>
-                          {device.label || `Device ${device.deviceId.slice(0, 8)}`}
-                        </option>
-                      ))}
-                    </select>
-                    {isMusicPublished && (
-                      <div className="space-y-2">
-                        <div className="flex items-center gap-2 text-xs text-green-500">
-                          <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse" />
-                          Music streaming active
-                        </div>
-                        <div className="space-y-1">
-                          <div className="text-xs text-muted-foreground">Audio Level</div>
-                          <div className="w-full h-2 bg-secondary rounded-full overflow-hidden">
-                            <div 
-                              className="h-full bg-green-500 transition-all duration-75"
-                              style={{ width: `${musicAudioLevel * 100}%` }}
-                            />
-                          </div>
-                        </div>
+                    <div className="flex items-center gap-2 text-xs text-green-500">
+                      <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse" />
+                      Music + Mic streaming
+                    </div>
+                    <div className="space-y-1">
+                      <div className="text-xs text-muted-foreground">Audio Level</div>
+                      <div className="w-full h-2 bg-secondary rounded-full overflow-hidden">
+                        <div 
+                          className="h-full bg-green-500 transition-all duration-75"
+                          style={{ width: `${musicAudioLevel * 100}%` }}
+                        />
                       </div>
-                    )}
+                    </div>
                   </div>
                 )}
             </div>
