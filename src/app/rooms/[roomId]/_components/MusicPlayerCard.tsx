@@ -70,6 +70,7 @@ export default function MusicPlayerCard({
   const [musicAudioLevel, setMusicAudioLevel] = useState(0);
   const audioAnalyzerRef = useRef<AnalyserNode | null>(null);
   const animationFrameRef = useRef<number>();
+  const iframeRef = useRef<HTMLIFrameElement>(null);
   
   const [currentTime, setCurrentTime] = React.useState(0);
   const [duration, setDuration] = React.useState(0);
@@ -89,6 +90,12 @@ export default function MusicPlayerCard({
     navigator.mediaDevices.enumerateDevices().then(devices => {
       const audioInputs = devices.filter(d => d.kind === 'audioinput');
       setMusicDevices(audioInputs);
+      
+      // Load saved device from localStorage
+      const saved = localStorage.getItem('musicDevice');
+      if (saved && audioInputs.some(d => d.deviceId === saved)) {
+        setSelectedMusicDevice(saved);
+      }
     });
   }, []);
 
@@ -167,6 +174,16 @@ export default function MusicPlayerCard({
   const toggleMute = () => {
     onVolumeChange(volume > 0 ? 0 : lastNonZeroVolume.current || 1);
   };
+
+  // Auto-play YouTube when track changes
+  useEffect(() => {
+    if (!isDJ || !currentTrack?.url || !playing) return;
+    
+    const videoId = new URL(currentTrack.url).searchParams.get('v');
+    if (videoId && iframeRef.current) {
+      iframeRef.current.src = `https://www.youtube.com/embed/${videoId}?autoplay=1&controls=0`;
+    }
+  }, [isDJ, currentTrack?.url, playing]);
   
   return (
     <Card className="flex flex-col h-full">
@@ -195,19 +212,12 @@ export default function MusicPlayerCard({
                 <p className="text-muted-foreground text-sm truncate">{currentTrack ? `${currentTrack.title} - ${currentTrack.artist}` : "No song selected"}</p>
                 {isDJ && (
                   <div className="mt-2 space-y-2">
-                    {currentTrack && (
-                      <a 
-                        href={currentTrack.url} 
-                        target="_blank" 
-                        rel="noopener noreferrer"
-                        className="text-xs text-primary hover:underline block"
-                      >
-                        Open in YouTube →
-                      </a>
-                    )}
                     <select 
                       value={selectedMusicDevice} 
-                      onChange={(e) => setSelectedMusicDevice(e.target.value)}
+                      onChange={(e) => {
+                        setSelectedMusicDevice(e.target.value);
+                        localStorage.setItem('musicDevice', e.target.value);
+                      }}
                       className="w-full text-xs bg-background border rounded px-2 py-1"
                     >
                       <option value="">Select Music Device</option>
@@ -316,6 +326,8 @@ export default function MusicPlayerCard({
             />
         </div>
       </CardContent>
+      {/* Hidden YouTube player */}
+      {isDJ && <iframe ref={iframeRef} style={{ display: 'none' }} allow="autoplay" />}
     </Card>
   );
 }
