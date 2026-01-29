@@ -114,6 +114,10 @@ function initializeTwitchBot() {
   const twitchBotUsername = process.env.TWITCH_BOT_USERNAME;
   const twitchBotOauthToken = process.env.TWITCH_BOT_OAUTH_TOKEN;
 
+  console.log('[Twitch Bot] Checking credentials...');
+  console.log('[Twitch Bot] Username exists:', !!twitchBotUsername);
+  console.log('[Twitch Bot] OAuth token exists:', !!twitchBotOauthToken);
+
   if (!twitchBotUsername || !twitchBotOauthToken) {
     console.error('[Twitch Bot] Missing credentials');
     return;
