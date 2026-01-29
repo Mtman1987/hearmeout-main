@@ -8,13 +8,13 @@ export async function GET(req: NextRequest) {
 
   if (error) {
     return NextResponse.redirect(
-      new URL(`/login?error=${encodeURIComponent(error)}`, req.url)
+      `${process.env.NEXT_PUBLIC_BASE_URL}/login?error=${encodeURIComponent(error)}`
     );
   }
 
   if (!code) {
     return NextResponse.redirect(
-      new URL('/login?error=no_authorization_code', req.url)
+      `${process.env.NEXT_PUBLIC_BASE_URL}/login?error=no_authorization_code`
     );
   }
 
@@ -90,13 +90,13 @@ export async function GET(req: NextRequest) {
 
     // Redirect with token
     return NextResponse.redirect(
-      new URL(`/login?token=${customToken}`, req.url)
+      `${process.env.NEXT_PUBLIC_BASE_URL}/login?token=${customToken}`
     );
   } catch (error) {
     console.error('Twitch OAuth error:', error);
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';
     return NextResponse.redirect(
-      new URL(`/login?error=${encodeURIComponent(errorMessage)}`, req.url)
+      `${process.env.NEXT_PUBLIC_BASE_URL}/login?error=${encodeURIComponent(errorMessage)}`
     );
   }
 }
