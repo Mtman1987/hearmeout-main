@@ -11,7 +11,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Users, Music } from "lucide-react";
+import { Users, Music, Trash2 } from "lucide-react";
 import {
   SidebarProvider,
   SidebarInset,
@@ -22,6 +22,8 @@ import LeftSidebar from '@/app/components/LeftSidebar';
 import { useFirebase, useCollection, useMemoFirebase } from '@/firebase';
 import { collection, query, where } from 'firebase/firestore';
 import { Skeleton } from '@/components/ui/skeleton';
+import { useToast } from '@/hooks/use-toast';
+import { deleteDoc, doc } from 'firebase/firestore';
 
 
 function DashboardHeader() {
@@ -37,10 +39,12 @@ function DashboardHeader() {
 interface Room {
     id: string;
     name: string;
+    ownerId: string;
 }
 
 export default function Home() {
-  const { firestore } = useFirebase();
+  const { firestore, user } = useFirebase();
+  const { toast } = useToast();
 
   const publicRoomsQuery = useMemoFirebase(() => {
     if (!firestore) return null;
@@ -51,6 +55,17 @@ export default function Home() {
   }, [firestore]);
 
   const { data: publicRooms, isLoading: roomsLoading } = useCollection<Room>(publicRoomsQuery);
+
+  const handleDeleteRoom = async (roomId: string, roomName: string) => {
+    if (!firestore || !user) return;
+    if (!confirm(`Delete "${roomName}"? This cannot be undone.`)) return;
+    try {
+      await deleteDoc(doc(firestore, 'rooms', roomId));
+      toast({ title: 'Room Deleted', description: `"${roomName}" has been deleted.` });
+    } catch (e) {
+      toast({ variant: 'destructive', title: 'Error', description: 'Failed to delete room.' });
+    }
+  };
 
   return (
     <SidebarProvider>
@@ -75,7 +90,14 @@ export default function Home() {
                             {publicRooms.map((room) => (
                                 <Card key={room.id} className="flex flex-col hover:shadow-lg transition-shadow duration-300">
                                 <CardHeader>
-                                    <CardTitle className="font-headline">{room.name}</CardTitle>
+                                    <CardTitle className="font-headline flex items-center justify-between">
+                                        {room.name}
+                                        {user && room.ownerId === user.uid && (
+                                            <Button variant="ghost" size="icon" onClick={() => handleDeleteRoom(room.id, room.name)}>
+                                                <Trash2 className="h-4 w-4 text-destructive" />
+                                            </Button>
+                                        )}
+                                    </CardTitle>
                                 </CardHeader>
                                 <CardContent className="flex-grow">
                                 </CardContent>

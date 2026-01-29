@@ -243,7 +243,7 @@ const DiscordIcon = () => (
 function MusicStreamer({ 
     isDJ, 
     isPlaying, 
-    trackUrl, // This is now a youtube.com URL
+    trackUrl,
     onTrackEnd 
 } : { 
     isDJ: boolean, 
@@ -253,7 +253,10 @@ function MusicStreamer({
 }) {
     const room = useRoomContext();
     const audioRef = useRef<HTMLAudioElement>(null);
-    const publicationRef = useRef<any>(null); // Track publication reference
+    const publicationRef = useRef<any>(null);
+    const audioContextRef = useRef<AudioContext | null>(null);
+    const sourceNodeRef = useRef<MediaElementAudioSourceNode | null>(null);
+    const destinationRef = useRef<MediaStreamAudioDestinationNode | null>(null);
     const [audioStreamUrl, setAudioStreamUrl] = useState<string | null>(null);
     const [isFetchingUrl, setIsFetchingUrl] = useState(false);
     const [audioError, setAudioError] = useState<string | null>(null);
@@ -330,109 +333,85 @@ function MusicStreamer({
         };
     }, [trackUrl, isDJ, corsBlocked]);
 
-    // Effect 2: Manage LiveKit track publication based on resolved URL and playback state
     useEffect(() => {
         const audioEl = audioRef.current;
         
-        // Don't do anything if not DJ, no element, or still fetching/errored
         if (!isDJ || !room || !audioEl || isFetchingUrl || audioError) {
             if (publicationRef.current && room?.localParticipant) {
-                room.localParticipant.unpublishTrack(publicationRef.current.track!)
-                    .catch(e => console.warn("Failed to unpublish on cleanup", e));
+                room.localParticipant.unpublishTrack(publicationRef.current.track!).catch(e => console.warn(e));
                 publicationRef.current = null;
             }
-            if(audioEl) audioEl.pause();
+            if (audioEl) audioEl.pause();
+            if (audioContextRef.current) {
+                audioContextRef.current.close();
+                audioContextRef.current = null;
+            }
             return;
         }
 
         const manageTrack = async () => {
-            // If we should be playing and have a resolved stream URL
             if (isPlaying && audioStreamUrl) {
                 try {
-                    // This check prevents re-publishing if the track is already published
-                    if (publicationRef.current && audioEl.src === audioStreamUrl && !audioEl.paused) {
-                        return;
-                    }
+                    if (publicationRef.current && audioEl.src === audioStreamUrl && !audioEl.paused) return;
 
-                    // Unpublish any existing track before publishing a new one
                     if (publicationRef.current) {
                         await room.localParticipant.unpublishTrack(publicationRef.current.track!);
                         publicationRef.current = null;
                     }
 
-                    // Set audio source and ensure crossOrigin is set
                     audioEl.src = audioStreamUrl;
                     audioEl.crossOrigin = 'anonymous';
-                    
-                    // Add event listeners for debugging
-                    audioEl.oncanplay = () => console.log("Audio can play now");
-                    audioEl.onplaying = () => console.log("Audio is playing");
-                    audioEl.onerror = (e) => {
-                        console.error("Audio element error:", audioEl.error?.message);
-                        // Check if it's a CORS error (error code 4)
-                        if (audioEl.error?.code === 4) { // MEDIA_ERR_SRC_NOT_SUPPORTED or CORS
-                            console.warn("CORS/Loading error detected, switching to proxied URL...");
-                            setCorsBlocked(true);
-                        } else {
-                            setAudioError(`Failed to load audio: ${audioEl.error?.message || 'Unknown error'}`);
-                        }
+                    audioEl.onerror = () => {
+                        if (audioEl.error?.code === 4) setCorsBlocked(true);
+                        else setAudioError(`Failed to load audio`);
                     };
                     
                     await audioEl.play().catch(e => {
-                        console.error("Failed to play audio:", e);
-                        // Check if it's a CORS-related error
-                        if (e.name === 'NotAllowedError' || e.name === 'NotSupportedError') {
-                            console.warn("Playback error detected, trying proxied URL...");
-                            setCorsBlocked(true);
-                        } else {
-                            setAudioError("Failed to start playback");
-                        }
+                        if (e.name === 'NotAllowedError' || e.name === 'NotSupportedError') setCorsBlocked(true);
+                        else setAudioError("Failed to start playback");
                     });
                     
-                    const track = await createLocalAudioTrack({
-                        echoCancellation: true,
-                        noiseSuppression: true,
-                        autoGainControl: true,
-                    });
+                    if (!audioContextRef.current) audioContextRef.current = new AudioContext();
+                    if (!sourceNodeRef.current) sourceNodeRef.current = audioContextRef.current.createMediaElementSource(audioEl);
+                    if (!destinationRef.current) destinationRef.current = audioContextRef.current.createMediaStreamDestination();
                     
-                    const publication = await room.localParticipant.publishTrack(track, {
-                        name: 'music',
-                        // Use 'microphone' source for better audio quality
-                    });
+                    sourceNodeRef.current.connect(destinationRef.current);
+                    sourceNodeRef.current.connect(audioContextRef.current.destination);
+                    
+                    const mediaStream = destinationRef.current.stream;
+                    const audioTrack = mediaStream.getAudioTracks()[0];
+                    
+                    const publication = await room.localParticipant.publishTrack(audioTrack, { name: 'music' });
                     publicationRef.current = publication;
-                    console.log("Music track published successfully");
+                    console.log("Music track published");
                 } catch (e) {
-                    console.error("Failed to publish music track:", e);
-                    setAudioError("Failed to publish audio to room");
+                    console.error("Failed to publish music:", e);
+                    setAudioError("Failed to publish audio");
                 }
             } else {
-                // If we should not be playing, stop the audio and unpublish
                 audioEl.pause();
                 if (publicationRef.current) {
-                    try {
-                        await room.localParticipant.unpublishTrack(publicationRef.current.track!);
-                        publicationRef.current = null;
-                    } catch (e) {
-                        console.warn("Error during unpublish:", e);
-                    }
+                    await room.localParticipant.unpublishTrack(publicationRef.current.track!).catch(e => console.warn(e));
+                    publicationRef.current = null;
                 }
             }
         };
         
         manageTrack();
 
-        // The main cleanup function for when the component unmounts
         return () => {
             if (room?.localParticipant && publicationRef.current) {
-                room.localParticipant.unpublishTrack(publicationRef.current.track!)
-                    .catch(e => console.warn("Failed to unpublish on cleanup", e));
+                room.localParticipant.unpublishTrack(publicationRef.current.track!).catch(e => console.warn(e));
                 publicationRef.current = null;
+            }
+            if (audioContextRef.current) {
+                audioContextRef.current.close();
+                audioContextRef.current = null;
             }
         };
     }, [isDJ, isPlaying, audioStreamUrl, room, isFetchingUrl, audioError]);
 
-    // The audio element itself. It's hidden but drives the WebRTC track.
-    return <audio ref={audioRef} onEnded={onTrackEnd} crossOrigin="anonymous" className="hidden"></audio>;
+    return <audio ref={audioRef} onEnded={onTrackEnd} crossOrigin="anonymous" className="hidden" />;
 }
 
 
