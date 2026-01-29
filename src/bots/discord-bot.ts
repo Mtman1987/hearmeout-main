@@ -82,18 +82,6 @@ export async function sendControlEmbed(
                 title: (roomName || 'HearMeOut Music Room').slice(0, 256),
                 description: (description || 'Join us for music and chat!').slice(0, 4096),
                 color: 5814783,
-                fields: [
-                    {
-                        name: '👥 Listeners',
-                        value: 'Loading...',
-                        inline: true
-                    },
-                    {
-                        name: '🎧 Now Playing',
-                        value: 'Nothing playing',
-                        inline: true
-                    }
-                ],
                 footer: {
                     text: `Room ID: ${(roomId || 'N/A').slice(0, 2048)}`
                 }
