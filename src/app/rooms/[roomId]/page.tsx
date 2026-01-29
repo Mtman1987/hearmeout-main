@@ -202,7 +202,6 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
     const [chatOpen, setChatOpen] = useState(false);
     const [voiceToken, setVoiceToken] = useState<string | undefined>(undefined);
     const [activePanels, setActivePanels] = useState({ playlist: true, add: true });
-    
     const [localVolume, setLocalVolume] = useState(0.5);
 
     const roomRef = useMemoFirebase(() => doc(firestore, 'rooms', roomId), [firestore, roomId]);

@@ -107,7 +107,14 @@ export default function MusicPlayerCard({
       try {
         if (playing) {
           // Only publish if not already published
-          if (musicTrackRef.current) return;
+          if (musicTrackRef.current) {
+            // Update volume on existing track
+            const audioTrack = musicTrackRef.current.audioTrack;
+            if (audioTrack) {
+              await audioTrack.setVolume(volume);
+            }
+            return;
+          }
           
           const stream = await navigator.mediaDevices.getUserMedia({
             audio: { deviceId: { exact: selectedMusicDevice } }
@@ -137,8 +144,15 @@ export default function MusicPlayerCard({
             name: 'music',
             source: LivekitClient.Track.Source.Unknown,
           });
+          
+          // Set initial volume
+          const audioTrack = musicTrackRef.current.audioTrack;
+          if (audioTrack) {
+            await audioTrack.setVolume(volume);
+          }
+          
           setIsMusicPublished(true);
-          console.log('Music track published');
+          console.log('Music track published with volume:', volume);
         } else {
           // Unpublish when paused
           if (musicTrackRef.current) {
@@ -165,7 +179,7 @@ export default function MusicPlayerCard({
         musicTrackRef.current = null;
       }
     };
-  }, [isDJ, room, selectedMusicDevice, playing]);
+  }, [isDJ, room, selectedMusicDevice, playing, volume]);
 
   const handlePlayPause = () => isPlayerControlAllowed && currentTrack && onPlayPause(!playing);
   const handlePlayNextWithTrack = () => isPlayerControlAllowed && currentTrack && onPlayNext();
