@@ -50,14 +50,7 @@ export function ChatWidget({
   onClose,
   roomId,
 }: ChatWidgetProps) {
-  let firebaseContext;
-  try {
-    firebaseContext = useFirebase();
-  } catch (e) {
-    console.error('[ChatWidget] Firebase context error:', e);
-    firebaseContext = null;
-  }
-  const { firestore, user } = firebaseContext || { firestore: null, user: null };
+  const { firestore, user } = useFirebase();
   const [selectedChannel, setSelectedChannel] = useState('');
   const [viewMode, setViewMode] = useState<'tabbed' | 'split-v' | 'split-h'>('tabbed');
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -79,6 +72,24 @@ export function ChatWidget({
     discordSelectedChannel?: string;
     discordChannels?: DiscordChannel[];
   }>(userInRoomRef);
+
+  if (!firestore || !user) {
+    return (
+      <DraggableContainer
+        id={id}
+        position={position}
+        size={size}
+        onPositionChange={onPositionChange}
+        onSizeChange={onSizeChange}
+        onClose={onClose}
+        title="💬 Chat"
+      >
+        <div className="flex items-center justify-center h-full text-muted-foreground text-sm">
+          Loading...
+        </div>
+      </DraggableContainer>
+    );
+  }
 
   useEffect(() => {
     if (firestoreUser?.discordGuildId) {

@@ -51,8 +51,8 @@ export default function RootLayout({
         <PopoutProvider>
           <FirebaseClientProvider>
             {children}
+            <PopoutRenderer />
           </FirebaseClientProvider>
-          <PopoutRenderer />
         </PopoutProvider>
         <Toaster />
       </body>
