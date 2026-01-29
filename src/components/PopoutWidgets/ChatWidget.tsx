@@ -89,27 +89,6 @@ export function ChatWidget({
     }
   }, [firestoreUser]);
 
-  if (!firestore || !user) {
-    return (
-      <DraggableContainer
-        id={id}
-        position={position}
-        size={size}
-        onPositionChange={onPositionChange}
-        onSizeChange={onSizeChange}
-        onClose={onClose}
-        title="💬 Chat"
-      >
-        <div className="flex items-center justify-center h-full text-muted-foreground text-sm">
-          Loading...
-        </div>
-      </DraggableContainer>
-    );
-  }
-
-
-
-  // Save selected channel to Firestore when it changes
   useEffect(() => {
     if (!selectedChannel || !userInRoomRef || !firestore) return;
     setDoc(userInRoomRef, { discordSelectedChannel: selectedChannel }, { merge: true }).catch(e => 
@@ -151,6 +130,26 @@ export function ChatWidget({
     return () => clearInterval(interval);
   }, [selectedChannel, lastMessageId]);
 
+  if (!firestore || !user) {
+    return (
+      <DraggableContainer
+        id={id}
+        position={position}
+        size={size}
+        onPositionChange={onPositionChange}
+        onSizeChange={onSizeChange}
+        onClose={onClose}
+        title="💬 Chat"
+      >
+        <div className="flex items-center justify-center h-full text-muted-foreground text-sm">
+          Loading...
+        </div>
+      </DraggableContainer>
+    );
+  }
+
+
+
   const handleSendMessage = async () => {
     if (!newMessage.trim() || !selectedChannel) return;
     
@@ -161,6 +160,8 @@ export function ChatWidget({
         body: JSON.stringify({
           channelId: selectedChannel,
           content: newMessage,
+          username: user?.displayName || 'HearMeOut User',
+          avatarUrl: user?.photoURL,
         }),
       });
       setNewMessage('');
