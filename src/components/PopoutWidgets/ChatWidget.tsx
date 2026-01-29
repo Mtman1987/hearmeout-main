@@ -13,7 +13,6 @@ import { Button } from '@/components/ui/button';
 import { Send, Loader2 } from 'lucide-react';
 import { useFirebase, useDoc, useMemoFirebase } from '@/firebase';
 import { doc, updateDoc, setDoc, getDoc } from 'firebase/firestore';
-import { postToDiscord } from '@/app/actions';
 import { useToast } from '@/hooks/use-toast';
 
 interface ChatWidgetProps {
@@ -182,21 +181,27 @@ export function ChatWidget({
     
     setPostingEmbed(true);
     try {
-      // Fetch room data to get custom links
       const roomRef = doc(firestore!, 'rooms', roomId);
       const roomSnap = await getDoc(roomRef);
       const roomData = roomSnap.data();
       
-      await postToDiscord(
-        selectedChannel,
-        roomId,
-        roomData?.name || 'Music Room',
-        roomData?.description || 'Join us for music and chat!',
-        roomData?.link1Label,
-        roomData?.link1Url,
-        roomData?.link2Label,
-        roomData?.link2Url
-      );
+      const res = await fetch('/api/discord/post-embed', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          channelId: selectedChannel,
+          roomId,
+          roomName: roomData?.name || 'Music Room',
+          description: roomData?.description || 'Join us for music and chat!',
+          link1Label: roomData?.link1Label,
+          link1Url: roomData?.link1Url,
+          link2Label: roomData?.link2Label,
+          link2Url: roomData?.link2Url,
+        }),
+      });
+      
+      if (!res.ok) throw new Error('Failed to post embed');
+      
       toast({ title: 'Posted to Discord!', description: 'Control embed sent to selected channel' });
     } catch (error: any) {
       console.error('Failed to post embed:', error);

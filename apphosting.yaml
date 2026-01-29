@@ -22,6 +22,12 @@ env:
     value: rxmohc28tthq0nudfd6iwx0sgy88dp
   - variable: TWITCH_CLIENT_SECRET
     value: w2zamrz7xix7k91albcfhxxri42725
+  - variable: FIREBASE_PROJECT_ID
+    value: studio-4331919473-dea24
+  - variable: FIREBASE_CLIENT_EMAIL
+    value: firebase-adminsdk-fbsvc@studio-4331919473-dea24.iam.gserviceaccount.com
+  - variable: FIREBASE_PRIVATE_KEY
+    value: "-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQDZ84B0A8LfoFpL\nNL7k1aMA+JwRRdg3wO+372XFCNDfl4gi5dR3iFjAFgG/lQAyTK6TPaGu/AfN/WJD\ngiUZWMIlLOua+xZNNApBdE+Nu720mx1lxpvf7Lls2lHo3LzxhEC6X5LAcbvS1pn+\njiAAO+H8PLX7gnBuXaw2m5VvaTV93KetZnoSY6xs2E+01mTvZ+3e5L9bc+85ViVa\n8NqQb4t4u3lopGumba02TQjHfBtGZssqSkArmZo/i+puUAnevAblJineh9CBGE0W\nyR0EZJD+Zv9wBXGJafmsR0oytf6WqpqKNfy3jqNyvnPu/jnx6Iyhi+OIt2LRkWzw\nn/5+17whAgMBAAECggEADzHAf2YJOoeeb96HHeMubFmIoNQkkxt4YtN13fcDv8i7\nwQoShjxLSqXmHI31z+vkYkeyS0WPAjtzU6dBsJsNWuPfL4RobTyu59oE10nSu4Hy\nWlduo71oPmhYfEJSSkiY7h1OWOv85wGWxgYwwS9rjWcKnVR+Q9V0NXDiibw1Eld0\nIkSb96giS4GByvXuRDLLje+ksVwGPGiQLwKupcrh2Uf4eaEv+yN3n8JBt8poR2oG\nia32kSCLC2uw64A843+QKv/gsAGm5dDTfqeb7/LDwjR7ZoXfu+89x+IfqmNqQyOH\neJhmwQIAgkYPfpB/N8Hv7Vm6uf9+lJTFjlp+7PZL6QKBgQD2sy1oqGqauDYHYwdl\nmNOkOvVhAIW4Gr38KTYsvHhumwUcMLb2mBB2oubxOud0Ws5jkuI8O4+L0MMJZJIA\nlPWUBBma69jdp6NTPMn+hotLd6ErTpjpTx140bFIl4ei9Eun2ratgcC0wnLFg89X\nBOfVTLuhtk3JZeOqR6zL6GTZyQKBgQDiKuEmExkERzylYBdOnYEhvXlmxhQGKnot\n06OglcMJqot+Ko/fLNWC/WOAeNuORP9JriQVqp/VGcsCmqMutfs4jdN1gl7ioVQ8\nfq5Ejf0JNeDLd2jcl/TfUM2oGHLTpnkNa2Qy3tRaoarmBAevCJbrL6fuaBZ1XgPx\nXnl3zX57mQKBgC8ZRjIU9UVUpfwDDAZ5hu5z0yUR1HWxpVPfCljAIr37Gp6nLkcm\nAP6lWzHy7P1p2L1p7YdSV7V5xcKlULqLtdbscXcCUAUBXE0n7eiKB04BKOP7vXXN\nhPLsFcymIV8bBNanCvlVLFVWSlMrNwqGBTzTyX62L2Oj8DMyO+syEw8BAoGAVzah\ny8ThiLzPrhX35uDlwtUF05PedOI8ax+JoYsewsN5NxXClRT84J5FmG0CfUIuD4OP\ndqttJwfjOQXYl1KlpZFLUa0MWehMS2euW9FFGiAkp1FMpoQScWr/YyrKXMN9OqeG\n4/b5fFmLRVeYfu6ZA+hEobKRtoCilJkRzhj4BUECgYEAgZ7zHVvVVpn6v8EYMgvV\nwq3eFnaII4gPGOmPCAldsGVO5XmyYRUIEo7oZe/l3tsUjcVpRmnQlNVUVmin0Bm1\naAgr10Ua0n4QmEI+41f8401YXFnUMxKd51dK/HCA/9tcitdsno7W1r6lm2tG/TaL\nXsBndde+BA5rzGccWQ3l5mc=\n-----END PRIVATE KEY-----\n"
   - variable: DISCORD_BOT_TOKEN
     secret: DISCORD_BOT_TOKEN
     availability:
