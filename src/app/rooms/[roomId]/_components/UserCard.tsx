@@ -119,8 +119,8 @@ export default function UserCard({
   // Get ALL audio tracks for this participant (microphone + music)
   const allAudioTracks = useTracks(
     [LivekitClient.Track.Source.Microphone, LivekitClient.Track.Source.Unknown],
-    { onlySubscribed: false, participant }
-  ).filter(track => track.participant.identity === participant.identity);
+    { onlySubscribed: true, participant }
+  ).filter(track => track.participant.identity === participant.identity && track.publication);
   
   const { name, identity } = participant;
 
@@ -159,24 +159,65 @@ export default function UserCard({
   }, [firestoreUser]);
 
   const handleSaveTwitch = async () => {
-    if (!userInRoomRef) return;
+    if (!userInRoomRef) {
+      toast({ variant: 'destructive', title: 'Error', description: 'User reference not available. Try refreshing.' });
+      return;
+    }
     try {
-      await updateDoc(userInRoomRef, { twitchChannel: twitchChannel.trim().toLowerCase() || null });
+      const channelValue = twitchChannel.trim().toLowerCase();
+      console.log('[UserCard] Saving Twitch channel:', channelValue);
+      await updateDoc(userInRoomRef, { twitchChannel: channelValue || null });
       toast({ title: 'Saved', description: 'Twitch channel updated. Bot will join within 30 seconds.' });
       setTwitchDialogOpen(false);
     } catch (e) {
-      toast({ variant: 'destructive', title: 'Error', description: 'Failed to update Twitch channel.' });
+      console.error('[UserCard] Twitch save error:', e);
+      toast({ variant: 'destructive', title: 'Error', description: `Failed to update: ${e instanceof Error ? e.message : 'Unknown error'}` });
     }
   };
 
   const handleSaveDiscord = async () => {
-    if (!userInRoomRef) return;
+    if (!userInRoomRef) {
+      toast({ variant: 'destructive', title: 'Error', description: 'User reference not available. Try refreshing.' });
+      return;
+    }
     try {
-      await updateDoc(userInRoomRef, { discordGuildId: discordGuildId.trim() || null });
-      toast({ title: 'Saved', description: 'Discord server ID saved. Use channel dropdown in chat.' });
+      const guildId = discordGuildId.trim();
+      console.log('[UserCard] Saving Discord guild ID:', guildId);
+      
+      // Fetch channels immediately and save to Firestore
+      if (guildId) {
+        const res = await fetch(`/api/discord/channels?guildId=${guildId}`);
+        if (res.ok) {
+          const channels = await res.json();
+          if (Array.isArray(channels)) {
+            // Save guild ID, channels list, and set first text channel as default
+            const firstTextChannel = channels.find((ch: any) => ch.type === 0);
+            await updateDoc(userInRoomRef, { 
+              discordGuildId: guildId,
+              discordChannels: channels,
+              discordSelectedChannel: firstTextChannel?.id || channels[0]?.id || null
+            });
+            toast({ title: 'Saved', description: `Discord configured with ${channels.length} channels.` });
+          } else {
+            throw new Error('Invalid channels response');
+          }
+        } else {
+          throw new Error('Failed to fetch channels. Make sure bot is in your server.');
+        }
+      } else {
+        // Clear Discord data
+        await updateDoc(userInRoomRef, { 
+          discordGuildId: null,
+          discordChannels: null,
+          discordSelectedChannel: null
+        });
+        toast({ title: 'Cleared', description: 'Discord configuration removed.' });
+      }
+      
       setDiscordDialogOpen(false);
     } catch (e) {
-      toast({ variant: 'destructive', title: 'Error', description: 'Failed to update Discord server.' });
+      console.error('[UserCard] Discord save error:', e);
+      toast({ variant: 'destructive', title: 'Error', description: `Failed to update: ${e instanceof Error ? e.message : 'Unknown error'}` });
     }
   };
   
@@ -222,28 +263,6 @@ export default function UserCard({
 
   return (
     <>
-      {/* Render ALL audio tracks for remote participants with volume control (never pause) */}
-      {!isLocal && allAudioTracks.map((trackRef) => {
-        if (!trackRef.publication) return null;
-        console.log(`[UserCard] Rendering audio track for ${participant.identity}:`, {
-          trackSid: trackRef.publication.trackSid,
-          source: trackRef.source,
-          subscribed: trackRef.publication.isSubscribed,
-          enabled: trackRef.publication.isEnabled
-        });
-        return (
-          <AudioTrack 
-            key={trackRef.publication.trackSid} 
-            trackRef={trackRef} 
-            volume={volume}
-            muted={false}
-            onSubscriptionStatusChanged={(status) => {
-              console.log(`[UserCard] Track ${trackRef.publication.trackSid} subscription:`, status);
-            }}
-          />
-        );
-      })}
-
       <Card className="flex flex-col h-full">
         <CardContent className="p-4 flex flex-col gap-4 flex-grow">
             <div className="flex items-start gap-4">

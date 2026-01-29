@@ -6,12 +6,7 @@ import { doc, collection, onSnapshot } from 'firebase/firestore';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { initializeApp, getApps } from 'firebase/app';
 import { getFirestore } from 'firebase/firestore';
-
-const firebaseConfig = {
-  apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY,
-  authDomain: process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN,
-  projectId: process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID,
-};
+import { firebaseConfig } from '@/firebase/config';
 
 const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApps()[0];
 const firestore = getFirestore(app);

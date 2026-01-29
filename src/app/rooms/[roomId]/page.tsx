@@ -93,25 +93,17 @@ function RoomHeader({
                 return;
             }
             
-            // Fetch channels and let user pick
-            const res = await fetch(`/api/discord/channels?guildId=${userData.discordGuildId}`);
-            if (!res.ok) {
-                toast({ variant: 'destructive', title: 'Error', description: 'Failed to load channels. Make sure bot is in your server.' });
-                return;
-            }
-            const channels = await res.json();
-            
-            // For now, post to first text channel (TODO: add channel picker dialog)
-            const textChannel = channels.find((ch: any) => ch.type === 0);
-            if (!textChannel) {
-                toast({ variant: 'destructive', title: 'Error', description: 'No text channels found in your server.' });
+            // Use saved selected channel (already populated when guild ID was set)
+            const channelId = userData.discordSelectedChannel;
+            if (!channelId) {
+                toast({ variant: 'destructive', title: 'No Channel Selected', description: 'Select a channel in the chat widget first.' });
                 return;
             }
             
-            await postToDiscord(textChannel.id);
+            await postToDiscord(channelId);
             toast({
                 title: "Posted to Discord!",
-                description: `Control embed sent to #${textChannel.name}`,
+                description: `Control embed sent to selected channel`,
             });
         } catch (error: any) {
             toast({
@@ -644,6 +636,11 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
           connect={true}
           audio={true} 
           video={false}
+          options={{
+            autoSubscribe: true,
+            dynacast: true,
+            adaptiveStream: true,
+          }}
           onError={(err) => {
               console.error("LiveKit connection error:", err);
               toast({ variant: 'destructive', title: 'Connection Error', description: err.message });

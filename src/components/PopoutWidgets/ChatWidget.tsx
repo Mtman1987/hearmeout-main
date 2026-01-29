@@ -14,7 +14,7 @@ import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Send, Loader2 } from 'lucide-react';
 import { useFirebase, useDoc, useMemoFirebase } from '@/firebase';
-import { doc } from 'firebase/firestore';
+import { doc, updateDoc } from 'firebase/firestore';
 
 interface ChatWidgetProps {
   id: string;
@@ -50,7 +50,14 @@ export function ChatWidget({
   onClose,
   roomId,
 }: ChatWidgetProps) {
-  const { firestore, user } = useFirebase();
+  let firebaseContext;
+  try {
+    firebaseContext = useFirebase();
+  } catch (e) {
+    console.error('[ChatWidget] Firebase context error:', e);
+    firebaseContext = null;
+  }
+  const { firestore, user } = firebaseContext || { firestore: null, user: null };
   const [selectedChannel, setSelectedChannel] = useState('');
   const [viewMode, setViewMode] = useState<'tabbed' | 'split-v' | 'split-h'>('tabbed');
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -66,7 +73,12 @@ export function ChatWidget({
     return doc(firestore, 'rooms', roomId, 'users', user.uid);
   }, [firestore, roomId, user]);
 
-  const { data: firestoreUser } = useDoc<{ discordGuildId?: string; twitchChannel?: string }>(userInRoomRef);
+  const { data: firestoreUser } = useDoc<{ 
+    discordGuildId?: string; 
+    twitchChannel?: string; 
+    discordSelectedChannel?: string;
+    discordChannels?: DiscordChannel[];
+  }>(userInRoomRef);
 
   useEffect(() => {
     if (firestoreUser?.discordGuildId) {
@@ -75,28 +87,23 @@ export function ChatWidget({
     if (firestoreUser?.twitchChannel) {
       setTwitchChannel(firestoreUser.twitchChannel);
     }
+    if (firestoreUser?.discordSelectedChannel) {
+      setSelectedChannel(firestoreUser.discordSelectedChannel);
+    }
+    if (firestoreUser?.discordChannels) {
+      setDiscordChannels(firestoreUser.discordChannels);
+    }
   }, [firestoreUser]);
 
-  useEffect(() => {
-    if (!discordGuildId) {
-      setDiscordChannels([]);
-      return;
-    }
+  // No longer need to fetch channels - they're already in Firestore
 
-    setLoadingChannels(true);
-    fetch(`/api/discord/channels?guildId=${discordGuildId}`)
-      .then(res => res.json())
-      .then(channels => {
-        if (Array.isArray(channels)) {
-          setDiscordChannels(channels);
-          if (channels.length > 0 && !selectedChannel) {
-            setSelectedChannel(channels[0].id);
-          }
-        }
-      })
-      .catch(err => console.error('Failed to fetch Discord channels:', err))
-      .finally(() => setLoadingChannels(false));
-  }, [discordGuildId]);
+  // Save selected channel to Firestore when it changes
+  useEffect(() => {
+    if (!selectedChannel || !userInRoomRef || !firestore) return;
+    updateDoc(userInRoomRef, { discordSelectedChannel: selectedChannel }).catch(e => 
+      console.error('Failed to save selected channel:', e)
+    );
+  }, [selectedChannel, userInRoomRef, firestore]);
 
   useEffect(() => {
     if (!selectedChannel) return;
