@@ -7,7 +7,7 @@
     "twitch-bot": "tsx src/bots/twitch-bot.ts",
     "genkit:dev": "genkit start -- tsx src/ai/dev.ts",
     "genkit:watch": "genkit start -- tsx --watch src/ai/dev.ts",
-    "postinstall": "pip3 install --user yt-dlp || true",
+    "postinstall": "echo Skip",
     "build": "NODE_ENV=production next build",
     "start": "next start",
     "lint": "next lint",
@@ -63,6 +63,7 @@
     "tailwindcss-animate": "^1.0.7",
     "tmi.js": "^1.8.5",
     "youtube-sr": "^4.3.8",
+    "yt-dlp-wrap": "^2.3.12",
     "zod": "^3.24.2"
   },
   "devDependencies": {

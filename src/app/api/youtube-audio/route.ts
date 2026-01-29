@@ -1,13 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { exec } from 'child_process';
-import { promisify } from 'util';
+import YTDlpWrap from 'yt-dlp-wrap';
 import { unlink } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { getStorage } from 'firebase-admin/storage';
 import { initializeApp, getApps, cert } from 'firebase-admin/app';
 
-const execAsync = promisify(exec);
+const ytDlp = new YTDlpWrap();
 
 const PIPED_INSTANCES = [
   "https://piped.video",
@@ -121,7 +120,13 @@ async function downloadAndUpload(videoId: string, youtubeUrl: string) {
     const tempAudio = join(tempDir, `${videoId}.mp3`);
 
     console.log(`Downloading ${videoId} with yt-dlp...`);
-    await execAsync(`yt-dlp -x --audio-format mp3 --audio-quality 0 -o "${tempAudio}" "${youtubeUrl}"`);
+    await ytDlp.execPromise([
+      youtubeUrl,
+      '-x',
+      '--audio-format', 'mp3',
+      '--audio-quality', '0',
+      '-o', tempAudio
+    ]);
 
     console.log(`Uploading ${videoId} to Storage...`);
     await bucket.upload(tempAudio, {
