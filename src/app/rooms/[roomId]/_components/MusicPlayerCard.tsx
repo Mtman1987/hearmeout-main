@@ -67,6 +67,9 @@ export default function MusicPlayerCard({
   const [musicDevices, setMusicDevices] = useState<MediaDeviceInfo[]>([]);
   const [selectedMusicDevice, setSelectedMusicDevice] = useState<string>('');
   const [isMusicPublished, setIsMusicPublished] = useState(false);
+  const [musicAudioLevel, setMusicAudioLevel] = useState(0);
+  const audioAnalyzerRef = useRef<AnalyserNode | null>(null);
+  const animationFrameRef = useRef<number>();
   
   const [currentTime, setCurrentTime] = React.useState(0);
   const [duration, setDuration] = React.useState(0);
@@ -104,6 +107,25 @@ export default function MusicPlayerCard({
           });
           
           const track = stream.getAudioTracks()[0];
+          
+          // Set up audio analyzer
+          const audioContext = new AudioContext();
+          const source = audioContext.createMediaStreamSource(stream);
+          const analyzer = audioContext.createAnalyser();
+          analyzer.fftSize = 256;
+          source.connect(analyzer);
+          audioAnalyzerRef.current = analyzer;
+          
+          // Monitor audio levels
+          const dataArray = new Uint8Array(analyzer.frequencyBinCount);
+          const updateLevel = () => {
+            analyzer.getByteFrequencyData(dataArray);
+            const average = dataArray.reduce((a, b) => a + b) / dataArray.length;
+            setMusicAudioLevel(average / 255);
+            animationFrameRef.current = requestAnimationFrame(updateLevel);
+          };
+          updateLevel();
+          
           musicTrackRef.current = await room.localParticipant.publishTrack(track, {
             name: 'music',
             source: LivekitClient.Track.Source.Unknown,
@@ -116,6 +138,10 @@ export default function MusicPlayerCard({
             await room.localParticipant.unpublishTrack(musicTrackRef.current.track!);
             musicTrackRef.current = null;
             setIsMusicPublished(false);
+            setMusicAudioLevel(0);
+            if (animationFrameRef.current) {
+              cancelAnimationFrame(animationFrameRef.current);
+            }
             console.log('Music track unpublished');
           }
         }
@@ -192,9 +218,20 @@ export default function MusicPlayerCard({
                       ))}
                     </select>
                     {isMusicPublished && (
-                      <div className="flex items-center gap-2 text-xs text-green-500">
-                        <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse" />
-                        Music streaming active
+                      <div className="space-y-2">
+                        <div className="flex items-center gap-2 text-xs text-green-500">
+                          <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse" />
+                          Music streaming active
+                        </div>
+                        <div className="space-y-1">
+                          <div className="text-xs text-muted-foreground">Audio Level</div>
+                          <div className="w-full h-2 bg-secondary rounded-full overflow-hidden">
+                            <div 
+                              className="h-full bg-green-500 transition-all duration-75"
+                              style={{ width: `${musicAudioLevel * 100}%` }}
+                            />
+                          </div>
+                        </div>
                       </div>
                     )}
                   </div>
