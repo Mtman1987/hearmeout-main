@@ -45,7 +45,7 @@ export async function sendControlEmbed(
             style: 1,
             label: 'Settings',
             emoji: { name: '⚙️' },
-            custom_id: `settings_${roomId?.slice(0, 20) || 'room'}`,
+            custom_id: `room_settings:${roomId || 'room'}`,
         }
     ];
 
@@ -73,7 +73,7 @@ export async function sendControlEmbed(
         style: 4,
         label: 'Close',
         emoji: { name: '❌' },
-        custom_id: `close_${roomId?.slice(0, 20) || 'room'}`,
+        custom_id: `room_close:${roomId || 'room'}`,
     });
 
     const body = {
