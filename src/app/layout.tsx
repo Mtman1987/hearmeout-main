@@ -1,6 +1,7 @@
 import type {Metadata} from 'next';
 import './globals.css';
 import { Toaster } from "@/components/ui/toaster";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import { FirebaseClientProvider } from '@/firebase';
 import { PopoutProvider } from '@/components/PopoutWidgets/PopoutProvider';
 import { PopoutRenderer } from '@/components/PopoutWidgets/PopoutRenderer';
@@ -50,8 +51,10 @@ export default function RootLayout({
         />
         <PopoutProvider>
           <FirebaseClientProvider>
-            {children}
-            <PopoutRenderer />
+            <TooltipProvider delayDuration={200}>
+              {children}
+              <PopoutRenderer />
+            </TooltipProvider>
           </FirebaseClientProvider>
         </PopoutProvider>
         <Toaster />

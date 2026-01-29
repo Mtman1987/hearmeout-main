@@ -84,14 +84,37 @@
 }
 
 /* Fix Radix UI overlay blocking clicks */
-[data-radix-popper-content-wrapper] {
+/* Make all portal wrappers transparent to pointer events */
+[data-radix-popper-content-wrapper],
+[data-radix-portal],
+[data-radix-dialog-overlay],
+[data-radix-popover-content-wrapper],
+[data-radix-select-viewport],
+[data-radix-dropdown-menu-viewport],
+[data-radix-tooltip-portal] {
   pointer-events: none !important;
 }
 
-[data-radix-popper-content-wrapper] > * {
+/* Re-enable pointer events on actual content */
+[data-radix-popper-content-wrapper] > *,
+[data-radix-portal] > *,
+[data-radix-dialog-content],
+[data-radix-popover-content],
+[data-radix-select-content],
+[data-radix-dropdown-menu-content],
+[data-radix-tooltip-content],
+[role="dialog"],
+[role="menu"],
+[role="listbox"] {
   pointer-events: auto !important;
 }
 
+/* Ensure tooltips don't block interactions */
+[data-radix-tooltip-trigger] {
+  pointer-events: auto !important;
+}
+
+/* Fix for any radix themes */
 .radix-themes {
   pointer-events: none !important;
 }
@@ -100,16 +123,15 @@
   pointer-events: auto !important;
 }
 
-/* Additional overlay fixes */
-[data-radix-dialog-overlay],
-[data-radix-popover-content-wrapper],
-[data-state="open"][data-radix-collection-item] {
-  pointer-events: none !important;
-}
-
-[data-radix-dialog-content],
-[data-radix-popover-content],
-[data-radix-select-content],
-[data-radix-dropdown-menu-content] {
+/* Ensure buttons and interactive elements are always clickable */
+button,
+a,
+input,
+textarea,
+select,
+[role="button"],
+[role="link"] {
   pointer-events: auto !important;
+  position: relative;
+  z-index: 1;
 }
