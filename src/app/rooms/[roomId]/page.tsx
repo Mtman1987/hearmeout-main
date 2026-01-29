@@ -459,7 +459,6 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
     const [chatOpen, setChatOpen] = useState(false);
     const [voiceToken, setVoiceToken] = useState<string | undefined>(undefined);
     const [activePanels, setActivePanels] = useState({ playlist: true, add: true });
-    const audioRef = useRef<HTMLAudioElement>(null);
     
     const [musicVolume, setMusicVolume] = useState(0.5);
     const [localVolume, setLocalVolume] = useState(0.5);
@@ -677,13 +676,6 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
               toast({ variant: 'destructive', title: 'Connection Error', description: err.message });
           }}
       >
-        <MusicStreamer 
-            isDJ={isDJ}
-            isPlaying={!!room.isPlaying}
-            trackUrl={currentTrack?.url}
-            onTrackEnd={handlePlayNext}
-            audioRef={audioRef}
-        />
         <div className={cn(
             "bg-secondary/30 md:peer-data-[state=collapsed]:peer-data-[variant=inset]:ml-[calc(var(--sidebar-width-icon)_+_1rem)] md:peer-data-[variant=inset]:ml-[calc(var(--sidebar-width)_+_1rem)] duration-200 transition-[margin-left,margin-right]",
             chatOpen && "md:mr-[28rem]"
@@ -738,7 +730,8 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
                                                         canAddMusic={true}
                                                     />
                                                     <MusicStreamerCard
-                                                        audioRef={audioRef}
+                                                        trackUrl={currentTrack?.url}
+                                                        isPlaying={!!room.isPlaying}
                                                         volume={musicVolume}
                                                         onVolumeChange={setMusicVolume}
                                                         onTrackEnd={handlePlayNext}
