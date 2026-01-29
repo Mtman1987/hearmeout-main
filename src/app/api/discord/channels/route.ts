@@ -33,10 +33,9 @@ export async function GET(req: NextRequest) {
     }
 
     const channels = await response.json();
-    const textAndVoiceChannels = channels.filter((ch: any) => ch.type === 0 || ch.type === 2);
-    console.log('[Discord Channels API] Found channels:', textAndVoiceChannels.length);
+    console.log('[Discord Channels API] Found channels:', channels.length);
     
-    return NextResponse.json(textAndVoiceChannels);
+    return NextResponse.json(channels);
   } catch (error) {
     console.error('[Discord Channels API] Error:', error);
     return NextResponse.json({ error: 'Internal error' }, { status: 500 });
