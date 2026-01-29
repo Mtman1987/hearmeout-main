@@ -79,42 +79,6 @@ function RoomHeader({
         });
     }
 
-    const handlePostToDiscord = async () => {
-        if (!user || !firestore) {
-            toast({ variant: 'destructive', title: 'Error', description: 'You must be logged in.' });
-            return;
-        }
-        try {
-            const userInRoomRef = doc(firestore, 'rooms', params.roomId as string, 'users', user.uid);
-            const userDoc = await getDoc(userInRoomRef);
-            const userData = userDoc.data();
-            
-            if (!userData?.discordGuildId) {
-                toast({ variant: 'destructive', title: 'Discord Not Configured', description: 'Set your Discord server ID in your user card menu first.' });
-                return;
-            }
-            
-            // Use saved selected channel (already populated when guild ID was set)
-            const channelId = userData.discordSelectedChannel;
-            if (!channelId) {
-                toast({ variant: 'destructive', title: 'No Channel Selected', description: 'Select a channel in the chat widget first.' });
-                return;
-            }
-            
-            await postToDiscord(channelId);
-            toast({
-                title: "Posted to Discord!",
-                description: `Control embed sent to selected channel`,
-            });
-        } catch (error: any) {
-            toast({
-                variant: "destructive",
-                title: "Discord Error",
-                description: error.message || "Could not post to Discord.",
-            });
-        }
-    }
-
     return (
         <header className="sticky top-0 z-30 flex h-16 items-center gap-4 border-b bg-background px-4 md:px-6">
             <SidebarTrigger className={isMobile ? "" : "hidden md:flex"} />
@@ -152,18 +116,6 @@ function RoomHeader({
                     </TooltipTrigger>
                     <TooltipContent>
                         <p>Pop-out Chat Widget</p>
-                    </TooltipContent>
-                </Tooltip>
-                
-                <Tooltip>
-                    <TooltipTrigger asChild>
-                        <Button variant="outline" size="icon" onClick={handlePostToDiscord}>
-                            <DiscordIcon />
-                            <span className="sr-only">Post Controls to Discord</span>
-                        </Button>
-                    </TooltipTrigger>
-                    <TooltipContent>
-                        <p>Post Controls to Discord</p>
                     </TooltipContent>
                 </Tooltip>
 
@@ -647,6 +599,53 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
     const handlePlayPause = useCallback((playing: boolean) => {
         if (roomRef && isDJ) updateDocumentNonBlocking(roomRef, { isPlaying: playing });
     }, [roomRef, isDJ]);
+
+    const handlePostToDiscord = useCallback(async () => {
+        if (!user || !firestore) {
+            toast({ variant: 'destructive', title: 'Error', description: 'You must be logged in.' });
+            return;
+        }
+        
+        console.log('[handlePostToDiscord] Starting...');
+        
+        try {
+            const userInRoomRef = doc(firestore, 'rooms', roomId, 'users', user.uid);
+            console.log('[handlePostToDiscord] Fetching user data...');
+            const userDoc = await getDoc(userInRoomRef);
+            const userData = userDoc.data();
+            
+            console.log('[handlePostToDiscord] User data:', userData);
+            
+            if (!userData?.discordGuildId) {
+                toast({ variant: 'destructive', title: 'Discord Not Configured', description: 'Set your Discord server ID in your user card menu first.' });
+                return;
+            }
+            
+            const channelId = userData.discordSelectedChannel;
+            console.log('[handlePostToDiscord] Channel ID:', channelId);
+            
+            if (!channelId) {
+                toast({ variant: 'destructive', title: 'No Channel Selected', description: 'Select a channel in the chat widget first.' });
+                return;
+            }
+            
+            console.log('[handlePostToDiscord] Calling postToDiscord with channel:', channelId);
+            await postToDiscord(channelId);
+            
+            console.log('[handlePostToDiscord] Success!');
+            toast({
+                title: "Posted to Discord!",
+                description: `Control embed sent to selected channel`,
+            });
+        } catch (error: any) {
+            console.error('[handlePostToDiscord] Error:', error);
+            toast({
+                variant: "destructive",
+                title: "Discord Error",
+                description: error.message || "Could not post to Discord.",
+            });
+        }
+    }, [user, firestore, roomId, toast]);
 
     const livekitUrl = process.env.NEXT_PUBLIC_LIVEKIT_URL;
 

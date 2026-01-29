@@ -36,23 +36,11 @@ export default function SettingsPage() {
 
   React.useEffect(() => {
     const params = new URLSearchParams(window.location.search);
-    const code = params.get('code');
-    const state = params.get('state');
+    const botAuthorized = params.get('bot_authorized');
     
-    if (code && state === 'twitch_bot') {
-      fetch('/api/twitch/exchange', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ code }),
-      })
-        .then(res => res.json())
-        .then(data => {
-          if (data.success) {
-            toast({ title: 'Success', description: `Bot authorized as ${data.username}` });
-            window.history.replaceState({}, '', '/settings');
-          }
-        })
-        .catch(console.error);
+    if (botAuthorized) {
+      toast({ title: 'Success', description: `Bot authorized as ${botAuthorized}` });
+      window.history.replaceState({}, '', '/settings');
     }
   }, [toast]);
 
@@ -112,9 +100,9 @@ export default function SettingsPage() {
                                 <CardContent>
                                   <Button
                                     onClick={() => {
-                                      const redirectUri = `${window.location.origin}/settings`;
+                                      const redirectUri = `${window.location.origin}/api/auth/twitch/callback`;
                                       const scope = 'chat:read chat:edit';
-                                      window.location.href = `https://id.twitch.tv/oauth2/authorize?client_id=${process.env.NEXT_PUBLIC_TWITCH_CLIENT_ID}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=code&scope=${encodeURIComponent(scope)}&state=twitch_bot`;
+                                      window.location.href = `https://id.twitch.tv/oauth2/authorize?client_id=${process.env.NEXT_PUBLIC_TWITCH_CLIENT_ID}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=code&scope=${encodeURIComponent(scope)}&state=twitch_bot&force_verify=true`;
                                     }}
                                   >
                                     Authorize Bot Account

@@ -4,6 +4,7 @@ import { auth as adminAuth, db as adminDb } from '@/firebase/admin';
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
   const code = searchParams.get('code');
+  const state = searchParams.get('state');
   const error = searchParams.get('error');
 
   if (error) {
@@ -41,13 +42,13 @@ export async function GET(req: NextRequest) {
       throw new Error(`Twitch token exchange failed: ${JSON.stringify(errorData)}`);
     }
 
-    const { access_token } = await tokenResponse.json();
+    const tokens = await tokenResponse.json();
 
     // Get user info
     const userResponse = await fetch('https://api.twitch.tv/helix/users', {
       headers: {
         'Client-ID': clientId!,
-        Authorization: `Bearer ${access_token}`,
+        Authorization: `Bearer ${tokens.access_token}`,
       },
     });
 
@@ -61,6 +62,22 @@ export async function GET(req: NextRequest) {
     }
 
     const twitchUser = users[0];
+
+    // If this is bot authorization (state=twitch_bot), save bot credentials
+    if (state === 'twitch_bot') {
+      await adminDb.collection('config').doc('twitch_bot').set({
+        access_token: tokens.access_token,
+        refresh_token: tokens.refresh_token,
+        username: twitchUser.login,
+        updated_at: new Date().toISOString(),
+      });
+      
+      return NextResponse.redirect(
+        `${process.env.NEXT_PUBLIC_BASE_URL}/settings?bot_authorized=${twitchUser.login}`
+      );
+    }
+
+    // Otherwise, this is user login
     const uid = `twitch_${twitchUser.id}`;
 
     // Create or update Firebase user

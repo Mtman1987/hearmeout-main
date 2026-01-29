@@ -1,5 +1,3 @@
-'use client';
-
 import React, { useState, useEffect } from 'react';
 import { DraggableContainer } from './DraggableContainer';
 import {
@@ -15,6 +13,8 @@ import { Button } from '@/components/ui/button';
 import { Send, Loader2 } from 'lucide-react';
 import { useFirebase, useDoc, useMemoFirebase } from '@/firebase';
 import { doc, updateDoc, setDoc } from 'firebase/firestore';
+import { postToDiscord } from '@/app/actions';
+import { useToast } from '@/hooks/use-toast';
 
 interface ChatWidgetProps {
   id: string;
@@ -33,6 +33,10 @@ interface ChatMessage {
   timestamp: Date;
   platform: 'discord' | 'twitch';
   badge?: 'mod' | 'sub' | 'vip';
+  avatarUrl?: string;
+  attachments?: Array<{ url: string; proxy_url: string; content_type?: string }>;
+  embeds?: Array<{ image?: { url: string }; thumbnail?: { url: string } }>;
+  mentions?: Array<{ id: string; username: string }>;
 }
 
 interface DiscordChannel {
@@ -51,6 +55,7 @@ export function ChatWidget({
   roomId,
 }: ChatWidgetProps) {
   const { firestore, user } = useFirebase();
+  const { toast } = useToast();
   const [selectedChannel, setSelectedChannel] = useState('');
   const [viewMode, setViewMode] = useState<'tabbed' | 'split-v' | 'split-h'>('tabbed');
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -60,6 +65,7 @@ export function ChatWidget({
   const [discordGuildId, setDiscordGuildId] = useState<string | null>(null);
   const [twitchChannel, setTwitchChannel] = useState<string | null>(null);
   const [lastMessageId, setLastMessageId] = useState<string | null>(null);
+  const [postingEmbed, setPostingEmbed] = useState(false);
 
   const userInRoomRef = useMemoFirebase(() => {
     if (!firestore || !roomId || !user) return null;
@@ -91,6 +97,11 @@ export function ChatWidget({
 
   useEffect(() => {
     if (!selectedChannel || !userInRoomRef || !firestore) return;
+    
+    // Reset messages and lastMessageId when channel changes
+    setMessages([]);
+    setLastMessageId(null);
+    
     setDoc(userInRoomRef, { discordSelectedChannel: selectedChannel }, { merge: true }).catch(e => 
       console.error('Failed to save selected channel:', e)
     );
@@ -115,6 +126,12 @@ export function ChatWidget({
             content: msg.content,
             timestamp: new Date(msg.timestamp),
             platform: 'discord' as const,
+            avatarUrl: msg.author.avatar 
+              ? `https://cdn.discordapp.com/avatars/${msg.author.id}/${msg.author.avatar}.png`
+              : undefined,
+            attachments: msg.attachments,
+            embeds: msg.embeds,
+            mentions: msg.mentions,
           }));
           
           setMessages(prev => [...prev, ...msgs]);
@@ -149,6 +166,24 @@ export function ChatWidget({
   }
 
 
+
+  const handlePostToDiscord = async () => {
+    if (!selectedChannel) {
+      toast({ variant: 'destructive', title: 'No Channel Selected', description: 'Select a Discord channel first.' });
+      return;
+    }
+    
+    setPostingEmbed(true);
+    try {
+      await postToDiscord(selectedChannel);
+      toast({ title: 'Posted to Discord!', description: 'Control embed sent to selected channel' });
+    } catch (error: any) {
+      console.error('Failed to post embed:', error);
+      toast({ variant: 'destructive', title: 'Discord Error', description: error.message || 'Could not post to Discord.' });
+    } finally {
+      setPostingEmbed(false);
+    }
+  };
 
   const handleSendMessage = async () => {
     if (!newMessage.trim() || !selectedChannel) return;
@@ -195,6 +230,25 @@ export function ChatWidget({
               ))}
             </SelectContent>
           </Select>
+          
+          <Button 
+            size="sm" 
+            onClick={handlePostToDiscord}
+            disabled={!selectedChannel || postingEmbed}
+            className="h-8 text-xs"
+          >
+            {postingEmbed ? (
+              <Loader2 className="h-3 w-3 animate-spin" />
+            ) : (
+              <>
+                <svg className="h-3 w-3 mr-1" viewBox="0 0 24 24" fill="currentColor">
+                  <path d="M16.29 5.23a10.08 10.08 0 0 0-2.2-.62.84.84 0 0 0-1 .75c.18.25.36.5.52.75a8.62 8.62 0 0 0-4.14 0c.16-.25.34-.5.52-.75a.84.84 0 0 0-1-.75 10.08 10.08 0 0 0-2.2.62.81.81 0 0 0-.54.78c-.28 3.24.78 6.28 2.82 8.25a.85.85 0 0 0 .93.12 7.55 7.55 0 0 0 1.45-.87.82.82 0 0 1 .9-.06 6.53 6.53 0 0 0 2.22 0 .82.82 0 0 1 .9.06 7.55 7.55 0 0 0 1.45.87.85.85 0 0 0 .93-.12c2.04-1.97 3.1-5 2.82-8.25a.81.81 0 0 0-.55-.78zM10 11.85a1.45 1.45 0 0 1-1.45-1.45A1.45 1.45 0 0 1 10 8.95a1.45 1.45 0 0 1 1.45 1.45A1.45 1.45 0 0 1 10 11.85zm4 0a1.45 1.45 0 0 1-1.45-1.45A1.45 1.45 0 0 1 14 8.95a1.45 1.45 0 0 1 1.45 1.45A1.45 1.45 0 0 1 14 11.85z"/>
+                </svg>
+                Post Embed
+              </>
+            )}
+          </Button>
+          
           {loadingChannels && <Loader2 className="h-4 w-4 animate-spin" />}
 
           <select
@@ -209,10 +263,10 @@ export function ChatWidget({
         </div>
 
         {/* Chat Messages */}
-        <div className="flex-1 overflow-hidden flex">
+        <div className="flex-1 overflow-hidden flex flex-col">
           {viewMode === 'tabbed' ? (
-            <Tabs defaultValue="discord" className="w-full flex flex-col">
-              <TabsList className="w-full rounded-none h-8">
+            <Tabs defaultValue="discord" className="w-full flex flex-col flex-1">
+              <TabsList className="w-full rounded-none h-8 flex-shrink-0">
                 <TabsTrigger value="discord" className="text-xs flex-1">
                   Discord
                 </TabsTrigger>
@@ -243,17 +297,19 @@ export function ChatWidget({
               </TabsContent>
             </Tabs>
           ) : viewMode === 'split-v' ? (
-            <div className="flex gap-1 w-full">
-              <div className="flex-1 overflow-y-auto border-r p-2">
-                {!discordGuildId ? (
-                  <div className="text-xs text-muted-foreground text-center py-4">
-                    Set Discord server in your user card menu
-                  </div>
-                ) : (
-                  <ChatMessageList messages={messages.filter((m) => m.platform === 'discord')} />
-                )}
+            <div className="flex gap-1 w-full flex-1">
+              <div className="flex-1 flex flex-col overflow-hidden">
+                <div className="flex-1 overflow-y-auto p-2">
+                  {!discordGuildId ? (
+                    <div className="text-xs text-muted-foreground text-center py-4">
+                      Set Discord server in your user card menu
+                    </div>
+                  ) : (
+                    <ChatMessageList messages={messages.filter((m) => m.platform === 'discord')} />
+                  )}
+                </div>
               </div>
-              <div className="flex-1 p-0 overflow-hidden">
+              <div className="flex-1 overflow-hidden">
                 {!twitchChannel ? (
                   <div className="text-xs text-muted-foreground text-center py-4">
                     Set Twitch channel in your user card menu
@@ -267,17 +323,19 @@ export function ChatWidget({
               </div>
             </div>
           ) : (
-            <div className="flex flex-col gap-1 w-full">
-              <div className="flex-1 overflow-y-auto border-b p-2">
-                {!discordGuildId ? (
-                  <div className="text-xs text-muted-foreground text-center py-4">
-                    Set Discord server in your user card menu
-                  </div>
-                ) : (
-                  <ChatMessageList messages={messages.filter((m) => m.platform === 'discord')} />
-                )}
+            <div className="flex flex-col gap-1 w-full flex-1">
+              <div className="flex-1 flex flex-col overflow-hidden">
+                <div className="flex-1 overflow-y-auto p-2">
+                  {!discordGuildId ? (
+                    <div className="text-xs text-muted-foreground text-center py-4">
+                      Set Discord server in your user card menu
+                    </div>
+                  ) : (
+                    <ChatMessageList messages={messages.filter((m) => m.platform === 'discord')} />
+                  )}
+                </div>
               </div>
-              <div className="flex-1 p-0 overflow-hidden">
+              <div className="flex-1 overflow-hidden">
                 {!twitchChannel ? (
                   <div className="text-xs text-muted-foreground text-center py-4">
                     Set Twitch channel in your user card menu
@@ -293,25 +351,27 @@ export function ChatWidget({
           )}
         </div>
 
-        {/* Input */}
-        <div className="border-t p-2 bg-muted/30 flex gap-1">
-          <Input
-            placeholder={!discordGuildId ? "Set Discord server first..." : "Message..."}
-            value={newMessage}
-            onChange={(e) => setNewMessage(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && handleSendMessage()}
-            className="h-8 text-xs"
-            disabled={!discordGuildId || !selectedChannel}
-          />
-          <Button
-            size="sm"
-            onClick={handleSendMessage}
-            className="h-8 w-8 p-0"
-            disabled={!discordGuildId || !selectedChannel}
-          >
-            <Send className="w-3 h-3" />
-          </Button>
-        </div>
+        {/* Input - Only show for Discord */}
+        {discordGuildId && (
+          <div className="border-t p-2 bg-muted/30 flex gap-1 flex-shrink-0">
+            <Input
+              placeholder="Message..."
+              value={newMessage}
+              onChange={(e) => setNewMessage(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && handleSendMessage()}
+              className="h-8 text-xs"
+              disabled={!selectedChannel}
+            />
+            <Button
+              size="sm"
+              onClick={handleSendMessage}
+              className="h-8 w-8 p-0"
+              disabled={!selectedChannel}
+            >
+              <Send className="w-3 h-3" />
+            </Button>
+          </div>
+        )}
       </div>
     </DraggableContainer>
   );
@@ -324,34 +384,101 @@ function ChatMessageList({ messages }: { messages: ChatMessage[] }) {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
+  const parseDiscordContent = (content: string, mentions?: Array<{ id: string; username: string }>) => {
+    let parsed = content;
+    
+    // Replace user mentions
+    if (mentions) {
+      mentions.forEach(mention => {
+        parsed = parsed.replace(new RegExp(`<@!?${mention.id}>`, 'g'), `@${mention.username}`);
+      });
+    }
+    
+    // Replace custom emojis with their names
+    parsed = parsed.replace(/<a?:(\w+):\d+>/g, ':$1:');
+    
+    return parsed;
+  };
+
   return (
-    <div className="space-y-1.5">
+    <div className="space-y-2">
       {messages.length === 0 ? (
         <div className="text-xs text-muted-foreground text-center py-4">
           No messages yet
         </div>
       ) : (
         messages.map((msg) => (
-          <div key={msg.id} className="text-xs break-words">
-            <div className="flex items-center gap-1">
-              {msg.badge && (
-                <span
-                  className={`text-xs font-bold px-1 rounded ${
-                    msg.badge === 'mod'
-                      ? 'bg-red-500/20 text-red-700 dark:text-red-400'
-                      : msg.badge === 'sub'
-                        ? 'bg-purple-500/20 text-purple-700 dark:text-purple-400'
-                        : 'bg-yellow-500/20 text-yellow-700 dark:text-yellow-400'
-                  }`}
-                >
-                  {msg.badge.toUpperCase()}
+          <div key={msg.id} className="text-xs break-words flex gap-2">
+            {msg.avatarUrl && (
+              <img 
+                src={msg.avatarUrl} 
+                alt={msg.author} 
+                className="w-6 h-6 rounded-full flex-shrink-0"
+              />
+            )}
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center gap-1 flex-wrap">
+                {msg.badge && (
+                  <span
+                    className={`text-xs font-bold px-1 rounded ${
+                      msg.badge === 'mod'
+                        ? 'bg-red-500/20 text-red-700 dark:text-red-400'
+                        : msg.badge === 'sub'
+                          ? 'bg-purple-500/20 text-purple-700 dark:text-purple-400'
+                          : 'bg-yellow-500/20 text-yellow-700 dark:text-yellow-400'
+                    }`}
+                  >
+                    {msg.badge.toUpperCase()}
+                  </span>
+                )}
+                <span className="font-semibold text-blue-600 dark:text-blue-400">
+                  {msg.author}
                 </span>
+              </div>
+              {msg.content && (
+                <div className="text-foreground mt-0.5">
+                  {parseDiscordContent(msg.content, msg.mentions)}
+                </div>
               )}
-              <span className="font-semibold text-blue-600 dark:text-blue-400">
-                {msg.author}:
-              </span>
+              {msg.attachments && msg.attachments.length > 0 && (
+                <div className="mt-1 space-y-1">
+                  {msg.attachments.map((att, i) => (
+                    att.content_type?.startsWith('image/') ? (
+                      <img 
+                        key={i}
+                        src={att.proxy_url || att.url} 
+                        alt="attachment" 
+                        className="max-w-full max-h-48 rounded"
+                      />
+                    ) : (
+                      <a 
+                        key={i}
+                        href={att.url} 
+                        target="_blank" 
+                        rel="noopener noreferrer"
+                        className="text-blue-500 hover:underline block"
+                      >
+                        📎 Attachment
+                      </a>
+                    )
+                  ))}
+                </div>
+              )}
+              {msg.embeds && msg.embeds.length > 0 && (
+                <div className="mt-1 space-y-1">
+                  {msg.embeds.map((embed, i) => (
+                    (embed.image?.url || embed.thumbnail?.url) && (
+                      <img 
+                        key={i}
+                        src={embed.image?.url || embed.thumbnail?.url} 
+                        alt="embed" 
+                        className="max-w-full max-h-48 rounded"
+                      />
+                    )
+                  ))}
+                </div>
+              )}
             </div>
-            <div className="text-muted-foreground ml-4">{msg.content}</div>
           </div>
         ))
       )}
