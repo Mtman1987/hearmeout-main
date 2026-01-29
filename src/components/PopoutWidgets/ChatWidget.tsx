@@ -82,16 +82,16 @@ export function ChatWidget({
   useEffect(() => {
     if (firestoreUser?.discordGuildId) {
       setDiscordGuildId(firestoreUser.discordGuildId);
+      // Load channels when guild ID is available
+      if (firestoreUser.discordChannels && firestoreUser.discordChannels.length > 0) {
+        setDiscordChannels(firestoreUser.discordChannels);
+      }
     }
     if (firestoreUser?.twitchChannel) {
       setTwitchChannel(firestoreUser.twitchChannel);
     }
     if (firestoreUser?.discordSelectedChannel) {
       setSelectedChannel(firestoreUser.discordSelectedChannel);
-    }
-    if (firestoreUser?.discordChannels) {
-      console.log('[ChatWidget] Loading channels from Firestore:', firestoreUser.discordChannels);
-      setDiscordChannels(firestoreUser.discordChannels);
     }
   }, [firestoreUser]);
 
@@ -102,11 +102,13 @@ export function ChatWidget({
     setMessages([]);
     setLastMessageId(null);
     
+    // Save selected channel (write only when changed)
     setDoc(userInRoomRef, { discordSelectedChannel: selectedChannel }, { merge: true }).catch(e => 
       console.error('Failed to save selected channel:', e)
     );
   }, [selectedChannel, userInRoomRef, firestore]);
 
+  // Poll Discord messages every 5 seconds
   useEffect(() => {
     if (!selectedChannel) return;
 
@@ -117,6 +119,8 @@ export function ChatWidget({
           : `/api/discord/messages?channelId=${selectedChannel}&limit=50`;
         
         const res = await fetch(url);
+        if (!res.ok) throw new Error('Failed to fetch messages');
+        
         const newMessages = await res.json();
         
         if (Array.isArray(newMessages) && newMessages.length > 0) {
@@ -142,8 +146,11 @@ export function ChatWidget({
       }
     };
 
+    // Initial load
     pollMessages();
-    const interval = setInterval(pollMessages, 3000);
+    
+    // Poll every 5 seconds
+    const interval = setInterval(pollMessages, 5000);
     return () => clearInterval(interval);
   }, [selectedChannel, lastMessageId]);
 
@@ -175,7 +182,16 @@ export function ChatWidget({
     
     setPostingEmbed(true);
     try {
-      await postToDiscord(selectedChannel);
+      // Get room data from Firestore
+      const roomData = firestoreUser;
+      await postToDiscord(
+        selectedChannel,
+        roomId,
+        'Music Room', // You can get this from room data
+        'Join us for music and chat!',
+        undefined, // Add Twitch URL if available
+        undefined  // Add Discord URL if available
+      );
       toast({ title: 'Posted to Discord!', description: 'Control embed sent to selected channel' });
     } catch (error: any) {
       console.error('Failed to post embed:', error);
@@ -188,20 +204,39 @@ export function ChatWidget({
   const handleSendMessage = async () => {
     if (!newMessage.trim() || !selectedChannel) return;
     
+    const messageText = newMessage;
+    setNewMessage(''); // Clear input immediately
+    
     try {
-      await fetch('/api/discord/send', {
+      const res = await fetch('/api/discord/send', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           channelId: selectedChannel,
-          content: newMessage,
+          content: messageText,
           username: user?.displayName || 'HearMeOut User',
           avatarUrl: user?.photoURL,
         }),
       });
-      setNewMessage('');
+      
+      if (!res.ok) throw new Error('Failed to send message');
+      
+      // Immediately add message to local state for instant feedback
+      const sentMsg: ChatMessage = {
+        id: `temp-${Date.now()}`,
+        author: user?.displayName || 'You',
+        content: messageText,
+        timestamp: new Date(),
+        platform: 'discord',
+        avatarUrl: user?.photoURL,
+      };
+      setMessages(prev => [...prev, sentMsg]);
+      
+      // Reset lastMessageId to force refresh on next poll
+      setLastMessageId(null);
     } catch (error) {
       console.error('Failed to send message:', error);
+      setNewMessage(messageText); // Restore message on error
     }
   };
 

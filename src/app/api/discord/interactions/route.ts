@@ -31,16 +31,13 @@ function verifyDiscordRequest(body: string, signature: string, timestamp: string
   return true;
 }
 
-async function handlePlayPauseButton(body: any): Promise<NextResponse> {
+async function handlePlayPauseButton(body: any, token: string): Promise<void> {
   const targetRoomId = process.env.TARGET_ROOM_ID;
-  if (!targetRoomId) {
-    return NextResponse.json({
-      type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
-      data: {
-        content: '❌ Bot not configured (missing Room ID).',
-        flags: 64
-      }
-    });
+  const clientId = process.env.NEXT_PUBLIC_DISCORD_CLIENT_ID;
+  
+  if (!targetRoomId || !clientId) {
+    await sendFollowup(clientId!, token, '❌ Bot not configured.');
+    return;
   }
 
   try {
@@ -48,73 +45,53 @@ async function handlePlayPauseButton(body: any): Promise<NextResponse> {
     const roomDoc = await roomRef.get();
     
     if (!roomDoc.exists) {
-      return NextResponse.json({
-        type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
-        data: {
-          content: '❌ Room not found.',
-          flags: 64
-        }
-      });
+      await sendFollowup(clientId, token, '❌ Room not found.');
+      return;
     }
 
     const roomData = roomDoc.data();
     const currentState = roomData?.isPlaying || false;
     
-    // Toggle play/pause
     await roomRef.update({ isPlaying: !currentState });
-
     const status = !currentState ? '▶️ Playing' : '⏸️ Paused';
     
-    return NextResponse.json({
-      type: InteractionResponseType.UPDATE_MESSAGE,
-      data: {
-        content: `${status}`,
-        flags: 64
-      }
-    });
+    await sendFollowup(clientId, token, status);
   } catch (error) {
-    console.error("Error handling play/pause:", error);
-    return NextResponse.json({
-      type: InteractionResponseType.UPDATE_MESSAGE,
-      data: {
-        content: '❌ Error updating playback state.',
-        flags: 64
-      }
-    });
+    console.error('Error handling play/pause:', error);
+    await sendFollowup(clientId, token, '❌ Error updating playback state.');
   }
 }
 
-async function handleSkipButton(body: any): Promise<NextResponse> {
+async function handleSkipButton(body: any, token: string): Promise<void> {
   const targetRoomId = process.env.TARGET_ROOM_ID;
-  if (!targetRoomId) {
-    return NextResponse.json({
-      type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
-      data: {
-        content: '❌ Bot not configured (missing Room ID).',
-        flags: 64
-      }
-    });
+  const clientId = process.env.NEXT_PUBLIC_DISCORD_CLIENT_ID;
+  
+  if (!targetRoomId || !clientId) {
+    await sendFollowup(clientId!, token, '❌ Bot not configured.');
+    return;
   }
 
   try {
     const result = await skipTrack(targetRoomId);
-    
-    return NextResponse.json({
-      type: InteractionResponseType.UPDATE_MESSAGE,
-      data: {
-        content: result.success ? `✅ ${result.message}` : `❌ ${result.message}`,
-        flags: 64
-      }
-    });
+    const message = result.success ? `✅ ${result.message}` : `❌ ${result.message}`;
+    await sendFollowup(clientId, token, message);
   } catch (error) {
-    console.error("Error handling skip:", error);
-    return NextResponse.json({
-      type: InteractionResponseType.UPDATE_MESSAGE,
-      data: {
-        content: '❌ Error skipping track.',
-        flags: 64
-      }
+    console.error('Error handling skip:', error);
+    await sendFollowup(clientId, token, '❌ Error skipping track.');
+  }
+}
+
+async function sendFollowup(clientId: string, token: string, content: string): Promise<void> {
+  const followupUrl = `https://discord.com/api/v10/webhooks/${clientId}/${token}`;
+  
+  try {
+    await fetch(followupUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content }),
     });
+  } catch (err) {
+    console.error('Discord followup message failed:', err);
   }
 }
 
@@ -140,22 +117,86 @@ export async function POST(req: NextRequest) {
   if (type === InteractionType.MESSAGE_COMPONENT) {
     const { custom_id } = data;
 
-    // Song request button
-    if (custom_id === 'request_song_modal_trigger') {
+    // Settings button - show ephemeral controls
+    if (custom_id.startsWith('room_settings:')) {
+      const roomId = custom_id.split(':')[1];
+      return NextResponse.json({
+        type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
+        data: {
+          content: '🎵 **Personal Music Controls**\nThese controls are only visible to you!',
+          flags: 64, // Ephemeral
+          components: [
+            {
+              type: 1,
+              components: [
+                {
+                  type: 2,
+                  style: 1,
+                  label: 'Request Song',
+                  emoji: { name: '🎶' },
+                  custom_id: `request_song:${roomId}`,
+                },
+                {
+                  type: 2,
+                  style: 2,
+                  label: 'Mute',
+                  emoji: { name: '🔇' },
+                  custom_id: `mute_toggle:${roomId}`,
+                },
+                {
+                  type: 2,
+                  style: 4,
+                  label: 'Close',
+                  emoji: { name: '❌' },
+                  custom_id: `close_settings:${roomId}`,
+                },
+              ]
+            }
+          ]
+        },
+      });
+    }
+
+    // Close settings button
+    if (custom_id.startsWith('close_settings:')) {
+      return NextResponse.json({
+        type: InteractionResponseType.UPDATE_MESSAGE,
+        data: {
+          content: '✅ Settings closed.',
+          components: [],
+        },
+      });
+    }
+
+    // Close main embed button
+    if (custom_id.startsWith('room_close:')) {
+      return NextResponse.json({
+        type: InteractionResponseType.UPDATE_MESSAGE,
+        data: {
+          content: '❌ Room embed closed.',
+          embeds: [],
+          components: [],
+        },
+      });
+    }
+
+    // Request song button from settings
+    if (custom_id.startsWith('request_song:')) {
+      const roomId = custom_id.split(':')[1];
       return NextResponse.json({
         type: InteractionResponseType.MODAL,
         data: {
-          custom_id: 'request_song_modal_submit',
+          custom_id: `request_song_modal:${roomId}`,
           title: 'Request a Song',
           components: [
             {
-              type: 1, // Action Row
+              type: 1,
               components: [
                 {
-                  type: 4, // Text Input
+                  type: 4,
                   custom_id: 'song_request_input',
                   label: 'Song Name or YouTube URL',
-                  style: 1, // Short text
+                  style: 1,
                   required: true,
                   placeholder: 'e.g., Lofi Hip Hop or youtube.com/watch?v=...',
                 },
@@ -166,14 +207,61 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    // Play/Pause button
-    if (custom_id === 'music_play_pause_btn') {
-      return await handlePlayPauseButton(body);
+    // Mute toggle button
+    if (custom_id.startsWith('mute_toggle:')) {
+      return NextResponse.json({
+        type: InteractionResponseType.UPDATE_MESSAGE,
+        data: {
+          content: '🔇 **Muted**\nThe music is now muted for you. This doesn\'t affect others!\n\n_Note: To unmute, adjust your volume in the web app._',
+          components: [],
+        },
+      });
     }
 
-    // Skip button
+    // Legacy buttons (keeping for backwards compatibility)
+    if (custom_id === 'request_song_modal_trigger') {
+      return NextResponse.json({
+        type: InteractionResponseType.MODAL,
+        data: {
+          custom_id: 'request_song_modal_submit',
+          title: 'Request a Song',
+          components: [
+            {
+              type: 1,
+              components: [
+                {
+                  type: 4,
+                  custom_id: 'song_request_input',
+                  label: 'Song Name or YouTube URL',
+                  style: 1,
+                  required: true,
+                  placeholder: 'e.g., Lofi Hip Hop or youtube.com/watch?v=...',
+                },
+              ],
+            },
+          ],
+        },
+      });
+    }
+
+    if (custom_id === 'music_play_pause_btn') {
+      const deferResponse = NextResponse.json({
+        type: InteractionResponseType.DEFERRED_UPDATE_MESSAGE,
+      });
+      handlePlayPauseButton(body, token).catch(err => 
+        console.error('Error in handlePlayPauseButton:', err)
+      );
+      return deferResponse;
+    }
+
     if (custom_id === 'music_skip_btn') {
-      return await handleSkipButton(body);
+      const deferResponse = NextResponse.json({
+        type: InteractionResponseType.DEFERRED_UPDATE_MESSAGE,
+      });
+      handleSkipButton(body, token).catch(err => 
+        console.error('Error in handleSkipButton:', err)
+      );
+      return deferResponse;
     }
   }
 
@@ -181,53 +269,91 @@ export async function POST(req: NextRequest) {
   if (type === InteractionType.MODAL_SUBMIT) {
     const { custom_id } = data;
 
+    // New modal format with room ID
+    if (custom_id.startsWith('request_song_modal:')) {
+      const roomId = custom_id.split(':')[1];
+      const songQuery = data.components[0].components[0].value;
+      const requester = member?.user?.global_name || member?.user?.username || 'Discord User';
+      const clientId = process.env.NEXT_PUBLIC_DISCORD_CLIENT_ID;
+      
+      if (!roomId || !clientId) {
+        return NextResponse.json({
+          type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
+          data: { content: '❌ Bot not configured.', flags: 64 }
+        });
+      }
+
+      const deferResponse = NextResponse.json({
+        type: InteractionResponseType.DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE,
+        data: { flags: 64 }
+      });
+
+      addSongToPlaylist(songQuery, roomId, `${requester} (Discord)`)
+        .then(result => {
+          const followupUrl = `https://discord.com/api/v10/webhooks/${clientId}/${token}`;
+          fetch(followupUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              content: result.success ? `✅ ${result.message}` : `❌ ${result.message}`,
+            }),
+          }).catch(err => console.error('Discord followup failed:', err));
+        })
+        .catch(err => {
+          console.error('Error in addSongToPlaylist:', err);
+          const followupUrl = `https://discord.com/api/v10/webhooks/${clientId}/${token}`;
+          fetch(followupUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ content: '❌ Failed to add song.' }),
+          }).catch(e => console.error('Discord error followup failed:', e));
+        });
+
+      return deferResponse;
+    }
+
+    // Legacy modal format
     if (custom_id === 'request_song_modal_submit') {
       const songQuery = data.components[0].components[0].value;
       const requester = member?.user?.global_name || member?.user?.username || 'Discord User';
       
       const targetRoomId = process.env.TARGET_ROOM_ID;
-      if (!targetRoomId) {
-        return NextResponse.json({
-          type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
-          data: {
-            content: '❌ Sorry, the bot is not configured correctly on the server (missing Room ID).',
-            flags: 64
-          }
-        });
-      }
-
-      // Acknowledge immediately
       const clientId = process.env.NEXT_PUBLIC_DISCORD_CLIENT_ID;
-      if (!clientId) {
-        console.error("NEXT_PUBLIC_DISCORD_CLIENT_ID is not set");
+      
+      if (!targetRoomId || !clientId) {
         return NextResponse.json({
           type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
-          data: {
-            content: '❌ Bot configuration error.',
-            flags: 64
-          }
+          data: { content: '❌ Bot not configured.', flags: 64 }
         });
       }
 
-      // Process asynchronously
-      addSongToPlaylist(songQuery, targetRoomId, `${requester} (Discord)`).then(result => {
-        const followupUrl = `https://discord.com/api/v10/webhooks/${clientId}/${token}/messages/@original`;
-        
-        fetch(followupUrl, {
-          method: 'PATCH',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            content: result.success ? `✅ ${result.message}` : `❌ ${result.message}`,
-          }),
-        }).catch(err => console.error("Discord followup message failed:", err));
-      }).catch(err => {
-        console.error("Error in addSongToPlaylist:", err);
-      });
-
-      return NextResponse.json({
+      const deferResponse = NextResponse.json({
         type: InteractionResponseType.DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE,
         data: { flags: 64 }
       });
+
+      addSongToPlaylist(songQuery, targetRoomId, `${requester} (Discord)`)
+        .then(result => {
+          const followupUrl = `https://discord.com/api/v10/webhooks/${clientId}/${token}`;
+          fetch(followupUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              content: result.success ? `✅ ${result.message}` : `❌ ${result.message}`,
+            }),
+          }).catch(err => console.error('Discord followup failed:', err));
+        })
+        .catch(err => {
+          console.error('Error in addSongToPlaylist:', err);
+          const followupUrl = `https://discord.com/api/v10/webhooks/${clientId}/${token}`;
+          fetch(followupUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ content: '❌ Failed to add song.' }),
+          }).catch(e => console.error('Discord error followup failed:', e));
+        });
+
+      return deferResponse;
     }
   }
 

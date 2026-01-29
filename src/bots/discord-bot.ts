@@ -3,14 +3,23 @@
 
 /**
  * Sends a pre-defined control embed to a specified Discord channel.
- * This embed includes buttons for:
- * - Request a Song
- * - Play/Pause
- * - Skip Track
+ * This embed shows room info and provides buttons for Settings, Twitch, Discord, and Close.
  *
  * @param channelId The ID of the Discord channel to send the message to.
+ * @param roomId The room ID to fetch data from.
+ * @param roomName The name of the room.
+ * @param description Optional description for the room.
+ * @param twitchUrl Optional Twitch stream URL.
+ * @param discordUrl Optional Discord server URL.
  */
-export async function sendControlEmbed(channelId: string) {
+export async function sendControlEmbed(
+  channelId: string,
+  roomId?: string,
+  roomName?: string,
+  description?: string,
+  twitchUrl?: string,
+  discordUrl?: string
+) {
     const DISCORD_BOT_TOKEN = process.env.DISCORD_BOT_TOKEN;
 
     if (!DISCORD_BOT_TOKEN) {
@@ -23,57 +32,58 @@ export async function sendControlEmbed(channelId: string) {
     const body = {
         embeds: [
             {
-                title: "🎵 HearMeOut Player Controls",
-                description: "Use the buttons below to control the music player and request songs.",
-                color: 5814783, // A nice blue color (#58b9ff)
+                title: `🎵 ${roomName || 'HearMeOut Music Room'}`,
+                description: description || 'Join us for music and chat!',
+                color: 5814783,
                 fields: [
                     {
-                        name: "📝 Request Songs",
-                        value: "Click 'Request a Song' to add music to the queue",
-                        inline: false
+                        name: '👥 Listeners',
+                        value: 'Loading...',
+                        inline: true
                     },
                     {
-                        name: "🎛️ Playback Controls",
-                        value: "Use Play/Pause and Skip buttons to control playback",
-                        inline: false
+                        name: '🎧 Now Playing',
+                        value: 'Nothing playing',
+                        inline: true
                     }
                 ],
-                thumbnail: {
-                    url: "https://media.discordapp.net/attachments/1234567890/1234567890/music_icon.png"
+                footer: {
+                    text: `Room ID: ${roomId || 'N/A'}`
                 }
             }
         ],
         components: [
             {
-                type: 1, // Action Row
+                type: 1,
                 components: [
                     {
-                        type: 2, // Button
-                        style: 1, // Primary (blue)
-                        label: "Request a Song",
-                        emoji: {
-                            name: "🎵"
-                        },
-                        custom_id: "request_song_modal_trigger", 
+                        type: 2,
+                        style: 1,
+                        label: 'Settings',
+                        emoji: { name: '⚙️' },
+                        custom_id: `room_settings:${roomId}`,
                     },
+                    ...(twitchUrl ? [{
+                        type: 2,
+                        style: 5,
+                        label: 'Twitch',
+                        emoji: { name: '📺' },
+                        url: twitchUrl,
+                    }] : []),
+                    ...(discordUrl ? [{
+                        type: 2,
+                        style: 5,
+                        label: 'Discord',
+                        emoji: { name: '💬' },
+                        url: discordUrl,
+                    }] : []),
                     {
-                        type: 2, // Button
-                        style: 1, // Primary (blue)
-                        label: "Play/Pause",
-                        emoji: {
-                            name: "⏯️"
-                        },
-                        custom_id: "music_play_pause_btn",
+                        type: 2,
+                        style: 4,
+                        label: 'Close',
+                        emoji: { name: '❌' },
+                        custom_id: `room_close:${roomId}`,
                     },
-                    {
-                        type: 2, // Button
-                        style: 1, // Primary (blue)
-                        label: "Skip",
-                        emoji: {
-                            name: "⏭️"
-                        },
-                        custom_id: "music_skip_btn",
-                    }
                 ]
             }
         ]
