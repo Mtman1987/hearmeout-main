@@ -6,7 +6,15 @@ import { join } from 'path';
 import { getStorage } from 'firebase-admin/storage';
 import { initializeApp, getApps, cert } from 'firebase-admin/app';
 
-const ytDlp = new YTDlpWrap();
+let ytDlp: YTDlpWrap | null = null;
+
+async function getYtDlp() {
+  if (!ytDlp) {
+    ytDlp = new YTDlpWrap();
+    await ytDlp.downloadFromGithub();
+  }
+  return ytDlp;
+}
 
 const PIPED_INSTANCES = [
   "https://piped.video",
@@ -120,7 +128,8 @@ async function downloadAndUpload(videoId: string, youtubeUrl: string) {
     const tempAudio = join(tempDir, `${videoId}.mp3`);
 
     console.log(`Downloading ${videoId} with yt-dlp...`);
-    await ytDlp.execPromise([
+    const ytDlpInstance = await getYtDlp();
+    await ytDlpInstance.execPromise([
       youtubeUrl,
       '-x',
       '--audio-format', 'mp3',
