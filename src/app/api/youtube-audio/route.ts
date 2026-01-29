@@ -1,15 +1,39 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { exec } from 'child_process';
+import { promisify } from 'util';
+import { unlink } from 'fs/promises';
+import { tmpdir } from 'os';
+import { join } from 'path';
+import { getStorage } from 'firebase-admin/storage';
+import { initializeApp, getApps, cert } from 'firebase-admin/app';
+
+const execAsync = promisify(exec);
 
 const PIPED_INSTANCES = [
   "https://piped.video",
   "https://pipedapi.kavin.rocks",
   "https://piped.mha.fi",
   "https://piped.privacydev.net",
-  "https://piped-api.garudalinux.org", // Additional backup instance
-  "https://api.piped.projectsegfau.lt"  // Another backup
+  "https://piped-api.garudalinux.org",
+  "https://api.piped.projectsegfau.lt"
 ];
 
-const TIMEOUT_MS = 5000; // 5 second timeout per instance
+const TIMEOUT_MS = 5000;
+
+if (!getApps().length) {
+  try {
+    initializeApp({
+      credential: cert({
+        projectId: process.env.FIREBASE_PROJECT_ID || 'studio-4331919473-dea24',
+        clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
+        privateKey: process.env.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, '\n'),
+      }),
+      storageBucket: process.env.FIREBASE_STORAGE_BUCKET || 'studio-4331919473-dea24.firebasestorage.app',
+    });
+  } catch (e) {
+    console.warn('Firebase Admin init failed, Storage fallback disabled:', e);
+  }
+}
 
 function extractVideoId(url: string): string | null {
   try {
@@ -40,143 +64,118 @@ async function fetchWithTimeout(url: string, timeoutMs: number) {
   }
 }
 
-async function getYoutubeAudioUrl(youtubeUrl: string) {
-  console.log("Incoming URL for audio processing:", youtubeUrl);
-
-  const videoId = extractVideoId(youtubeUrl);
-  console.log("Extracted video ID:", videoId);
-
-  if (!videoId) throw new Error("Invalid YouTube URL or failed to extract Video ID");
-
+async function tryPipedInstances(videoId: string) {
   const errors: string[] = [];
 
   for (const instance of PIPED_INSTANCES) {
     try {
       const apiUrl = `${instance}/streams/${videoId}`;
-      console.log(`Trying Piped instance: ${apiUrl}`);
-
       const res = await fetchWithTimeout(apiUrl, TIMEOUT_MS);
 
       if (!res.ok) {
-        const errorMsg = `HTTP ${res.status} from ${instance}`;
-        console.warn(errorMsg);
-        errors.push(errorMsg);
+        errors.push(`HTTP ${res.status} from ${instance}`);
         continue;
       }
 
       const data = await res.json();
       
       if (!data.audioStreams?.length) {
-        const errorMsg = `No audio streams found from ${instance}`;
-        console.warn(errorMsg);
-        errors.push(errorMsg);
+        errors.push(`No audio streams from ${instance}`);
         continue;
       }
 
-      // Sort by bitrate to get the best quality
       const best = data.audioStreams.sort((a: any, b: any) => (b.bitrate || 0) - (a.bitrate || 0))[0];
       
       if (!best?.url) {
-        const errorMsg = `No valid audio URL from ${instance}`;
-        console.warn(errorMsg);
-        errors.push(errorMsg);
+        errors.push(`No valid URL from ${instance}`);
         continue;
       }
 
-      console.log(`Successfully resolved audio URL from ${instance}:`, best.url);
-
-      return {
-        url: best.url,
-        bitrate: best.bitrate || 0,
-        codec: best.codec || 'unknown',
-        source: instance,
-        videoId: videoId
-      };
+      console.log(`Piped success from ${instance}`);
+      return { url: best.url, source: 'piped' };
     } catch (err: any) {
-      const errorMsg = `Piped instance ${instance} failed: ${err.message}`;
-      console.warn(errorMsg);
-      errors.push(errorMsg);
-      continue;
+      errors.push(`${instance}: ${err.message}`);
     }
   }
 
-  console.error("All Piped instances failed. Errors:", errors);
-  throw new Error(`Unable to resolve audio stream for video ${videoId}. All backends returned errors.`);
+  throw new Error(`All Piped instances failed: ${errors.join(', ')}`);
+}
+
+async function downloadAndUpload(videoId: string, youtubeUrl: string) {
+  try {
+    const bucket = getStorage().bucket();
+    const fileName = `music/${videoId}.mp3`;
+    const file = bucket.file(fileName);
+
+    const [exists] = await file.exists();
+    if (exists) {
+      const [signedUrl] = await file.getSignedUrl({
+        action: 'read',
+        expires: Date.now() + 7 * 24 * 60 * 60 * 1000,
+      });
+      console.log(`Using cached file for ${videoId}`);
+      return { url: signedUrl, source: 'storage-cached' };
+    }
+
+    const tempDir = tmpdir();
+    const tempAudio = join(tempDir, `${videoId}.mp3`);
+
+    console.log(`Downloading ${videoId} with yt-dlp...`);
+    await execAsync(`yt-dlp -x --audio-format mp3 --audio-quality 0 -o "${tempAudio}" "${youtubeUrl}"`);
+
+    console.log(`Uploading ${videoId} to Storage...`);
+    await bucket.upload(tempAudio, {
+      destination: fileName,
+      metadata: {
+        contentType: 'audio/mpeg',
+        cacheControl: 'public, max-age=604800',
+      },
+    });
+
+    await unlink(tempAudio);
+
+    const [signedUrl] = await file.getSignedUrl({
+      action: 'read',
+      expires: Date.now() + 7 * 24 * 60 * 60 * 1000,
+    });
+
+    console.log(`Successfully uploaded ${videoId}`);
+    return { url: signedUrl, source: 'storage-new' };
+  } catch (e: any) {
+    console.error('Storage fallback failed:', e.message);
+    throw e;
+  }
 }
 
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
   const url = searchParams.get('url');
-  const proxy = searchParams.get('proxy'); // Check if requesting proxied audio
-  const retryCount = parseInt(searchParams.get('retry') || '0', 10);
-  const maxRetries = 2;
 
   if (!url) {
     return NextResponse.json({ error: "Missing url query parameter" }, { status: 400 });
   }
 
-  try {
-    const result = await getYoutubeAudioUrl(url as string);
-    
-    // If client requests proxied audio (adds CORS headers), proxy it
-    if (proxy === 'true') {
-      console.log("Proxying audio stream through Next.js endpoint");
-      try {
-        const audioRes = await fetchWithTimeout(result.url, TIMEOUT_MS);
-        if (!audioRes.ok) {
-          throw new Error(`Failed to fetch audio: HTTP ${audioRes.status}`);
-        }
-
-        // Forward with proper CORS headers
-        const buffer = await audioRes.arrayBuffer();
-        return new NextResponse(buffer, {
-          status: 200,
-          headers: {
-            'Content-Type': audioRes.headers.get('content-type') || 'audio/mp4',
-            'Access-Control-Allow-Origin': '*',
-            'Access-Control-Allow-Methods': 'GET, OPTIONS',
-            'Cache-Control': 'public, max-age=3600',
-            'Content-Length': buffer.byteLength.toString(),
-          },
-        });
-      } catch (proxyError) {
-        console.error("Proxy error:", proxyError);
-        return NextResponse.json(
-          { error: "Failed to proxy audio stream" },
-          { status: 500 }
-        );
-      }
-    }
-
-    // Return metadata with both direct and proxied options
-    return NextResponse.json({
-      ...result,
-      directUrl: result.url, // Direct URL (CORS depends on Piped)
-      proxiedUrl: `/api/youtube-audio?url=${encodeURIComponent(url)}&proxy=true`, // Via our server
-    });
-  } catch (e: any) {
-    console.error(`Failed attempt ${retryCount + 1}:`, e.message);
-    
-    // Return error with retry hint for client
-    const status = retryCount < maxRetries ? 502 : 500;
-    return NextResponse.json(
-      { 
-        error: e.message,
-        canRetry: retryCount < maxRetries,
-        retryCount: retryCount + 1
-      }, 
-      { status }
-    );
+  const videoId = extractVideoId(url);
+  if (!videoId) {
+    return NextResponse.json({ error: "Invalid YouTube URL" }, { status: 400 });
   }
-}
 
-export async function OPTIONS(req: NextRequest) {
-  return new NextResponse(null, {
-    status: 200,
-    headers: {
-      'Access-Control-Allow-Origin': '*',
-      'Access-Control-Allow-Methods': 'GET, OPTIONS',
-      'Access-Control-Allow-Headers': 'Content-Type',
-    },
-  });
+  try {
+    // Try Piped first
+    const result = await tryPipedInstances(videoId);
+    return NextResponse.json(result);
+  } catch (pipedError: any) {
+    console.warn('Piped failed, trying Storage fallback:', pipedError.message);
+    
+    try {
+      // Fallback to download + Storage
+      const result = await downloadAndUpload(videoId, url);
+      return NextResponse.json(result);
+    } catch (storageError: any) {
+      console.error('All methods failed:', storageError.message);
+      return NextResponse.json({ 
+        error: `Unable to resolve audio: ${pipedError.message}. Storage fallback: ${storageError.message}` 
+      }, { status: 500 });
+    }
+  }
 }
