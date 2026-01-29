@@ -15,7 +15,6 @@ import { Button } from '@/components/ui/button';
 import { Send, Loader2 } from 'lucide-react';
 import { useFirebase, useDoc, useMemoFirebase } from '@/firebase';
 import { doc } from 'firebase/firestore';
-import { useAuth } from '@/firebase/auth';
 
 interface ChatWidgetProps {
   id: string;
@@ -51,8 +50,7 @@ export function ChatWidget({
   onClose,
   roomId,
 }: ChatWidgetProps) {
-  const { firestore, auth } = useFirebase();
-  const { user } = useAuth();
+  const { firestore, user } = useFirebase();
   const [selectedChannel, setSelectedChannel] = useState('');
   const [viewMode, setViewMode] = useState<'tabbed' | 'split-v' | 'split-h'>('tabbed');
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -64,9 +62,9 @@ export function ChatWidget({
   const [lastMessageId, setLastMessageId] = useState<string | null>(null);
 
   const userInRoomRef = useMemoFirebase(() => {
-    if (!firestore || !roomId || !user?.uid) return null;
+    if (!firestore || !roomId || !user) return null;
     return doc(firestore, 'rooms', roomId, 'users', user.uid);
-  }, [firestore, roomId, user?.uid]);
+  }, [firestore, roomId, user]);
 
   const { data: firestoreUser } = useDoc<{ discordGuildId?: string; twitchChannel?: string }>(userInRoomRef);
 

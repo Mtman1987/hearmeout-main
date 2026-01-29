@@ -2,17 +2,19 @@
 
 import { useParams, useSearchParams } from 'next/navigation';
 import { useEffect, useState } from 'react';
-import { useFirebase, useDoc, useMemoFirebase } from '@/firebase';
-import { doc, collection, query, where } from 'firebase/firestore';
-import { useCollection } from 'react-firebase-hooks/firestore';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Input } from '@/components/ui/input';
-import { Button } from '@/components/ui/button';
-import { Send, Loader2 } from 'lucide-react';
+import { doc, collection, onSnapshot } from 'firebase/firestore';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
-import { useVoiceAssistant } from '@livekit/components-react';
-import { useRemoteParticipants } from '@livekit/components-react';
+import { initializeApp, getApps } from 'firebase/app';
+import { getFirestore } from 'firebase/firestore';
+
+const firebaseConfig = {
+  apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY,
+  authDomain: process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN,
+  projectId: process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID,
+};
+
+const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApps()[0];
+const firestore = getFirestore(app);
 
 interface ChatMessage {
   id: string;
@@ -34,23 +36,40 @@ export default function OBSOverlay() {
   const roomId = params.roomId as string;
   const opacity = searchParams.get('opacity') || '95';
   
-  const { firestore } = useFirebase();
-  const participants = useRemoteParticipants();
-  
-  const roomRef = useMemoFirebase(() => {
-    if (!firestore || !roomId) return null;
-    return doc(firestore, 'rooms', roomId);
-  }, [firestore, roomId]);
+  const [room, setRoom] = useState<any>(null);
+  const [users, setUsers] = useState<any[]>([]);
+  const [speakingUsers, setSpeakingUsers] = useState<Set<string>>(new Set());
 
-  const { data: room } = useDoc<any>(roomRef);
-  
-  const usersRef = useMemoFirebase(() => {
-    if (!firestore || !roomId) return null;
-    return collection(firestore, 'rooms', roomId, 'users');
-  }, [firestore, roomId]);
-  
-  const [usersSnapshot] = useCollection(usersRef);
-  const users = usersSnapshot?.docs.map(d => ({ id: d.id, ...d.data() })) || [];
+  useEffect(() => {
+    if (!roomId) return;
+    
+    const roomRef = doc(firestore, 'rooms', roomId);
+    const unsubRoom = onSnapshot(roomRef, (doc) => {
+      if (doc.exists()) {
+        setRoom({ id: doc.id, ...doc.data() });
+      }
+    });
+
+    const usersRef = collection(firestore, 'rooms', roomId, 'users');
+    const unsubUsers = onSnapshot(usersRef, (snapshot) => {
+      const usersList = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
+      setUsers(usersList);
+    });
+
+    return () => {
+      unsubRoom();
+      unsubUsers();
+    };
+  }, [roomId]);
+
+  // Simulate speaking detection (in real app, this would come from LiveKit)
+  useEffect(() => {
+    const interval = setInterval(() => {
+      // This is a placeholder - real implementation would use LiveKit participant.isSpeaking
+      setSpeakingUsers(new Set());
+    }, 1000);
+    return () => clearInterval(interval);
+  }, []);
 
   const currentTrack = room?.playlist?.find((t: any) => t.id === room?.currentTrackId);
 
@@ -83,8 +102,7 @@ export default function OBSOverlay() {
           <h4 className="text-white/80 text-sm font-semibold mb-2 px-2">In Room</h4>
           <div className="space-y-2">
             {users.map((user: any) => {
-              const participant = participants.find(p => p.identity === user.id);
-              const isSpeaking = participant?.isSpeaking || false;
+              const isSpeaking = speakingUsers.has(user.id);
               
               return (
                 <div 
