@@ -31,14 +31,11 @@ function verifyDiscordRequest(body: string, signature: string, timestamp: string
       return false;
     }
 
-    const { createVerify } = require('crypto');
-    const verifier = createVerify('sha256');
-    verifier.update(timestamp + body);
-    
-    return verifier.verify(
-      `-----BEGIN PUBLIC KEY-----\n${PUBLIC_KEY}\n-----END PUBLIC KEY-----`,
-      signature,
-      'hex'
+    const nacl = require('tweetnacl');
+    return nacl.sign.detached.verify(
+      Buffer.from(timestamp + body),
+      Buffer.from(signature, 'hex'),
+      Buffer.from(PUBLIC_KEY, 'hex')
     );
   } catch (error) {
     console.error('Signature verification error:', error);

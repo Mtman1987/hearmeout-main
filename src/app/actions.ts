@@ -78,8 +78,8 @@ export async function generateLiveKitToken(roomName: string, participantIdentity
 
 export async function postToDiscord(
   channelId: string, 
-  roomId?: string,
-  roomName?: string,
+  roomId: string,
+  roomName: string,
   description?: string,
   link1Label?: string,
   link1Url?: string,
@@ -89,10 +89,5 @@ export async function postToDiscord(
     if (!channelId) {
         throw new Error("Channel ID is required.");
     }
-    try {
-        await sendControlEmbed(channelId, roomId, roomName, description, link1Label, link1Url, link2Label, link2Url);
-    } catch (error) {
-        console.error("Error posting to Discord:", error);
-        throw error;
-    }
+    await sendControlEmbed(channelId, roomId, roomName, description, link1Label, link1Url, link2Label, link2Url);
 }
