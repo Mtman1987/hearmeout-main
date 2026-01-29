@@ -23,12 +23,34 @@ export async function runModeration(
   }
 }
 
-export async function getYoutubeInfo(url: string): Promise<PlaylistItem[] | null> {
+export async function getYoutubeInfo(query: string): Promise<PlaylistItem[] | null> {
   try {
-    const result = await getYoutubeInfoFlow({ url }) as PlaylistItem[] | null;
-    return result;
+    // If it looks like a URL, use the YouTube flow
+    if (query.includes('youtube.com') || query.includes('youtu.be') || query.startsWith('http')) {
+      const result = await getYoutubeInfoFlow({ url: query }) as PlaylistItem[] | null;
+      return result;
+    }
+    
+    // Otherwise, search Jamendo for free music
+    const res = await fetch(
+      `https://api.jamendo.com/v3.0/tracks/?client_id=56d30c95&format=json&limit=5&search=${encodeURIComponent(query)}&audioformat=mp32`
+    );
+    const data = await res.json();
+    
+    if (data.results?.length > 0) {
+      return data.results.map((track: any) => ({
+        id: track.id,
+        title: track.name,
+        artist: track.artist_name,
+        thumbnail: track.album_image,
+        url: track.audio,
+        duration: track.duration,
+      }));
+    }
+    
+    return null;
   } catch (error) {
-    console.error("Error getting YouTube info:", error);
+    console.error("Error getting music info:", error);
     return null;
   }
 }

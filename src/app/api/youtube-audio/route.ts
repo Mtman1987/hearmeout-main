@@ -1,195 +1,46 @@
 import { NextRequest, NextResponse } from 'next/server';
-import YTDlpWrap from 'yt-dlp-wrap';
-import { unlink } from 'fs/promises';
-import { tmpdir } from 'os';
-import { join } from 'path';
-import { getStorage } from 'firebase-admin/storage';
-import { initializeApp, getApps, cert } from 'firebase-admin/app';
 
-let ytDlp: YTDlpWrap | null = null;
-
-async function getYtDlp() {
-  if (!ytDlp) {
-    ytDlp = new YTDlpWrap();
-    await ytDlp.downloadFromGithub();
-  }
-  return ytDlp;
-}
-
-const PIPED_INSTANCES = [
-  "https://piped.video",
-  "https://pipedapi.kavin.rocks",
-  "https://piped.mha.fi",
-  "https://piped.privacydev.net",
-  "https://piped-api.garudalinux.org",
-  "https://api.piped.projectsegfau.lt"
-];
-
-const TIMEOUT_MS = 5000;
-
-if (!getApps().length) {
-  try {
-    initializeApp({
-      credential: cert({
-        projectId: process.env.FIREBASE_PROJECT_ID || 'studio-4331919473-dea24',
-        clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
-        privateKey: process.env.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, '\n'),
-      }),
-      storageBucket: process.env.FIREBASE_STORAGE_BUCKET || 'studio-4331919473-dea24.firebasestorage.app',
-    });
-  } catch (e) {
-    console.warn('Firebase Admin init failed, Storage fallback disabled:', e);
-  }
-}
-
-function extractVideoId(url: string): string | null {
-  try {
-    const u = new URL(url);
-    if (u.hostname.includes("youtube.com")) return u.searchParams.get("v");
-    if (u.hostname.includes("youtu.be")) return u.pathname.slice(1);
-  } catch {
-    return null;
-  }
-  return null;
-}
-
-async function fetchWithTimeout(url: string, timeoutMs: number) {
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+// Jamendo provides free music with direct MP3 URLs
+async function searchJamendo(query: string) {
+  const res = await fetch(
+    `https://api.jamendo.com/v3.0/tracks/?client_id=56d30c95&format=json&limit=1&search=${encodeURIComponent(query)}&audioformat=mp32`
+  );
+  const data = await res.json();
   
-  try {
-    const res = await fetch(url, {
-      signal: controller.signal,
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-        'Accept': 'application/json'
-      }
-    });
-    return res;
-  } finally {
-    clearTimeout(timeoutId);
+  if (data.results?.[0]) {
+    const track = data.results[0];
+    return {
+      url: track.audio,
+      title: track.name,
+      artist: track.artist_name,
+      thumbnail: track.album_image,
+    };
   }
-}
-
-async function tryPipedInstances(videoId: string) {
-  const errors: string[] = [];
-
-  for (const instance of PIPED_INSTANCES) {
-    try {
-      const apiUrl = `${instance}/streams/${videoId}`;
-      const res = await fetchWithTimeout(apiUrl, TIMEOUT_MS);
-
-      if (!res.ok) {
-        errors.push(`HTTP ${res.status} from ${instance}`);
-        continue;
-      }
-
-      const data = await res.json();
-      
-      if (!data.audioStreams?.length) {
-        errors.push(`No audio streams from ${instance}`);
-        continue;
-      }
-
-      const best = data.audioStreams.sort((a: any, b: any) => (b.bitrate || 0) - (a.bitrate || 0))[0];
-      
-      if (!best?.url) {
-        errors.push(`No valid URL from ${instance}`);
-        continue;
-      }
-
-      console.log(`Piped success from ${instance}`);
-      return { url: best.url, source: 'piped' };
-    } catch (err: any) {
-      errors.push(`${instance}: ${err.message}`);
-    }
-  }
-
-  throw new Error(`All Piped instances failed: ${errors.join(', ')}`);
-}
-
-async function downloadAndUpload(videoId: string, youtubeUrl: string) {
-  try {
-    const bucket = getStorage().bucket();
-    const fileName = `music/${videoId}.mp3`;
-    const file = bucket.file(fileName);
-
-    const [exists] = await file.exists();
-    if (exists) {
-      const [signedUrl] = await file.getSignedUrl({
-        action: 'read',
-        expires: Date.now() + 7 * 24 * 60 * 60 * 1000,
-      });
-      console.log(`Using cached file for ${videoId}`);
-      return { url: signedUrl, source: 'storage-cached' };
-    }
-
-    const tempDir = tmpdir();
-    const tempAudio = join(tempDir, `${videoId}.mp3`);
-
-    console.log(`Downloading ${videoId} with yt-dlp...`);
-    const ytDlpInstance = await getYtDlp();
-    await ytDlpInstance.execPromise([
-      youtubeUrl,
-      '-x',
-      '--audio-format', 'mp3',
-      '--audio-quality', '0',
-      '-o', tempAudio
-    ]);
-
-    console.log(`Uploading ${videoId} to Storage...`);
-    await bucket.upload(tempAudio, {
-      destination: fileName,
-      metadata: {
-        contentType: 'audio/mpeg',
-        cacheControl: 'public, max-age=604800',
-      },
-    });
-
-    await unlink(tempAudio);
-
-    const [signedUrl] = await file.getSignedUrl({
-      action: 'read',
-      expires: Date.now() + 7 * 24 * 60 * 60 * 1000,
-    });
-
-    console.log(`Successfully uploaded ${videoId}`);
-    return { url: signedUrl, source: 'storage-new' };
-  } catch (e: any) {
-    console.error('Storage fallback failed:', e.message);
-    throw e;
-  }
+  throw new Error('No results found');
 }
 
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
   const url = searchParams.get('url');
+  const query = searchParams.get('query');
 
-  if (!url) {
-    return NextResponse.json({ error: "Missing url query parameter" }, { status: 400 });
+  // If it's a direct URL, just return it
+  if (url && !url.includes('youtube.com') && !url.includes('youtu.be')) {
+    return NextResponse.json({ url });
   }
 
-  const videoId = extractVideoId(url);
-  if (!videoId) {
-    return NextResponse.json({ error: "Invalid YouTube URL" }, { status: 400 });
-  }
-
-  try {
-    // Try Piped first
-    const result = await tryPipedInstances(videoId);
-    return NextResponse.json(result);
-  } catch (pipedError: any) {
-    console.warn('Piped failed, trying Storage fallback:', pipedError.message);
-    
+  // If it's a search query, use Jamendo
+  if (query) {
     try {
-      // Fallback to download + Storage
-      const result = await downloadAndUpload(videoId, url);
+      const result = await searchJamendo(query);
       return NextResponse.json(result);
-    } catch (storageError: any) {
-      console.error('All methods failed:', storageError.message);
-      return NextResponse.json({ 
-        error: `Unable to resolve audio: ${pipedError.message}. Storage fallback: ${storageError.message}` 
-      }, { status: 500 });
+    } catch (e: any) {
+      return NextResponse.json({ error: e.message }, { status: 404 });
     }
   }
+
+  // For YouTube URLs, we can't help without yt-dlp
+  return NextResponse.json({ 
+    error: 'YouTube URLs require yt-dlp. Use search query instead or provide direct audio URL.' 
+  }, { status: 400 });
 }
