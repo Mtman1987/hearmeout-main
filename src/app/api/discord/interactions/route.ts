@@ -119,12 +119,12 @@ async function handleSkipButton(body: any): Promise<NextResponse> {
 }
 
 export async function POST(req: NextRequest) {
-  const body = await req.json();
+  const rawBody = await req.text();
+  const body = JSON.parse(rawBody);
 
   // Verify Discord request signature
   const signature = req.headers.get('x-signature-ed25519') || '';
   const timestamp = req.headers.get('x-signature-timestamp') || '';
-  const rawBody = await req.text();
   
   // Note: For production, properly verify the signature
   // verifyDiscordRequest(rawBody, signature, timestamp);
