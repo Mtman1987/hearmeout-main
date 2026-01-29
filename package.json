@@ -7,6 +7,7 @@
     "twitch-bot": "tsx src/bots/twitch-bot.ts",
     "genkit:dev": "genkit start -- tsx src/ai/dev.ts",
     "genkit:watch": "genkit start -- tsx --watch src/ai/dev.ts",
+    "postinstall": "pip3 install --user yt-dlp || true",
     "build": "NODE_ENV=production next build",
     "start": "next start",
     "lint": "next lint",
