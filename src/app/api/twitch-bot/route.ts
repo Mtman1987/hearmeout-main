@@ -6,6 +6,39 @@ import { db } from '@/firebase/admin';
 let client: tmi.Client | null = null;
 let isInitialized = false;
 const activeChannels = new Map<string, string>();
+let botTokens: { access_token: string; refresh_token: string; username: string } | null = null;
+
+async function refreshToken() {
+  if (!botTokens?.refresh_token) return null;
+  
+  try {
+    const res = await fetch('https://id.twitch.tv/oauth2/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        client_id: process.env.NEXT_PUBLIC_TWITCH_CLIENT_ID!,
+        client_secret: process.env.TWITCH_CLIENT_SECRET!,
+        grant_type: 'refresh_token',
+        refresh_token: botTokens.refresh_token,
+      }),
+    });
+    
+    const tokens = await res.json();
+    botTokens.access_token = tokens.access_token;
+    botTokens.refresh_token = tokens.refresh_token;
+    
+    await db.collection('config').doc('twitch_bot').update({
+      access_token: tokens.access_token,
+      refresh_token: tokens.refresh_token,
+      updated_at: new Date().toISOString(),
+    });
+    
+    return `oauth:${tokens.access_token}`;
+  } catch (e) {
+    console.error('[Twitch Bot] Token refresh failed:', e);
+    return null;
+  }
+}
 
 async function syncChannels() {
   if (!client) return;
@@ -111,35 +144,53 @@ async function onMessageHandler(target: string, context: tmi.ChatUserstate, msg:
 function initializeTwitchBot() {
   if (isInitialized) return;
 
-  const twitchBotUsername = process.env.TWITCH_BOT_USERNAME;
-  const twitchBotOauthToken = process.env.TWITCH_BOT_OAUTH_TOKEN;
+  db.collection('config').doc('twitch_bot').get()
+    .then(async (doc) => {
+      if (!doc.exists) {
+        console.error('[Twitch Bot] No tokens in Firestore. Authorize bot in settings.');
+        return;
+      }
+      
+      botTokens = doc.data() as any;
+      console.log('[Twitch Bot] Loaded tokens for:', botTokens?.username);
 
-  console.log('[Twitch Bot] Checking credentials...');
-  console.log('[Twitch Bot] Username exists:', !!twitchBotUsername);
-  console.log('[Twitch Bot] OAuth token exists:', !!twitchBotOauthToken);
+      client = new tmi.client({
+        identity: {
+          username: botTokens!.username,
+          password: `oauth:${botTokens!.access_token}`,
+        },
+        channels: [],
+      });
 
-  if (!twitchBotUsername || !twitchBotOauthToken) {
-    console.error('[Twitch Bot] Missing credentials');
-    return;
-  }
+      client.on('message', onMessageHandler);
+      client.on('connected', () => {
+        console.log('[Twitch Bot] Connected');
+        syncChannels();
+        setInterval(syncChannels, 30000);
+      });
+      
+      client.on('notice', async (channel, msgid, message) => {
+        if (msgid === 'msg_banned' || message.includes('authentication failed')) {
+          console.log('[Twitch Bot] Auth failed, refreshing token...');
+          const newToken = await refreshToken();
+          if (newToken && client) {
+            client.disconnect();
+            client = new tmi.client({
+              identity: {
+                username: botTokens!.username,
+                password: newToken,
+              },
+              channels: [],
+            });
+            client.connect();
+          }
+        }
+      });
 
-  client = new tmi.client({
-    identity: {
-      username: twitchBotUsername,
-      password: twitchBotOauthToken,
-    },
-    channels: [],
-  });
-
-  client.on('message', onMessageHandler);
-  client.on('connected', () => {
-    console.log('[Twitch Bot] Connected');
-    syncChannels();
-    setInterval(syncChannels, 30000);
-  });
-
-  client.connect().catch(console.error);
-  isInitialized = true;
+      client.connect().catch(console.error);
+      isInitialized = true;
+    })
+    .catch(console.error);
 }
 
 export async function GET(req: NextRequest) {

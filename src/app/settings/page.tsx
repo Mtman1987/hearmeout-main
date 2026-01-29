@@ -34,6 +34,28 @@ export default function SettingsPage() {
   const [twitchChannel, setTwitchChannel] = useState('');
   const [saving, setSaving] = useState(false);
 
+  React.useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const code = params.get('code');
+    const state = params.get('state');
+    
+    if (code && state === 'twitch_bot') {
+      fetch('/api/twitch/exchange', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code }),
+      })
+        .then(res => res.json())
+        .then(data => {
+          if (data.success) {
+            toast({ title: 'Success', description: `Bot authorized as ${data.username}` });
+            window.history.replaceState({}, '', '/settings');
+          }
+        })
+        .catch(console.error);
+    }
+  }, [toast]);
+
   const userDocRef = useMemoFirebase(() => user && firestore ? doc(firestore, 'users', user.uid) : null, [user, firestore]);
   const { data: userData } = useDoc(userDocRef);
 
@@ -80,6 +102,26 @@ export default function SettingsPage() {
                                     </Button>
                                 </CardContent>
                             </Card>
+                            
+                            {user?.uid === 'discord_767875979561009173' && (
+                              <Card>
+                                <CardHeader>
+                                  <CardTitle>Twitch Bot OAuth</CardTitle>
+                                  <CardDescription>Authorize the global Twitch bot account</CardDescription>
+                                </CardHeader>
+                                <CardContent>
+                                  <Button
+                                    onClick={() => {
+                                      const redirectUri = `${window.location.origin}/settings`;
+                                      const scope = 'chat:read chat:edit';
+                                      window.location.href = `https://id.twitch.tv/oauth2/authorize?client_id=${process.env.NEXT_PUBLIC_TWITCH_CLIENT_ID}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=code&scope=${encodeURIComponent(scope)}&state=twitch_bot`;
+                                    }}
+                                  >
+                                    Authorize Bot Account
+                                  </Button>
+                                </CardContent>
+                              </Card>
+                            )}
                             <ThemeCustomizer />
                         </div>
                     </main>
