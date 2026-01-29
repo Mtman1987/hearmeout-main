@@ -19,7 +19,7 @@ import {
 } from 'lucide-react';
 import { useTracks, AudioTrack, useRoomContext } from '@livekit/components-react';
 import * as LivekitClient from 'livekit-client';
-import { doc, deleteDoc, updateDoc } from 'firebase/firestore';
+import { doc, deleteDoc, updateDoc, setDoc } from 'firebase/firestore';
 
 import { useFirebase, useDoc, useMemoFirebase } from '@/firebase';
 import { useToast } from '@/hooks/use-toast';
@@ -166,7 +166,7 @@ export default function UserCard({
     try {
       const channelValue = twitchChannel.trim().toLowerCase();
       console.log('[UserCard] Saving Twitch channel:', channelValue);
-      await updateDoc(userInRoomRef, { twitchChannel: channelValue || null });
+      await setDoc(userInRoomRef, { twitchChannel: channelValue || null }, { merge: true });
       toast({ title: 'Saved', description: 'Twitch channel updated. Bot will join within 30 seconds.' });
       setTwitchDialogOpen(false);
     } catch (e) {
@@ -185,11 +185,11 @@ export default function UserCard({
     
     if (!guildId) {
       try {
-        await updateDoc(userInRoomRef, { 
+        await setDoc(userInRoomRef, { 
           discordGuildId: null,
           discordChannels: null,
           discordSelectedChannel: null
-        });
+        }, { merge: true });
         toast({ title: 'Cleared', description: 'Discord configuration removed.' });
         setDiscordDialogOpen(false);
       } catch (e) {
@@ -218,11 +218,11 @@ export default function UserCard({
       const firstTextChannel = channels.find((ch: any) => ch.type === 0);
       const defaultChannel = firstTextChannel?.id || channels[0]?.id;
       
-      await updateDoc(userInRoomRef, { 
+      await setDoc(userInRoomRef, { 
         discordGuildId: guildId,
         discordChannels: channels,
         discordSelectedChannel: defaultChannel
-      });
+      }, { merge: true });
       
       toast({ title: 'Saved', description: `Discord configured with ${channels.length} channels.` });
       setDiscordDialogOpen(false);

@@ -14,7 +14,7 @@ import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Send, Loader2 } from 'lucide-react';
 import { useFirebase, useDoc, useMemoFirebase } from '@/firebase';
-import { doc, updateDoc } from 'firebase/firestore';
+import { doc, updateDoc, setDoc } from 'firebase/firestore';
 
 interface ChatWidgetProps {
   id: string;
@@ -100,7 +100,7 @@ export function ChatWidget({
   // Save selected channel to Firestore when it changes
   useEffect(() => {
     if (!selectedChannel || !userInRoomRef || !firestore) return;
-    updateDoc(userInRoomRef, { discordSelectedChannel: selectedChannel }).catch(e => 
+    setDoc(userInRoomRef, { discordSelectedChannel: selectedChannel }, { merge: true }).catch(e => 
       console.error('Failed to save selected channel:', e)
     );
   }, [selectedChannel, userInRoomRef, firestore]);
