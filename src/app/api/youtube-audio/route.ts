@@ -1,46 +1,80 @@
 import { NextRequest, NextResponse } from 'next/server';
+import ytdl from 'ytdl-core';
+import { getStorage } from 'firebase-admin/storage';
+import { initializeApp, getApps, cert } from 'firebase-admin/app';
+import { Readable } from 'stream';
 
-// Jamendo provides free music with direct MP3 URLs
-async function searchJamendo(query: string) {
-  const res = await fetch(
-    `https://api.jamendo.com/v3.0/tracks/?client_id=56d30c95&format=json&limit=1&search=${encodeURIComponent(query)}&audioformat=mp32`
-  );
-  const data = await res.json();
-  
-  if (data.results?.[0]) {
-    const track = data.results[0];
-    return {
-      url: track.audio,
-      title: track.name,
-      artist: track.artist_name,
-      thumbnail: track.album_image,
-    };
-  }
-  throw new Error('No results found');
+if (!getApps().length) {
+  initializeApp({
+    credential: cert({
+      projectId: process.env.FIREBASE_PROJECT_ID || 'studio-4331919473-dea24',
+      clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
+      privateKey: process.env.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, '\n'),
+    }),
+    storageBucket: 'studio-4331919473-dea24.firebasestorage.app',
+  });
+}
+
+function extractVideoId(url: string): string | null {
+  try {
+    const u = new URL(url);
+    if (u.hostname.includes("youtube.com")) return u.searchParams.get("v");
+    if (u.hostname.includes("youtu.be")) return u.pathname.slice(1);
+  } catch {}
+  return null;
 }
 
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
   const url = searchParams.get('url');
-  const query = searchParams.get('query');
 
-  // If it's a direct URL, just return it
-  if (url && !url.includes('youtube.com') && !url.includes('youtu.be')) {
-    return NextResponse.json({ url });
-  }
+  if (!url) return NextResponse.json({ error: "Missing url parameter" }, { status: 400 });
 
-  // If it's a search query, use Jamendo
-  if (query) {
-    try {
-      const result = await searchJamendo(query);
-      return NextResponse.json(result);
-    } catch (e: any) {
-      return NextResponse.json({ error: e.message }, { status: 404 });
+  const videoId = extractVideoId(url);
+  if (!videoId) return NextResponse.json({ error: "Invalid YouTube URL" }, { status: 400 });
+
+  try {
+    const bucket = getStorage().bucket();
+    const fileName = `music/${videoId}.mp3`;
+    const file = bucket.file(fileName);
+
+    const [exists] = await file.exists();
+    if (exists) {
+      const [signedUrl] = await file.getSignedUrl({
+        action: 'read',
+        expires: Date.now() + 7 * 24 * 60 * 60 * 1000,
+      });
+      console.log(`Cached: ${videoId}`);
+      return NextResponse.json({ url: signedUrl });
     }
-  }
 
-  // For YouTube URLs, we can't help without yt-dlp
-  return NextResponse.json({ 
-    error: 'YouTube URLs require yt-dlp. Use search query instead or provide direct audio URL.' 
-  }, { status: 400 });
+    console.log(`Downloading ${videoId}...`);
+    
+    const audioStream = ytdl(url, {
+      quality: 'highestaudio',
+      filter: 'audioonly',
+    });
+
+    await new Promise((resolve, reject) => {
+      const writeStream = file.createWriteStream({
+        metadata: { contentType: 'audio/mpeg' },
+      });
+
+      audioStream.pipe(writeStream);
+      writeStream.on('finish', resolve);
+      writeStream.on('error', reject);
+      audioStream.on('error', reject);
+    });
+
+    const [signedUrl] = await file.getSignedUrl({
+      action: 'read',
+      expires: Date.now() + 7 * 24 * 60 * 60 * 1000,
+    });
+
+    console.log(`Uploaded: ${videoId}`);
+    return NextResponse.json({ url: signedUrl });
+  } catch (e: any) {
+    console.error('Download failed:', e.message);
+    return NextResponse.json({ error: e.message }, { status: 500 });
+  }
 }

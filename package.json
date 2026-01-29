@@ -64,6 +64,7 @@
     "tmi.js": "^1.8.5",
     "youtube-sr": "^4.3.8",
     "yt-dlp-wrap": "^2.3.12",
+    "ytdl-core": "^4.11.5",
     "zod": "^3.24.2"
   },
   "devDependencies": {
