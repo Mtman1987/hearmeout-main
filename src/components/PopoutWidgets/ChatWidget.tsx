@@ -73,6 +73,22 @@ export function ChatWidget({
     discordChannels?: DiscordChannel[];
   }>(userInRoomRef);
 
+  useEffect(() => {
+    if (firestoreUser?.discordGuildId) {
+      setDiscordGuildId(firestoreUser.discordGuildId);
+    }
+    if (firestoreUser?.twitchChannel) {
+      setTwitchChannel(firestoreUser.twitchChannel);
+    }
+    if (firestoreUser?.discordSelectedChannel) {
+      setSelectedChannel(firestoreUser.discordSelectedChannel);
+    }
+    if (firestoreUser?.discordChannels) {
+      console.log('[ChatWidget] Loading channels from Firestore:', firestoreUser.discordChannels);
+      setDiscordChannels(firestoreUser.discordChannels);
+    }
+  }, [firestoreUser]);
+
   if (!firestore || !user) {
     return (
       <DraggableContainer
@@ -91,22 +107,7 @@ export function ChatWidget({
     );
   }
 
-  useEffect(() => {
-    if (firestoreUser?.discordGuildId) {
-      setDiscordGuildId(firestoreUser.discordGuildId);
-    }
-    if (firestoreUser?.twitchChannel) {
-      setTwitchChannel(firestoreUser.twitchChannel);
-    }
-    if (firestoreUser?.discordSelectedChannel) {
-      setSelectedChannel(firestoreUser.discordSelectedChannel);
-    }
-    if (firestoreUser?.discordChannels) {
-      setDiscordChannels(firestoreUser.discordChannels);
-    }
-  }, [firestoreUser]);
 
-  // No longer need to fetch channels - they're already in Firestore
 
   // Save selected channel to Firestore when it changes
   useEffect(() => {
