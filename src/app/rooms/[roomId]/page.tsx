@@ -24,6 +24,7 @@ import MusicPlayerCard from './_components/MusicPlayerCard';
 import PlaylistPanel from './_components/PlaylistPanel';
 import MusicStreamerCard from './_components/MusicStreamerCard';
 import AddMusicPanel from './_components/AddMusicPanel';
+import VoiceQueue from './_components/VoiceQueue';
 import { cn } from "@/lib/utils";
 import { useToast } from '@/hooks/use-toast';
 import {
@@ -759,6 +760,10 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
                             <UserList 
                                 roomId={roomId}
                             />
+                            
+                            {(isDJ || isOwner) && (
+                                <VoiceQueue roomId={roomId} />
+                            )}
                         </main>
                   </div>
               </SidebarInset>

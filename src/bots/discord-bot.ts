@@ -3,22 +3,26 @@
 
 /**
  * Sends a pre-defined control embed to a specified Discord channel.
- * This embed shows room info and provides buttons for Settings, Twitch, Discord, and Close.
+ * This embed shows room info and provides buttons for Settings, custom links, and Close.
  *
  * @param channelId The ID of the Discord channel to send the message to.
  * @param roomId The room ID to fetch data from.
  * @param roomName The name of the room.
  * @param description Optional description for the room.
- * @param twitchUrl Optional Twitch stream URL.
- * @param discordUrl Optional Discord server URL.
+ * @param link1Label Optional label for first custom link.
+ * @param link1Url Optional URL for first custom link.
+ * @param link2Label Optional label for second custom link.
+ * @param link2Url Optional URL for second custom link.
  */
 export async function sendControlEmbed(
   channelId: string,
   roomId?: string,
   roomName?: string,
   description?: string,
-  twitchUrl?: string,
-  discordUrl?: string
+  link1Label?: string,
+  link1Url?: string,
+  link2Label?: string,
+  link2Url?: string
 ) {
     const DISCORD_BOT_TOKEN = process.env.DISCORD_BOT_TOKEN;
 
@@ -28,6 +32,43 @@ export async function sendControlEmbed(
     }
     
     const url = `https://discord.com/api/v10/channels/${channelId}/messages`;
+
+    const buttons = [
+        {
+            type: 2,
+            style: 1,
+            label: 'Settings',
+            emoji: { name: '⚙️' },
+            custom_id: `room_settings:${roomId}`,
+        }
+    ];
+
+    // Add custom link buttons if provided
+    if (link1Label && link1Url) {
+        buttons.push({
+            type: 2,
+            style: 5,
+            label: link1Label,
+            url: link1Url,
+        });
+    }
+    if (link2Label && link2Url) {
+        buttons.push({
+            type: 2,
+            style: 5,
+            label: link2Label,
+            url: link2Url,
+        });
+    }
+
+    // Add close button
+    buttons.push({
+        type: 2,
+        style: 4,
+        label: 'Close',
+        emoji: { name: '❌' },
+        custom_id: `room_close:${roomId}`,
+    });
 
     const body = {
         embeds: [
@@ -55,36 +96,7 @@ export async function sendControlEmbed(
         components: [
             {
                 type: 1,
-                components: [
-                    {
-                        type: 2,
-                        style: 1,
-                        label: 'Settings',
-                        emoji: { name: '⚙️' },
-                        custom_id: `room_settings:${roomId}`,
-                    },
-                    ...(twitchUrl ? [{
-                        type: 2,
-                        style: 5,
-                        label: 'Twitch',
-                        emoji: { name: '📺' },
-                        url: twitchUrl,
-                    }] : []),
-                    ...(discordUrl ? [{
-                        type: 2,
-                        style: 5,
-                        label: 'Discord',
-                        emoji: { name: '💬' },
-                        url: discordUrl,
-                    }] : []),
-                    {
-                        type: 2,
-                        style: 4,
-                        label: 'Close',
-                        emoji: { name: '❌' },
-                        custom_id: `room_close:${roomId}`,
-                    },
-                ]
+                components: buttons
             }
         ]
     };

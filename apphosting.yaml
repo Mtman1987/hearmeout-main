@@ -16,6 +16,8 @@ env:
     value: "1279582181768957963"
   - variable: DISCORD_CLIENT_SECRET
     value: YefpOYWdIOUkpxDx4t5w17Ms6sOFXOjj
+  - variable: DISCORD_PUBLIC_KEY
+    value: 6a903d0ec86d3d1556aeb2a7ec1dd585ab35e9129d040a8149cdfb8ad4154561
   - variable: NEXT_PUBLIC_TWITCH_CLIENT_ID
     value: rxmohc28tthq0nudfd6iwx0sgy88dp
   - variable: TWITCH_CLIENT_SECRET

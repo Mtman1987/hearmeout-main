@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { addSongToPlaylist, updateRoomPlayState, skipTrack } from '@/lib/bot-actions';
 import { db } from '@/firebase/admin';
+import { verify } from 'crypto';
 
 // Discord Interaction Types
 const InteractionType = {
@@ -21,14 +22,28 @@ const InteractionResponseType = {
   MODAL: 9,
 };
 
-// Helper function to verify Discord's request signature (HIGHLY RECOMMENDED FOR PRODUCTION)
+// Helper function to verify Discord's request signature
 function verifyDiscordRequest(body: string, signature: string, timestamp: string): boolean {
-  // For production, implement proper signature verification:
-  // https://discord.com/developers/docs/interactions/receiving-and-responding#security-and-authorization
-  
-  // For now, return true - but you MUST implement this for security
-  console.warn("⚠️ Discord signature verification is NOT implemented. This should be enabled in production.");
-  return true;
+  try {
+    const PUBLIC_KEY = process.env.DISCORD_PUBLIC_KEY;
+    if (!PUBLIC_KEY) {
+      console.error('DISCORD_PUBLIC_KEY not set');
+      return false;
+    }
+
+    const { createVerify } = require('crypto');
+    const verifier = createVerify('sha256');
+    verifier.update(timestamp + body);
+    
+    return verifier.verify(
+      `-----BEGIN PUBLIC KEY-----\n${PUBLIC_KEY}\n-----END PUBLIC KEY-----`,
+      signature,
+      'hex'
+    );
+  } catch (error) {
+    console.error('Signature verification error:', error);
+    return false;
+  }
 }
 
 async function handlePlayPauseButton(body: any, token: string): Promise<void> {
@@ -97,15 +112,16 @@ async function sendFollowup(clientId: string, token: string, content: string): P
 
 export async function POST(req: NextRequest) {
   const rawBody = await req.text();
-  const body = JSON.parse(rawBody);
-
-  // Verify Discord request signature
   const signature = req.headers.get('x-signature-ed25519') || '';
   const timestamp = req.headers.get('x-signature-timestamp') || '';
   
-  // Note: For production, properly verify the signature
-  // verifyDiscordRequest(rawBody, signature, timestamp);
+  // Verify Discord request signature
+  if (!verifyDiscordRequest(rawBody, signature, timestamp)) {
+    console.error('Invalid Discord signature');
+    return NextResponse.json({ error: 'Invalid signature' }, { status: 401 });
+  }
 
+  const body = JSON.parse(rawBody);
   const { type, data, member, token } = body;
 
   // Handle Discord's mandatory PING command
@@ -138,17 +154,17 @@ export async function POST(req: NextRequest) {
                 },
                 {
                   type: 2,
+                  style: 3,
+                  label: 'Join Queue',
+                  emoji: { name: '🎤' },
+                  custom_id: `join_queue:${roomId}`,
+                },
+                {
+                  type: 2,
                   style: 2,
                   label: 'Mute',
                   emoji: { name: '🔇' },
                   custom_id: `mute_toggle:${roomId}`,
-                },
-                {
-                  type: 2,
-                  style: 4,
-                  label: 'Close',
-                  emoji: { name: '❌' },
-                  custom_id: `close_settings:${roomId}`,
                 },
               ]
             }
@@ -157,15 +173,66 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    // Close settings button
-    if (custom_id.startsWith('close_settings:')) {
-      return NextResponse.json({
-        type: InteractionResponseType.UPDATE_MESSAGE,
-        data: {
-          content: '✅ Settings closed.',
-          components: [],
-        },
+    // Join queue button
+    if (custom_id.startsWith('join_queue:')) {
+      const roomId = custom_id.split(':')[1];
+      const userId = member?.user?.id || body.user?.id;
+      const username = member?.user?.global_name || member?.user?.username || body.user?.username || 'Discord User';
+      
+      if (!userId) {
+        return NextResponse.json({
+          type: InteractionResponseType.UPDATE_MESSAGE,
+          data: {
+            content: '❌ Unable to identify your user ID.',
+            components: [],
+          },
+        });
+      }
+
+      // Defer response
+      const deferResponse = NextResponse.json({
+        type: InteractionResponseType.DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE,
+        data: { flags: 64 }
       });
+
+      // Add to queue asynchronously
+      (async () => {
+        try {
+          const queueRef = db.collection('rooms').doc(roomId).collection('voiceQueue');
+          await queueRef.doc(userId).set({
+            userId,
+            username,
+            addedAt: new Date().toISOString(),
+            platform: 'discord',
+          });
+
+          const queueSnapshot = await queueRef.orderBy('addedAt').get();
+          const position = queueSnapshot.docs.findIndex(doc => doc.id === userId) + 1;
+
+          const clientId = process.env.NEXT_PUBLIC_DISCORD_CLIENT_ID;
+          const followupUrl = `https://discord.com/api/v10/webhooks/${clientId}/${token}`;
+          
+          await fetch(followupUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              content: `✅ You've been added to the voice chat queue!\n**Position:** #${position}\n\nThe streamer will send you an invite link when it's your turn!`,
+            }),
+          });
+        } catch (error) {
+          console.error('Error adding to queue:', error);
+          const clientId = process.env.NEXT_PUBLIC_DISCORD_CLIENT_ID;
+          const followupUrl = `https://discord.com/api/v10/webhooks/${clientId}/${token}`;
+          
+          await fetch(followupUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ content: '❌ Error joining queue.' }),
+          });
+        }
+      })();
+
+      return deferResponse;
     }
 
     // Close main embed button

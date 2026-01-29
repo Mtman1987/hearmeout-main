@@ -81,14 +81,16 @@ export async function postToDiscord(
   roomId?: string,
   roomName?: string,
   description?: string,
-  twitchUrl?: string,
-  discordUrl?: string
+  link1Label?: string,
+  link1Url?: string,
+  link2Label?: string,
+  link2Url?: string
 ) {
     if (!channelId) {
         throw new Error("Channel ID is required.");
     }
     try {
-        await sendControlEmbed(channelId, roomId, roomName, description, twitchUrl, discordUrl);
+        await sendControlEmbed(channelId, roomId, roomName, description, link1Label, link1Url, link2Label, link2Url);
     } catch (error) {
         console.error("Error posting to Discord:", error);
         throw error;

@@ -151,6 +151,38 @@ async function onMessageHandler(target: string, context: tmi.ChatUserstate, msg:
 
   // --- !help Command ---
   if (message === '!help' || message === '!commands') {
-    client.say(target, "🎵 HearMeOut Commands: !sr [song/URL] - Request a song | !np - Now playing | !status - Room status | !help - Show this message");
+    client.say(target, "🎵 HearMeOut Commands: !sr [song/URL] - Request a song | !np - Now playing | !status - Room status | !queue - Join voice chat queue | !help - Show this message");
+  }
+
+  // --- !queue Command ---
+  if (message === '!queue' || message === '!play') {
+    try {
+      const userId = context['user-id'];
+      const username = context['display-name'] || context.username || 'Unknown';
+      
+      if (!userId) {
+        client.say(target, `@${requester}, unable to identify your user ID.`);
+        return;
+      }
+
+      // Add to queue in Firestore
+      const queueRef = db.collection('rooms').doc(targetRoomId!).collection('voiceQueue');
+      await queueRef.doc(userId).set({
+        userId,
+        username,
+        addedAt: new Date().toISOString(),
+        platform: 'twitch',
+      });
+
+      // Get queue position
+      const queueSnapshot = await queueRef.orderBy('addedAt').get();
+      const position = queueSnapshot.docs.findIndex(doc => doc.id === userId) + 1;
+
+      client.say(target, `✅ @${requester} You've been added to the voice chat queue! Position: #${position}`);
+      console.log(`* ${requester} joined voice queue (position ${position})`);
+    } catch (error) {
+      console.error('Error processing !queue command:', error);
+      client.say(target, `❌ @${requester} Error joining queue.`);
+    }
   }
 }

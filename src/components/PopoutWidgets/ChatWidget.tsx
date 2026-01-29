@@ -12,7 +12,7 @@ import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Send, Loader2 } from 'lucide-react';
 import { useFirebase, useDoc, useMemoFirebase } from '@/firebase';
-import { doc, updateDoc, setDoc } from 'firebase/firestore';
+import { doc, updateDoc, setDoc, getDoc } from 'firebase/firestore';
 import { postToDiscord } from '@/app/actions';
 import { useToast } from '@/hooks/use-toast';
 
@@ -182,15 +182,20 @@ export function ChatWidget({
     
     setPostingEmbed(true);
     try {
-      // Get room data from Firestore
-      const roomData = firestoreUser;
+      // Fetch room data to get custom links
+      const roomRef = doc(firestore!, 'rooms', roomId);
+      const roomSnap = await getDoc(roomRef);
+      const roomData = roomSnap.data();
+      
       await postToDiscord(
         selectedChannel,
         roomId,
-        'Music Room', // You can get this from room data
-        'Join us for music and chat!',
-        undefined, // Add Twitch URL if available
-        undefined  // Add Discord URL if available
+        roomData?.name || 'Music Room',
+        roomData?.description || 'Join us for music and chat!',
+        roomData?.link1Label,
+        roomData?.link1Url,
+        roomData?.link2Label,
+        roomData?.link2Url
       );
       toast({ title: 'Posted to Discord!', description: 'Control embed sent to selected channel' });
     } catch (error: any) {
