@@ -4,7 +4,8 @@ import UserCard from "./UserCard";
 import React from "react";
 import { useFirebase, useDoc, useMemoFirebase } from '@/firebase';
 import { doc } from 'firebase/firestore';
-import { useLocalParticipant, useRemoteParticipants } from '@livekit/components-react';
+import { useLocalParticipant, useRemoteParticipants, useTracks } from '@livekit/components-react';
+import { Track } from 'livekit-client';
 import '@livekit/components-styles';
 
 export interface RoomData {
@@ -25,6 +26,26 @@ export default function UserList({
   const remoteParticipants = useRemoteParticipants();
 
   const allParticipants = [localParticipant, ...remoteParticipants];
+  
+  // Log participant audio tracks for debugging
+  React.useEffect(() => {
+    console.log('[UserList] Total participants:', allParticipants.length);
+    allParticipants.forEach(p => {
+      const audioTracks = Array.from(p.audioTrackPublications.values());
+      console.log(`[UserList] Participant ${p.identity}:`, {
+        isLocal: p.isLocal,
+        audioTracks: audioTracks.length,
+        micEnabled: p.isMicrophoneEnabled,
+        tracks: audioTracks.map(t => ({ 
+          sid: t.trackSid, 
+          subscribed: t.isSubscribed,
+          enabled: t.isEnabled,
+          muted: t.isMuted,
+          source: t.source
+        }))
+      });
+    });
+  }, [allParticipants.length, remoteParticipants.length]);
 
   const roomRef = useMemoFirebase(() => {
     if (!firestore || !roomId) return null;

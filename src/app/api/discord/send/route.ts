@@ -1,44 +1,35 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { DiscordChatService } from '@/lib/discord-chat-service';
 
-/**
- * POST /api/discord/send
- * Body: { channelId: string, content: string }
- * Sends a message to a Discord channel
- */
 export async function POST(req: NextRequest) {
   try {
-    const botToken = req.headers.get('X-Discord-Token');
-
-    if (!botToken) {
-      return NextResponse.json(
-        { error: 'Missing X-Discord-Token header' },
-        { status: 401 }
-      );
-    }
-
     const { channelId, content } = await req.json();
 
     if (!channelId || !content) {
-      return NextResponse.json(
-        { error: 'Missing channelId or content' },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: 'Missing channelId or content' }, { status: 400 });
     }
 
-    // Initialize service with token
-    DiscordChatService.initialize(botToken);
+    const botToken = process.env.DISCORD_BOT_TOKEN;
+    if (!botToken) {
+      return NextResponse.json({ error: 'Bot not configured' }, { status: 500 });
+    }
 
-    const messageId = await DiscordChatService.sendMessage(channelId, content);
-
-    return NextResponse.json({ id: messageId, success: true });
-  } catch (error) {
-    console.error('Discord send error:', error);
-    return NextResponse.json(
-      {
-        error: error instanceof Error ? error.message : 'Failed to send message',
+    const response = await fetch(`https://discord.com/api/v10/channels/${channelId}/messages`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bot ${botToken}`,
+        'Content-Type': 'application/json',
       },
-      { status: 500 }
-    );
+      body: JSON.stringify({ content }),
+    });
+
+    if (!response.ok) {
+      const error = await response.json();
+      return NextResponse.json({ error: 'Failed to send message', details: error }, { status: response.status });
+    }
+
+    return NextResponse.json({ success: true });
+  } catch (error) {
+    console.error('Error sending Discord message:', error);
+    return NextResponse.json({ error: 'Internal error' }, { status: 500 });
   }
 }

@@ -76,18 +76,14 @@ export async function generateLiveKitToken(roomName: string, participantIdentity
   }
 }
 
-export async function postToDiscord() {
-    const channelId = process.env.DISCORD_CHANNEL_ID;
+export async function postToDiscord(channelId: string) {
     if (!channelId) {
-        console.error("DISCORD_CHANNEL_ID is not set in environment variables.");
-        throw new Error("Discord channel ID is not configured on the server.");
+        throw new Error("Channel ID is required.");
     }
     try {
         await sendControlEmbed(channelId);
     } catch (error) {
         console.error("Error posting to Discord:", error);
-        // We throw the error so the client can catch it and display a message.
-        // The error from sendControlEmbed is already descriptive.
         throw error;
     }
 }

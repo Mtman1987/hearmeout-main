@@ -1,8 +1,8 @@
 'use server';
 
-import { db } from '@/firebase/admin';
 import { YouTube } from 'youtube-sr';
 import { PlaylistItem } from "@/types/playlist";
+import { roomService } from '@/firebase/firestore-service';
 
 // A simple deterministic hash function to select album art from the existing set
 function simpleHash(str: string): number {
@@ -37,16 +37,12 @@ export async function addSongToPlaylist(
   if (!roomId) {
     return { success: false, message: 'No room ID provided.' };
   }
-  
-  const roomRef = db.collection('rooms').doc(roomId);
 
   try {
-    // Validate input is a YouTube URL or search query
     const isUrl = /^(https?:\/\/)?(www\.)?(youtube\.com|youtu\.?be)\/.+/.test(songQuery);
     let videosToAdd: PlaylistItem[] = [];
 
     if (isUrl) {
-        // Check if it's a playlist URL
         const isPlaylistUrl = /[?&]list=/.test(songQuery);
         if (isPlaylistUrl) {
             const playlist = await YouTube.getPlaylist(songQuery);
@@ -65,7 +61,6 @@ export async function addSongToPlaylist(
                 plays: 0,
                 source: 'web' as const,
             }));
-
         } else {
             const video = await YouTube.getVideo(songQuery);
              if (!video || !video.id) {
@@ -110,31 +105,9 @@ export async function addSongToPlaylist(
 
     const firstSongAdded = videosToAdd[0];
 
-    await db.runTransaction(async (transaction) => {
-      const roomDoc = await transaction.get(roomRef);
-      if (!roomDoc.exists) {
-        throw new Error(`Room with ID ${roomId} does not exist.`);
-      }
-      const roomData = roomDoc.data();
-      const currentPlaylist = roomData?.playlist || [];
-      const newPlaylist = [...currentPlaylist, ...videosToAdd];
-      
-      const updates: { 
-        playlist: PlaylistItem[]; 
-        isPlaying?: boolean; 
-        currentTrackId?: string;
-      } = {
-          playlist: newPlaylist
-      };
-
-      // If nothing is playing and there was no playlist before, start playing the new song.
-      if (!roomData?.isPlaying && currentPlaylist.length === 0) {
-          updates.isPlaying = true;
-          updates.currentTrackId = firstSongAdded.id;
-      }
-      
-      transaction.update(roomRef, updates);
-    });
+    for (const song of videosToAdd) {
+      await roomService.addSongToPlaylist(roomId, song);
+    }
 
     const message = videosToAdd.length > 1
         ? `Queued up ${videosToAdd.length} songs from the playlist.`
@@ -162,19 +135,17 @@ export async function updateRoomPlayState(
   }
 
   try {
-    const roomRef = db.collection('rooms').doc(roomId);
-    const roomDoc = await roomRef.get();
+    const roomData = await roomService.getRoom(roomId);
 
-    if (!roomDoc.exists) {
+    if (!roomData) {
       return { success: false, message: 'Room not found.' };
     }
 
-    const roomData = roomDoc.data();
-    if (!roomData?.currentTrackId) {
+    if (!roomData.currentTrackId) {
       return { success: false, message: 'No track is currently selected.' };
     }
 
-    await roomRef.update({ isPlaying });
+    await roomService.updatePlayState(roomId, isPlaying);
 
     const status = isPlaying ? 'Playing' : 'Paused';
     const trackTitle = roomData.playlist
@@ -199,32 +170,22 @@ export async function skipTrack(roomId: string): Promise<{ success: boolean; mes
   }
 
   try {
-    const roomRef = db.collection('rooms').doc(roomId);
-    
-    await db.runTransaction(async (transaction) => {
-      const roomDoc = await transaction.get(roomRef);
+    const roomData = await roomService.getRoom(roomId);
 
-      if (!roomDoc.exists) {
-        throw new Error('Room not found.');
-      }
+    if (!roomData) {
+      return { success: false, message: 'Room not found.' };
+    }
 
-      const roomData = roomDoc.data();
-      const playlist = roomData?.playlist || [];
-      const currentTrackId = roomData?.currentTrackId;
+    const playlist = roomData.playlist || [];
+    if (!playlist.length) {
+      return { success: false, message: 'Playlist is empty.' };
+    }
 
-      if (!playlist.length) {
-        throw new Error('Playlist is empty.');
-      }
+    const currentIndex = playlist.findIndex((t: any) => t.id === roomData.currentTrackId);
+    const nextIndex = (currentIndex + 1) % playlist.length;
+    const nextTrack = playlist[nextIndex];
 
-      const currentIndex = playlist.findIndex((t: any) => t.id === currentTrackId);
-      const nextIndex = (currentIndex + 1) % playlist.length;
-      const nextTrack = playlist[nextIndex];
-
-      transaction.update(roomRef, {
-        currentTrackId: nextTrack.id,
-        isPlaying: true,
-      });
-    });
+    await roomService.setCurrentTrack(roomId, nextTrack.id);
 
     return { success: true, message: 'Skipped to next track.' };
   } catch (error: any) {
@@ -243,19 +204,18 @@ export async function getRoomState(roomId: string) {
   }
 
   try {
-    const roomDoc = await db.collection('rooms').doc(roomId).get();
-    if (!roomDoc.exists) {
+    const data = await roomService.getRoom(roomId);
+    if (!data) {
       return null;
     }
 
-    const data = roomDoc.data();
-    const currentTrack = data?.playlist?.find((t: any) => t.id === data?.currentTrackId);
+    const currentTrack = data.playlist?.find((t: any) => t.id === data.currentTrackId);
 
     return {
-      isPlaying: data?.isPlaying || false,
+      isPlaying: data.isPlaying || false,
       currentTrack: currentTrack || null,
-      playlistLength: data?.playlist?.length || 0,
-      djDisplayName: data?.djDisplayName || 'No DJ',
+      playlistLength: data.playlist?.length || 0,
+      djDisplayName: data.djDisplayName || 'No DJ',
     };
   } catch (error) {
     console.error(`Error getting room state for ${roomId}:`, error);

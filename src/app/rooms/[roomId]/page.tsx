@@ -7,7 +7,8 @@ import {
   useConnectionState,
   useRoomContext,
 } from '@livekit/components-react';
-import { ConnectionState, createLocalAudioTrack } from 'livekit-client';
+import { ConnectionState, createLocalAudioTrack, Track } from 'livekit-client';
+import * as LivekitClient from 'livekit-client';
 import {
   SidebarProvider,
   SidebarInset,
@@ -30,7 +31,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { useFirebase, useDoc, useMemoFirebase, updateDocumentNonBlocking, setDocumentNonBlocking, deleteDocumentNonBlocking } from '@/firebase';
-import { doc } from 'firebase/firestore';
+import { doc, getDoc } from 'firebase/firestore';
 import { generateLiveKitToken, postToDiscord } from '@/app/actions';
 import { PlaylistItem } from "@/types/playlist";
 import { usePopout } from '@/components/PopoutWidgets/PopoutProvider';
@@ -54,7 +55,6 @@ function RoomHeader({
     onClaimDJ,
     onRelinquishDJ,
     isOwner,
-    onOpenVoiceWidget,
     onOpenChatWidget,
 }: {
     roomName: string,
@@ -63,7 +63,6 @@ function RoomHeader({
     onClaimDJ: () => void,
     onRelinquishDJ: () => void;
     isOwner: boolean;
-    onOpenVoiceWidget: () => void;
     onOpenChatWidget: () => void;
 }) {
     const { isMobile } = useSidebar();
@@ -80,17 +79,45 @@ function RoomHeader({
     }
 
     const handlePostToDiscord = async () => {
+        if (!user || !firestore) {
+            toast({ variant: 'destructive', title: 'Error', description: 'You must be logged in.' });
+            return;
+        }
         try {
-            await postToDiscord();
+            const userInRoomRef = doc(firestore, 'rooms', params.roomId as string, 'users', user.uid);
+            const userDoc = await getDoc(userInRoomRef);
+            const userData = userDoc.data();
+            
+            if (!userData?.discordGuildId) {
+                toast({ variant: 'destructive', title: 'Discord Not Configured', description: 'Set your Discord server ID in your user card menu first.' });
+                return;
+            }
+            
+            // Fetch channels and let user pick
+            const res = await fetch(`/api/discord/channels?guildId=${userData.discordGuildId}`);
+            if (!res.ok) {
+                toast({ variant: 'destructive', title: 'Error', description: 'Failed to load channels. Make sure bot is in your server.' });
+                return;
+            }
+            const channels = await res.json();
+            
+            // For now, post to first text channel (TODO: add channel picker dialog)
+            const textChannel = channels.find((ch: any) => ch.type === 0);
+            if (!textChannel) {
+                toast({ variant: 'destructive', title: 'Error', description: 'No text channels found in your server.' });
+                return;
+            }
+            
+            await postToDiscord(textChannel.id);
             toast({
                 title: "Posted to Discord!",
-                description: "The control embed has been sent to your channel.",
+                description: `Control embed sent to #${textChannel.name}`,
             });
         } catch (error: any) {
             toast({
                 variant: "destructive",
                 title: "Discord Error",
-                description: error.message || "Could not post to Discord. Check server logs.",
+                description: error.message || "Could not post to Discord.",
             });
         }
     }
@@ -125,21 +152,6 @@ function RoomHeader({
                          <Button 
                             variant="outline" 
                             size="icon" 
-                            onClick={onOpenVoiceWidget}
-                            >
-                            <Headphones className="h-4 w-4" />
-                        </Button>
-                    </TooltipTrigger>
-                    <TooltipContent>
-                        <p>Pop-out Voice Widget</p>
-                    </TooltipContent>
-                </Tooltip>
-
-                <Tooltip>
-                    <TooltipTrigger asChild>
-                         <Button 
-                            variant="outline" 
-                            size="icon" 
                             onClick={onOpenChatWidget}
                             >
                             <MessageSquare className="h-4 w-4" />
@@ -150,19 +162,17 @@ function RoomHeader({
                     </TooltipContent>
                 </Tooltip>
                 
-                {isOwner && (
-                    <Tooltip>
-                        <TooltipTrigger asChild>
-                            <Button variant="outline" size="icon" onClick={handlePostToDiscord}>
-                                <DiscordIcon />
-                                <span className="sr-only">Post Controls to Discord</span>
-                            </Button>
-                        </TooltipTrigger>
-                        <TooltipContent>
-                            <p>Post Controls to Discord</p>
-                        </TooltipContent>
-                    </Tooltip>
-                )}
+                <Tooltip>
+                    <TooltipTrigger asChild>
+                        <Button variant="outline" size="icon" onClick={handlePostToDiscord}>
+                            <DiscordIcon />
+                            <span className="sr-only">Post Controls to Discord</span>
+                        </Button>
+                    </TooltipTrigger>
+                    <TooltipContent>
+                        <p>Post Controls to Discord</p>
+                    </TooltipContent>
+                </Tooltip>
 
                 {isOwner && (
                     <Tooltip>
@@ -284,16 +294,14 @@ function MusicStreamer({
                 const data = await res.json();
                 
                 if (!res.ok) {
-                    // Check if we can retry
                     if (data.canRetry && retryAttempt < 3) {
                         console.warn(`Audio URL resolution failed (attempt ${retryAttempt + 1}), retrying...`);
                         if (!isCancelled) {
-                            // Wait before retrying
                             setTimeout(() => {
                                 if (!isCancelled) {
                                     fetchAudioUrl(retryAttempt + 1, useProxy);
                                 }
-                            }, 2000); // 2 second delay before retry
+                            }, 2000);
                         }
                         return;
                     }
@@ -305,16 +313,15 @@ function MusicStreamer({
                 }
                 
                 if (!isCancelled) {
-                    // Try to use proxied URL first to avoid CORS issues
                     const urlToUse = useProxy && data.proxiedUrl ? data.proxiedUrl : (data.directUrl || data.url);
-                    console.log(`Using ${useProxy ? 'proxied' : 'direct'} audio URL`);
+                    console.log(`[MusicStreamer] Using ${useProxy ? 'proxied' : 'direct'} audio URL`);
                     setAudioStreamUrl(urlToUse);
                     setAudioError(null);
                     setCorsBlocked(false);
                     retryCountRef.current = 0;
                 }
             } catch (error: any) {
-                console.error("Error fetching audio URL:", error);
+                console.error("[MusicStreamer] Error fetching audio URL:", error);
                 if (!isCancelled) {
                     setAudioStreamUrl(null);
                     setAudioError(error.message || "Failed to load audio");
@@ -338,13 +345,18 @@ function MusicStreamer({
         
         if (!isDJ || !room || !audioEl || isFetchingUrl || audioError) {
             if (publicationRef.current && room?.localParticipant) {
-                room.localParticipant.unpublishTrack(publicationRef.current.track!).catch(e => console.warn(e));
+                room.localParticipant.unpublishTrack(publicationRef.current.track!).catch(e => console.warn('[MusicStreamer] Unpublish error:', e));
                 publicationRef.current = null;
             }
-            if (audioEl) audioEl.pause();
-            if (audioContextRef.current) {
+            if (audioEl) {
+                audioEl.pause();
+                audioEl.src = '';
+            }
+            if (audioContextRef.current && audioContextRef.current.state !== 'closed') {
                 audioContextRef.current.close();
                 audioContextRef.current = null;
+                sourceNodeRef.current = null;
+                destinationRef.current = null;
             }
             return;
         }
@@ -352,46 +364,94 @@ function MusicStreamer({
         const manageTrack = async () => {
             if (isPlaying && audioStreamUrl) {
                 try {
-                    if (publicationRef.current && audioEl.src === audioStreamUrl && !audioEl.paused) return;
+                    // Check if already playing the same track
+                    if (publicationRef.current && audioEl.src === audioStreamUrl && !audioEl.paused) {
+                        console.log('[MusicStreamer] Already playing this track');
+                        return;
+                    }
 
+                    // Unpublish existing track
                     if (publicationRef.current) {
+                        console.log('[MusicStreamer] Unpublishing previous track');
                         await room.localParticipant.unpublishTrack(publicationRef.current.track!);
                         publicationRef.current = null;
                     }
 
+                    // Set up audio element
+                    console.log('[MusicStreamer] Setting up audio element');
                     audioEl.src = audioStreamUrl;
                     audioEl.crossOrigin = 'anonymous';
-                    audioEl.onerror = () => {
+                    audioEl.volume = 1.0; // Full volume for local playback
+                    audioEl.onerror = (e) => {
+                        console.error('[MusicStreamer] Audio element error:', audioEl.error);
                         if (audioEl.error?.code === 4) setCorsBlocked(true);
                         else setAudioError(`Failed to load audio`);
                     };
                     
+                    // Play audio
                     await audioEl.play().catch(e => {
+                        console.error('[MusicStreamer] Play error:', e);
                         if (e.name === 'NotAllowedError' || e.name === 'NotSupportedError') setCorsBlocked(true);
                         else setAudioError("Failed to start playback");
+                        throw e;
                     });
                     
-                    if (!audioContextRef.current) audioContextRef.current = new AudioContext();
-                    if (!sourceNodeRef.current) sourceNodeRef.current = audioContextRef.current.createMediaElementSource(audioEl);
-                    if (!destinationRef.current) destinationRef.current = audioContextRef.current.createMediaStreamDestination();
+                    console.log('[MusicStreamer] Audio playing, setting up Web Audio API');
                     
+                    // Create audio context if needed
+                    if (!audioContextRef.current || audioContextRef.current.state === 'closed') {
+                        audioContextRef.current = new AudioContext();
+                        console.log('[MusicStreamer] Created new AudioContext');
+                    }
+                    
+                    // Resume audio context if suspended
+                    if (audioContextRef.current.state === 'suspended') {
+                        await audioContextRef.current.resume();
+                        console.log('[MusicStreamer] Resumed AudioContext');
+                    }
+                    
+                    // Create source node if needed
+                    if (!sourceNodeRef.current) {
+                        sourceNodeRef.current = audioContextRef.current.createMediaElementSource(audioEl);
+                        console.log('[MusicStreamer] Created MediaElementAudioSourceNode');
+                    }
+                    
+                    // Create destination node if needed
+                    if (!destinationRef.current) {
+                        destinationRef.current = audioContextRef.current.createMediaStreamDestination();
+                        console.log('[MusicStreamer] Created MediaStreamAudioDestinationNode');
+                    }
+                    
+                    // Connect nodes: source -> destination (for LiveKit) AND source -> speakers (for local playback)
                     sourceNodeRef.current.connect(destinationRef.current);
                     sourceNodeRef.current.connect(audioContextRef.current.destination);
+                    console.log('[MusicStreamer] Connected audio nodes');
                     
+                    // Get audio track from destination
                     const mediaStream = destinationRef.current.stream;
                     const audioTrack = mediaStream.getAudioTracks()[0];
                     
-                    const publication = await room.localParticipant.publishTrack(audioTrack, { name: 'music' });
+                    if (!audioTrack) {
+                        throw new Error('No audio track available from MediaStream');
+                    }
+                    
+                    console.log('[MusicStreamer] Publishing audio track to LiveKit');
+                    const publication = await room.localParticipant.publishTrack(audioTrack, { 
+                        name: 'music',
+                        source: LivekitClient.Track.Source.Microphone,
+                    });
                     publicationRef.current = publication;
-                    console.log("Music track published");
+                    console.log('[MusicStreamer] Music track published successfully');
                 } catch (e) {
-                    console.error("Failed to publish music:", e);
+                    console.error("[MusicStreamer] Failed to publish music:", e);
                     setAudioError("Failed to publish audio");
                 }
             } else {
+                // Pause playback
+                console.log('[MusicStreamer] Pausing playback');
                 audioEl.pause();
                 if (publicationRef.current) {
-                    await room.localParticipant.unpublishTrack(publicationRef.current.track!).catch(e => console.warn(e));
+                    await room.localParticipant.unpublishTrack(publicationRef.current.track!).catch(e => console.warn('[MusicStreamer] Unpublish error:', e));
                     publicationRef.current = null;
                 }
             }
@@ -401,17 +461,19 @@ function MusicStreamer({
 
         return () => {
             if (room?.localParticipant && publicationRef.current) {
-                room.localParticipant.unpublishTrack(publicationRef.current.track!).catch(e => console.warn(e));
+                room.localParticipant.unpublishTrack(publicationRef.current.track!).catch(e => console.warn('[MusicStreamer] Cleanup unpublish error:', e));
                 publicationRef.current = null;
             }
-            if (audioContextRef.current) {
+            if (audioContextRef.current && audioContextRef.current.state !== 'closed') {
                 audioContextRef.current.close();
                 audioContextRef.current = null;
+                sourceNodeRef.current = null;
+                destinationRef.current = null;
             }
         };
     }, [isDJ, isPlaying, audioStreamUrl, room, isFetchingUrl, audioError]);
 
-    return <audio ref={audioRef} onEnded={onTrackEnd} crossOrigin="anonymous" className="hidden" />;
+    return <audio ref={audioRef} onEnded={onTrackEnd} crossOrigin="anonymous" />;
 }
 
 
@@ -606,7 +668,6 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
                             onClaimDJ={handleClaimDJ}
                             onRelinquishDJ={handleRelinquishDJ}
                             isOwner={isOwner}
-                            onOpenVoiceWidget={() => openPopout('voice', { width: 320, height: 420 })}
                             onOpenChatWidget={() => openPopout('chat', { width: 450, height: 600 })}
                         />
                         <main className="flex-1 p-4 md:p-6 overflow-y-auto space-y-6">

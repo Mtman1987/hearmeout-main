@@ -197,9 +197,9 @@ export async function POST(req: NextRequest) {
       }
 
       // Acknowledge immediately
-      const clientId = process.env.DISCORD_CLIENT_ID;
+      const clientId = process.env.NEXT_PUBLIC_DISCORD_CLIENT_ID;
       if (!clientId) {
-        console.error("DISCORD_CLIENT_ID is not set in .env");
+        console.error("NEXT_PUBLIC_DISCORD_CLIENT_ID is not set");
         return NextResponse.json({
           type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
           data: {

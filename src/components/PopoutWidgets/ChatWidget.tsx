@@ -12,7 +12,10 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
-import { Send } from 'lucide-react';
+import { Send, Loader2 } from 'lucide-react';
+import { useFirebase, useDoc, useMemoFirebase } from '@/firebase';
+import { doc } from 'firebase/firestore';
+import { useAuth } from '@/firebase/auth';
 
 interface ChatWidgetProps {
   id: string;
@@ -33,6 +36,12 @@ interface ChatMessage {
   badge?: 'mod' | 'sub' | 'vip';
 }
 
+interface DiscordChannel {
+  id: string;
+  name: string;
+  type: number;
+}
+
 export function ChatWidget({
   id,
   position,
@@ -42,60 +51,105 @@ export function ChatWidget({
   onClose,
   roomId,
 }: ChatWidgetProps) {
-  const [selectedChannel, setSelectedChannel] = useState('general');
+  const { firestore, auth } = useFirebase();
+  const { user } = useAuth();
+  const [selectedChannel, setSelectedChannel] = useState('');
   const [viewMode, setViewMode] = useState<'tabbed' | 'split-v' | 'split-h'>('tabbed');
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [newMessage, setNewMessage] = useState('');
+  const [discordChannels, setDiscordChannels] = useState<DiscordChannel[]>([]);
+  const [loadingChannels, setLoadingChannels] = useState(false);
+  const [discordGuildId, setDiscordGuildId] = useState<string | null>(null);
+  const [twitchChannel, setTwitchChannel] = useState<string | null>(null);
+  const [lastMessageId, setLastMessageId] = useState<string | null>(null);
 
-  // Mock messages for demo
+  const userInRoomRef = useMemoFirebase(() => {
+    if (!firestore || !roomId || !user?.uid) return null;
+    return doc(firestore, 'rooms', roomId, 'users', user.uid);
+  }, [firestore, roomId, user?.uid]);
+
+  const { data: firestoreUser } = useDoc<{ discordGuildId?: string; twitchChannel?: string }>(userInRoomRef);
+
   useEffect(() => {
-    const mockMessages: ChatMessage[] = [
-      {
-        id: '1',
-        author: 'StreamViewer',
-        content: 'Great stream!',
-        timestamp: new Date(Date.now() - 60000),
-        platform: 'discord',
-        badge: undefined,
-      },
-      {
-        id: '2',
-        author: 'Moderator',
-        content: 'Welcome everyone! Check the rules pinned.',
-        timestamp: new Date(Date.now() - 45000),
-        platform: 'discord',
-        badge: 'mod',
-      },
-      {
-        id: '3',
-        author: 'TwitchViewer123',
-        content: 'Following!',
-        timestamp: new Date(Date.now() - 30000),
-        platform: 'twitch',
-        badge: 'sub',
-      },
-      {
-        id: '4',
-        author: 'ChatUser',
-        content: 'Thanks for streaming!',
-        timestamp: new Date(Date.now() - 15000),
-        platform: 'discord',
-      },
-    ];
-    setMessages(mockMessages);
-  }, [selectedChannel]);
+    if (firestoreUser?.discordGuildId) {
+      setDiscordGuildId(firestoreUser.discordGuildId);
+    }
+    if (firestoreUser?.twitchChannel) {
+      setTwitchChannel(firestoreUser.twitchChannel);
+    }
+  }, [firestoreUser]);
 
-  const handleSendMessage = () => {
-    if (!newMessage.trim()) return;
-    const message: ChatMessage = {
-      id: Date.now().toString(),
-      author: 'You',
-      content: newMessage,
-      timestamp: new Date(),
-      platform: 'discord',
+  useEffect(() => {
+    if (!discordGuildId) {
+      setDiscordChannels([]);
+      return;
+    }
+
+    setLoadingChannels(true);
+    fetch(`/api/discord/channels?guildId=${discordGuildId}`)
+      .then(res => res.json())
+      .then(channels => {
+        if (Array.isArray(channels)) {
+          setDiscordChannels(channels);
+          if (channels.length > 0 && !selectedChannel) {
+            setSelectedChannel(channels[0].id);
+          }
+        }
+      })
+      .catch(err => console.error('Failed to fetch Discord channels:', err))
+      .finally(() => setLoadingChannels(false));
+  }, [discordGuildId]);
+
+  useEffect(() => {
+    if (!selectedChannel) return;
+
+    const pollMessages = async () => {
+      try {
+        const url = lastMessageId 
+          ? `/api/discord/messages?channelId=${selectedChannel}&after=${lastMessageId}`
+          : `/api/discord/messages?channelId=${selectedChannel}&limit=50`;
+        
+        const res = await fetch(url);
+        const newMessages = await res.json();
+        
+        if (Array.isArray(newMessages) && newMessages.length > 0) {
+          const msgs: ChatMessage[] = newMessages.reverse().map((msg: any) => ({
+            id: msg.id,
+            author: msg.author.username,
+            content: msg.content,
+            timestamp: new Date(msg.timestamp),
+            platform: 'discord' as const,
+          }));
+          
+          setMessages(prev => [...prev, ...msgs]);
+          setLastMessageId(newMessages[newMessages.length - 1].id);
+        }
+      } catch (err) {
+        console.error('Failed to poll messages:', err);
+      }
     };
-    setMessages((prev) => [...prev, message]);
-    setNewMessage('');
+
+    pollMessages();
+    const interval = setInterval(pollMessages, 3000);
+    return () => clearInterval(interval);
+  }, [selectedChannel, lastMessageId]);
+
+  const handleSendMessage = async () => {
+    if (!newMessage.trim() || !selectedChannel) return;
+    
+    try {
+      await fetch('/api/discord/send', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          channelId: selectedChannel,
+          content: newMessage,
+        }),
+      });
+      setNewMessage('');
+    } catch (error) {
+      console.error('Failed to send message:', error);
+    }
   };
 
   return (
@@ -111,16 +165,19 @@ export function ChatWidget({
       <div className="flex flex-col overflow-hidden flex-1">
         {/* Controls */}
         <div className="flex items-center gap-2 p-2 border-b bg-muted/30 flex-wrap">
-          <Select value={selectedChannel} onValueChange={setSelectedChannel}>
+          <Select value={selectedChannel} onValueChange={setSelectedChannel} disabled={loadingChannels || discordChannels.length === 0}>
             <SelectTrigger className="w-[140px] h-8">
-              <SelectValue />
+              <SelectValue placeholder={loadingChannels ? 'Loading...' : discordChannels.length === 0 ? 'No channels' : 'Select channel'} />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="general">general</SelectItem>
-              <SelectItem value="announcements">announcements</SelectItem>
-              <SelectItem value="random">random</SelectItem>
+              {discordChannels.map(ch => (
+                <SelectItem key={ch.id} value={ch.id}>
+                  {ch.type === 2 ? '🔊' : '#'} {ch.name}
+                </SelectItem>
+              ))}
             </SelectContent>
           </Select>
+          {loadingChannels && <Loader2 className="h-4 w-4 animate-spin" />}
 
           <select
             value={viewMode}
@@ -146,40 +203,73 @@ export function ChatWidget({
                 </TabsTrigger>
               </TabsList>
               <TabsContent value="discord" className="flex-1 overflow-y-auto m-0 p-2">
-                <ChatMessageList
-                  messages={messages.filter((m) => m.platform === 'discord')}
-                />
+                {!discordGuildId ? (
+                  <div className="text-xs text-muted-foreground text-center py-4">
+                    Set Discord server in your user card menu to view chat
+                  </div>
+                ) : (
+                  <ChatMessageList messages={messages.filter((m) => m.platform === 'discord')} />
+                )}
               </TabsContent>
-              <TabsContent value="twitch" className="flex-1 overflow-y-auto m-0 p-2">
-                <ChatMessageList
-                  messages={messages.filter((m) => m.platform === 'twitch')}
-                />
+              <TabsContent value="twitch" className="flex-1 m-0 p-0 overflow-hidden">
+                {!twitchChannel ? (
+                  <div className="text-xs text-muted-foreground text-center py-4">
+                    Set Twitch channel in your user card menu to view chat
+                  </div>
+                ) : (
+                  <iframe
+                    src={`https://www.twitch.tv/embed/${twitchChannel}/chat?parent=${typeof window !== 'undefined' ? window.location.hostname : 'localhost'}&darkpopout`}
+                    className="w-full h-full border-0"
+                  />
+                )}
               </TabsContent>
             </Tabs>
           ) : viewMode === 'split-v' ? (
             <div className="flex gap-1 w-full">
               <div className="flex-1 overflow-y-auto border-r p-2">
-                <ChatMessageList
-                  messages={messages.filter((m) => m.platform === 'discord')}
-                />
+                {!discordGuildId ? (
+                  <div className="text-xs text-muted-foreground text-center py-4">
+                    Set Discord server in your user card menu
+                  </div>
+                ) : (
+                  <ChatMessageList messages={messages.filter((m) => m.platform === 'discord')} />
+                )}
               </div>
-              <div className="flex-1 overflow-y-auto p-2">
-                <ChatMessageList
-                  messages={messages.filter((m) => m.platform === 'twitch')}
-                />
+              <div className="flex-1 p-0 overflow-hidden">
+                {!twitchChannel ? (
+                  <div className="text-xs text-muted-foreground text-center py-4">
+                    Set Twitch channel in your user card menu
+                  </div>
+                ) : (
+                  <iframe
+                    src={`https://www.twitch.tv/embed/${twitchChannel}/chat?parent=${typeof window !== 'undefined' ? window.location.hostname : 'localhost'}&darkpopout`}
+                    className="w-full h-full border-0"
+                  />
+                )}
               </div>
             </div>
           ) : (
             <div className="flex flex-col gap-1 w-full">
               <div className="flex-1 overflow-y-auto border-b p-2">
-                <ChatMessageList
-                  messages={messages.filter((m) => m.platform === 'discord')}
-                />
+                {!discordGuildId ? (
+                  <div className="text-xs text-muted-foreground text-center py-4">
+                    Set Discord server in your user card menu
+                  </div>
+                ) : (
+                  <ChatMessageList messages={messages.filter((m) => m.platform === 'discord')} />
+                )}
               </div>
-              <div className="flex-1 overflow-y-auto p-2">
-                <ChatMessageList
-                  messages={messages.filter((m) => m.platform === 'twitch')}
-                />
+              <div className="flex-1 p-0 overflow-hidden">
+                {!twitchChannel ? (
+                  <div className="text-xs text-muted-foreground text-center py-4">
+                    Set Twitch channel in your user card menu
+                  </div>
+                ) : (
+                  <iframe
+                    src={`https://www.twitch.tv/embed/${twitchChannel}/chat?parent=${typeof window !== 'undefined' ? window.location.hostname : 'localhost'}&darkpopout`}
+                    className="w-full h-full border-0"
+                  />
+                )}
               </div>
             </div>
           )}
@@ -188,16 +278,18 @@ export function ChatWidget({
         {/* Input */}
         <div className="border-t p-2 bg-muted/30 flex gap-1">
           <Input
-            placeholder="Message..."
+            placeholder={!discordGuildId ? "Set Discord server first..." : "Message..."}
             value={newMessage}
             onChange={(e) => setNewMessage(e.target.value)}
             onKeyDown={(e) => e.key === 'Enter' && handleSendMessage()}
             className="h-8 text-xs"
+            disabled={!discordGuildId || !selectedChannel}
           />
           <Button
             size="sm"
             onClick={handleSendMessage}
             className="h-8 w-8 p-0"
+            disabled={!discordGuildId || !selectedChannel}
           >
             <Send className="w-3 h-3" />
           </Button>

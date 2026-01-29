@@ -1,6 +1,6 @@
 'use client';
 
-import React, { createContext, useContext, useState, useCallback, ReactNode } from 'react';
+import React, { createContext, useContext, useState, useCallback, ReactNode, useEffect } from 'react';
 
 export interface PopoutState {
   id: string;
@@ -26,8 +26,30 @@ interface PopoutContextType {
 
 const PopoutContext = createContext<PopoutContextType | undefined>(undefined);
 
+const STORAGE_KEY = 'hearmeout-popout-state';
+
 export function PopoutProvider({ children }: { children: ReactNode }) {
   const [popouts, setPopouts] = useState<PopoutState[]>([]);
+  const [isHydrated, setIsHydrated] = useState(false);
+
+  useEffect(() => {
+    const saved = localStorage.getItem(STORAGE_KEY);
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        setPopouts(parsed);
+      } catch (e) {
+        console.error('Failed to restore popout state:', e);
+      }
+    }
+    setIsHydrated(true);
+  }, []);
+
+  useEffect(() => {
+    if (isHydrated) {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(popouts));
+    }
+  }, [popouts, isHydrated]);
 
   const openPopout = useCallback(
     (type: PopoutState['type'], initialSize = { width: 400, height: 300 }) => {

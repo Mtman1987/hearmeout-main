@@ -20,3 +20,9 @@ env:
     value: 9u0mtc83xeabmguw53c89dehth0gwg
   - variable: TWITCH_CLIENT_SECRET
     value: wclfm53vrx76i435p2jhmyv3v1ovrn
+  - variable: DISCORD_BOT_TOKEN
+    value: YOUR_DISCORD_BOT_TOKEN
+  - variable: TWITCH_BOT_USERNAME
+    value: YOUR_TWITCH_BOT_USERNAME
+  - variable: TWITCH_BOT_OAUTH_TOKEN
+    value: oauth:YOUR_TWITCH_OAUTH_TOKEN

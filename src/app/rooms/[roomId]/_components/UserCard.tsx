@@ -15,10 +15,11 @@ import {
   VolumeX,
   LoaderCircle,
   LogOut,
+  Radio,
 } from 'lucide-react';
 import { useTracks, AudioTrack, useRoomContext } from '@livekit/components-react';
 import * as LivekitClient from 'livekit-client';
-import { doc, deleteDoc } from 'firebase/firestore';
+import { doc, deleteDoc, updateDoc } from 'firebase/firestore';
 
 import { useFirebase, useDoc, useMemoFirebase } from '@/firebase';
 import { useToast } from '@/hooks/use-toast';
@@ -39,6 +40,14 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+  DialogFooter,
+} from "@/components/ui/dialog";
+import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
@@ -54,6 +63,7 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Card, CardContent } from "@/components/ui/card";
 import { Slider } from "@/components/ui/slider";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { SpeakingIndicator } from "./SpeakingIndicator";
 import { Label } from '@/components/ui/label';
 import {
@@ -72,6 +82,8 @@ interface RoomParticipantData {
   uid: string;
   displayName: string;
   photoURL: string;
+  twitchChannel?: string;
+  discordGuildId?: string;
 }
 
 export default function UserCard({
@@ -91,6 +103,10 @@ export default function UserCard({
   const router = useRouter();
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = React.useState(false);
   const [isDeleting, setIsDeleting] = React.useState(false);
+  const [twitchDialogOpen, setTwitchDialogOpen] = React.useState(false);
+  const [twitchChannel, setTwitchChannel] = React.useState('');
+  const [discordDialogOpen, setDiscordDialogOpen] = React.useState(false);
+  const [discordGuildId, setDiscordGuildId] = React.useState('');
 
   // Remote participant volume control state
   const [volume, setVolume] = React.useState(1);
@@ -100,8 +116,11 @@ export default function UserCard({
   const { devices: audioInputDevices, activeDeviceId: activeAudioInputDeviceId, setDevice: setAudioInputDevice } = useAudioDevice({ kind: 'audioinput' });
   const { devices: audioOutputDevices, activeDeviceId: activeAudioOutputDeviceId, setDevice: setAudioOutputDevice } = useAudioDevice({ kind: 'audiooutput' });
 
-  const audioTracks = useTracks([LivekitClient.Track.Source.Microphone])[0];
-  const audioTrackRef = audioTracks?.source === LivekitClient.Track.Source.Microphone ? audioTracks : undefined;
+  // Get ALL audio tracks for this participant (microphone + music)
+  const allAudioTracks = useTracks(
+    [LivekitClient.Track.Source.Microphone, LivekitClient.Track.Source.Unknown],
+    { onlySubscribed: false, participant }
+  ).filter(track => track.participant.identity === participant.identity);
   
   const { name, identity } = participant;
 
@@ -129,15 +148,42 @@ export default function UserCard({
   }, [firestore, roomId, identity]);
 
   const { data: firestoreUser } = useDoc<RoomParticipantData>(userInRoomRef);
+
+  React.useEffect(() => {
+    if (firestoreUser?.twitchChannel) {
+      setTwitchChannel(firestoreUser.twitchChannel);
+    }
+    if (firestoreUser?.discordGuildId) {
+      setDiscordGuildId(firestoreUser.discordGuildId);
+    }
+  }, [firestoreUser]);
+
+  const handleSaveTwitch = async () => {
+    if (!userInRoomRef) return;
+    try {
+      await updateDoc(userInRoomRef, { twitchChannel: twitchChannel.trim().toLowerCase() || null });
+      toast({ title: 'Saved', description: 'Twitch channel updated. Bot will join within 30 seconds.' });
+      setTwitchDialogOpen(false);
+    } catch (e) {
+      toast({ variant: 'destructive', title: 'Error', description: 'Failed to update Twitch channel.' });
+    }
+  };
+
+  const handleSaveDiscord = async () => {
+    if (!userInRoomRef) return;
+    try {
+      await updateDoc(userInRoomRef, { discordGuildId: discordGuildId.trim() || null });
+      toast({ title: 'Saved', description: 'Discord server ID saved. Use channel dropdown in chat.' });
+      setDiscordDialogOpen(false);
+    } catch (e) {
+      toast({ variant: 'destructive', title: 'Error', description: 'Failed to update Discord server.' });
+    }
+  };
   
   const handleToggleMic = async () => {
-    if (isLocal) {
-        // For local participant, use the audio track from useTracks hook
-        if (audioTrackRef?.publication?.track) {
-          if (participant.isMicrophoneEnabled) {
-            audioTrackRef.publication.track.stop();
-          }
-        }
+    if (isLocal && room) {
+      const enabled = participant.isMicrophoneEnabled;
+      await room.localParticipant.setMicrophoneEnabled(!enabled);
     }
   };
   
@@ -176,9 +222,27 @@ export default function UserCard({
 
   return (
     <>
-      {!isLocal && audioTrackRef && (
-        <AudioTrack key={audioTrackRef.publication.trackSid} trackRef={audioTrackRef} volume={volume} />
-      )}
+      {/* Render ALL audio tracks for remote participants with volume control (never pause) */}
+      {!isLocal && allAudioTracks.map((trackRef) => {
+        if (!trackRef.publication) return null;
+        console.log(`[UserCard] Rendering audio track for ${participant.identity}:`, {
+          trackSid: trackRef.publication.trackSid,
+          source: trackRef.source,
+          subscribed: trackRef.publication.isSubscribed,
+          enabled: trackRef.publication.isEnabled
+        });
+        return (
+          <AudioTrack 
+            key={trackRef.publication.trackSid} 
+            trackRef={trackRef} 
+            volume={volume}
+            muted={false}
+            onSubscriptionStatusChanged={(status) => {
+              console.log(`[UserCard] Track ${trackRef.publication.trackSid} subscription:`, status);
+            }}
+          />
+        );
+      })}
 
       <Card className="flex flex-col h-full">
         <CardContent className="p-4 flex flex-col gap-4 flex-grow">
@@ -260,6 +324,17 @@ export default function UserCard({
                                     <Button variant="ghost" size="icon" className="h-7 w-7"><MoreVertical className="h-4 w-4" /></Button>
                                 </DropdownMenuTrigger>
                                 <DropdownMenuContent align="start">
+                                    <DropdownMenuItem onClick={() => setTwitchDialogOpen(true)}>
+                                        <Radio className="mr-2 h-4 w-4" />
+                                        <span>Twitch Bot</span>
+                                    </DropdownMenuItem>
+                                    <DropdownMenuItem onClick={() => setDiscordDialogOpen(true)}>
+                                        <svg className="mr-2 h-4 w-4" role="img" viewBox="0 0 24 24" fill="currentColor">
+                                            <path d="M16.29 5.23a10.08 10.08 0 0 0-2.2-.62.84.84 0 0 0-1 .75c.18.25.36.5.52.75a8.62 8.62 0 0 0-4.14 0c.16-.25.34-.5.52-.75a.84.84 0 0 0-1-.75 10.08 10.08 0 0 0-2.2.62.81.81 0 0 0-.54.78c-.28 3.24.78 6.28 2.82 8.25a.85.85 0 0 0 .93.12 7.55 7.55 0 0 0 1.45-.87.82.82 0 0 1 .9-.06 6.53 6.53 0 0 0 2.22 0 .82.82 0 0 1 .9.06 7.55 7.55 0 0 0 1.45.87.85.85 0 0 0 .93-.12c2.04-1.97 3.1-5 2.82-8.25a.81.81 0 0 0-.55-.78zM10 11.85a1.45 1.45 0 0 1-1.45-1.45A1.45 1.45 0 0 1 10 8.95a1.45 1.45 0 0 1 1.45 1.45A1.45 1.45 0 0 1 10 11.85zm4 0a1.45 1.45 0 0 1-1.45-1.45A1.45 1.45 0 0 1 14 8.95a1.45 1.45 0 0 1 1.45 1.45A1.45 1.45 0 0 1 14 11.85z"/>
+                                        </svg>
+                                        <span>Discord Bot</span>
+                                    </DropdownMenuItem>
+                                    <DropdownMenuSeparator />
                                     <DropdownMenuItem onClick={handleLeaveRoom}>
                                         <LogOut className="mr-2 h-4 w-4" />
                                         <span>Leave Room</span>
@@ -359,6 +434,54 @@ export default function UserCard({
             </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      <Dialog open={twitchDialogOpen} onOpenChange={setTwitchDialogOpen}>
+        <DialogContent>
+            <DialogHeader>
+                <DialogTitle>Twitch Bot for {displayName}</DialogTitle>
+                <DialogDescription>Set your Twitch channel to enable bot commands in this room</DialogDescription>
+            </DialogHeader>
+            <div className="space-y-4 py-4">
+                <div className="space-y-2">
+                    <Label htmlFor="channel">Twitch Channel Name</Label>
+                    <Input
+                        id="channel"
+                        placeholder="your_channel_name"
+                        value={twitchChannel}
+                        onChange={(e) => setTwitchChannel(e.target.value)}
+                    />
+                    <p className="text-xs text-muted-foreground">Bot will respond to !sr, !np, !status in your channel</p>
+                </div>
+            </div>
+            <DialogFooter>
+                <Button onClick={handleSaveTwitch}>Save</Button>
+            </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={discordDialogOpen} onOpenChange={setDiscordDialogOpen}>
+        <DialogContent>
+            <DialogHeader>
+                <DialogTitle>Discord Server for {displayName}</DialogTitle>
+                <DialogDescription>Set your Discord server ID to enable chat and bot controls</DialogDescription>
+            </DialogHeader>
+            <div className="space-y-4 py-4">
+                <div className="space-y-2">
+                    <Label htmlFor="guildId">Discord Server ID</Label>
+                    <Input
+                        id="guildId"
+                        placeholder="123456789012345678"
+                        value={discordGuildId}
+                        onChange={(e) => setDiscordGuildId(e.target.value)}
+                    />
+                    <p className="text-xs text-muted-foreground">Enable Developer Mode in Discord, right-click your server → Copy Server ID. Use the channel dropdown in chat to select channels.</p>
+                </div>
+            </div>
+            <DialogFooter>
+                <Button onClick={handleSaveDiscord}>Save</Button>
+            </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </>
   );
 }

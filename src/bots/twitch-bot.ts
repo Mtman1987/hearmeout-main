@@ -1,46 +1,81 @@
 import 'dotenv/config';
 import tmi from 'tmi.js';
 import { addSongToPlaylist, getRoomState } from '@/lib/bot-actions';
+import { db } from '@/firebase/admin';
 
-// --- Twitch Bot Configuration ---
-// Ensure all necessary environment variables are present.
 const twitchBotUsername = process.env.TWITCH_BOT_USERNAME;
 const twitchBotOauthToken = process.env.TWITCH_BOT_OAUTH_TOKEN;
-const twitchChannelName = process.env.TWITCH_CHANNEL_NAME;
-const targetRoomId = process.env.TARGET_ROOM_ID;
 
-if (!twitchBotUsername || !twitchBotOauthToken || !twitchChannelName || !targetRoomId) {
-    console.error("Missing required environment variables for Twitch bot. Please check your .env file.");
+if (!twitchBotUsername || !twitchBotOauthToken) {
+    console.error("Missing TWITCH_BOT_USERNAME or TWITCH_BOT_OAUTH_TOKEN");
     process.exit(1);
 }
 
-const opts = {
+const client = new tmi.client({
   identity: {
     username: twitchBotUsername,
     password: twitchBotOauthToken,
   },
-  channels: [twitchChannelName],
-};
+  channels: [],
+});
 
-// --- Bot Main Logic ---
-const client = new tmi.client(opts);
+const activeChannels = new Map<string, string>();
+
+async function syncChannels() {
+  try {
+    const roomsSnapshot = await db.collection('rooms').get();
+    const newChannels = new Map<string, string>();
+    
+    for (const roomDoc of roomsSnapshot.docs) {
+      const usersSnapshot = await db.collection('rooms').doc(roomDoc.id).collection('users').get();
+      usersSnapshot.forEach(userDoc => {
+        const data = userDoc.data();
+        if (data.twitchChannel) {
+          newChannels.set(data.twitchChannel.toLowerCase(), roomDoc.id);
+        }
+      });
+    }
+
+    for (const [channel] of activeChannels) {
+      if (!newChannels.has(channel)) {
+        client.part(channel).catch(e => console.error(`Failed to leave ${channel}:`, e));
+        console.log(`* Left channel: ${channel}`);
+      }
+    }
+
+    for (const [channel, roomId] of newChannels) {
+      if (!activeChannels.has(channel)) {
+        client.join(channel).catch(e => console.error(`Failed to join ${channel}:`, e));
+        console.log(`* Joined channel: ${channel} (room: ${roomId})`);
+      }
+    }
+
+    activeChannels.clear();
+    newChannels.forEach((roomId, channel) => activeChannels.set(channel, roomId));
+  } catch (error) {
+    console.error('Error syncing channels:', error);
+  }
+}
 
 client.on('message', onMessageHandler);
-client.on('connected', onConnectedHandler);
+client.on('connected', () => {
+  console.log('* Connected to Twitch');
+  syncChannels();
+  setInterval(syncChannels, 30000);
+});
 
 client.connect().catch((err) => {
     console.error("Failed to connect to Twitch:", err);
     process.exit(1);
 });
 
-function onConnectedHandler(addr: any, port: any) {
-  console.log(`* Connected to ${addr}:${port}`);
-  console.log(`* Listening for !sr, !status, !np commands in #${twitchChannelName}`);
-  console.log(`* Adding songs to room: ${targetRoomId}`);
-}
-
 async function onMessageHandler(target: string, context: tmi.ChatUserstate, msg: string, self: boolean) {
-  if (self) { return; } // Ignore messages from the bot itself
+  if (self) return;
+
+  const channelName = target.replace('#', '').toLowerCase();
+  const targetRoomId = activeChannels.get(channelName);
+  
+  if (!targetRoomId) return;
 
   const message = msg.trim().toLowerCase();
   const requester = context['display-name'] || 'Someone from Twitch';

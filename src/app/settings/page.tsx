@@ -1,7 +1,6 @@
-
 'use client';
 
-import React from 'react';
+import React, { useState } from 'react';
 import {
   SidebarProvider,
   SidebarInset,
@@ -10,6 +9,13 @@ import {
 } from '@/components/ui/sidebar';
 import LeftSidebar from '@/app/components/LeftSidebar';
 import { ThemeCustomizer } from '@/app/components/ThemeCustomizer';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Input } from '@/components/ui/input';
+import { Button } from '@/components/ui/button';
+import { Label } from '@/components/ui/label';
+import { useFirebase, useMemoFirebase, useDoc } from '@/firebase';
+import { doc, updateDoc } from 'firebase/firestore';
+import { useToast } from '@/hooks/use-toast';
 
 
 function SettingsHeader() {
@@ -23,6 +29,27 @@ function SettingsHeader() {
 }
 
 export default function SettingsPage() {
+  const { user, firestore } = useFirebase();
+  const { toast } = useToast();
+  const [twitchChannel, setTwitchChannel] = useState('');
+  const [saving, setSaving] = useState(false);
+
+  const userDocRef = useMemoFirebase(() => user && firestore ? doc(firestore, 'users', user.uid) : null, [user, firestore]);
+  const { data: userData } = useDoc(userDocRef);
+
+  const handleSaveTwitch = async () => {
+    if (!userDocRef || !twitchChannel.trim()) return;
+    setSaving(true);
+    try {
+      await updateDoc(userDocRef, { twitchChannel: twitchChannel.trim().toLowerCase() });
+      toast({ title: 'Saved', description: 'Twitch channel updated. Bot will join within 30 seconds.' });
+    } catch (e) {
+      toast({ variant: 'destructive', title: 'Error', description: 'Failed to save Twitch channel.' });
+    } finally {
+      setSaving(false);
+    }
+  };
+
   return (
     <SidebarProvider>
         <LeftSidebar />
@@ -31,7 +58,28 @@ export default function SettingsPage() {
                 <div className="flex flex-col h-screen">
                     <SettingsHeader />
                     <main className="flex-1 p-4 md:p-6">
-                        <div className="max-w-xl mx-auto">
+                        <div className="max-w-xl mx-auto space-y-6">
+                            <Card>
+                                <CardHeader>
+                                    <CardTitle>Twitch Integration</CardTitle>
+                                    <CardDescription>Connect your Twitch channel to enable bot commands</CardDescription>
+                                </CardHeader>
+                                <CardContent className="space-y-4">
+                                    <div className="space-y-2">
+                                        <Label htmlFor="twitch">Twitch Channel Name</Label>
+                                        <Input 
+                                            id="twitch"
+                                            placeholder="your_channel_name"
+                                            value={twitchChannel || userData?.twitchChannel || ''}
+                                            onChange={(e) => setTwitchChannel(e.target.value)}
+                                        />
+                                        <p className="text-xs text-muted-foreground">Bot will join your channel and respond to !sr, !np, !status commands</p>
+                                    </div>
+                                    <Button onClick={handleSaveTwitch} disabled={saving || !twitchChannel.trim()}>
+                                        {saving ? 'Saving...' : 'Save Channel'}
+                                    </Button>
+                                </CardContent>
+                            </Card>
                             <ThemeCustomizer />
                         </div>
                     </main>
