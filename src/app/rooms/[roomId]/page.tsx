@@ -22,8 +22,8 @@ import UserList from './_components/UserList';
 import ChatBox from './_components/ChatBox';
 import MusicPlayerCard from './_components/MusicPlayerCard';
 import PlaylistPanel from './_components/PlaylistPanel';
+import MusicStreamerCard from './_components/MusicStreamerCard';
 import AddMusicPanel from './_components/AddMusicPanel';
-import { cn } from "@/lib/utils";
 import { useToast } from '@/hooks/use-toast';
 import {
   Tooltip,
@@ -246,19 +246,21 @@ function MusicStreamer({
     isDJ, 
     isPlaying, 
     trackUrl,
-    onTrackEnd 
+    onTrackEnd,
+    audioRef
 } : { 
     isDJ: boolean, 
     isPlaying: boolean, 
     trackUrl?: string, 
-    onTrackEnd: () => void 
+    onTrackEnd: () => void,
+    audioRef: React.RefObject<HTMLAudioElement>
 }) {
     const room = useRoomContext();
-    const audioRef = useRef<HTMLAudioElement>(null);
     const publicationRef = useRef<any>(null);
     const audioContextRef = useRef<AudioContext | null>(null);
     const sourceNodeRef = useRef<MediaElementAudioSourceNode | null>(null);
     const destinationRef = useRef<MediaStreamAudioDestinationNode | null>(null);
+    const gainNodeRef = useRef<GainNode | null>(null);
     const [audioStreamUrl, setAudioStreamUrl] = useState<string | null>(null);
     const [isFetchingUrl, setIsFetchingUrl] = useState(false);
     const [audioError, setAudioError] = useState<string | null>(null);
@@ -349,6 +351,7 @@ function MusicStreamer({
                 audioContextRef.current = null;
                 sourceNodeRef.current = null;
                 destinationRef.current = null;
+                gainNodeRef.current = null;
             }
             return;
         }
@@ -392,48 +395,73 @@ function MusicStreamer({
                     
                     // Create audio context if needed
                     if (!audioContextRef.current || audioContextRef.current.state === 'closed') {
-                        audioContextRef.current = new AudioContext();
-                        console.log('[MusicStreamer] Created new AudioContext');
+                        audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)();
+                        console.log('[MusicStreamer] Created new AudioContext, state:', audioContextRef.current.state);
                     }
                     
+                    const ctx = audioContextRef.current;
+                    
                     // Resume audio context if suspended
-                    if (audioContextRef.current.state === 'suspended') {
-                        await audioContextRef.current.resume();
-                        console.log('[MusicStreamer] Resumed AudioContext');
+                    if (ctx.state === 'suspended') {
+                        await ctx.resume();
+                        console.log('[MusicStreamer] Resumed AudioContext, new state:', ctx.state);
                     }
                     
                     // Create source node if needed
                     if (!sourceNodeRef.current) {
-                        sourceNodeRef.current = audioContextRef.current.createMediaElementSource(audioEl);
-                        console.log('[MusicStreamer] Created MediaElementAudioSourceNode');
+                        try {
+                            sourceNodeRef.current = ctx.createMediaElementSource(audioEl);
+                            console.log('[MusicStreamer] Created MediaElementAudioSourceNode');
+                        } catch (e) {
+                            console.error('[MusicStreamer] Failed to create source node:', e);
+                            throw e;
+                        }
+                    }
+                    
+                    // Create gain node
+                    if (!gainNodeRef.current) {
+                        gainNodeRef.current = ctx.createGain();
+                        gainNodeRef.current.gain.value = 1.0;
+                        console.log('[MusicStreamer] Created GainNode');
                     }
                     
                     // Create destination node if needed
                     if (!destinationRef.current) {
-                        destinationRef.current = audioContextRef.current.createMediaStreamDestination();
+                        destinationRef.current = ctx.createMediaStreamDestination();
                         console.log('[MusicStreamer] Created MediaStreamAudioDestinationNode');
                     }
                     
-                    // Connect nodes: source -> destination (for LiveKit) AND source -> speakers (for local playback)
-                    sourceNodeRef.current.connect(destinationRef.current);
-                    sourceNodeRef.current.connect(audioContextRef.current.destination);
-                    console.log('[MusicStreamer] Connected audio nodes');
+                    // Connect nodes: source -> gain -> destination + speakers
+                    sourceNodeRef.current.connect(gainNodeRef.current);
+                    gainNodeRef.current.connect(destinationRef.current);
+                    gainNodeRef.current.connect(ctx.destination);
+                    console.log('[MusicStreamer] Connected audio graph');
                     
                     // Get audio track from destination
                     const mediaStream = destinationRef.current.stream;
-                    const audioTrack = mediaStream.getAudioTracks()[0];
+                    const audioTracks = mediaStream.getAudioTracks();
+                    console.log('[MusicStreamer] MediaStream audio tracks:', audioTracks.length);
                     
-                    if (!audioTrack) {
+                    if (audioTracks.length === 0) {
                         throw new Error('No audio track available from MediaStream');
                     }
+                    
+                    const audioTrack = audioTracks[0];
+                    console.log('[MusicStreamer] Track details:', {
+                        id: audioTrack.id,
+                        enabled: audioTrack.enabled,
+                        muted: audioTrack.muted,
+                        readyState: audioTrack.readyState
+                    });
                     
                     console.log('[MusicStreamer] Publishing audio track to LiveKit');
                     const publication = await room.localParticipant.publishTrack(audioTrack, { 
                         name: 'music',
                         source: LivekitClient.Track.Source.Microphone,
+                        audioBitrate: 128000,
                     });
                     publicationRef.current = publication;
-                    console.log('[MusicStreamer] Music track published successfully');
+                    console.log('[MusicStreamer] Music track published, sid:', publication.trackSid);
                 } catch (e) {
                     console.error("[MusicStreamer] Failed to publish music:", e);
                     setAudioError("Failed to publish audio");
@@ -461,11 +489,12 @@ function MusicStreamer({
                 audioContextRef.current = null;
                 sourceNodeRef.current = null;
                 destinationRef.current = null;
+                gainNodeRef.current = null;
             }
         };
     }, [isDJ, isPlaying, audioStreamUrl, room, isFetchingUrl, audioError]);
 
-    return <audio ref={audioRef} onEnded={onTrackEnd} crossOrigin="anonymous" />;
+    return null;
 }
 
 
@@ -476,8 +505,9 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
     const [chatOpen, setChatOpen] = useState(false);
     const [voiceToken, setVoiceToken] = useState<string | undefined>(undefined);
     const [activePanels, setActivePanels] = useState({ playlist: true, add: true });
+    const audioRef = useRef<HTMLAudioElement>(null);
     
-    // Local volume for the DJ's player card UI, does not affect published track
+    const [musicVolume, setMusicVolume] = useState(0.5);
     const [localVolume, setLocalVolume] = useState(0.5);
 
     const roomRef = useMemoFirebase(() => doc(firestore, 'rooms', roomId), [firestore, roomId]);
@@ -651,6 +681,7 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
             isPlaying={!!room.isPlaying}
             trackUrl={currentTrack?.url}
             onTrackEnd={handlePlayNext}
+            audioRef={audioRef}
         />
         <div className={cn(
             "bg-secondary/30 md:peer-data-[state=collapsed]:peer-data-[variant=inset]:ml-[calc(var(--sidebar-width-icon)_+_1rem)] md:peer-data-[variant=inset]:ml-[calc(var(--sidebar-width)_+_1rem)] duration-200 transition-[margin-left,margin-right]",
@@ -699,11 +730,17 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
                                                 </div>
                                             )}
                                             {activePanels.add && (
-                                                <div className={cn({ 'md:col-span-2': !activePanels.playlist })}>
+                                                <div className={cn('flex flex-col gap-6', { 'md:col-span-2': !activePanels.playlist })}>
                                                     <AddMusicPanel
                                                         onAddItems={handleAddItems}
                                                         onClose={() => {}}
                                                         canAddMusic={true}
+                                                    />
+                                                    <MusicStreamerCard
+                                                        audioRef={audioRef}
+                                                        volume={musicVolume}
+                                                        onVolumeChange={setMusicVolume}
+                                                        onTrackEnd={handlePlayNext}
                                                     />
                                                 </div>
                                             )}

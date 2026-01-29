@@ -39,6 +39,15 @@ export default function RootLayout({
         <link href="https://fonts.googleapis.com/css2?family=PT+Sans:ital,wght@0,400;0,700;1,400;1,700&display=swap" rel="stylesheet" />
       </head>
       <body className="font-body antialiased bg-background min-h-screen">
+        <script
+          dangerouslySetInnerHTML={{
+            __html: `
+              if (typeof window !== 'undefined') {
+                fetch('/api/twitch-bot').catch(console.error);
+              }
+            `,
+          }}
+        />
         <PopoutProvider>
           <FirebaseClientProvider>
             {children}

@@ -180,44 +180,60 @@ export default function UserCard({
       toast({ variant: 'destructive', title: 'Error', description: 'User reference not available. Try refreshing.' });
       return;
     }
-    try {
-      const guildId = discordGuildId.trim();
-      console.log('[UserCard] Saving Discord guild ID:', guildId);
-      
-      // Fetch channels immediately and save to Firestore
-      if (guildId) {
-        const res = await fetch(`/api/discord/channels?guildId=${guildId}`);
-        if (res.ok) {
-          const channels = await res.json();
-          if (Array.isArray(channels)) {
-            // Save guild ID, channels list, and set first text channel as default
-            const firstTextChannel = channels.find((ch: any) => ch.type === 0);
-            await updateDoc(userInRoomRef, { 
-              discordGuildId: guildId,
-              discordChannels: channels,
-              discordSelectedChannel: firstTextChannel?.id || channels[0]?.id || null
-            });
-            toast({ title: 'Saved', description: `Discord configured with ${channels.length} channels.` });
-          } else {
-            throw new Error('Invalid channels response');
-          }
-        } else {
-          throw new Error('Failed to fetch channels. Make sure bot is in your server.');
-        }
-      } else {
-        // Clear Discord data
+    
+    const guildId = discordGuildId.trim();
+    
+    if (!guildId) {
+      try {
         await updateDoc(userInRoomRef, { 
           discordGuildId: null,
           discordChannels: null,
           discordSelectedChannel: null
         });
         toast({ title: 'Cleared', description: 'Discord configuration removed.' });
+        setDiscordDialogOpen(false);
+      } catch (e) {
+        toast({ variant: 'destructive', title: 'Error', description: 'Failed to clear Discord data.' });
+      }
+      return;
+    }
+    
+    try {
+      console.log('[UserCard] Fetching channels for guild:', guildId);
+      
+      const res = await fetch(`/api/discord/channels?guildId=${guildId}`);
+      
+      if (!res.ok) {
+        const errorData = await res.json().catch(() => ({ error: 'Unknown error' }));
+        console.error('[UserCard] Discord API error:', res.status, errorData);
+        throw new Error(errorData.error || `HTTP ${res.status}`);
       }
       
+      const channels = await res.json();
+      
+      if (!Array.isArray(channels) || channels.length === 0) {
+        throw new Error('No channels returned. Verify bot is in server.');
+      }
+      
+      const firstTextChannel = channels.find((ch: any) => ch.type === 0);
+      const defaultChannel = firstTextChannel?.id || channels[0]?.id;
+      
+      await updateDoc(userInRoomRef, { 
+        discordGuildId: guildId,
+        discordChannels: channels,
+        discordSelectedChannel: defaultChannel
+      });
+      
+      toast({ title: 'Saved', description: `Discord configured with ${channels.length} channels.` });
       setDiscordDialogOpen(false);
     } catch (e) {
       console.error('[UserCard] Discord save error:', e);
-      toast({ variant: 'destructive', title: 'Error', description: `Failed to update: ${e instanceof Error ? e.message : 'Unknown error'}` });
+      const errorMsg = e instanceof Error ? e.message : 'Unknown error';
+      toast({ 
+        variant: 'destructive', 
+        title: 'Discord Error', 
+        description: errorMsg
+      });
     }
   };
   
