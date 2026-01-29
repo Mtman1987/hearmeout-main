@@ -99,3 +99,17 @@
 .radix-themes > * {
   pointer-events: auto !important;
 }
+
+/* Additional overlay fixes */
+[data-radix-dialog-overlay],
+[data-radix-popover-content-wrapper],
+[data-state="open"][data-radix-collection-item] {
+  pointer-events: none !important;
+}
+
+[data-radix-dialog-content],
+[data-radix-popover-content],
+[data-radix-select-content],
+[data-radix-dropdown-menu-content] {
+  pointer-events: auto !important;
+}
