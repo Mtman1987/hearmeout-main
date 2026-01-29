@@ -591,7 +591,7 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
         return () => {
             isCancelled = true;
             clearTimeout(tokenTimeout);
-            if (userInRoomRef) deleteDocumentNonBlocking(userInRoomRef);
+            // Don't delete document - keep Discord/Twitch settings
             if (roomRef && isDJ) {
                 updateDocumentNonBlocking(roomRef, { isPlaying: false });
             }
