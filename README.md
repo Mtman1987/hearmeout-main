@@ -126,9 +126,24 @@ Stream overlay showing room participants with voice activity indicators and curr
 ### Setup
 
 1. In OBS, add **Browser Source**
-2. **URL**: `https://your-deployment-url/obs/chat/ROOM_ID?opacity=95`
-3. **Width**: 400, **Height**: 600
+2. **URL**: `https://your-deployment-url/overlay/ROOM_ID?userId=YOUR_USER_ID`
+3. **Width**: 1920, **Height**: 1080 (or your stream resolution)
 4. **FPS**: 30
+
+### Stream Mode
+
+**Enable Stream Mode** in your user card dropdown (3 dots menu) to:
+- Disable audio in main room page
+- Enable audio in overlay (OBS captures all audio)
+- Simplify audio routing - no virtual cables needed!
+
+**How to use:**
+1. Open main room page, become DJ, set up music
+2. Enable Stream Mode in your user card menu
+3. OBS overlay now outputs all audio (music + voices)
+4. Close main room page or keep open for controls
+
+**Get your User ID:** Check browser console or Firestore
 
 ### Features
 

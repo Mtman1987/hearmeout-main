@@ -107,6 +107,7 @@ export default function UserCard({
   const [twitchChannel, setTwitchChannel] = React.useState('');
   const [discordDialogOpen, setDiscordDialogOpen] = React.useState(false);
   const [discordGuildId, setDiscordGuildId] = React.useState('');
+  const [streamMode, setStreamMode] = React.useState(false);
 
   // Remote participant volume control state
   const [volume, setVolume] = React.useState(1);
@@ -185,7 +186,28 @@ export default function UserCard({
     if (firestoreUser?.discordGuildId) {
       setDiscordGuildId(firestoreUser.discordGuildId);
     }
+    if (typeof firestoreUser?.streamMode === 'boolean') {
+      setStreamMode(firestoreUser.streamMode);
+    }
   }, [firestoreUser]);
+
+  const handleToggleStreamMode = async () => {
+    if (!userInRoomRef) return;
+    const newMode = !streamMode;
+    setStreamMode(newMode);
+    try {
+      await setDoc(userInRoomRef, { streamMode: newMode }, { merge: true });
+      toast({ 
+        title: newMode ? 'Stream Mode ON' : 'Stream Mode OFF', 
+        description: newMode 
+          ? 'Main page audio disabled. Use overlay in OBS for all audio.' 
+          : 'Main page audio enabled. Overlay audio disabled.'
+      });
+    } catch (e) {
+      console.error('[UserCard] Stream mode toggle error:', e);
+      setStreamMode(!newMode);
+    }
+  };
 
   const handleSaveTwitch = async () => {
     if (!userInRoomRef) {
@@ -388,6 +410,11 @@ export default function UserCard({
                                     <Button variant="ghost" size="icon" className="h-7 w-7"><MoreVertical className="h-4 w-4" /></Button>
                                 </DropdownMenuTrigger>
                                 <DropdownMenuContent align="start">
+                                    <DropdownMenuItem onClick={handleToggleStreamMode}>
+                                        <Radio className="mr-2 h-4 w-4" />
+                                        <span>{streamMode ? '✓ Stream Mode' : 'Stream Mode'}</span>
+                                    </DropdownMenuItem>
+                                    <DropdownMenuSeparator />
                                     <DropdownMenuItem onClick={() => setTwitchDialogOpen(true)}>
                                         <Radio className="mr-2 h-4 w-4" />
                                         <span>Twitch Bot</span>

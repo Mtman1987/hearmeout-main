@@ -206,6 +206,7 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
 
     const roomRef = useMemoFirebase(() => doc(firestore, 'rooms', roomId), [firestore, roomId]);
     const userInRoomRef = useMemoFirebase(() => user ? doc(firestore, 'rooms', roomId, 'users', user.uid) : null, [firestore, roomId, user]);
+  const { data: userSettings } = useDoc<{ streamMode?: boolean }>(userInRoomRef);
 
     const isDJ = !!user && !!room.djId && user.uid === room.djId;
     const isOwner = !!user && !!room.ownerId && user.uid === room.ownerId;
@@ -405,7 +406,7 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
           serverUrl={livekitUrl}
           token={voiceToken}
           connect={true}
-          audio={true} 
+          audio={!userSettings?.streamMode}
           video={false}
           options={{
             autoSubscribe: true,
