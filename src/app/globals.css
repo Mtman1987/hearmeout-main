@@ -82,3 +82,20 @@
     @apply bg-background text-foreground;
   }
 }
+
+/* Fix Radix UI overlay blocking clicks */
+[data-radix-popper-content-wrapper] {
+  pointer-events: none !important;
+}
+
+[data-radix-popper-content-wrapper] > * {
+  pointer-events: auto !important;
+}
+
+.radix-themes {
+  pointer-events: none !important;
+}
+
+.radix-themes > * {
+  pointer-events: auto !important;
+}
