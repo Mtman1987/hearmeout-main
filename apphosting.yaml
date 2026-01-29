@@ -5,7 +5,7 @@ env:
   - variable: NODE_ENV
     value: production
   - variable: NEXT_PUBLIC_BASE_URL
-    value: https://hearmeout.web.app
+    value: https://hearmeout--studio-4331919473-dea24.us-central1.hosted.app
   - variable: LIVEKIT_API_KEY
     value: APIAwZ334Q2bBhP
   - variable: LIVEKIT_API_SECRET

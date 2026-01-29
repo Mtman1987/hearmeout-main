@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { adminAuth, adminDb } from '@/firebase/admin';
 
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
@@ -36,10 +37,11 @@ export async function GET(req: NextRequest) {
     });
 
     if (!tokenResponse.ok) {
-      throw new Error(`Twitch token exchange failed: ${tokenResponse.statusText}`);
+      const errorData = await tokenResponse.json();
+      throw new Error(`Twitch token exchange failed: ${JSON.stringify(errorData)}`);
     }
 
-    const { access_token, refresh_token, expires_in } = await tokenResponse.json();
+    const { access_token } = await tokenResponse.json();
 
     // Get user info
     const userResponse = await fetch('https://api.twitch.tv/helix/users', {
@@ -58,36 +60,38 @@ export async function GET(req: NextRequest) {
       throw new Error('No user data returned from Twitch');
     }
 
-    const user = users[0];
+    const twitchUser = users[0];
+    const uid = `twitch_${twitchUser.id}`;
 
-    // Create redirect response
-    const response = NextResponse.redirect(new URL('/rooms', req.url));
-
-    // Store tokens in secure httpOnly cookies
-    response.cookies.set('twitch_access_token', access_token, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: 'lax',
-      maxAge: expires_in,
-    });
-
-    if (refresh_token) {
-      response.cookies.set('twitch_refresh_token', refresh_token, {
-        httpOnly: true,
-        secure: process.env.NODE_ENV === 'production',
-        sameSite: 'lax',
-        maxAge: 30 * 24 * 60 * 60, // 30 days
+    // Create or update Firebase user
+    try {
+      await adminAuth.getUser(uid);
+    } catch {
+      await adminAuth.createUser({
+        uid,
+        email: twitchUser.email,
+        displayName: twitchUser.display_name,
+        photoURL: twitchUser.profile_image_url,
       });
     }
 
-    response.cookies.set('twitch_user', JSON.stringify(user), {
-      httpOnly: false,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: 'lax',
-      maxAge: 30 * 24 * 60 * 60,
-    });
+    // Update Firestore
+    await adminDb.collection('users').doc(uid).set({
+      id: uid,
+      username: twitchUser.login,
+      email: twitchUser.email,
+      displayName: twitchUser.display_name,
+      profileImageUrl: twitchUser.profile_image_url,
+      twitchId: twitchUser.id,
+    }, { merge: true });
 
-    return response;
+    // Create custom token
+    const customToken = await adminAuth.createCustomToken(uid);
+
+    // Redirect with token
+    return NextResponse.redirect(
+      new URL(`/login?token=${customToken}`, req.url)
+    );
   } catch (error) {
     console.error('Twitch OAuth error:', error);
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';
