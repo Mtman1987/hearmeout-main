@@ -24,6 +24,7 @@ import MusicPlayerCard from './_components/MusicPlayerCard';
 import PlaylistPanel from './_components/PlaylistPanel';
 import MusicStreamerCard from './_components/MusicStreamerCard';
 import AddMusicPanel from './_components/AddMusicPanel';
+import { cn } from "@/lib/utils";
 import { useToast } from '@/hooks/use-toast';
 import {
   Tooltip,
