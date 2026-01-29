@@ -7,6 +7,7 @@ import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { initializeApp, getApps } from 'firebase/app';
 import { getFirestore } from 'firebase/firestore';
 import { firebaseConfig } from '@/firebase/config';
+import { Room } from 'livekit-client';
 
 const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApps()[0];
 const firestore = getFirestore(app);
@@ -34,6 +35,7 @@ export default function OBSOverlay() {
   const [room, setRoom] = useState<any>(null);
   const [users, setUsers] = useState<any[]>([]);
   const [speakingUsers, setSpeakingUsers] = useState<Set<string>>(new Set());
+  const [livekitRoom, setLivekitRoom] = useState<Room | null>(null);
 
   useEffect(() => {
     if (!roomId) return;
@@ -57,14 +59,62 @@ export default function OBSOverlay() {
     };
   }, [roomId]);
 
-  // Simulate speaking detection (in real app, this would come from LiveKit)
+  // Connect to LiveKit to get real speaking status
   useEffect(() => {
-    const interval = setInterval(() => {
-      // This is a placeholder - real implementation would use LiveKit participant.isSpeaking
-      setSpeakingUsers(new Set());
-    }, 1000);
-    return () => clearInterval(interval);
-  }, []);
+    if (!roomId) return;
+
+    const connectToLiveKit = async () => {
+      try {
+        const livekitUrl = process.env.NEXT_PUBLIC_LIVEKIT_URL;
+        if (!livekitUrl) return;
+
+        const room = new Room();
+        
+        room.on('participantConnected', () => updateSpeaking());
+        room.on('participantDisconnected', () => updateSpeaking());
+        room.on('trackSubscribed', () => updateSpeaking());
+        room.on('audioPlaybackStatusChanged', () => updateSpeaking());
+
+        const updateSpeaking = () => {
+          const speaking = new Set<string>();
+          room.remoteParticipants.forEach((participant) => {
+            if (participant.isSpeaking) {
+              speaking.add(participant.identity);
+            }
+          });
+          if (room.localParticipant?.isSpeaking) {
+            speaking.add(room.localParticipant.identity);
+          }
+          setSpeakingUsers(speaking);
+        };
+
+        // Get token for overlay (read-only)
+        const response = await fetch('/api/livekit-token', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ roomId, userId: 'overlay', userName: 'Overlay' })
+        });
+        
+        if (response.ok) {
+          const { token } = await response.json();
+          await room.connect(livekitUrl, token);
+          setLivekitRoom(room);
+
+          // Set up interval to check speaking status
+          const interval = setInterval(updateSpeaking, 100);
+          return () => clearInterval(interval);
+        }
+      } catch (error) {
+        console.error('Failed to connect to LiveKit:', error);
+      }
+    };
+
+    connectToLiveKit();
+
+    return () => {
+      livekitRoom?.disconnect();
+    };
+  }, [roomId]);
 
   const currentTrack = room?.playlist?.find((t: any) => t.id === room?.currentTrackId);
 
@@ -77,21 +127,6 @@ export default function OBSOverlay() {
           backdropFilter: 'blur(8px)'
         }}
       >
-        {/* Now Playing */}
-        {currentTrack && (
-          <div className="flex items-center gap-4 p-4 bg-black/40 rounded-lg border border-white/10">
-            <img 
-              src={currentTrack.thumbnail} 
-              alt={currentTrack.title}
-              className="w-20 h-20 rounded object-cover"
-            />
-            <div className="flex-1 min-w-0">
-              <h3 className="text-white font-semibold truncate">{currentTrack.title}</h3>
-              <p className="text-white/60 text-sm truncate">{currentTrack.artist}</p>
-            </div>
-          </div>
-        )}
-
         {/* Users */}
         <div className="flex-1 overflow-y-auto">
           <h4 className="text-white/80 text-sm font-semibold mb-2 px-2">In Room</h4>
@@ -130,6 +165,21 @@ export default function OBSOverlay() {
             })}
           </div>
         </div>
+
+        {/* Now Playing - Moved to Bottom */}
+        {currentTrack && (
+          <div className="flex items-center gap-4 p-4 bg-black/40 rounded-lg border border-white/10">
+            <img 
+              src={currentTrack.thumbnail} 
+              alt={currentTrack.title}
+              className="w-16 h-16 rounded object-cover"
+            />
+            <div className="flex-1 min-w-0">
+              <h3 className="text-white font-semibold truncate text-sm">{currentTrack.title}</h3>
+              <p className="text-white/60 text-xs truncate">{currentTrack.artist}</p>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

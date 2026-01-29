@@ -22,7 +22,7 @@ import UserList from './_components/UserList';
 import ChatBox from './_components/ChatBox';
 import MusicPlayerCard from './_components/MusicPlayerCard';
 import PlaylistPanel from './_components/PlaylistPanel';
-import MusicStreamerCard from './_components/MusicStreamerCard';
+
 import AddMusicPanel from './_components/AddMusicPanel';
 import VoiceQueue from './_components/VoiceQueue';
 import { cn } from "@/lib/utils";
@@ -195,263 +195,6 @@ const DiscordIcon = () => (
         <path d="M16.29 5.23a10.08 10.08 0 0 0-2.2-.62.84.84 0 0 0-1 .75c.18.25.36.5.52.75a8.62 8.62 0 0 0-4.14 0c.16-.25.34-.5.52-.75a.84.84 0 0 0-1-.75 10.08 10.08 0 0 0-2.2.62.81.81 0 0 0-.54.78c-.28 3.24.78 6.28 2.82 8.25a.85.85 0 0 0 .93.12 7.55 7.55 0 0 0 1.45-.87.82.82 0 0 1 .9-.06 6.53 6.53 0 0 0 2.22 0 .82.82 0 0 1 .9.06 7.55 7.55 0 0 0 1.45.87.85.85 0 0 0 .93-.12c2.04-1.97 3.1-5 2.82-8.25a.81.81 0 0 0-.55-.78zM10 11.85a1.45 1.45 0 0 1-1.45-1.45A1.45 1.45 0 0 1 10 8.95a1.45 1.45 0 0 1 1.45 1.45A1.45 1.45 0 0 1 10 11.85zm4 0a1.45 1.45 0 0 1-1.45-1.45A1.45 1.45 0 0 1 14 8.95a1.45 1.45 0 0 1 1.45 1.45A1.45 1.45 0 0 1 14 11.85z"/>
     </svg>
 );
-
-function MusicStreamer({ 
-    isDJ, 
-    isPlaying, 
-    trackUrl,
-    onTrackEnd,
-    audioRef
-} : { 
-    isDJ: boolean, 
-    isPlaying: boolean, 
-    trackUrl?: string, 
-    onTrackEnd: () => void,
-    audioRef: React.RefObject<HTMLAudioElement>
-}) {
-    const room = useRoomContext();
-    const publicationRef = useRef<any>(null);
-    const audioContextRef = useRef<AudioContext | null>(null);
-    const sourceNodeRef = useRef<MediaElementAudioSourceNode | null>(null);
-    const destinationRef = useRef<MediaStreamAudioDestinationNode | null>(null);
-    const gainNodeRef = useRef<GainNode | null>(null);
-    const [audioStreamUrl, setAudioStreamUrl] = useState<string | null>(null);
-    const [isFetchingUrl, setIsFetchingUrl] = useState(false);
-    const [audioError, setAudioError] = useState<string | null>(null);
-    const retryCountRef = useRef(0);
-    const [corsBlocked, setCorsBlocked] = useState(false);
-
-    // Effect 1: Resolve YouTube URL to a direct audio stream URL with retry logic & CORS fallback
-    useEffect(() => {
-        if (!trackUrl || !isDJ) {
-            setAudioStreamUrl(null);
-            setAudioError(null);
-            setCorsBlocked(false);
-            retryCountRef.current = 0;
-            return;
-        }
-
-        let isCancelled = false;
-        const fetchAudioUrl = async (retryAttempt = 0, useProxy = false) => {
-            setIsFetchingUrl(true);
-            setAudioError(null);
-            try {
-                const retryParam = retryAttempt > 0 ? `&retry=${retryAttempt}` : '';
-                const res = await fetch(`/api/youtube-audio?url=${encodeURIComponent(trackUrl)}${retryParam}`);
-                
-                const data = await res.json();
-                
-                if (!res.ok) {
-                    if (data.canRetry && retryAttempt < 3) {
-                        console.warn(`Audio URL resolution failed (attempt ${retryAttempt + 1}), retrying...`);
-                        if (!isCancelled) {
-                            setTimeout(() => {
-                                if (!isCancelled) {
-                                    fetchAudioUrl(retryAttempt + 1, useProxy);
-                                }
-                            }, 2000);
-                        }
-                        return;
-                    }
-                    throw new Error(data.error || `Failed to get audio URL: HTTP ${res.status}`);
-                }
-                
-                if (!data.url && !data.directUrl) {
-                    throw new Error("No audio URL returned from backend");
-                }
-                
-                if (!isCancelled) {
-                    const urlToUse = useProxy && data.proxiedUrl ? data.proxiedUrl : (data.directUrl || data.url);
-                    console.log(`[MusicStreamer] Using ${useProxy ? 'proxied' : 'direct'} audio URL`);
-                    setAudioStreamUrl(urlToUse);
-                    setAudioError(null);
-                    setCorsBlocked(false);
-                    retryCountRef.current = 0;
-                }
-            } catch (error: any) {
-                console.error("[MusicStreamer] Error fetching audio URL:", error);
-                if (!isCancelled) {
-                    setAudioStreamUrl(null);
-                    setAudioError(error.message || "Failed to load audio");
-                }
-            } finally {
-                if (!isCancelled) {
-                    setIsFetchingUrl(false);
-                }
-            }
-        };
-
-        fetchAudioUrl(retryCountRef.current, corsBlocked);
-
-        return () => {
-            isCancelled = true;
-        };
-    }, [trackUrl, isDJ, corsBlocked]);
-
-    useEffect(() => {
-        const audioEl = audioRef.current;
-        
-        if (!isDJ || !room || !audioEl || isFetchingUrl || audioError) {
-            if (publicationRef.current && room?.localParticipant) {
-                room.localParticipant.unpublishTrack(publicationRef.current.track!).catch(e => console.warn('[MusicStreamer] Unpublish error:', e));
-                publicationRef.current = null;
-            }
-            if (audioEl) {
-                audioEl.pause();
-                audioEl.src = '';
-            }
-            if (audioContextRef.current && audioContextRef.current.state !== 'closed') {
-                audioContextRef.current.close();
-                audioContextRef.current = null;
-                sourceNodeRef.current = null;
-                destinationRef.current = null;
-                gainNodeRef.current = null;
-            }
-            return;
-        }
-
-        const manageTrack = async () => {
-            if (isPlaying && audioStreamUrl) {
-                try {
-                    // Check if already playing the same track
-                    if (publicationRef.current && audioEl.src === audioStreamUrl && !audioEl.paused) {
-                        console.log('[MusicStreamer] Already playing this track');
-                        return;
-                    }
-
-                    // Unpublish existing track
-                    if (publicationRef.current) {
-                        console.log('[MusicStreamer] Unpublishing previous track');
-                        await room.localParticipant.unpublishTrack(publicationRef.current.track!);
-                        publicationRef.current = null;
-                    }
-
-                    // Set up audio element
-                    console.log('[MusicStreamer] Setting up audio element');
-                    audioEl.src = audioStreamUrl;
-                    audioEl.crossOrigin = 'anonymous';
-                    audioEl.volume = 1.0; // Full volume for local playback
-                    audioEl.onerror = (e) => {
-                        console.error('[MusicStreamer] Audio element error:', audioEl.error);
-                        if (audioEl.error?.code === 4) setCorsBlocked(true);
-                        else setAudioError(`Failed to load audio`);
-                    };
-                    
-                    // Play audio
-                    await audioEl.play().catch(e => {
-                        console.error('[MusicStreamer] Play error:', e);
-                        if (e.name === 'NotAllowedError' || e.name === 'NotSupportedError') setCorsBlocked(true);
-                        else setAudioError("Failed to start playback");
-                        throw e;
-                    });
-                    
-                    console.log('[MusicStreamer] Audio playing, setting up Web Audio API');
-                    
-                    // Create audio context if needed
-                    if (!audioContextRef.current || audioContextRef.current.state === 'closed') {
-                        audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)();
-                        console.log('[MusicStreamer] Created new AudioContext, state:', audioContextRef.current.state);
-                    }
-                    
-                    const ctx = audioContextRef.current;
-                    
-                    // Resume audio context if suspended
-                    if (ctx.state === 'suspended') {
-                        await ctx.resume();
-                        console.log('[MusicStreamer] Resumed AudioContext, new state:', ctx.state);
-                    }
-                    
-                    // Create source node if needed
-                    if (!sourceNodeRef.current) {
-                        try {
-                            sourceNodeRef.current = ctx.createMediaElementSource(audioEl);
-                            console.log('[MusicStreamer] Created MediaElementAudioSourceNode');
-                        } catch (e) {
-                            console.error('[MusicStreamer] Failed to create source node:', e);
-                            throw e;
-                        }
-                    }
-                    
-                    // Create gain node
-                    if (!gainNodeRef.current) {
-                        gainNodeRef.current = ctx.createGain();
-                        gainNodeRef.current.gain.value = 1.0;
-                        console.log('[MusicStreamer] Created GainNode');
-                    }
-                    
-                    // Create destination node if needed
-                    if (!destinationRef.current) {
-                        destinationRef.current = ctx.createMediaStreamDestination();
-                        console.log('[MusicStreamer] Created MediaStreamAudioDestinationNode');
-                    }
-                    
-                    // Connect nodes: source -> gain -> destination + speakers
-                    sourceNodeRef.current.connect(gainNodeRef.current);
-                    gainNodeRef.current.connect(destinationRef.current);
-                    gainNodeRef.current.connect(ctx.destination);
-                    console.log('[MusicStreamer] Connected audio graph');
-                    
-                    // Get audio track from destination
-                    const mediaStream = destinationRef.current.stream;
-                    const audioTracks = mediaStream.getAudioTracks();
-                    console.log('[MusicStreamer] MediaStream audio tracks:', audioTracks.length);
-                    
-                    if (audioTracks.length === 0) {
-                        throw new Error('No audio track available from MediaStream');
-                    }
-                    
-                    const audioTrack = audioTracks[0];
-                    console.log('[MusicStreamer] Track details:', {
-                        id: audioTrack.id,
-                        enabled: audioTrack.enabled,
-                        muted: audioTrack.muted,
-                        readyState: audioTrack.readyState
-                    });
-                    
-                    console.log('[MusicStreamer] Publishing audio track to LiveKit');
-                    const publication = await room.localParticipant.publishTrack(audioTrack, { 
-                        name: 'music',
-                        source: LivekitClient.Track.Source.Microphone,
-                        audioBitrate: 128000,
-                    });
-                    publicationRef.current = publication;
-                    console.log('[MusicStreamer] Music track published, sid:', publication.trackSid);
-                } catch (e) {
-                    console.error("[MusicStreamer] Failed to publish music:", e);
-                    setAudioError("Failed to publish audio");
-                }
-            } else {
-                // Pause playback
-                console.log('[MusicStreamer] Pausing playback');
-                audioEl.pause();
-                if (publicationRef.current) {
-                    await room.localParticipant.unpublishTrack(publicationRef.current.track!).catch(e => console.warn('[MusicStreamer] Unpublish error:', e));
-                    publicationRef.current = null;
-                }
-            }
-        };
-        
-        manageTrack();
-
-        return () => {
-            if (room?.localParticipant && publicationRef.current) {
-                room.localParticipant.unpublishTrack(publicationRef.current.track!).catch(e => console.warn('[MusicStreamer] Cleanup unpublish error:', e));
-                publicationRef.current = null;
-            }
-            if (audioContextRef.current && audioContextRef.current.state !== 'closed') {
-                audioContextRef.current.close();
-                audioContextRef.current = null;
-                sourceNodeRef.current = null;
-                destinationRef.current = null;
-                gainNodeRef.current = null;
-            }
-        };
-    }, [isDJ, isPlaying, audioStreamUrl, room, isFetchingUrl, audioError]);
-
-    return null;
-}
-
-
 function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
     const { user, isUserLoading, firestore } = useFirebase();
     const { toast } = useToast();
@@ -460,7 +203,6 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
     const [voiceToken, setVoiceToken] = useState<string | undefined>(undefined);
     const [activePanels, setActivePanels] = useState({ playlist: true, add: true });
     
-    const [musicVolume, setMusicVolume] = useState(0.5);
     const [localVolume, setLocalVolume] = useState(0.5);
 
     const roomRef = useMemoFirebase(() => doc(firestore, 'rooms', roomId), [firestore, roomId]);
@@ -707,6 +449,8 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
                                                 activePanels={activePanels}
                                                 volume={localVolume}
                                                 onVolumeChange={setLocalVolume}
+                                                isDJ={isDJ}
+                                                roomId={roomId}
                                             />
                                         </div>
                                         <div className="flex-1 grid grid-cols-1 md:grid-cols-2 gap-6 items-start">
@@ -723,18 +467,11 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
                                                 </div>
                                             )}
                                             {activePanels.add && (
-                                                <div className={cn('flex flex-col gap-6', { 'md:col-span-2': !activePanels.playlist })}>
+                                                <div className={cn({ 'md:col-span-2': !activePanels.playlist })}>
                                                     <AddMusicPanel
                                                         onAddItems={handleAddItems}
                                                         onClose={() => {}}
                                                         canAddMusic={true}
-                                                    />
-                                                    <MusicStreamerCard
-                                                        trackUrl={currentTrack?.url}
-                                                        isPlaying={!!room.isPlaying}
-                                                        volume={musicVolume}
-                                                        onVolumeChange={setMusicVolume}
-                                                        onTrackEnd={handlePlayNext}
                                                     />
                                                 </div>
                                             )}

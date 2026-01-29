@@ -1,7 +1,7 @@
 'use client';
 
 import Image from "next/image";
-import React from "react";
+import React, { useRef, useEffect, useState } from "react";
 import {
   Card,
   CardContent,
@@ -28,6 +28,8 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { Slider } from "@/components/ui/slider";
+import { useRoomContext } from '@livekit/components-react';
+import * as LivekitClient from 'livekit-client';
 
 type MusicPlayerCardProps = {
   currentTrack: PlaylistItem | undefined;
@@ -40,6 +42,8 @@ type MusicPlayerCardProps = {
   activePanels?: { playlist: boolean, add: boolean };
   volume: number;
   onVolumeChange: (volume: number) => void;
+  isDJ?: boolean;
+  roomId?: string;
 };
 
 export default function MusicPlayerCard({
@@ -52,8 +56,19 @@ export default function MusicPlayerCard({
   onTogglePanel,
   activePanels,
   volume,
-  onVolumeChange
+  onVolumeChange,
+  isDJ = false,
+  roomId
 }: MusicPlayerCardProps) {
+  const room = useRoomContext();
+  const audioRef = useRef<HTMLAudioElement>(null);
+  const musicTrackRef = useRef<LivekitClient.LocalTrackPublication | null>(null);
+  const [audioStreamUrl, setAudioStreamUrl] = useState<string | null>(null);
+  const [musicDevices, setMusicDevices] = useState<MediaDeviceInfo[]>([]);
+  const [selectedMusicDevice, setSelectedMusicDevice] = useState<string>('');
+  
+  const [currentTime, setCurrentTime] = React.useState(0);
+  const [duration, setDuration] = React.useState(0);
 
   const albumArt = currentTrack ? placeholderData.placeholderImages.find(p => p.id === currentTrack.artId) : undefined;
   const isMuted = volume === 0;
@@ -64,6 +79,49 @@ export default function MusicPlayerCard({
       lastNonZeroVolume.current = volume;
     }
   }, [volume])
+
+  // Get available audio input devices for music
+  useEffect(() => {
+    navigator.mediaDevices.enumerateDevices().then(devices => {
+      const audioInputs = devices.filter(d => d.kind === 'audioinput');
+      setMusicDevices(audioInputs);
+    });
+  }, []);
+
+  // Publish music track when device selected
+  useEffect(() => {
+    if (!isDJ || !room || !selectedMusicDevice || !playing) {
+      if (musicTrackRef.current) {
+        room?.localParticipant.unpublishTrack(musicTrackRef.current.track!);
+        musicTrackRef.current = null;
+      }
+      return;
+    }
+
+    const publishMusicTrack = async () => {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          audio: { deviceId: { exact: selectedMusicDevice } }
+        });
+        
+        const track = stream.getAudioTracks()[0];
+        musicTrackRef.current = await room.localParticipant.publishTrack(track, {
+          name: 'music',
+          source: LivekitClient.Track.Source.Unknown,
+        });
+      } catch (e) {
+        console.error('Failed to publish music:', e);
+      }
+    };
+
+    publishMusicTrack();
+
+    return () => {
+      if (musicTrackRef.current) {
+        room.localParticipant.unpublishTrack(musicTrackRef.current.track!);
+      }
+    };
+  }, [isDJ, room, selectedMusicDevice, playing]);
 
   const handlePlayPause = () => isPlayerControlAllowed && currentTrack && onPlayPause(!playing);
   const handlePlayNextWithTrack = () => isPlayerControlAllowed && currentTrack && onPlayNext();
@@ -98,6 +156,32 @@ export default function MusicPlayerCard({
                     <Music /> Now Playing
                 </CardTitle>
                 <p className="text-muted-foreground text-sm truncate">{currentTrack ? `${currentTrack.title} - ${currentTrack.artist}` : "No song selected"}</p>
+                {isDJ && (
+                  <div className="mt-2 space-y-2">
+                    {currentTrack && (
+                      <a 
+                        href={currentTrack.url} 
+                        target="_blank" 
+                        rel="noopener noreferrer"
+                        className="text-xs text-primary hover:underline block"
+                      >
+                        Open in YouTube →
+                      </a>
+                    )}
+                    <select 
+                      value={selectedMusicDevice} 
+                      onChange={(e) => setSelectedMusicDevice(e.target.value)}
+                      className="w-full text-xs bg-background border rounded px-2 py-1"
+                    >
+                      <option value="">Select Music Device</option>
+                      {musicDevices.map(device => (
+                        <option key={device.deviceId} value={device.deviceId}>
+                          {device.label || `Device ${device.deviceId.slice(0, 8)}`}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
             </div>
             {isPlayerControlAllowed && (
                 <div className="flex items-center gap-1 text-muted-foreground">
@@ -126,7 +210,6 @@ export default function MusicPlayerCard({
         </div>
       </CardHeader>
       <CardContent className="flex-1 flex flex-col justify-end gap-4 p-3 sm:p-4">
-       
         <div className="flex items-center justify-center gap-1">
             <Tooltip>
                 <TooltipTrigger asChild>

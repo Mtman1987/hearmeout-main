@@ -127,6 +127,35 @@ export default function UserCard({
   const [trackAudioLevel, setTrackAudioLevel] = useState(0);
   const isSpeaking = participant.isSpeaking;
 
+  // Track audio level from participant
+  useEffect(() => {
+    if (!participant) return;
+
+    const handleAudioLevel = (level: number) => {
+      setTrackAudioLevel(level);
+    };
+
+    participant.on('audioTrackPublished', () => {
+      const audioTrack = participant.getTrackPublication(LivekitClient.Track.Source.Microphone);
+      if (audioTrack?.audioTrack) {
+        audioTrack.audioTrack.on('audioLevel', handleAudioLevel);
+      }
+    });
+
+    // Check if track already exists
+    const audioTrack = participant.getTrackPublication(LivekitClient.Track.Source.Microphone);
+    if (audioTrack?.audioTrack) {
+      audioTrack.audioTrack.on('audioLevel', handleAudioLevel);
+    }
+
+    return () => {
+      const audioTrack = participant.getTrackPublication(LivekitClient.Track.Source.Microphone);
+      if (audioTrack?.audioTrack) {
+        audioTrack.audioTrack.off('audioLevel', handleAudioLevel);
+      }
+    };
+  }, [participant]);
+
   useEffect(() => {
     if (isLocal) return;
     if (volume > 0) {
@@ -424,6 +453,7 @@ export default function UserCard({
             </div>
           
             <div className="space-y-2 flex-grow flex flex-col justify-end">
+                <SpeakingIndicator audioLevel={isMuted ? 0 : (isSpeaking ? trackAudioLevel : 0)} />
                  {!isLocal && (
                      <div className="flex items-center gap-2">
                         <Tooltip>
@@ -448,7 +478,6 @@ export default function UserCard({
                         />
                     </div>
                 )}
-                <SpeakingIndicator audioLevel={isMuted ? 0 : trackAudioLevel} />
             </div>
         </CardContent>
       </Card>
