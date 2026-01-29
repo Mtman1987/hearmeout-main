@@ -66,6 +66,7 @@ export default function MusicPlayerCard({
   const [audioStreamUrl, setAudioStreamUrl] = useState<string | null>(null);
   const [musicDevices, setMusicDevices] = useState<MediaDeviceInfo[]>([]);
   const [selectedMusicDevice, setSelectedMusicDevice] = useState<string>('');
+  const [isMusicPublished, setIsMusicPublished] = useState(false);
   
   const [currentTime, setCurrentTime] = React.useState(0);
   const [duration, setDuration] = React.useState(0);
@@ -88,27 +89,36 @@ export default function MusicPlayerCard({
     });
   }, []);
 
-  // Publish music track when device selected
+  // Publish music track when device selected and playing
   useEffect(() => {
-    if (!isDJ || !room || !selectedMusicDevice || !playing) {
-      if (musicTrackRef.current) {
-        room?.localParticipant.unpublishTrack(musicTrackRef.current.track!);
-        musicTrackRef.current = null;
-      }
-      return;
-    }
+    if (!isDJ || !room || !selectedMusicDevice) return;
 
     const publishMusicTrack = async () => {
       try {
-        const stream = await navigator.mediaDevices.getUserMedia({
-          audio: { deviceId: { exact: selectedMusicDevice } }
-        });
-        
-        const track = stream.getAudioTracks()[0];
-        musicTrackRef.current = await room.localParticipant.publishTrack(track, {
-          name: 'music',
-          source: LivekitClient.Track.Source.Unknown,
-        });
+        if (playing) {
+          // Only publish if not already published
+          if (musicTrackRef.current) return;
+          
+          const stream = await navigator.mediaDevices.getUserMedia({
+            audio: { deviceId: { exact: selectedMusicDevice } }
+          });
+          
+          const track = stream.getAudioTracks()[0];
+          musicTrackRef.current = await room.localParticipant.publishTrack(track, {
+            name: 'music',
+            source: LivekitClient.Track.Source.Unknown,
+          });
+          setIsMusicPublished(true);
+          console.log('Music track published');
+        } else {
+          // Unpublish when paused
+          if (musicTrackRef.current) {
+            await room.localParticipant.unpublishTrack(musicTrackRef.current.track!);
+            musicTrackRef.current = null;
+            setIsMusicPublished(false);
+            console.log('Music track unpublished');
+          }
+        }
       } catch (e) {
         console.error('Failed to publish music:', e);
       }
@@ -118,7 +128,8 @@ export default function MusicPlayerCard({
 
     return () => {
       if (musicTrackRef.current) {
-        room.localParticipant.unpublishTrack(musicTrackRef.current.track!);
+        room.localParticipant.unpublishTrack(musicTrackRef.current.track!).catch(console.error);
+        musicTrackRef.current = null;
       }
     };
   }, [isDJ, room, selectedMusicDevice, playing]);
@@ -180,6 +191,12 @@ export default function MusicPlayerCard({
                         </option>
                       ))}
                     </select>
+                    {isMusicPublished && (
+                      <div className="flex items-center gap-2 text-xs text-green-500">
+                        <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse" />
+                        Music streaming active
+                      </div>
+                    )}
                   </div>
                 )}
             </div>
