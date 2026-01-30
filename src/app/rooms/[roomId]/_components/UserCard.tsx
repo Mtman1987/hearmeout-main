@@ -16,6 +16,10 @@ import {
   LoaderCircle,
   LogOut,
   Radio,
+  MessageSquare,
+  Music,
+  ListMusic,
+  Users,
 } from 'lucide-react';
 import { useTracks, AudioTrack, useRoomContext } from '@livekit/components-react';
 import * as LivekitClient from 'livekit-client';
@@ -108,6 +112,7 @@ export default function UserCard({
   const [discordDialogOpen, setDiscordDialogOpen] = React.useState(false);
   const [discordGuildId, setDiscordGuildId] = React.useState('');
   const [streamMode, setStreamMode] = React.useState(false);
+  const [showOverlayControls, setShowOverlayControls] = React.useState(false);
 
   // Remote participant volume control state
   const [volume, setVolume] = React.useState(1);
@@ -190,6 +195,38 @@ export default function UserCard({
       setStreamMode(firestoreUser.streamMode);
     }
   }, [firestoreUser]);
+
+  React.useEffect(() => {
+    const checkOverlay = () => {
+      const overlayOpen = localStorage.getItem('overlay-open') === 'true';
+      setShowOverlayControls(overlayOpen);
+    };
+    checkOverlay();
+    window.addEventListener('storage', checkOverlay);
+    const interval = setInterval(checkOverlay, 1000);
+    return () => {
+      window.removeEventListener('storage', checkOverlay);
+      clearInterval(interval);
+    };
+  }, []);
+
+  const toggleOverlayWidget = (widget: string) => {
+    const saved = localStorage.getItem('overlay-visible');
+    const visible = saved ? JSON.parse(saved) : { chat: true, music: true, queue: true };
+    visible[widget] = !visible[widget];
+    localStorage.setItem('overlay-visible', JSON.stringify(visible));
+    window.dispatchEvent(new Event('storage'));
+  };
+
+  const showHiddenUsers = () => {
+    const savedUsers = localStorage.getItem('overlay-hidden-users');
+    const hiddenUsers = savedUsers ? JSON.parse(savedUsers) : [];
+    if (hiddenUsers.length > 0) {
+      localStorage.setItem('overlay-hidden-users', JSON.stringify([]));
+      window.dispatchEvent(new Event('storage'));
+      toast({ title: 'Profiles Restored', description: `${hiddenUsers.length} hidden profile(s) restored` });
+    }
+  };
 
   const handleToggleStreamMode = async () => {
     if (!userInRoomRef) return;
@@ -446,6 +483,41 @@ export default function UserCard({
                                 </DropdownMenuContent>
                             </DropdownMenu>
                          </div>
+                    ): showOverlayControls ? (
+                        <div className='flex items-center gap-1'>
+                            <Tooltip>
+                                <TooltipTrigger asChild>
+                                    <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => toggleOverlayWidget('chat')}>
+                                        <MessageSquare className="h-4 w-4" />
+                                    </Button>
+                                </TooltipTrigger>
+                                <TooltipContent><p>Toggle Chat</p></TooltipContent>
+                            </Tooltip>
+                            <Tooltip>
+                                <TooltipTrigger asChild>
+                                    <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => toggleOverlayWidget('music')}>
+                                        <Music className="h-4 w-4" />
+                                    </Button>
+                                </TooltipTrigger>
+                                <TooltipContent><p>Toggle Music</p></TooltipContent>
+                            </Tooltip>
+                            <Tooltip>
+                                <TooltipTrigger asChild>
+                                    <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => toggleOverlayWidget('queue')}>
+                                        <ListMusic className="h-4 w-4" />
+                                    </Button>
+                                </TooltipTrigger>
+                                <TooltipContent><p>Toggle Queue</p></TooltipContent>
+                            </Tooltip>
+                            <Tooltip>
+                                <TooltipTrigger asChild>
+                                    <Button variant="ghost" size="icon" className="h-7 w-7" onClick={showHiddenUsers}>
+                                        <Users className="h-4 w-4" />
+                                    </Button>
+                                </TooltipTrigger>
+                                <TooltipContent><p>Show Hidden Profiles</p></TooltipContent>
+                            </Tooltip>
+                        </div>
                     ): (
                         isHost && (
                            <div className='flex items-center gap-1'>

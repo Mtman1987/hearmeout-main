@@ -1,6 +1,7 @@
 'use client';
 
 import UserCard from "./UserCard";
+import OverlayCard from "./OverlayCard";
 import React from "react";
 import { useFirebase, useDoc, useMemoFirebase } from '@/firebase';
 import { doc } from 'firebase/firestore';
@@ -26,6 +27,10 @@ export default function UserList({
   const remoteParticipants = useRemoteParticipants();
 
   const allParticipants = [localParticipant, ...remoteParticipants];
+  
+  // Separate overlay viewer from regular participants
+  const overlayParticipant = allParticipants.find(p => p.identity === 'overlay-viewer');
+  const regularParticipants = allParticipants.filter(p => p.identity !== 'overlay-viewer');
   
   // Get ALL audio tracks from ALL participants (including local DJ's music)
   const allAudioTracks = useTracks(
@@ -82,7 +87,7 @@ export default function UserList({
       
       <div className="flex flex-col gap-6">
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
-          {allParticipants.map((participant) => (
+          {regularParticipants.map((participant) => (
             <UserCard
               key={participant.sid}
               participant={participant}
@@ -91,6 +96,9 @@ export default function UserList({
               roomId={roomId}
             />
           ))}
+          {overlayParticipant && (
+            <OverlayCard participant={overlayParticipant} roomId={roomId} />
+          )}
         </div>
       </div>
     </>
