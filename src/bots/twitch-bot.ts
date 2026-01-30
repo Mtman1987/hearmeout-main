@@ -16,7 +16,7 @@ const client = new tmi.client({
     username: twitchBotUsername,
     password: twitchBotOauthToken,
   },
-  channels: [],
+  channels: ['mtman1987'],
 });
 
 const activeChannels = new Map<string, string>();
@@ -25,6 +25,9 @@ async function syncChannels() {
   try {
     const roomsSnapshot = await db.collection('rooms').get();
     const newChannels = new Map<string, string>();
+    
+    // Always include mtman1987
+    newChannels.set('mtman1987', 'default');
     
     for (const roomDoc of roomsSnapshot.docs) {
       const usersSnapshot = await db.collection('rooms').doc(roomDoc.id).collection('users').get();
