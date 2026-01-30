@@ -133,7 +133,7 @@ const CurrentTrack = ({ room, onClose }: { room: RoomData; onClose: () => void }
 };
 
 const ParticipantWithVoice = ({ user, isSpeaking, index, onClose }: { user: RoomUser; isSpeaking: boolean; index: number; onClose: () => void }) => (
-  <Draggable id={`user-${user.id}`} defaultX={20} defaultY={20 + (index * 100)} lockAxis="y" onClose={onClose}>
+  <Draggable id={`user-${user.id}`} defaultX={20} defaultY={20 + (index * 100)} onClose={onClose}>
     <div className="rounded-lg bg-black/80 backdrop-blur-md p-3 shadow-2xl">
       <div data-drag-handle className="cursor-grab active:cursor-grabbing mb-2 flex items-center gap-2 text-gray-400">
         <GripVertical className="w-3 h-3" />
@@ -226,9 +226,6 @@ const ChatWidget = ({ roomId, onClose }: { roomId: string; onClose: () => void }
         <div data-drag-handle className="cursor-grab active:cursor-grabbing p-2 border-b border-white/10 flex items-center gap-2">
           <GripVertical className="w-4 h-4 text-gray-400" />
           <span className="text-sm font-semibold">Chat</span>
-          <select value={viewMode} onChange={(e) => setViewMode(e.target.value as any)} className="ml-auto text-xs px-2 py-1 rounded border bg-black/50 text-white">
-            <option value="tabbed">Tabbed</option>
-          </select>
         </div>
         <div className="flex-1 overflow-y-auto p-2 space-y-2">
           {messages.map((msg) => (
@@ -252,6 +249,8 @@ const VoiceQueue = ({ roomId, onClose }: { roomId: string; onClose: () => void }
   const queueRef = useMemoFirebase(() => firestore && roomId ? collection(firestore, 'rooms', roomId, 'voiceQueue') : null, [firestore, roomId]);
   const queueQuery = useMemoFirebase(() => queueRef ? query(queueRef, orderBy('addedAt', 'asc')) : null, [queueRef]);
   const { data: queue } = useCollection<any>(queueQuery);
+
+  console.log('[VoiceQueue] Queue data:', queue);
 
   return (
     <Draggable id="queue" defaultX={1500} defaultY={20} onClose={onClose}>
