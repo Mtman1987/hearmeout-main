@@ -40,7 +40,8 @@ export async function addSongToPlaylist(
     console.log(`[!sr YT-DLP] Query: ${songQuery} (URL: ${isUrl})`);
 
     try {
-      const { stdout } = await execAsync(`"${YT_DLP}" --dump-json --no-download --flat-playlist "${songQuery}"`);
+      const searchQuery = isUrl ? songQuery : `ytsearch1:${songQuery}`;
+      const { stdout } = await execAsync(`"${YT_DLP}" --dump-json --no-download --flat-playlist "${searchQuery}"`);
       const lines = stdout.trim().split('\n').filter(Boolean);
       
       console.log(`[!sr YT-DLP] Found ${lines.length} result(s)`);
@@ -93,7 +94,7 @@ export async function addSongToPlaylist(
     
     // Trigger ripper API
     try {
-      const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3000';
+      const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3001';
       const res = await fetch(`${baseUrl}/api/rip-trigger`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },

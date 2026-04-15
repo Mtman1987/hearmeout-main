@@ -58,7 +58,27 @@ async function syncChannels() {
     const rooms = db.list('rooms');
     const newChannels = new Map<string, string>();
 
-    newChannels.set('mtman1987', 'default');
+    const broadcasterChannel = (process.env.TWITCH_BROADCASTER_USERNAME || 'mtman1987').toLowerCase();
+
+    // Find or create a default room
+    let defaultRoomId = 'default';
+    if (rooms.length > 0) {
+      defaultRoomId = rooms[0].id;
+    } else {
+      db.set('rooms', 'default', {
+        name: 'Main Room',
+        ownerId: process.env.HARDCODED_ADMIN_DISCORD_ID || 'admin',
+        playlist: [],
+        currentTrackId: '',
+        isPlaying: false,
+        djId: '',
+        djDisplayName: '',
+        createdAt: new Date().toISOString(),
+      });
+      console.log('[Twitch Bot] Auto-created default room');
+    }
+
+    newChannels.set(broadcasterChannel, defaultRoomId);
 
     for (const room of rooms) {
       const users = db.list(`rooms/${room.id}/users`);
@@ -78,11 +98,13 @@ async function syncChannels() {
     for (const [channel, roomId] of newChannels) {
       if (!activeChannels.has(channel)) {
         client?.join(channel).catch((e: any) => console.error(`Failed to join ${channel}:`, e));
+        console.log(`[Twitch Bot] Joined channel: ${channel} (room: ${roomId})`);
       }
     }
 
     activeChannels.clear();
     newChannels.forEach((roomId, channel) => activeChannels.set(channel, roomId));
+    console.log(`[Twitch Bot] Active channels:`, Object.fromEntries(activeChannels));
   } catch (error) {
     console.error('Error syncing channels:', error);
   }

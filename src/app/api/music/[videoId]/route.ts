@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { readFileSync, existsSync } from 'fs';
 import { join } from 'path';
 
-const CACHE_DIR = process.env.MUSIC_CACHE_DIR || '/data/music';
+const CACHE_DIR = process.env.MUSIC_CACHE_DIR || join(process.cwd(), 'data', 'music');
 
 export async function GET(req: NextRequest, { params }: { params: Promise<{ videoId: string }> }) {
   const { videoId } = await params;

@@ -7,7 +7,7 @@ import { promisify } from 'util';
 const execAsync = promisify(exec);
 
 const YT_DLP = process.env.YT_DLP_PATH || 'yt-dlp';
-const CACHE_DIR = process.env.MUSIC_CACHE_DIR || '/data/music';
+const CACHE_DIR = process.env.MUSIC_CACHE_DIR || join(process.cwd(), 'data', 'music');
 
 if (!existsSync(CACHE_DIR)) {
   mkdirSync(CACHE_DIR, { recursive: true });
@@ -49,7 +49,8 @@ export async function GET(req: NextRequest) {
 
   try {
     console.log(`Extracting audio URL for ${videoId} via yt-dlp...`);
-    const { stdout } = await execAsync(`yt-dlp -f "bestaudio[ext=m4a]/bestaudio/best" --no-playlist --get-url "${youTubeUrl}"`); // Removed cookies-from-browser: no Firefox on server
+    const ytDlpCmd = `"${YT_DLP}" -f "bestaudio[ext=m4a]/bestaudio/best" --no-playlist --get-url "${youTubeUrl}"`;
+    const { stdout } = await execAsync(ytDlpCmd);
     const audioUrl = stdout.trim();
     if (!audioUrl) throw new Error('No audio stream found');
 
@@ -61,7 +62,7 @@ export async function GET(req: NextRequest) {
     if (e.message.includes('requested format') || e.message.includes('no video formats')) {
       console.log(`Retrying ${videoId} with simpler format...`);
       try {
-        const { stdout: fallbackStdout } = await execAsync(`yt-dlp --no-playlist --get-url "${youTubeUrl}"`);
+        const { stdout: fallbackStdout } = await execAsync(`"${YT_DLP}" --no-playlist --get-url "${youTubeUrl}"`);
         const fallbackUrl = fallbackStdout.trim();
         if (fallbackUrl) {
           console.log(`Fallback stream found for ${videoId}`);
