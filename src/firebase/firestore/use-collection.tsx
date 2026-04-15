@@ -1,14 +1,22 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import {
-  Query,
-  onSnapshot,
-  DocumentData,
-  FirestoreError,
-  QuerySnapshot,
-  CollectionReference,
-} from 'firebase/firestore';
+// Firebase imports removed - this file is deprecated
+// import {
+//   Query,
+//   onSnapshot,
+//   DocumentData,
+//   FirestoreError,
+//   QuerySnapshot,
+//   CollectionReference,
+// } from 'firebase/firestore';
+
+type Query = any;
+type onSnapshot = any;
+type DocumentData = any;
+type FirestoreError = any;
+type QuerySnapshot = any;
+type CollectionReference = any;
 import { errorEmitter } from '@/firebase/error-emitter';
 import { FirestorePermissionError } from '@/firebase/errors';
 

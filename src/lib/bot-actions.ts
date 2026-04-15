@@ -1,16 +1,20 @@
 'use server';
 
-import { YouTube } from 'youtube-sr';
+import { exec } from 'child_process';
+import util from 'util';
+const execAsync = util.promisify(exec);
 import { PlaylistItem } from "@/types/playlist";
-import { roomService } from '@/firebase/firestore-service';
+import { db, ensureDb } from '@/lib/db';
 
-// A simple deterministic hash function to select album art from the existing set
+const YT_DLP = process.env.YT_DLP_PATH
+  || 'C:\\Users\\mtman\\AppData\\Local\\Microsoft\\WinGet\\Packages\\yt-dlp.yt-dlp_Microsoft.Winget.Source_8wekyb3d8bbwe\\yt-dlp.exe';
+
 function simpleHash(str: string): number {
     let hash = 0;
     for (let i = 0; i < str.length; i++) {
         const char = str.charCodeAt(i);
         hash = (hash << 5) - hash + char;
-        hash |= 0; // Convert to 32bit integer
+        hash |= 0;
     }
     return Math.abs(hash);
 }
@@ -18,207 +22,140 @@ function simpleHash(str: string): number {
 function selectArtId(videoId: string): string {
     const artIds = ["album-art-1", "album-art-2", "album-art-3"];
     if (!videoId) return artIds[0];
-    const hash = simpleHash(videoId);
-    return artIds[hash % artIds.length];
+    return artIds[simpleHash(videoId) % artIds.length];
 }
 
-/**
- * Searches for a song/playlist on YouTube and adds it to the specified room's playlist in Firestore.
- * @param songQuery The search term or YouTube URL.
- * @param roomId The ID of the room to add the song to.
- * @param requester The name of the user who requested the song.
- * @returns A promise that resolves to an object with a success flag and a message.
- */
 export async function addSongToPlaylist(
-  songQuery: string, 
-  roomId: string, 
+  songQuery: string,
+  roomId: string,
   requester: string
 ): Promise<{ success: boolean; message: string }> {
-  if (!roomId) {
-    return { success: false, message: 'No room ID provided.' };
-  }
+  if (!roomId) return { success: false, message: 'No room ID provided.' };
 
   try {
+    await ensureDb();
     const isUrl = /^(https?:\/\/)?(www\.)?(youtube\.com|youtu\.?be)\/.+/.test(songQuery);
     let videosToAdd: PlaylistItem[] = [];
 
-    if (isUrl) {
-        const isPlaylistUrl = /[?&]list=/.test(songQuery);
-        if (isPlaylistUrl) {
-            const playlist = await YouTube.getPlaylist(songQuery);
-            if (!playlist || playlist.videos.length === 0) {
-                 return { success: false, message: `I couldn't find that playlist or it's empty.` };
-            }
-            videosToAdd = playlist.videos.map(video => ({
-                id: video.id!,
-                title: video.title || 'Untitled',
-                artist: video.channel?.name || 'Unknown Artist',
-                url: video.url,
-                artId: selectArtId(video.id!),
-                duration: video.duration / 1000,
-                addedBy: requester,
-                addedAt: new Date(),
-                plays: 0,
-                source: 'web' as const,
-            }));
-        } else {
-            const video = await YouTube.getVideo(songQuery);
-             if (!video || !video.id) {
-                return { success: false, message: `I couldn't find a video at that URL.` };
-            }
-            videosToAdd.push({
-                id: video.id,
-                title: video.title || 'Untitled',
-                artist: video.channel?.name || 'Unknown Artist',
-                url: video.url,
-                artId: selectArtId(video.id),
-                duration: video.duration / 1000,
-                addedBy: requester,
-                addedAt: new Date(),
-                plays: 0,
-                source: 'web' as const,
-            });
-        }
-    } else {
-        const searchResults = await YouTube.search(songQuery, { limit: 1, type: 'video' });
-        if (!searchResults || searchResults.length === 0 || !searchResults[0].id) {
-            return { success: false, message: `I couldn't find a song matching "${songQuery}".` };
-        }
-        const video = searchResults[0];
-        videosToAdd.push({
-            id: video.id!,
-            title: video.title || 'Untitled',
-            artist: video.channel?.name || 'Unknown Artist',
-            url: video.url,
-            artId: selectArtId(video.id!),
-            duration: video.duration / 1000,
-            addedBy: requester,
-            addedAt: new Date(),
-            plays: 0,
-            source: 'web' as const,
-        });
+    console.log(`[!sr YT-DLP] Query: ${songQuery} (URL: ${isUrl})`);
+
+    try {
+      const { stdout } = await execAsync(`"${YT_DLP}" --dump-json --no-download --flat-playlist "${songQuery}"`);
+      const lines = stdout.trim().split('\n').filter(Boolean);
+      
+      console.log(`[!sr YT-DLP] Found ${lines.length} result(s)`);
+
+      if (lines.length === 0) {
+        return { success: false, message: `I couldn't find any songs for "${songQuery}". Try a different search.` };
+      }
+
+      const videoJson = JSON.parse(lines[0]);
+      const videoId = videoJson.id || videoJson.webpage_url_match?.[0];
+      videosToAdd.push({
+        id: videoId!,
+        title: videoJson.title || 'Untitled',
+        artist: videoJson.uploader || videoJson.channel || 'Unknown Artist',
+        url: videoJson.webpage_url || videoJson.url || songQuery,
+        artId: selectArtId(videoId),
+        duration: (videoJson.duration || 180) * 1000,
+        addedBy: requester,
+        addedAt: new Date(),
+        plays: 0,
+        source: 'web' as const,
+      });
+
+      console.log(`[!sr YT-DLP] Selected: ${videoJson.title} (${videoId})`);
+
+    } catch (e: any) {
+      console.error(`[!sr YT-DLP] Failed:`, e.message);
+      return { success: false, message: `YouTube lookup failed: ${e.message}. Try a URL or different song name.` };
     }
+
+    if (videosToAdd.length === 0) return { success: false, message: `I couldn't find any songs for "${songQuery}".` };
+
+    const room = db.get('rooms', roomId);
+    if (!room) return { success: false, message: 'Room not found.' };
+
+    const playlist = room.playlist || [];
+    const newPlaylist = [...playlist, ...videosToAdd];
+    const updates: any = { playlist: newPlaylist };
+
+    if ((!room.isPlaying || !room.currentTrackId) && videosToAdd.length > 0) {
+      updates.currentTrackId = videosToAdd[0].id;
+      updates.isPlaying = true;
+    }
+
+    // Save playlist update to DB
+    db.update('rooms', roomId, updates);
+    console.log(`[!sr DEBUG] Saved playlist to DB for room ${roomId}`);
+
+    console.log(`[!sr DEBUG] Triggering ripper for room ${roomId}, videoId ${videosToAdd[0]?.id}`);
     
-    if (videosToAdd.length === 0) {
-        return { success: false, message: `I couldn't find any songs for "${songQuery}".` };
+    // Trigger ripper API
+    try {
+      const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3000';
+      const res = await fetch(`${baseUrl}/api/rip-trigger`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          roomId, 
+          videoId: updates.currentTrackId,
+          youtubeUrl: videosToAdd[0]?.url 
+        })
+      });
+      console.log(`[!sr DEBUG] rip-trigger API response:`, await res.json());
+    } catch (err) {
+      console.error(`[!sr DEBUG] rip-trigger API failed:`, err);
     }
 
-    const firstSongAdded = videosToAdd[0];
-
-    for (const song of videosToAdd) {
-      await roomService.addSongToPlaylist(roomId, song);
-    }
-
-    const message = videosToAdd.length > 1
+    // Frontend will sync playlist via useDoc
+    return {
+      success: true,
+      message: videosToAdd.length > 1
         ? `Queued up ${videosToAdd.length} songs from the playlist.`
-        : `Queued up: "${firstSongAdded.title}"`;
-
-    return { success: true, message };
-
+        : `Queued up: "${videosToAdd[0].title}"`,
+    };
   } catch (error: any) {
     console.error(`Error processing song request for room ${roomId}:`, error);
     return { success: false, message: 'An internal error occurred while processing your request.' };
   }
 }
 
-/**
- * Toggles the play/pause state of the current track
- * @param roomId The ID of the room
- * @returns Result object with success flag and message
- */
-export async function updateRoomPlayState(
-  roomId: string, 
-  isPlaying: boolean
-): Promise<{ success: boolean; message: string }> {
-  if (!roomId) {
-    return { success: false, message: 'No room ID provided.' };
-  }
+export async function updateRoomPlayState(roomId: string, isPlaying: boolean): Promise<{ success: boolean; message: string }> {
+  if (!roomId) return { success: false, message: 'No room ID provided.' };
+  await ensureDb();
+  const room = db.get('rooms', roomId);
+  if (!room) return { success: false, message: 'Room not found.' };
+  if (!room.currentTrackId) return { success: false, message: 'No track is currently selected.' };
 
-  try {
-    const roomData = await roomService.getRoom(roomId);
-
-    if (!roomData) {
-      return { success: false, message: 'Room not found.' };
-    }
-
-    if (!roomData.currentTrackId) {
-      return { success: false, message: 'No track is currently selected.' };
-    }
-
-    await roomService.updatePlayState(roomId, isPlaying);
-
-    const status = isPlaying ? 'Playing' : 'Paused';
-    const trackTitle = roomData.playlist
-      ?.find((t: any) => t.id === roomData.currentTrackId)
-      ?.title || 'Current track';
-    
-    return { success: true, message: `${status}: "${trackTitle}"` };
-  } catch (error: any) {
-    console.error(`Error updating play state for room ${roomId}:`, error);
-    return { success: false, message: 'Error updating playback state.' };
-  }
+  db.update('rooms', roomId, { isPlaying });
+  const trackTitle = room.playlist?.find((t: any) => t.id === room.currentTrackId)?.title || 'Current track';
+  return { success: true, message: `${isPlaying ? 'Playing' : 'Paused'}: "${trackTitle}"` };
 }
 
-/**
- * Skips to the next track in the playlist
- * @param roomId The ID of the room
- * @returns Result object with success flag and message
- */
 export async function skipTrack(roomId: string): Promise<{ success: boolean; message: string }> {
-  if (!roomId) {
-    return { success: false, message: 'No room ID provided.' };
-  }
+  if (!roomId) return { success: false, message: 'No room ID provided.' };
+  await ensureDb();
+  const room = db.get('rooms', roomId);
+  if (!room) return { success: false, message: 'Room not found.' };
+  const playlist = room.playlist || [];
+  if (!playlist.length) return { success: false, message: 'Playlist is empty.' };
 
-  try {
-    const roomData = await roomService.getRoom(roomId);
-
-    if (!roomData) {
-      return { success: false, message: 'Room not found.' };
-    }
-
-    const playlist = roomData.playlist || [];
-    if (!playlist.length) {
-      return { success: false, message: 'Playlist is empty.' };
-    }
-
-    const currentIndex = playlist.findIndex((t: any) => t.id === roomData.currentTrackId);
-    const nextIndex = (currentIndex + 1) % playlist.length;
-    const nextTrack = playlist[nextIndex];
-
-    await roomService.setCurrentTrack(roomId, nextTrack.id);
-
-    return { success: true, message: 'Skipped to next track.' };
-  } catch (error: any) {
-    console.error(`Error skipping track in room ${roomId}:`, error);
-    return { success: false, message: error.message || 'Error skipping track.' };
-  }
+  const currentIndex = playlist.findIndex((t: any) => t.id === room.currentTrackId);
+  const nextTrack = playlist[(currentIndex + 1) % playlist.length];
+  db.update('rooms', roomId, { currentTrackId: nextTrack.id, isPlaying: true });
+  return { success: true, message: 'Skipped to next track.' };
 }
 
-/**
- * Gets current room state (for bot status checks)
- * @param roomId The ID of the room
- */
 export async function getRoomState(roomId: string) {
-  if (!roomId) {
-    return null;
-  }
-
-  try {
-    const data = await roomService.getRoom(roomId);
-    if (!data) {
-      return null;
-    }
-
-    const currentTrack = data.playlist?.find((t: any) => t.id === data.currentTrackId);
-
-    return {
-      isPlaying: data.isPlaying || false,
-      currentTrack: currentTrack || null,
-      playlistLength: data.playlist?.length || 0,
-      djDisplayName: data.djDisplayName || 'No DJ',
-    };
-  } catch (error) {
-    console.error(`Error getting room state for ${roomId}:`, error);
-    return null;
-  }
+  if (!roomId) return null;
+  await ensureDb();
+  const data = db.get('rooms', roomId);
+  if (!data) return null;
+  return {
+    isPlaying: data.isPlaying || false,
+    currentTrack: data.playlist?.find((t: any) => t.id === data.currentTrackId) || null,
+    playlistLength: data.playlist?.length || 0,
+    djDisplayName: data.djDisplayName || 'No DJ',
+  };
 }

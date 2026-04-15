@@ -46,12 +46,15 @@ export async function generateLiveKitToken(roomName: string, participantIdentity
     console.log('[generateLiveKitToken] NEXT_PUBLIC_LIVEKIT_URL:', livekitUrl);
 
     if (!apiKey) {
+      console.error('[generateLiveKitToken] LIVEKIT_API_KEY missing');
       throw new Error('LIVEKIT_API_KEY is not configured in environment variables.');
     }
     if (!apiSecret) {
+      console.error('[generateLiveKitToken] LIVEKIT_API_SECRET missing');
       throw new Error('LIVEKIT_API_SECRET is not configured in environment variables.');
     }
     if (!livekitUrl) {
+      console.error('[generateLiveKitToken] NEXT_PUBLIC_LIVEKIT_URL missing');
       throw new Error('NEXT_PUBLIC_LIVEKIT_URL is not configured in environment variables.');
     }
 
@@ -61,18 +64,18 @@ export async function generateLiveKitToken(roomName: string, participantIdentity
       identity: participantIdentity,
       name: participantName,
       metadata: participantMetadata,
-      ttl: '10m', // The token is valid for 10 minutes
+      ttl: '6h', // Token valid for 6 hours
     });
 
     at.addGrant({ room: roomName, roomJoin: true, canPublish: true, canSubscribe: true });
-    const token = at.toJwt();
+    const token = await at.toJwt(); // Must await this!
 
     console.log('[generateLiveKitToken] Token generated successfully');
     return token;
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
     console.error('[generateLiveKitToken] Error:', errorMessage);
-    throw error;
+    throw new Error(errorMessage);
   }
 }
 

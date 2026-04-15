@@ -1,5 +1,5 @@
 {
-  "apphosting": {
-    "serviceId": "hearmeout"
+  "hosting": {
+    "ignore": ["*"]
   }
 }

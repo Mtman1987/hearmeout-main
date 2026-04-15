@@ -1,14 +1,27 @@
 import { NextRequest, NextResponse } from 'next/server';
 
+type CachedChannels = { channels: any[], timestamp: number };
+
+const cache = new Map<string, CachedChannels>();
+const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
   const guildId = searchParams.get('guildId');
 
-  console.log('[Discord Channels API] Request received for guildId:', guildId);
-
   if (!guildId) {
     return NextResponse.json({ error: 'Missing guildId' }, { status: 400 });
   }
+
+  // Check cache
+  const cached = cache.get(guildId);
+  const now = Date.now();
+  if (cached && (now - cached.timestamp) < CACHE_TTL) {
+    console.log(`[Discord Channels API] Cache hit for guild ${guildId} (${cached.channels.length} channels)`);
+    return NextResponse.json(cached.channels);
+  }
+
+  console.log(`[Discord Channels API] Cache miss - fetching for guildId:`, guildId);
 
   const botToken = process.env.DISCORD_BOT_TOKEN;
   console.log('[Discord Channels API] Bot token exists:', !!botToken);
@@ -33,7 +46,10 @@ export async function GET(req: NextRequest) {
     }
 
     const channels = await response.json();
-    console.log('[Discord Channels API] Found channels:', channels.length);
+    console.log(`[Discord Channels API] Fetched ${channels.length} channels for ${guildId}`);
+    
+    // Cache result
+    cache.set(guildId, { channels, timestamp: now });
     
     return NextResponse.json(channels);
   } catch (error) {

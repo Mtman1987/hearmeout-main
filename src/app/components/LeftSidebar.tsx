@@ -3,29 +3,18 @@
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import {
-  Sidebar,
-  SidebarHeader,
-  SidebarContent,
-  SidebarFooter,
-  SidebarMenu,
-  SidebarMenuItem,
-  SidebarMenuButton,
-  SidebarGroup,
-  SidebarGroupLabel,
+  Sidebar, SidebarHeader, SidebarContent, SidebarFooter, SidebarMenu,
+  SidebarMenuItem, SidebarMenuButton, SidebarGroup, SidebarGroupLabel,
 } from '@/components/ui/sidebar';
 import { Button } from '@/components/ui/button';
-import { Home, Music, LogOut, Settings, User, LogIn } from 'lucide-react';
+import { Home, Music, LogOut, Settings, User, LogIn, Users, ExternalLink } from 'lucide-react';
 import { Logo } from '@/app/components/Logo';
 import { Avatar, AvatarImage, AvatarFallback } from '@/components/ui/avatar';
-import {
-    Tooltip,
-    TooltipContent,
-    TooltipTrigger,
-} from "@/components/ui/tooltip";
-import { useFirebase, useCollection, useMemoFirebase } from '@/firebase';
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { useSession } from '@/hooks/use-session';
+import { useCollection } from '@/hooks/use-db';
 import { Skeleton } from '@/components/ui/skeleton';
 import { CreateRoomDialog } from '@/app/rooms/_components/CreateRoomDialog';
-import { collection, query, where } from 'firebase/firestore';
 
 interface Room {
     id: string;
@@ -33,26 +22,37 @@ interface Room {
     isPrivate: boolean;
 }
 
+function RoomOnlineUsers({ roomId, roomName }: { roomId: string; roomName: string }) {
+  const { data: users } = useCollection<{ displayName?: string; photoURL?: string }>(`rooms/${roomId}/users`);
+  if (!users || users.length === 0) return null;
+  return (
+    <div className="mb-2">
+      <p className="text-[10px] text-muted-foreground font-medium mb-1 truncate">{roomName}</p>
+      <div className="flex flex-wrap gap-1">
+        {users.slice(0, 8).map((u: any) => (
+          <Tooltip key={u.id}>
+            <TooltipTrigger asChild>
+              <Avatar className="h-6 w-6 border-2 border-green-500/60">
+                <AvatarImage src={u.photoURL} />
+                <AvatarFallback className="text-[9px]">{(u.displayName || '?').charAt(0)}</AvatarFallback>
+              </Avatar>
+            </TooltipTrigger>
+            <TooltipContent side="right"><p>{u.displayName || 'User'}</p></TooltipContent>
+          </Tooltip>
+        ))}
+        {users.length > 8 && <span className="text-[10px] text-muted-foreground self-center">+{users.length - 8}</span>}
+      </div>
+    </div>
+  );
+}
+
 export default function LeftSidebar({ roomId }: { roomId?: string }) {
   const pathname = usePathname();
-  const { user, auth, isUserLoading, firestore } = useFirebase();
+  const { user, isLoading: isUserLoading, logout } = useSession();
 
-  const publicRoomsQuery = useMemoFirebase(() => {
-    if (!firestore) return null;
-    return query(
-        collection(firestore, 'rooms'), 
-        where('isPrivate', '==', false)
-    );
-  }, [firestore]);
-
-  const { data: publicRooms, isLoading: roomsLoading } = useCollection<Room>(publicRoomsQuery);
-
-
-  const handleLogout = () => {
-    if (auth) {
-      auth.signOut();
-    }
-  };
+  const { data: publicRooms, isLoading: roomsLoading } = useCollection<Room>('rooms', {
+    filters: [{ field: 'isPrivate', op: '==', value: false }],
+  });
 
   return (
     <Sidebar>
@@ -63,10 +63,14 @@ export default function LeftSidebar({ roomId }: { roomId?: string }) {
         <SidebarMenu>
           <SidebarMenuItem>
             <SidebarMenuButton asChild isActive={pathname === '/'}>
-              <Link href="/">
-                <Home />
-                Home
-              </Link>
+              <Link href="/"><Home />Home</Link>
+            </SidebarMenuButton>
+          </SidebarMenuItem>
+          <SidebarMenuItem>
+            <SidebarMenuButton asChild>
+              <a href="https://discord-stream-hub-new.fly.dev" target="_blank" rel="noopener noreferrer">
+                <ExternalLink />Stream Hub
+              </a>
             </SidebarMenuButton>
           </SidebarMenuItem>
         </SidebarMenu>
@@ -83,10 +87,7 @@ export default function LeftSidebar({ roomId }: { roomId?: string }) {
             {publicRooms && publicRooms.map(room => (
               <SidebarMenuItem key={room.id}>
                 <SidebarMenuButton asChild isActive={room.id === roomId}>
-                  <Link href={`/rooms/${room.id}`}>
-                    <Music />
-                    {room.name}
-                  </Link>
+                  <Link href={`/rooms/${room.id}`}><Music />{room.name}</Link>
                 </SidebarMenuButton>
               </SidebarMenuItem>
             ))}
@@ -95,11 +96,23 @@ export default function LeftSidebar({ roomId }: { roomId?: string }) {
             )}
           </SidebarMenu>
         </SidebarGroup>
+
+        {/* Active users across rooms */}
+        {publicRooms && publicRooms.length > 0 && (
+          <SidebarGroup>
+            <SidebarGroupLabel><Users className="h-3 w-3 mr-1" />Online Now</SidebarGroupLabel>
+            <div className="px-2">
+              {publicRooms.map(room => (
+                <RoomOnlineUsers key={room.id} roomId={room.id} roomName={room.name} />
+              ))}
+            </div>
+          </SidebarGroup>
+        )}
       </SidebarContent>
       <SidebarFooter className='gap-4'>
         <CreateRoomDialog />
         <div className="border-t -mx-2"></div>
-        
+
         {isUserLoading ? (
             <>
               <div className="flex items-center gap-3 p-2 rounded-md">
@@ -119,13 +132,13 @@ export default function LeftSidebar({ roomId }: { roomId?: string }) {
             <>
                 <div className="flex items-center gap-3 p-2 rounded-md">
                     <Avatar className="h-9 w-9">
-                        <AvatarImage src={user.photoURL || `https://picsum.photos/seed/${user.uid}/100/100`} alt="User Avatar" data-ai-hint="person portrait" />
+                        <AvatarImage src={user.photoURL || `https://picsum.photos/seed/${user.uid}/100/100`} alt="User Avatar" />
                         <AvatarFallback>{user.isAnonymous ? 'G' : user.displayName?.charAt(0)?.toUpperCase() || 'U'}</AvatarFallback>
                     </Avatar>
                     <div className="flex flex-col flex-1 overflow-hidden">
                         <p className="text-sm font-medium leading-none truncate">{user.isAnonymous ? 'Guest User' : user.displayName || 'User'}</p>
                         <p className="text-xs leading-none text-muted-foreground truncate">
-                            {user.email || (user.isAnonymous ? 'guest@hearmeout.com' : 'Anonymous User')}
+                            {user.email || (user.isAnonymous ? 'guest@hearmeout.com' : 'Space Mountain')}
                         </p>
                     </div>
                 </div>
@@ -133,37 +146,26 @@ export default function LeftSidebar({ roomId }: { roomId?: string }) {
                     <Tooltip>
                         <TooltipTrigger asChild>
                             <Button variant="outline" size="icon" className='flex-1' disabled={user.isAnonymous}>
-                                <User/>
-                                <span className='sr-only'>Profile</span>
+                                <User/><span className='sr-only'>Profile</span>
                             </Button>
                         </TooltipTrigger>
-                        <TooltipContent side="top">
-                            <p>Profile</p>
-                        </TooltipContent>
+                        <TooltipContent side="top"><p>Profile</p></TooltipContent>
                     </Tooltip>
                     <Tooltip>
                         <TooltipTrigger asChild>
                             <Button variant="outline" size="icon" asChild className='flex-1'>
-                                <Link href="/settings">
-                                    <Settings/>
-                                    <span className='sr-only'>Settings</span>
-                                </Link>
+                                <Link href="/settings"><Settings/><span className='sr-only'>Settings</span></Link>
                             </Button>
                         </TooltipTrigger>
-                        <TooltipContent side="top">
-                            <p>Settings</p>
-                        </TooltipContent>
+                        <TooltipContent side="top"><p>Settings</p></TooltipContent>
                     </Tooltip>
                     <Tooltip>
                         <TooltipTrigger asChild>
-                            <Button variant="outline" size="icon" onClick={handleLogout} className='flex-1'>
-                                <LogOut />
-                                <span className='sr-only'>Log out</span>
+                            <Button variant="outline" size="icon" onClick={logout} className='flex-1'>
+                                <LogOut /><span className='sr-only'>Log out</span>
                             </Button>
                         </TooltipTrigger>
-                        <TooltipContent side="top">
-                            <p>Log out</p>
-                        </TooltipContent>
+                        <TooltipContent side="top"><p>Log out</p></TooltipContent>
                     </Tooltip>
                 </div>
             </>

@@ -1,55 +1,83 @@
-import 'dotenv/config';
 import tmi from 'tmi.js';
 import { addSongToPlaylist, getRoomState } from '@/lib/bot-actions';
-import { db } from '@/firebase/admin';
+import { db, ensureDb } from '@/lib/db';
+import { getUserBotToken, getUserBotUsername, refreshUserBotToken, getAllUsersWithTokens, validateToken } from '@/lib/token-service';
 
-const twitchBotUsername = process.env.TWITCH_BOT_USERNAME;
-const twitchBotOauthToken = process.env.TWITCH_BOT_OAUTH_TOKEN;
+let client: tmi.Client | null = null;
+let botUsername = '';
+let currentToken = '';
 
-if (!twitchBotUsername || !twitchBotOauthToken) {
-    console.error("Missing TWITCH_BOT_USERNAME or TWITCH_BOT_OAUTH_TOKEN");
+async function initializeBot() {
+  await ensureDb();
+  
+  const botData = db.get('config', 'twitch_bot') || { 
+    access_token: process.env.TWITCH_BOT_OAUTH_TOKEN,
+    refresh_token: process.env.TWITCH_BOT_REFRESH_TOKEN,
+    username: process.env.TWITCH_BOT_USERNAME || 'Athenabot87'
+  };
+
+  if (!botData.access_token) {
+    console.error('No bot token found in config or env.');
     process.exit(1);
-}
+  }
 
-const client = new tmi.client({
-  identity: {
-    username: twitchBotUsername,
-    password: twitchBotOauthToken,
-  },
-  channels: ['mtman1987'],
-});
+  botUsername = botData.username || 'Athenabot87';
+  currentToken = botData.access_token;
+
+  // Validate token before connecting — refresh if expired
+  const isValid = await validateToken(currentToken);
+  if (!isValid && botData.refresh_token) {
+    console.log('[Twitch Bot] Token expired, refreshing...');
+    const refreshed = await refreshUserBotToken('default', 'bot', botData.refresh_token);
+    if (refreshed) {
+      currentToken = refreshed;
+      console.log('[Twitch Bot] Token refreshed successfully');
+    } else {
+      console.error('[Twitch Bot] Token refresh failed. Bot may not connect.');
+    }
+  } else if (!isValid) {
+    console.error('[Twitch Bot] Token invalid and no refresh token available.');
+  }
+
+  console.log(`[Twitch Bot] Using bot: ${botUsername} (token valid: ${isValid || 'refreshed'})`);
+
+  client = new tmi.client({
+    identity: {
+      username: botUsername,
+      password: `oauth:${currentToken}`,
+    },
+    channels: [],
+  });
+}
 
 const activeChannels = new Map<string, string>();
 
 async function syncChannels() {
   try {
-    const roomsSnapshot = await db.collection('rooms').get();
+    await ensureDb();
+    const rooms = db.list('rooms');
     const newChannels = new Map<string, string>();
-    
-    // Always include mtman1987
+
     newChannels.set('mtman1987', 'default');
-    
-    for (const roomDoc of roomsSnapshot.docs) {
-      const usersSnapshot = await db.collection('rooms').doc(roomDoc.id).collection('users').get();
-      usersSnapshot.forEach(userDoc => {
-        const data = userDoc.data();
-        if (data.twitchChannel) {
-          newChannels.set(data.twitchChannel.toLowerCase(), roomDoc.id);
+
+    for (const room of rooms) {
+      const users = db.list(`rooms/${room.id}/users`);
+      for (const user of users) {
+        if (user.data.twitchChannel) {
+          newChannels.set(user.data.twitchChannel.toLowerCase(), room.id);
         }
-      });
+      }
     }
 
     for (const [channel] of activeChannels) {
       if (!newChannels.has(channel)) {
-        client.part(channel).catch(e => console.error(`Failed to leave ${channel}:`, e));
-        console.log(`* Left channel: ${channel}`);
+        client?.part(channel).catch((e: any) => console.error(`Failed to leave ${channel}:`, e));
       }
     }
 
     for (const [channel, roomId] of newChannels) {
       if (!activeChannels.has(channel)) {
-        client.join(channel).catch(e => console.error(`Failed to join ${channel}:`, e));
-        console.log(`* Joined channel: ${channel} (room: ${roomId})`);
+        client?.join(channel).catch((e: any) => console.error(`Failed to join ${channel}:`, e));
       }
     }
 
@@ -60,129 +88,115 @@ async function syncChannels() {
   }
 }
 
-client.on('message', onMessageHandler);
-client.on('connected', () => {
-  console.log('* Connected to Twitch');
+await initializeBot();
+
+client!.on('message', onMessageHandler);
+client!.on('connected', () => {
+  console.log('[Twitch Bot] Connected');
   syncChannels();
   setInterval(syncChannels, 30000);
 });
 
-client.connect().catch((err) => {
-    console.error("Failed to connect to Twitch:", err);
+client!.on('notice', async (channel: string, msgid: string, message: string) => {
+  if (msgid === 'msg_banned' || message.includes('authentication failed')) {
+    console.log('[Twitch Bot] Auth failed, trying refresh...');
+    // Try refresh logic if needed
+    if (db.get('config', 'twitch_bot')?.refresh_token) {
+      const refreshed = await refreshUserBotToken('default', 'bot', db.get('config', 'twitch_bot').refresh_token);
+      if (refreshed && client) {
+        client.disconnect();
+        currentToken = refreshed;
+        client = new tmi.client({
+          identity: {
+            username: botUsername,
+            password: `oauth:${refreshed}`,
+          },
+          channels: [],
+        });
+        client.connect();
+      }
+    }
+  }
+});
+
+client!.connect().catch((err: any) => {
+    console.error("[Twitch Bot] Failed to connect:", err);
     process.exit(1);
 });
 
 async function onMessageHandler(target: string, context: tmi.ChatUserstate, msg: string, self: boolean) {
-  if (self) return;
+  if (self || !client) return;
 
   const channelName = target.replace('#', '').toLowerCase();
   const targetRoomId = activeChannels.get(channelName);
+  console.log(`[!sr DEBUG] Channel ${channelName} -> room ${targetRoomId || 'MISSING'} | msg: ${msg}`);
   
-  if (!targetRoomId) return;
+  if (!targetRoomId) {
+    console.log(`[!sr DEBUG] No room for channel ${channelName}. Check user twitchChannel in rooms/${targetRoomId}/users`);
+    return;
+  }
 
   const message = msg.trim().toLowerCase();
   const requester = context['display-name'] || 'Someone from Twitch';
 
-  // --- !sr (Song Request) Command ---
   if (message.startsWith('!sr ')) {
     const songQuery = msg.substring(4).trim();
-    
     if (!songQuery) {
       client.say(target, `@${requester}, usage: !sr [song name or YouTube URL]`);
       return;
     }
-    
-    console.log(`* Received !sr command from ${requester}: ${songQuery}`);
-
     try {
-      const result = await addSongToPlaylist(songQuery, targetRoomId!, `${requester} (Twitch)`);
-      
-      if (result.success) {
-        client.say(target, `✅ @${requester} ${result.message}`);
-        console.log(`* Success: ${result.message}`);
-      } else {
-        client.say(target, `❌ @${requester} Sorry: ${result.message}`);
-        console.error(`* Failed to add song: ${result.message}`);
-      }
+    console.log(`[!sr DEBUG] Calling addSongToPlaylist(${songQuery}, ${targetRoomId})`);
+    const result = await addSongToPlaylist(songQuery, targetRoomId, `${requester} (Twitch)`);
+    console.log(`[!sr DEBUG] addSongToPlaylist result:`, result);
+      client.say(target, result.success ? `✅ @${requester} ${result.message}` : `❌ @${requester} Sorry: ${result.message}`);
     } catch (error) {
       console.error("Error processing !sr command:", error);
       client.say(target, `❌ @${requester} A critical error occurred while adding the song.`);
     }
   }
 
-  // --- !np (Now Playing) Command ---
   if (message === '!np') {
     try {
-      const roomState = await getRoomState(targetRoomId!);
-      
-      if (!roomState) {
-        client.say(target, "❌ Could not fetch room state.");
-        return;
-      }
-
-      if (!roomState.currentTrack) {
-        client.say(target, "🎵 No song is currently playing. Use !sr to request one!");
-        return;
-      }
-
+      const roomState = await getRoomState(targetRoomId);
+      if (!roomState) { client.say(target, "❌ Could not fetch room state."); return; }
+      if (!roomState.currentTrack) { client.say(target, "🎵 No song is currently playing. Use !sr to request one!"); return; }
       const status = roomState.isPlaying ? "▶️ Playing" : "⏸️ Paused";
-      const track = roomState.currentTrack;
-      client.say(target, `${status}: "${track.title}" by ${track.artist} (${roomState.playlistLength} songs in queue)`);
+      client.say(target, `${status}: "${roomState.currentTrack.title}" by ${roomState.currentTrack.artist} (${roomState.playlistLength} songs in queue)`);
     } catch (error) {
-      console.error("Error processing !np command:", error);
       client.say(target, "❌ Error fetching now playing info.");
     }
   }
 
-  // --- !status Command ---
   if (message === '!status') {
     try {
-      const roomState = await getRoomState(targetRoomId!);
-      
-      if (!roomState) {
-        client.say(target, "❌ Could not fetch room state.");
-        return;
-      }
-
+      const roomState = await getRoomState(targetRoomId);
+      if (!roomState) { client.say(target, "❌ Could not fetch room state."); return; }
       const status = roomState.isPlaying ? "▶️ Playing" : "⏸️ Paused";
       client.say(target, `🎵 DJ: ${roomState.djDisplayName} | ${status} | Queue: ${roomState.playlistLength} songs`);
     } catch (error) {
-      console.error("Error processing !status command:", error);
       client.say(target, "❌ Error fetching status.");
     }
   }
 
-  // --- !help Command ---
   if (message === '!help' || message === '!commands') {
-    client.say(target, "🎵 HearMeOut Commands: !sr [song/URL] - Request a song | !np - Now playing | !status - Room status | !queue - Join voice chat queue | !help - Show this message");
+    client.say(target, "🎵 HearMeOut Commands: !sr [song/URL] - Request a song | !np - Now playing | !status - Room status | !queue - Join voice queue | !help - Show this");
   }
 
-  // --- !queue Command ---
   if (message === '!queue' || message === '!play') {
     try {
+      await ensureDb();
       const userId = context['user-id'];
       const username = context['display-name'] || context.username || 'Unknown';
-      
-      if (!userId) {
-        client.say(target, `@${requester}, unable to identify your user ID.`);
-        return;
-      }
+      if (!userId) { client.say(target, `@${requester}, unable to identify your user ID.`); return; }
 
-      // Add to queue in Firestore
-      const queueRef = db.collection('rooms').doc(targetRoomId!).collection('voiceQueue');
-      await queueRef.doc(userId).set({
-        userId,
-        username,
-        addedAt: new Date().toISOString(),
-        platform: 'twitch',
+      db.set(`rooms/${targetRoomId}/voiceQueue`, userId, {
+        userId, username, addedAt: new Date().toISOString(), platform: 'twitch',
       });
 
-      // Get queue position
-      const queueSnapshot = await queueRef.orderBy('addedAt').get();
-      const position = queueSnapshot.docs.findIndex(doc => doc.id === userId) + 1;
-
+      const queue = db.list(`rooms/${targetRoomId}/voiceQueue`);
+      const position = queue.findIndex(q => q.id === userId) + 1;
       client.say(target, `✅ @${requester} You've been added to the voice chat queue! Position: #${position}`);
-      console.log(`* ${requester} joined voice queue (position ${position})`);
     } catch (error) {
       console.error('Error processing !queue command:', error);
       client.say(target, `❌ @${requester} Error joining queue.`);

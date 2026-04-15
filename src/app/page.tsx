@@ -2,29 +2,16 @@
 
 import React from 'react';
 import Link from "next/link";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardFooter,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+import { Card, CardContent, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Users, Music, Trash2 } from "lucide-react";
-import {
-  SidebarProvider,
-  SidebarInset,
-  SidebarTrigger,
-  useSidebar,
-} from '@/components/ui/sidebar';
+import { Trash2 } from "lucide-react";
+import { SidebarProvider, SidebarInset, SidebarTrigger, useSidebar } from '@/components/ui/sidebar';
 import LeftSidebar from '@/app/components/LeftSidebar';
-import { useFirebase, useCollection, useMemoFirebase } from '@/firebase';
-import { collection, query, where } from 'firebase/firestore';
+import { useSession } from '@/hooks/use-session';
+import { useCollection } from '@/hooks/use-db';
+import { dbDelete } from '@/lib/db-helpers';
 import { Skeleton } from '@/components/ui/skeleton';
 import { useToast } from '@/hooks/use-toast';
-import { deleteDoc, doc } from 'firebase/firestore';
-
 
 function DashboardHeader() {
     const { isMobile } = useSidebar();
@@ -43,28 +30,19 @@ interface Room {
 }
 
 export default function Home() {
-  const { firestore, user } = useFirebase();
+  const { user } = useSession();
   const { toast } = useToast();
+  const { data: publicRooms, isLoading: roomsLoading } = useCollection<Room>('rooms', {
+    filters: [{ field: 'isPrivate', op: '==', value: false }],
+  });
 
-  const publicRoomsQuery = useMemoFirebase(() => {
-    if (!firestore) return null;
-    return query(
-        collection(firestore, 'rooms'),
-        where('isPrivate', '==', false)
-    );
-  }, [firestore]);
 
-  const { data: publicRooms, isLoading: roomsLoading } = useCollection<Room>(publicRoomsQuery);
 
-  const handleDeleteRoom = async (roomId: string, roomName: string) => {
-    if (!firestore || !user) return;
+  const handleDeleteRoom = (roomId: string, roomName: string) => {
+    if (!user) return;
     if (!confirm(`Delete "${roomName}"? This cannot be undone.`)) return;
-    try {
-      await deleteDoc(doc(firestore, 'rooms', roomId));
-      toast({ title: 'Room Deleted', description: `"${roomName}" has been deleted.` });
-    } catch (e) {
-      toast({ variant: 'destructive', title: 'Error', description: 'Failed to delete room.' });
-    }
+    dbDelete('rooms', roomId);
+    toast({ title: 'Room Deleted', description: `"${roomName}" has been deleted.` });
   };
 
   return (
@@ -75,9 +53,8 @@ export default function Home() {
                 <div className="flex flex-col min-h-screen">
                     <DashboardHeader />
                     <main className="flex-1 container mx-auto py-8 px-4">
-                        <h2 className="text-3xl font-bold font-headline mb-6 text-foreground">
-                        Public Rooms
-                        </h2>
+                        
+                        <h2 className="text-3xl font-bold font-headline mb-6 text-foreground">Public Rooms</h2>
                         {roomsLoading && (
                              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                                 <Card><CardHeader><Skeleton className="h-5 w-3/4" /></CardHeader><CardContent><div className='h-4'></div></CardContent><CardFooter><Skeleton className="h-10 w-full" /></CardFooter></Card>
@@ -92,15 +69,14 @@ export default function Home() {
                                 <CardHeader>
                                     <CardTitle className="font-headline flex items-center justify-between">
                                         {room.name}
-                                        {user && room.ownerId === user.uid && (
+                                        {user && (room.ownerId === user.uid || user.discordId === '767875979561009173') && (
                                             <Button variant="ghost" size="icon" onClick={() => handleDeleteRoom(room.id, room.name)}>
                                                 <Trash2 className="h-4 w-4 text-destructive" />
                                             </Button>
                                         )}
                                     </CardTitle>
                                 </CardHeader>
-                                <CardContent className="flex-grow">
-                                </CardContent>
+                                <CardContent className="flex-grow" />
                                 <CardFooter>
                                     <Button asChild className="w-full">
                                     <Link href={`/rooms/${room.id}`}>Join Room</Link>
@@ -126,3 +102,4 @@ export default function Home() {
     </SidebarProvider>
   );
 }
+

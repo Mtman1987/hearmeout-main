@@ -3,6 +3,7 @@ export type PlaylistItem = {
   title: string;
   artist: string;
   artId: string;
+  thumbnail?: string;
   url: string;
   duration: number;
   addedBy: string;

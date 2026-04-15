@@ -1,18 +1,16 @@
 import { NextRequest, NextResponse } from 'next/server';
-import ytdl from 'ytdl-core';
-import { getStorage } from 'firebase-admin/storage';
-import { initializeApp, getApps, cert } from 'firebase-admin/app';
-import { Readable } from 'stream';
+import { existsSync, mkdirSync } from 'fs';
+import { join } from 'path';
+import { exec } from 'child_process';
+import { promisify } from 'util';
 
-if (!getApps().length) {
-  initializeApp({
-    credential: cert({
-      projectId: process.env.FIREBASE_PROJECT_ID || 'studio-4331919473-dea24',
-      clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
-      privateKey: process.env.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, '\n'),
-    }),
-    storageBucket: 'studio-4331919473-dea24.firebasestorage.app',
-  });
+const execAsync = promisify(exec);
+
+const YT_DLP = process.env.YT_DLP_PATH || 'yt-dlp';
+const CACHE_DIR = process.env.MUSIC_CACHE_DIR || '/data/music';
+
+if (!existsSync(CACHE_DIR)) {
+  mkdirSync(CACHE_DIR, { recursive: true });
 }
 
 function extractVideoId(url: string): string | null {
@@ -26,55 +24,54 @@ function extractVideoId(url: string): string | null {
 
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
-  const url = searchParams.get('url');
+  const urlParam = searchParams.get('url') || '';
+  const videoIdParam = searchParams.get('videoId') || '';
+  
+  let videoId: string;
+  if (videoIdParam) {
+    videoId = videoIdParam;
+  } else if (urlParam) {
+    const extracted = extractVideoId(urlParam);
+    if (!extracted) return NextResponse.json({ error: "Invalid YouTube URL" }, { status: 400 });
+    videoId = extracted;
+  } else {
+    return NextResponse.json({ error: "Missing URL or videoId parameter" }, { status: 400 });
+  }
 
-  if (!url) return NextResponse.json({ error: "Missing url parameter" }, { status: 400 });
+  const youTubeUrl = urlParam || `https://youtube.com/watch?v=${videoId}`;
+  const filePath = join(CACHE_DIR, `${videoId}.mp3`);
 
-  const videoId = extractVideoId(url);
-  if (!videoId) return NextResponse.json({ error: "Invalid YouTube URL" }, { status: 400 });
+  // Serve from cache if exists
+  if (existsSync(filePath)) {
+    console.log(`Cached: ${videoId}`);
+    return NextResponse.json({ audioUrl: `/api/music/${videoId}` });
+  }
 
   try {
-    const bucket = getStorage().bucket();
-    const fileName = `music/${videoId}.mp3`;
-    const file = bucket.file(fileName);
+    console.log(`Extracting audio URL for ${videoId} via yt-dlp...`);
+    const { stdout } = await execAsync(`yt-dlp -f "bestaudio[ext=m4a]/bestaudio/best" --no-playlist --get-url "${youTubeUrl}"`); // Removed cookies-from-browser: no Firefox on server
+    const audioUrl = stdout.trim();
+    if (!audioUrl) throw new Error('No audio stream found');
 
-    const [exists] = await file.exists();
-    if (exists) {
-      const [signedUrl] = await file.getSignedUrl({
-        action: 'read',
-        expires: Date.now() + 7 * 24 * 60 * 60 * 1000,
-      });
-      console.log(`Cached: ${videoId}`);
-      return NextResponse.json({ url: signedUrl });
-    }
-
-    console.log(`Downloading ${videoId}...`);
-    
-    const audioStream = ytdl(url, {
-      quality: 'highestaudio',
-      filter: 'audioonly',
-    });
-
-    await new Promise((resolve, reject) => {
-      const writeStream = file.createWriteStream({
-        metadata: { contentType: 'audio/mpeg' },
-      });
-
-      audioStream.pipe(writeStream);
-      writeStream.on('finish', resolve);
-      writeStream.on('error', reject);
-      audioStream.on('error', reject);
-    });
-
-    const [signedUrl] = await file.getSignedUrl({
-      action: 'read',
-      expires: Date.now() + 7 * 24 * 60 * 60 * 1000,
-    });
-
-    console.log(`Uploaded: ${videoId}`);
-    return NextResponse.json({ url: signedUrl });
+    console.log(`Found audio stream: ${videoId}`);
+    return NextResponse.json({ audioUrl });
   } catch (e: any) {
-    console.error('Download failed:', e.message);
-    return NextResponse.json({ error: e.message }, { status: 500 });
+    console.error('YouTube audio fetch failed:', e.message);
+    // Fallback: try without bestaudio filter if format fails
+    if (e.message.includes('requested format') || e.message.includes('no video formats')) {
+      console.log(`Retrying ${videoId} with simpler format...`);
+      try {
+        const { stdout: fallbackStdout } = await execAsync(`yt-dlp --no-playlist --get-url "${youTubeUrl}"`);
+        const fallbackUrl = fallbackStdout.trim();
+        if (fallbackUrl) {
+          console.log(`Fallback stream found for ${videoId}`);
+          return NextResponse.json({ audioUrl: fallbackUrl });
+        }
+      } catch (fallbackErr) {
+        console.error('Fallback also failed:', fallbackErr);
+      }
+    }
+    return NextResponse.json({ error: `YouTube fetch failed: ${e.message}` }, { status: 500 });
   }
 }
+

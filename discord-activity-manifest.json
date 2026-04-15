@@ -1,0 +1,28 @@
+{
+  "name": "HearMeOut",
+  "description": "Live music streaming with voice chat - DJ together, listen together",
+  "type": "EMBEDDED",
+  "supported_platforms": ["desktop", "mobile"],
+  "orientation_lock_state": "unlocked",
+  "tablet_support": true,
+  "requires_age_gate": false,
+  "activity_preview_video_asset_id": null,
+  "assets": {
+    "hearmeout_logo": {
+      "name": "HearMeOut Logo",
+      "type": "1"
+    },
+    "playing": {
+      "name": "Playing",
+      "type": "1"
+    },
+    "paused": {
+      "name": "Paused", 
+      "type": "1"
+    }
+  },
+  "activity_instance_timeout_ms": 300000,
+  "supported_locales": ["en-US"],
+  "tags": ["music", "social", "voice", "streaming"],
+  "default_orientation_lock_state": "unlocked"
+}

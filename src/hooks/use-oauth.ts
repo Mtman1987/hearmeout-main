@@ -1,105 +1,27 @@
+// Legacy OAuth hooks — now delegate to JWT session system
+// Kept as stubs so nothing breaks if imported
 'use client';
 
-import { useEffect, useState } from 'react';
-
-export interface DiscordUser {
-  id: string;
-  username: string;
-  avatar?: string;
-  email?: string;
-}
-
-export interface TwitchUser {
-  id: string;
-  login: string;
-  display_name: string;
-  profile_image_url: string;
-}
+import { useSession } from './use-session';
 
 export function useDiscordAuth() {
-  const [user, setUser] = useState<DiscordUser | null>(null);
-  const [token, setToken] = useState<string | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
-
-  useEffect(() => {
-    // Get from cookies
-    const cookieValue = document.cookie
-      .split('; ')
-      .find((row) => row.startsWith('discord_user='))
-      ?.split('=')[1];
-
-    const tokenValue = document.cookie
-      .split('; ')
-      .find((row) => row.startsWith('discord_access_token='))
-      ?.split('=')[1];
-
-    if (cookieValue) {
-      try {
-        setUser(JSON.parse(decodeURIComponent(cookieValue)));
-      } catch (error) {
-        console.error('Error parsing Discord user:', error);
-      }
-    }
-
-    if (tokenValue) {
-      setToken(decodeURIComponent(tokenValue));
-    }
-
-    setIsLoading(false);
-  }, []);
-
-  const logout = () => {
-    // Clear cookies
-    document.cookie = 'discord_access_token=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;';
-    document.cookie = 'discord_refresh_token=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;';
-    document.cookie = 'discord_user=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;';
-    setUser(null);
-    setToken(null);
+  const { user, isLoading, logout } = useSession();
+  return {
+    user: user?.discordId ? { id: user.discordId, username: user.displayName || '', avatar: user.photoURL || '' } : null,
+    token: null,
+    isLoading,
+    isAuthenticated: !!user,
+    logout,
   };
-
-  return { user, token, isLoading, isAuthenticated: !!user, logout };
 }
 
 export function useTwitchAuth() {
-  const [user, setUser] = useState<TwitchUser | null>(null);
-  const [token, setToken] = useState<string | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
-
-  useEffect(() => {
-    // Get from cookies
-    const cookieValue = document.cookie
-      .split('; ')
-      .find((row) => row.startsWith('twitch_user='))
-      ?.split('=')[1];
-
-    const tokenValue = document.cookie
-      .split('; ')
-      .find((row) => row.startsWith('twitch_access_token='))
-      ?.split('=')[1];
-
-    if (cookieValue) {
-      try {
-        setUser(JSON.parse(decodeURIComponent(cookieValue)));
-      } catch (error) {
-        console.error('Error parsing Twitch user:', error);
-      }
-    }
-
-    if (tokenValue) {
-      setToken(decodeURIComponent(tokenValue));
-    }
-
-    setIsLoading(false);
-  }, []);
-
-  const logout = () => {
-    // Clear cookies
-    document.cookie = 'twitch_access_token=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;';
-    document.cookie = 'twitch_refresh_token=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;';
-    document.cookie = 'twitch_user=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;';
-    setUser(null);
-    setToken(null);
+  const { user, isLoading, logout } = useSession();
+  return {
+    user: user?.twitchId ? { id: user.twitchId, login: user.displayName || '', display_name: user.displayName || '', profile_image_url: user.photoURL || '' } : null,
+    token: null,
+    isLoading,
+    isAuthenticated: !!user,
+    logout,
   };
-
-  return { user, token, isLoading, isAuthenticated: !!user, logout };
 }
