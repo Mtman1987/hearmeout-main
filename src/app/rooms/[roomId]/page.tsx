@@ -33,6 +33,8 @@ interface RoomData {
   currentTrackId?: string;
   isPlaying?: boolean;
   djActive?: boolean;
+  autoRadio?: boolean;
+  playHistory?: string[];
 }
 
 function RoomHeader({ roomName, onToggleChat, onOpenChatWidget, showDJ, onToggleDJ }: {
@@ -247,6 +249,10 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
         dbUpdate('rooms', roomId, updates);
     }, [room, roomId, canControl]);
 
+    const handleToggleAutoRadio = useCallback(() => {
+        dbUpdate('rooms', roomId, { autoRadio: !room.autoRadio });
+    }, [roomId, room.autoRadio]);
+
     const livekitUrl = process.env.NEXT_PUBLIC_LIVEKIT_URL;
 
     if (isBanned) {
@@ -307,6 +313,8 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
                           localVolume={localVolume}
                           onVolumeChange={setLocalVolume}
                           showDJ={showDJ}
+                          autoRadio={room.autoRadio}
+                          onToggleAutoRadio={handleToggleAutoRadio}
                         />
                         {isOwner && <VoiceQueue roomId={roomId} />}
                     </main>

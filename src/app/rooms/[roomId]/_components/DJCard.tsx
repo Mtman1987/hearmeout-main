@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useCallback, useEffect, useRef } from 'react';
-import { Music, Play, Pause, SkipForward, SkipBack, Volume2, VolumeX, Power, PowerOff } from 'lucide-react';
+import { Music, Play, Pause, SkipForward, SkipBack, Volume2, VolumeX, Power, PowerOff, Radio } from 'lucide-react';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -23,11 +23,14 @@ interface DJCardProps {
   localVolume: number;
   onVolumeChange: (v: number) => void;
   canControl: boolean;
+  autoRadio?: boolean;
+  onToggleAutoRadio?: () => void;
 }
 
 export default function DJCard({
   roomId, playlist, currentTrackId, isPlaying, djActive,
   musicStatus, localVolume, onVolumeChange, canControl,
+  autoRadio, onToggleAutoRadio,
 }: DJCardProps) {
   const { toast } = useToast();
   const [djPopupOpen, setDjPopupOpen] = useState(false);
@@ -176,6 +179,20 @@ export default function DJCard({
                 <><Power className="h-4 w-4" /> Start DJ</>}
             </Button>
           </TooltipTrigger><TooltipContent><p>{djPopupOpen ? 'Close the DJ window' : 'Open DJ tab to play music for everyone'}</p></TooltipContent></Tooltip>
+
+          {canControl && (
+            <Tooltip><TooltipTrigger asChild>
+              <Button
+                variant={autoRadio ? 'secondary' : 'outline'}
+                size="sm"
+                className="w-full gap-2 mt-2"
+                onClick={onToggleAutoRadio}
+              >
+                <Radio className="h-4 w-4" />
+                {autoRadio ? 'Auto-Radio ON' : 'Auto-Radio OFF'}
+              </Button>
+            </TooltipTrigger><TooltipContent><p>When enabled, automatically finds and plays related songs when the playlist runs out</p></TooltipContent></Tooltip>
+          )}
 
           {/* Hidden anchor to force open as tab */}
           <a ref={djLinkRef} href={`/dj/${roomId}`} target="_blank" rel="noopener" className="hidden" />

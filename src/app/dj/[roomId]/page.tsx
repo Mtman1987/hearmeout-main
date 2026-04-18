@@ -19,6 +19,8 @@ interface RoomData {
   currentTrackId: string;
   isPlaying: boolean;
   djActive: boolean;
+  autoRadio?: boolean;
+  playHistory?: string[];
 }
 
 function extractVideoId(trackId: string, trackUrl?: string): string {
@@ -50,6 +52,7 @@ export default function DJPage() {
   const roomDataRef = useRef<RoomData | null>(null);
   const lastTrackRef = useRef<string | null>(null);
   const liveRef = useRef(false);
+  const autoRadioRequestedRef = useRef(false);
 
   const [status, setStatus] = useState('Click "Start DJ Session" to begin');
   const [currentTrack, setCurrentTrack] = useState('');
@@ -242,6 +245,33 @@ export default function DJPage() {
     }
   }, []);
 
+  // Fire a single /api/auto-radio request, deduped by autoRadioRequestedRef.
+  // The ref stays true until either a new currentTrackId is observed (cleared
+  // by the poller) or the request fails / returns success:false (cleared here),
+  // so a failed lookup doesn't permanently disable auto-radio for the session.
+  const requestAutoRadio = useCallback(() => {
+    if (autoRadioRequestedRef.current) return;
+    autoRadioRequestedRef.current = true;
+    fetch('/api/auto-radio', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ roomId }),
+    })
+      .then(async (res) => {
+        try {
+          const body = await res.json();
+          if (!res.ok || !body?.success) {
+            autoRadioRequestedRef.current = false;
+          }
+        } catch {
+          autoRadioRequestedRef.current = false;
+        }
+      })
+      .catch(() => {
+        autoRadioRequestedRef.current = false;
+      });
+  }, [roomId]);
+
   // Poll room document for state changes (bots, room UI, chat can all drive this)
   useEffect(() => {
     let cancelled = false;
@@ -263,6 +293,9 @@ export default function DJPage() {
         if (!currentTrackId) {
           if (!audioEl.paused) audioEl.pause();
           setCurrentTrack('');
+          if (data.autoRadio && liveRef.current) {
+            requestAutoRadio();
+          }
           return;
         }
 
@@ -271,6 +304,7 @@ export default function DJPage() {
 
         if (lastTrackRef.current !== currentTrackId) {
           lastTrackRef.current = currentTrackId;
+          autoRadioRequestedRef.current = false;
           setCurrentTrack(track?.title || videoId);
           if (wantPlay && liveRef.current) {
             await loadAndPlay(videoId);
@@ -309,13 +343,25 @@ export default function DJPage() {
       cancelled = true;
       clearInterval(iv);
     };
-  }, [roomId, loadAndPlay]);
+  }, [roomId, loadAndPlay, requestAutoRadio]);
 
   // Auto-advance when a track ends
   const handleEnded = useCallback(() => {
     const r = roomDataRef.current;
-    if (!r?.playlist?.length) return;
+    if (!r?.playlist?.length) {
+      if (r?.autoRadio) {
+        requestAutoRadio();
+      }
+      return;
+    }
     const i = r.playlist.findIndex((t) => t.id === r.currentTrackId);
+    const isLastTrack = i === r.playlist.length - 1;
+
+    if (isLastTrack && r.autoRadio) {
+      requestAutoRadio();
+      return;
+    }
+
     const next = r.playlist[(i + 1) % r.playlist.length];
     if (!next) return;
     fetch('/api/db', {
@@ -327,7 +373,7 @@ export default function DJPage() {
         data: { currentTrackId: next.id, isPlaying: true },
       }),
     }).catch(() => {});
-  }, [roomId]);
+  }, [roomId, requestAutoRadio]);
 
   const skipNext = useCallback(() => {
     handleEnded();
