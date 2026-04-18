@@ -326,10 +326,10 @@ export default function DJPage() {
         // Fallback auto-advance: if audio has ended (or is very close to end) and we think we're playing
         if (wantPlay && liveRef.current && audioEl.duration && Number.isFinite(audioEl.duration) && audioEl.currentTime >= audioEl.duration - 0.5 && audioEl.paused) {
           // Track ended but onEnded didn't fire — advance manually.
-          // Defer to auto-radio on the last track when it's enabled: calling
-          // handleEnded ensures we either queue a new track via the API or
-          // advance normally, matching the onEnded path and avoiding a race
-          // where the fallback wraps the playlist while auto-radio is searching.
+          // Defer to auto-radio on the last track when it's enabled: this
+          // mirrors the onEnded → handleEnded path by calling requestAutoRadio()
+          // instead of wrapping the playlist, avoiding a race where the fallback
+          // advances while auto-radio is still searching.
           const idx = playlist?.findIndex((t) => t.id === currentTrackId) ?? -1;
           const isLastTrack = playlist ? idx === playlist.length - 1 : false;
 
