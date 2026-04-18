@@ -1,18 +1,18 @@
 'use client';
 
-// DJ Popup — opens as a small window from the DJCard
-// YouTube IFrame API plays videos natively (no extraction, no CORS, no proxy)
-// getDisplayMedia captures THIS tab's audio
-// AudioContext sends captured audio to LiveKit music room
-// Everyone subscribes and hears it synced
+// DJ Popup — plays audio server-side (yt-dlp/Piped → /api/youtube-audio/stream)
+// and publishes it to the LiveKit music room as a regular audio track (WebRTC).
+//
+// Listeners at /rooms/[roomId] already subscribe to this room's audio and render
+// it like any voice track, so audio is sample-accurate synchronised across every
+// client (there is no per-client playback — everyone hears the DJ's live stream).
+//
+// No getDisplayMedia, no shared-tab UX. The DJ just clicks "Start" once and the
+// playlist advances automatically, controlled from the main room (or chat bots).
 
 import { useParams } from 'next/navigation';
-import { useEffect, useRef, useState, useCallback } from 'react';
-import { Room, Track, LocalAudioTrack } from 'livekit-client';
-
-declare global {
-  interface Window { YT: any; onYouTubeIframeAPIReady: () => void; }
-}
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { LocalAudioTrack, Room, Track } from 'livekit-client';
 
 interface RoomData {
   playlist: Array<{ id: string; url: string; title: string; artist: string }>;
@@ -21,332 +21,563 @@ interface RoomData {
   djActive: boolean;
 }
 
-function loadYTApi(): Promise<void> {
-  if (window.YT?.Player) return Promise.resolve();
-  return new Promise((resolve) => {
-    if (document.querySelector('script[src*="youtube.com/iframe_api"]')) {
-      const check = setInterval(() => { if (window.YT?.Player) { clearInterval(check); resolve(); } }, 100);
-      return;
-    }
-    window.onYouTubeIframeAPIReady = () => resolve();
-    const tag = document.createElement('script');
-    tag.src = 'https://www.youtube.com/iframe_api';
-    document.head.appendChild(tag);
-  });
+function extractVideoId(trackId: string, trackUrl?: string): string {
+  if (trackUrl) {
+    try {
+      const u = new URL(trackUrl);
+      return u.searchParams.get('v') || u.pathname.slice(1) || trackId;
+    } catch {}
+  }
+  return trackId;
 }
 
 export default function DJPage() {
   const params = useParams<{ roomId: string }>();
   const roomId = params.roomId;
 
-  const playerRef = useRef<any>(null);
-  const playerReadyRef = useRef(false);
+  // Audio graph refs
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const sourceNodeRef = useRef<MediaElementAudioSourceNode | null>(null);
+  const monitorGainRef = useRef<GainNode | null>(null);
+  const publishDestRef = useRef<MediaStreamAudioDestinationNode | null>(null);
+
+  // LiveKit refs
   const livekitRoomRef = useRef<Room | null>(null);
   const publishedTrackRef = useRef<LocalAudioTrack | null>(null);
+
+  // Room-state refs
   const roomDataRef = useRef<RoomData | null>(null);
   const lastTrackRef = useRef<string | null>(null);
-  const captureStreamRef = useRef<MediaStream | null>(null);
+  const liveRef = useRef(false);
 
-  const [status, setStatus] = useState('Loading YouTube player...');
+  const [status, setStatus] = useState('Click "Start DJ Session" to begin');
   const [currentTrack, setCurrentTrack] = useState('');
-  const [isCapturing, setIsCapturing] = useState(false);
-  const [ytReady, setYtReady] = useState(false);
+  const [isLive, setIsLive] = useState(false);
+  const [isPlayingLocal, setIsPlayingLocal] = useState(false);
+  const [monitorVolume, setMonitorVolume] = useState(0.6);
+  const [monitorMuted, setMonitorMuted] = useState(false);
+  const [duration, setDuration] = useState(0);
+  const [position, setPosition] = useState(0);
 
-  // Set tab title so it's obvious in the share picker
   useEffect(() => {
-    document.title = isCapturing ? '🔴 DJ LIVE — HearMeOut' : '🎵 Share This Tab — HearMeOut DJ';
-  }, [isCapturing]);
+    document.title = isLive ? '🔴 DJ LIVE — HearMeOut' : '🎵 HearMeOut DJ';
+  }, [isLive]);
 
-  const extractVideoId = (trackId: string, trackUrl?: string): string => {
-    if (trackUrl) {
+  // Keep monitor gain in sync with UI controls (only affects DJ's own ears)
+  useEffect(() => {
+    if (monitorGainRef.current) {
+      monitorGainRef.current.gain.value = monitorMuted ? 0 : monitorVolume;
+    }
+  }, [monitorVolume, monitorMuted]);
+
+  // Build the WebAudio graph once, on first user gesture, so autoplay rules are
+  // satisfied and we can also capture a MediaStreamTrack from the <audio> element.
+  const ensureAudioGraph = useCallback(async (): Promise<MediaStreamTrack | null> => {
+    const audioEl = audioRef.current;
+    if (!audioEl) return null;
+
+    if (!audioContextRef.current) {
+      const Ctx =
+        (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext ||
+        window.AudioContext;
+      const ctx = new Ctx();
+      audioContextRef.current = ctx;
+
+      // Single source feeding two branches:
+      //   1. Publish branch  → MediaStreamAudioDestinationNode (goes to LiveKit, always unity gain)
+      //   2. Monitor branch  → GainNode → ctx.destination (DJ hears it locally, independent volume)
+      const src = ctx.createMediaElementSource(audioEl);
+      sourceNodeRef.current = src;
+
+      const publishDest = ctx.createMediaStreamDestination();
+      publishDestRef.current = publishDest;
+      src.connect(publishDest);
+
+      const monitorGain = ctx.createGain();
+      monitorGain.gain.value = monitorMuted ? 0 : monitorVolume;
+      monitorGainRef.current = monitorGain;
+      src.connect(monitorGain);
+      monitorGain.connect(ctx.destination);
+    }
+
+    if (audioContextRef.current.state === 'suspended') {
       try {
-        const u = new URL(trackUrl);
-        return u.searchParams.get('v') || u.pathname.slice(1) || trackId;
+        await audioContextRef.current.resume();
       } catch {}
     }
-    return trackId;
-  };
 
-  const playNext = useCallback(() => {
-    const r = roomDataRef.current;
-    if (!r?.playlist?.length) return;
-    const i = r.playlist.findIndex(t => t.id === r.currentTrackId);
-    const next = r.playlist[(i + 1) % r.playlist.length];
-    if (next) {
-      console.log(`[DJ] Auto-advancing to: ${next.title}`);
-      fetch('/api/db', {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ collection: 'rooms', id: roomId, data: { currentTrackId: next.id, isPlaying: true } }),
-      }).catch(console.error);
-    }
-  }, [roomId]);
+    const tracks = publishDestRef.current!.stream.getAudioTracks();
+    return tracks[0] || null;
+  }, [monitorMuted, monitorVolume]);
 
-  // 1. Init YouTube player
-  useEffect(() => {
-    let cancelled = false;
-    loadYTApi().then(() => {
-      if (cancelled) return;
-      playerRef.current = new window.YT.Player('yt-player', {
-        height: '200',
-        width: '100%',
-        playerVars: { autoplay: 0, controls: 1, modestbranding: 1, rel: 0 },
-        events: {
-          onReady: () => { playerReadyRef.current = true; setYtReady(true); setStatus('Player ready — click "Start Broadcasting"'); },
-          onStateChange: (e: any) => {
-            if (e.data === window.YT.PlayerState.ENDED) playNext();
-          },
-          onError: (e: any) => {
-            console.error('[DJ] YouTube error:', e.data);
-            setTimeout(playNext, 3000);
-          },
-        },
-      });
+  const connectLiveKit = useCallback(async (): Promise<void> => {
+    if (livekitRoomRef.current) return;
+    setStatus('Connecting to LiveKit...');
+
+    const tokenRes = await fetch('/api/livekit-token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        roomId,
+        userId: 'HearMeOutDJ',
+        userName: 'HearMeOut DJ',
+        musicRoom: true,
+        isDJ: true,
+      }),
     });
-    return () => { cancelled = true; };
-  }, [playNext]);
+    const { token } = await tokenRes.json();
+    const livekitUrl = process.env.NEXT_PUBLIC_LIVEKIT_URL;
+    if (!livekitUrl || !token) {
+      setStatus('ERROR: LiveKit config missing');
+      return;
+    }
 
-  // 2. Start broadcasting — getDisplayMedia + LiveKit
-  const startBroadcast = useCallback(async () => {
+    const lkRoom = new Room();
+    await lkRoom.connect(livekitUrl, token);
+    livekitRoomRef.current = lkRoom;
+    console.log('[DJ] LiveKit connected as', lkRoom.localParticipant.identity);
+  }, [roomId]);
+
+  const publishTrackIfNeeded = useCallback(async (): Promise<void> => {
+    if (publishedTrackRef.current) return;
+    const lkRoom = livekitRoomRef.current;
+    if (!lkRoom) return;
+
+    const mediaTrack = await ensureAudioGraph();
+    if (!mediaTrack) {
+      setStatus('ERROR: could not build audio graph');
+      return;
+    }
+
+    const localTrack = new LocalAudioTrack(mediaTrack, undefined, false);
+    await lkRoom.localParticipant.publishTrack(localTrack, {
+      name: 'music',
+      // Use Microphone source so existing listener code (which is keyed on
+      // Microphone/Unknown) picks it up exactly like a voice track.
+      source: Track.Source.Microphone,
+    });
+    publishedTrackRef.current = localTrack;
+    liveRef.current = true;
+    setIsLive(true);
+    setStatus('🔴 LIVE — broadcasting via WebRTC to every listener');
+    console.log('[DJ] Music track published');
+  }, [ensureAudioGraph]);
+
+  const startSession = useCallback(async () => {
     try {
-      setStatus('Requesting tab audio capture...');
+      // Prime AudioContext on this user gesture (required by autoplay rules)
+      await ensureAudioGraph();
+      await connectLiveKit();
+      await publishTrackIfNeeded();
 
-      // getDisplayMedia — browser prompts user to share this tab's audio
-      const stream = await navigator.mediaDevices.getDisplayMedia({
-        audio: true,
-        video: true, // Chrome requires video for getDisplayMedia, we ignore it
-      } as any);
-
-      // Stop video tracks immediately — we only want audio
-      stream.getVideoTracks().forEach(t => t.stop());
-
-      const audioTrack = stream.getAudioTracks()[0];
-      if (!audioTrack) {
-        setStatus('ERROR: No audio captured. Make sure you selected "Share tab audio"');
-        return;
-      }
-
-      captureStreamRef.current = stream;
-      console.log('[DJ] Tab audio captured');
-      setStatus('Connecting to LiveKit...');
-
-      // Connect to LiveKit music room
-      const tokenRes = await fetch('/api/livekit-token', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ roomId, userId: 'HearMeOutDJ', userName: 'HearMeOut DJ', musicRoom: true, isDJ: true }),
-      });
-      const { token } = await tokenRes.json();
-
-      const livekitUrl = process.env.NEXT_PUBLIC_LIVEKIT_URL;
-      if (!livekitUrl || !token) { setStatus('ERROR: Missing LiveKit config'); return; }
-
-      const lkRoom = new Room();
-      await lkRoom.connect(livekitUrl, token);
-      livekitRoomRef.current = lkRoom;
-      console.log('[DJ] Connected as', lkRoom.localParticipant.identity);
-
-      // Publish captured audio to LiveKit
-      const localTrack = new LocalAudioTrack(audioTrack, undefined, false);
-      await lkRoom.localParticipant.publishTrack(localTrack, {
-        name: 'music',
-        source: Track.Source.ScreenShareAudio,
-      });
-      publishedTrackRef.current = localTrack;
-
-      // Handle user stopping the share
-      audioTrack.onended = () => {
-        console.log('[DJ] Tab sharing stopped');
-        stopBroadcast();
-      };
-
-      setIsCapturing(true);
-      setStatus('🔴 BROADCASTING — Everyone can hear the music');
-      console.log('[DJ] Broadcasting started');
-
-      // Mark DJ active
       fetch('/api/db', {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ collection: 'rooms', id: roomId, data: { djActive: true } }),
+        body: JSON.stringify({
+          collection: 'rooms',
+          id: roomId,
+          data: { djActive: true },
+        }),
       }).catch(() => {});
-
-    } catch (err: any) {
-      console.error('[DJ] Broadcast error:', err);
-      setStatus(`ERROR: ${err.message}`);
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.error('[DJ] startSession error:', err);
+      setStatus(`ERROR: ${message}`);
     }
-  }, [roomId]);
+  }, [connectLiveKit, ensureAudioGraph, publishTrackIfNeeded, roomId]);
 
-  const stopBroadcast = useCallback(() => {
-    publishedTrackRef.current?.stop();
+  const stopSession = useCallback(() => {
+    try {
+      publishedTrackRef.current?.stop();
+    } catch {}
     publishedTrackRef.current = null;
-    captureStreamRef.current?.getTracks().forEach(t => t.stop());
-    captureStreamRef.current = null;
-    livekitRoomRef.current?.disconnect();
+
+    try {
+      livekitRoomRef.current?.disconnect();
+    } catch {}
     livekitRoomRef.current = null;
-    setIsCapturing(false);
-    setStatus('Broadcast stopped');
+
+    const audioEl = audioRef.current;
+    if (audioEl) {
+      try {
+        audioEl.pause();
+      } catch {}
+      audioEl.removeAttribute('src');
+      audioEl.load();
+    }
+
+    liveRef.current = false;
+    setIsLive(false);
+    setStatus('Session stopped');
 
     fetch('/api/db', {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ collection: 'rooms', id: roomId, data: { djActive: false } }),
+      body: JSON.stringify({
+        collection: 'rooms',
+        id: roomId,
+        data: { djActive: false, isPlaying: false },
+      }),
     }).catch(() => {});
   }, [roomId]);
 
-  // 3. Poll room state and control YouTube player
+  // Load a new video's audio stream into the audio element
+  const loadAndPlay = useCallback(async (videoId: string) => {
+    const audioEl = audioRef.current;
+    if (!audioEl) return;
+    const nextSrc = `/api/youtube-audio/stream?videoId=${encodeURIComponent(videoId)}`;
+    if (audioEl.src !== new URL(nextSrc, window.location.origin).toString()) {
+      audioEl.src = nextSrc;
+      audioEl.load();
+    }
+    try {
+      await audioEl.play();
+    } catch (e) {
+      console.warn('[DJ] audio.play() failed (will retry on next poll):', e);
+    }
+  }, []);
+
+  // Poll room document for state changes (bots, room UI, chat can all drive this)
   useEffect(() => {
+    let cancelled = false;
+
     const poll = async () => {
       try {
         const res = await fetch(`/api/db?collection=rooms&id=${roomId}`);
         const result = await res.json();
-        if (!result.exists) return;
+        if (cancelled || !result?.exists) return;
 
         const data = result.data as RoomData;
         roomDataRef.current = data;
 
-        if (!playerReadyRef.current || !ytReady) return;
+        const audioEl = audioRef.current;
+        if (!audioEl) return;
 
-        const { currentTrackId, isPlaying, playlist } = data;
+        const { currentTrackId, isPlaying: wantPlay, playlist } = data;
 
-        if (!currentTrackId || !isPlaying) {
-          try { playerRef.current?.pauseVideo(); } catch {}
+        if (!currentTrackId) {
+          if (!audioEl.paused) audioEl.pause();
           setCurrentTrack('');
           return;
         }
 
-        const track = playlist?.find(t => t.id === currentTrackId);
+        const track = playlist?.find((t) => t.id === currentTrackId);
         const videoId = extractVideoId(currentTrackId, track?.url);
 
         if (lastTrackRef.current !== currentTrackId) {
           lastTrackRef.current = currentTrackId;
           setCurrentTrack(track?.title || videoId);
-          console.log(`[DJ] Loading: ${track?.title || videoId}`);
-          playerRef.current?.loadVideoById(videoId);
-        } else if (isPlaying) {
-          const state = playerRef.current?.getPlayerState?.();
-          if (state === window.YT?.PlayerState?.PAUSED) {
-            playerRef.current?.playVideo();
+          if (wantPlay && liveRef.current) {
+            await loadAndPlay(videoId);
+          }
+        } else if (liveRef.current) {
+          if (wantPlay && audioEl.paused) {
+            try {
+              await audioEl.play();
+            } catch {}
+          } else if (!wantPlay && !audioEl.paused) {
+            audioEl.pause();
           }
         }
-
-        if (!isPlaying) {
-          try { playerRef.current?.pauseVideo(); } catch {}
-        }
-      } catch {}
+      } catch {
+        /* poll errors are non-fatal */
+      }
     };
 
     poll();
-    const interval = setInterval(poll, 2000);
-    return () => clearInterval(interval);
-  }, [roomId, ytReady]);
+    const iv = setInterval(poll, 2000);
+    return () => {
+      cancelled = true;
+      clearInterval(iv);
+    };
+  }, [roomId, loadAndPlay]);
+
+  // Auto-advance when a track ends
+  const handleEnded = useCallback(() => {
+    const r = roomDataRef.current;
+    if (!r?.playlist?.length) return;
+    const i = r.playlist.findIndex((t) => t.id === r.currentTrackId);
+    const next = r.playlist[(i + 1) % r.playlist.length];
+    if (!next) return;
+    fetch('/api/db', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        collection: 'rooms',
+        id: roomId,
+        data: { currentTrackId: next.id, isPlaying: true },
+      }),
+    }).catch(() => {});
+  }, [roomId]);
+
+  const skipNext = useCallback(() => {
+    handleEnded();
+  }, [handleEnded]);
+
+  const skipPrev = useCallback(() => {
+    const r = roomDataRef.current;
+    if (!r?.playlist?.length) return;
+    const i = r.playlist.findIndex((t) => t.id === r.currentTrackId);
+    const prev = r.playlist[(i - 1 + r.playlist.length) % r.playlist.length];
+    if (!prev) return;
+    fetch('/api/db', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        collection: 'rooms',
+        id: roomId,
+        data: { currentTrackId: prev.id, isPlaying: true },
+      }),
+    }).catch(() => {});
+  }, [roomId]);
+
+  const togglePlayPause = useCallback(() => {
+    const cur = roomDataRef.current;
+    const wantPlay = !(cur?.isPlaying ?? false);
+    fetch('/api/db', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        collection: 'rooms',
+        id: roomId,
+        data: { isPlaying: wantPlay },
+      }),
+    }).catch(() => {});
+  }, [roomId]);
+
+  const seekTo = useCallback((seconds: number) => {
+    const audioEl = audioRef.current;
+    if (!audioEl || !Number.isFinite(seconds)) return;
+    try {
+      audioEl.currentTime = seconds;
+    } catch {}
+  }, []);
 
   // Cleanup on unmount
   useEffect(() => {
     return () => {
-      publishedTrackRef.current?.stop();
-      captureStreamRef.current?.getTracks().forEach(t => t.stop());
-      livekitRoomRef.current?.disconnect();
+      try {
+        publishedTrackRef.current?.stop();
+      } catch {}
+      try {
+        livekitRoomRef.current?.disconnect();
+      } catch {}
+      try {
+        audioContextRef.current?.close();
+      } catch {}
       fetch('/api/db', {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ collection: 'rooms', id: roomId, data: { djActive: false } }),
+        body: JSON.stringify({
+          collection: 'rooms',
+          id: roomId,
+          data: { djActive: false },
+        }),
       }).catch(() => {});
     };
   }, [roomId]);
 
   return (
-    <div style={{ background: '#111', color: '#fff', fontFamily: 'system-ui', minHeight: '100vh', padding: 16 }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+    <div
+      style={{
+        background: '#111',
+        color: '#fff',
+        fontFamily: 'system-ui',
+        minHeight: '100vh',
+        padding: 16,
+      }}
+    >
+      <div
+        style={{
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          marginBottom: 12,
+        }}
+      >
         <h2 style={{ margin: 0, fontSize: 16 }}>🎵 HearMeOut DJ</h2>
-        <span style={{
-          fontSize: 11, padding: '2px 8px', borderRadius: 4,
-          background: isCapturing ? '#dc2626' : '#333',
-          color: isCapturing ? '#fff' : '#999',
-        }}>
-          {isCapturing ? '🔴 LIVE' : 'OFF AIR'}
+        <span
+          style={{
+            fontSize: 11,
+            padding: '2px 8px',
+            borderRadius: 4,
+            background: isLive ? '#dc2626' : '#333',
+            color: isLive ? '#fff' : '#999',
+          }}
+        >
+          {isLive ? '🔴 LIVE' : 'OFF AIR'}
         </span>
       </div>
 
-      {/* Big instruction banner when not broadcasting */}
-      {!isCapturing && (
-        <div style={{
-          background: '#7c3aed', borderRadius: 8, padding: 16, marginBottom: 16, textAlign: 'center',
-        }}>
-          <p style={{ fontSize: 18, fontWeight: 'bold', margin: '0 0 8px' }}>📡 Share THIS Tab</p>
-          <p style={{ fontSize: 13, color: '#e0d4ff', margin: 0, lineHeight: 1.5 }}>
-            Click the button below → Chrome will ask what to share →<br/>
-            Pick <strong>"This Tab"</strong> and check <strong>"Share tab audio"</strong>
-          </p>
-        </div>
-      )}
-
-      {/* Status */}
-      <p style={{ fontSize: 12, color: status.includes('ERROR') ? '#f87171' : status.includes('BROADCASTING') ? '#4ade80' : '#999', margin: '0 0 12px' }}>
+      <p
+        style={{
+          fontSize: 12,
+          color: status.includes('ERROR')
+            ? '#f87171'
+            : status.includes('LIVE')
+              ? '#4ade80'
+              : '#999',
+          margin: '0 0 12px',
+        }}
+      >
         {status}
       </p>
 
-      {/* Broadcast button */}
-      {!isCapturing ? (
+      {!isLive ? (
         <button
-          onClick={startBroadcast}
-          disabled={!ytReady}
+          onClick={startSession}
           style={{
-            width: '100%', padding: '14px', marginBottom: 12, border: 'none', borderRadius: 6,
-            background: ytReady ? '#16a34a' : '#333', color: '#fff', fontSize: 16, fontWeight: 'bold',
-            cursor: ytReady ? 'pointer' : 'default',
+            width: '100%',
+            padding: '14px',
+            marginBottom: 12,
+            border: 'none',
+            borderRadius: 6,
+            background: '#16a34a',
+            color: '#fff',
+            fontSize: 16,
+            fontWeight: 'bold',
+            cursor: 'pointer',
           }}
         >
-          {ytReady ? '📡 Start Broadcasting' : '⏳ Loading player...'}
+          ▶ Start DJ Session
         </button>
       ) : (
-        <button
-          onClick={stopBroadcast}
-          style={{
-            width: '100%', padding: '14px', marginBottom: 12, border: 'none', borderRadius: 6,
-            background: '#dc2626', color: '#fff', fontSize: 16, fontWeight: 'bold', cursor: 'pointer',
-          }}
-        >
-          ⏹ Stop Broadcasting
-        </button>
+        <>
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: '1fr 2fr 1fr 1fr',
+              gap: 8,
+              marginBottom: 12,
+            }}
+          >
+            <button onClick={skipPrev} style={controlBtn}>
+              ⏮
+            </button>
+            <button onClick={togglePlayPause} style={{ ...controlBtn, background: '#7c3aed' }}>
+              {isPlayingLocal ? '⏸ Pause' : '▶ Play'}
+            </button>
+            <button onClick={skipNext} style={controlBtn}>
+              ⏭
+            </button>
+            <button onClick={stopSession} style={{ ...controlBtn, background: '#dc2626' }}>
+              ⏹
+            </button>
+          </div>
+
+          <div style={{ marginBottom: 12, fontSize: 12, color: '#bbb' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
+              <span>{formatTime(position)}</span>
+              <span>{formatTime(duration)}</span>
+            </div>
+            <input
+              type="range"
+              min={0}
+              max={duration || 0}
+              step={0.1}
+              value={Math.min(position, duration || 0)}
+              onChange={(e) => seekTo(parseFloat(e.target.value))}
+              disabled={!duration}
+              style={{ width: '100%' }}
+            />
+          </div>
+
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 8,
+              marginBottom: 12,
+              fontSize: 12,
+              color: '#bbb',
+            }}
+          >
+            <button
+              onClick={() => setMonitorMuted((m) => !m)}
+              style={{ ...controlBtn, width: 40, padding: 6, background: '#333' }}
+              title="Mute your local monitor (listeners are unaffected)"
+            >
+              {monitorMuted ? '🔇' : '🔊'}
+            </button>
+            <input
+              type="range"
+              min={0}
+              max={1}
+              step={0.01}
+              value={monitorVolume}
+              onChange={(e) => setMonitorVolume(parseFloat(e.target.value))}
+              style={{ flex: 1 }}
+              aria-label="Monitor volume"
+            />
+            <span style={{ width: 36, textAlign: 'right' }}>
+              {Math.round(monitorVolume * 100)}%
+            </span>
+          </div>
+        </>
       )}
 
-      {/* Now playing */}
       {currentTrack && (
         <p style={{ fontSize: 13, color: '#a78bfa', margin: '0 0 12px' }}>
           🎵 Now Playing: {currentTrack}
         </p>
       )}
 
-      {/* YouTube Player — wrapper div so YT API doesn't conflict with React */}
-      <div style={{ borderRadius: 6, overflow: 'hidden' }}>
-        <div id="yt-player-container" ref={(el) => {
-          if (el && !document.getElementById('yt-player')) {
-            const div = document.createElement('div');
-            div.id = 'yt-player';
-            el.appendChild(div);
-          }
-        }} />
-      </div>
+      {/*
+        Hidden audio element — we capture its decoded output via WebAudio and
+        publish that as the LiveKit track. It's not rendered to the DOM because
+        the DJ monitors through the WebAudio graph (separate volume control).
+      */}
+      <audio
+        ref={audioRef}
+        onPlay={() => setIsPlayingLocal(true)}
+        onPause={() => setIsPlayingLocal(false)}
+        onEnded={handleEnded}
+        onLoadedMetadata={(e) => setDuration((e.currentTarget.duration) || 0)}
+        onTimeUpdate={(e) => setPosition(e.currentTarget.currentTime)}
+        preload="auto"
+      />
 
-      {/* Step by step when not broadcasting */}
-      {!isCapturing && (
-        <div style={{ marginTop: 16, background: '#1a1a2e', borderRadius: 8, padding: 14, fontSize: 13, color: '#888', lineHeight: 1.8 }}>
-          <p style={{ color: '#fff', fontWeight: 'bold', margin: '0 0 6px' }}>How it works:</p>
-          <p style={{ margin: 0 }}>1️⃣ Click <strong style={{ color: '#4ade80' }}>Start Broadcasting</strong> above</p>
-          <p style={{ margin: 0 }}>2️⃣ Chrome asks what to share — pick <strong style={{ color: '#a78bfa' }}>This Tab</strong></p>
-          <p style={{ margin: 0 }}>3️⃣ Check the <strong style={{ color: '#a78bfa' }}>"Also share tab audio"</strong> box</p>
-          <p style={{ margin: 0 }}>4️⃣ Click Share — music plays here, everyone hears it!</p>
-          <p style={{ margin: '8px 0 0', color: '#666', fontSize: 11 }}>Keep this tab open while DJing. Close it to stop.</p>
+      {!isLive && (
+        <div
+          style={{
+            marginTop: 16,
+            background: '#1a1a2e',
+            borderRadius: 8,
+            padding: 14,
+            fontSize: 13,
+            color: '#888',
+            lineHeight: 1.8,
+          }}
+        >
+          <p style={{ color: '#fff', fontWeight: 'bold', margin: '0 0 6px' }}>How it works</p>
+          <p style={{ margin: 0 }}>1️⃣ Click <strong style={{ color: '#4ade80' }}>Start DJ Session</strong> above.</p>
+          <p style={{ margin: 0 }}>2️⃣ Audio is fetched server-side (yt-dlp) and streamed to your browser.</p>
+          <p style={{ margin: 0 }}>3️⃣ Your browser re-publishes it to LiveKit over WebRTC.</p>
+          <p style={{ margin: 0 }}>4️⃣ Every listener hears the exact same live stream — in sync, like voice.</p>
+          <p style={{ margin: '8px 0 0', color: '#666', fontSize: 11 }}>
+            No tab sharing required. Keep this tab open while DJing.
+          </p>
         </div>
-      )}
-
-      {/* Minimal info when broadcasting */}
-      {isCapturing && (
-        <p style={{ marginTop: 12, fontSize: 11, color: '#4ade80', textAlign: 'center' }}>
-          ✅ Broadcasting to room — everyone can hear the music
-        </p>
       )}
     </div>
   );
+}
+
+const controlBtn: React.CSSProperties = {
+  padding: 10,
+  border: 'none',
+  borderRadius: 6,
+  background: '#222',
+  color: '#fff',
+  fontSize: 14,
+  fontWeight: 'bold',
+  cursor: 'pointer',
+};
+
+function formatTime(s: number): string {
+  if (!Number.isFinite(s) || s < 0) return '0:00';
+  const m = Math.floor(s / 60);
+  const sec = Math.floor(s % 60);
+  return `${m}:${sec.toString().padStart(2, '0')}`;
 }
