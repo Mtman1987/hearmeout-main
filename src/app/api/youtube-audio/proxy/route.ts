@@ -6,14 +6,15 @@ import { isValidVideoId } from '@/lib/validate-video-id';
 // These are extracted by the DJ's browser and sent here for proxying.
 const extractedUrls = new Map<string, { url: string; expires: number }>();
 
-// Allowed host suffixes for the upstream audio URL. Anything else is rejected
-// so this endpoint can't be abused as a generic SSRF primitive
+// Allowed base hosts for the upstream audio URL. A candidate host must
+// EITHER exactly equal one of these OR end with `.` + one of these — so
+// `youtube.com` is allowed but `evilyoutube.com` is not. Anything else is
+// rejected, so this endpoint can't be abused as a generic SSRF primitive
 // (e.g. against 169.254.169.254, localhost, internal services, etc).
-const ALLOWED_HOST_SUFFIXES = [
-  '.googlevideo.com',
-  '.youtube.com',
+const ALLOWED_BASE_HOSTS = [
+  'googlevideo.com',
   'youtube.com',
-  '.ytimg.com',
+  'ytimg.com',
 ];
 
 function isAllowedAudioUrl(raw: unknown): raw is string {
@@ -26,7 +27,7 @@ function isAllowedAudioUrl(raw: unknown): raw is string {
   }
   if (parsed.protocol !== 'https:') return false;
   const host = parsed.hostname.toLowerCase();
-  return ALLOWED_HOST_SUFFIXES.some((s) => host === s || host.endsWith(s));
+  return ALLOWED_BASE_HOSTS.some((base) => host === base || host.endsWith(`.${base}`));
 }
 
 // POST: Client sends an extracted googlevideo URL for a video.
