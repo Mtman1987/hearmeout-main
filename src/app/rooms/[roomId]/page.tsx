@@ -112,9 +112,16 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
     const musicRoomRef = useRef<LKRoom | null>(null);
     const musicAudioRef = useRef<HTMLAudioElement | null>(null);
 
-    // Connect to LiveKit Music Room as subscriber
+    // Connect to LiveKit Music Room as subscriber.
+    // The room owner/DJ already hears the music locally from /dj/[roomId]
+    // (WebAudio monitor). Subscribing here too would cause double playback,
+    // so owners skip this subscription entirely.
     useEffect(() => {
         if (isUserLoading || !user || !roomId) return;
+        if (isOwner) {
+            setMusicStatus('hosting (monitor on DJ tab)');
+            return;
+        }
         let cancelled = false;
 
         const connectMusicRoom = async () => {
@@ -174,7 +181,7 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
             musicRoomRef.current = null;
             if (musicAudioRef.current) { musicAudioRef.current.srcObject = null; }
         };
-    }, [user, isUserLoading, roomId]);
+    }, [user, isUserLoading, roomId, isOwner]);
 
     // Sync volume changes to the audio element
     useEffect(() => {
