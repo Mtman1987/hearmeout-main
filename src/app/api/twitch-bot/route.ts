@@ -11,6 +11,7 @@ interface BotInstance {
   client: tmi.Client;
   channels: Map<string, string>; // twitchChannel -> roomId
   tokens: ServerBotTokens;
+  syncInterval?: ReturnType<typeof setInterval>;
 }
 
 interface ServerBotTokens {
@@ -298,6 +299,34 @@ function createMessageHandler(instance: BotInstance) {
 
 // --- Bot lifecycle ---
 
+function attachBotHandlers(instance: BotInstance, serverId: string) {
+  const { client, tokens } = instance;
+  client.on('message', createMessageHandler(instance));
+  client.on('connected', () => {
+    console.log(`[Twitch Bot] Connected as ${tokens.username} for server ${serverId}`);
+    if (instance.syncInterval) clearInterval(instance.syncInterval);
+    syncChannels(serverId, instance);
+    instance.syncInterval = setInterval(() => syncChannels(serverId, instance), 30000);
+  });
+
+  client.on('notice', async (_channel, msgid, message) => {
+    if (msgid === 'msg_banned' || message.includes('authentication failed')) {
+      console.log(`[Twitch Bot] Auth failed for ${tokens.username}, refreshing...`);
+      const refreshed = await refreshBotToken(tokens);
+      if (refreshed) {
+        if (instance.syncInterval) clearInterval(instance.syncInterval);
+        try { instance.client.disconnect(); } catch {}
+        instance.client = new tmi.client({
+          identity: { username: tokens.username, password: `oauth:${tokens.accessToken}` },
+          channels: [],
+        });
+        attachBotHandlers(instance, serverId);
+        instance.client.connect();
+      }
+    }
+  });
+}
+
 async function startBotForServer(serverId: string): Promise<boolean> {
   if (botInstances.has(serverId)) return true;
 
@@ -323,32 +352,10 @@ async function startBotForServer(serverId: string): Promise<boolean> {
   });
 
   const instance: BotInstance = { client, channels, tokens };
-
-  client.on('message', createMessageHandler(instance));
-  client.on('connected', () => {
-    console.log(`[Twitch Bot] Connected as ${tokens.username} for server ${serverId}`);
-    syncChannels(serverId, instance);
-    setInterval(() => syncChannels(serverId, instance), 30000);
-  });
-
-  client.on('notice', async (_channel, msgid, message) => {
-    if (msgid === 'msg_banned' || message.includes('authentication failed')) {
-      console.log(`[Twitch Bot] Auth failed for ${tokens.username}, refreshing...`);
-      const refreshed = await refreshBotToken(tokens);
-      if (refreshed) {
-        client.disconnect();
-        instance.client = new tmi.client({
-          identity: { username: tokens.username, password: `oauth:${tokens.accessToken}` },
-          channels: [],
-        });
-        instance.client.on('message', createMessageHandler(instance));
-        instance.client.connect();
-      }
-    }
-  });
+  attachBotHandlers(instance, serverId);
 
   try {
-    await client.connect();
+    await instance.client.connect();
     botInstances.set(serverId, instance);
     return true;
   } catch (e) {
@@ -434,7 +441,10 @@ export async function POST(req: NextRequest) {
 
   if (action === 'restart') {
     const inst = botInstances.get(serverId);
-    if (inst) { try { inst.client.disconnect(); } catch {} }
+    if (inst) {
+      if (inst.syncInterval) clearInterval(inst.syncInterval);
+      try { inst.client.disconnect(); } catch {}
+    }
     botInstances.delete(serverId);
     const ok = await startBotForServer(serverId);
     return NextResponse.json({ success: ok, status: ok ? 'restarted' : 'failed' });

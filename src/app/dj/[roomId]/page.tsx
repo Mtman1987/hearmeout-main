@@ -57,6 +57,10 @@ export default function DJPage() {
   const [isPlayingLocal, setIsPlayingLocal] = useState(false);
   const [monitorVolume, setMonitorVolume] = useState(0.6);
   const [monitorMuted, setMonitorMuted] = useState(false);
+  const monitorVolumeRef = useRef(monitorVolume);
+  const monitorMutedRef = useRef(monitorMuted);
+  useEffect(() => { monitorVolumeRef.current = monitorVolume; }, [monitorVolume]);
+  useEffect(() => { monitorMutedRef.current = monitorMuted; }, [monitorMuted]);
   const [duration, setDuration] = useState(0);
   const [position, setPosition] = useState(0);
 
@@ -95,7 +99,7 @@ export default function DJPage() {
       src.connect(publishDest);
 
       const monitorGain = ctx.createGain();
-      monitorGain.gain.value = monitorMuted ? 0 : monitorVolume;
+      monitorGain.gain.value = monitorMutedRef.current ? 0 : monitorVolumeRef.current;
       monitorGainRef.current = monitorGain;
       src.connect(monitorGain);
       monitorGain.connect(ctx.destination);
@@ -109,7 +113,7 @@ export default function DJPage() {
 
     const tracks = publishDestRef.current!.stream.getAudioTracks();
     return tracks[0] || null;
-  }, [monitorMuted, monitorVolume]);
+  }, []);
 
   const connectLiveKit = useCallback(async (): Promise<void> => {
     if (livekitRoomRef.current) return;
@@ -278,6 +282,20 @@ export default function DJPage() {
             } catch {}
           } else if (!wantPlay && !audioEl.paused) {
             audioEl.pause();
+          }
+        }
+
+        // Fallback auto-advance: if audio has ended (or is very close to end) and we think we're playing
+        if (wantPlay && liveRef.current && audioEl.duration && Number.isFinite(audioEl.duration) && audioEl.currentTime >= audioEl.duration - 0.5 && audioEl.paused) {
+          // Track ended but onEnded didn't fire — advance manually
+          const idx = playlist?.findIndex((t) => t.id === currentTrackId) ?? -1;
+          const next = playlist?.[(idx + 1) % playlist.length];
+          if (next && next.id !== currentTrackId) {
+            fetch('/api/db', {
+              method: 'PATCH',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ collection: 'rooms', id: roomId, data: { currentTrackId: next.id, isPlaying: true } }),
+            }).catch(() => {});
           }
         }
       } catch {
