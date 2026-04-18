@@ -2,69 +2,49 @@
 
 import { db } from '@/lib/db';
 
-const SERVER_ID = process.env.HARDCODED_GUILD_ID || '1240832965865635881';
+/**
+ * Token service for HearMeOut.
+ * 
+ * Architecture: DSH is the auth authority. Tokens are stored per-server.
+ * HMO caches them locally in its own DB under config/twitch_bot_{serverId}.
+ * Each user authorizes with their own Twitch account — there is no shared bot account.
+ */
 
-interface UserTokens {
-  accessToken: string;
-  refreshToken: string;
-  expiresAt: number;
-  username: string;
-  userId: string;
-  twitchLogin: string;
+function dbKey(serverId: string) {
+  return `twitch_bot_${serverId}`;
 }
 
-/**
- * Get user's bot token (stored per Discord user)
- */
-export async function getUserBotToken(serverId: string, discordUserId: string): Promise<string | null> {
+export async function getUserBotToken(serverId: string, _discordUserId: string): Promise<string | null> {
   try {
-    const tokenDoc = db.get('config', 'twitch_bot');
-    
-    if (!tokenDoc) {
-      return null;
+    const data = db.get('config', dbKey(serverId));
+    if (!data?.accessToken) return null;
+
+    // Check expiry if we have it
+    if (data.expiresAt && Date.now() >= data.expiresAt) {
+      const refreshed = await refreshUserBotToken(serverId, _discordUserId, data.refreshToken);
+      return refreshed;
     }
 
-    const data = tokenDoc as UserTokens;
-    
-    // Check if expired
-    if (data.expiresAt && Date.now() >= data.expiresAt) {
-      const refreshed = await refreshUserBotToken(serverId, discordUserId, data.refreshToken);
-      if (refreshed) return refreshed;
-      return null;
-    }
-    
     return data.accessToken;
   } catch (error) {
-    console.error(`[Token] Error getting bot token for user ${discordUserId}:`, error);
+    console.error(`[Token] Error getting bot token for server ${serverId}:`, error);
     return null;
   }
 }
 
-/**
- * Get user's Twitch username from their bot token
- */
-export async function getUserBotUsername(serverId: string, discordUserId: string): Promise<string | null> {
+export async function getUserBotUsername(serverId: string, _discordUserId: string): Promise<string | null> {
   try {
-    const tokenDoc = await db.collection('servers').doc(serverId).collection('users').doc(discordUserId).collection('tokens').doc('twitchBot').get();
-    
-    if (!tokenDoc.exists) {
-      return null;
-    }
-
-    const data = tokenDoc.data() as UserTokens;
-    return data.username || null;
+    const data = db.get('config', dbKey(serverId));
+    return data?.username || null;
   } catch (error) {
-    console.error(`[Token] Error getting bot username for user ${discordUserId}:`, error);
+    console.error(`[Token] Error getting bot username for server ${serverId}:`, error);
     return null;
   }
 }
 
-/**
- * Store user's bot token
- */
 export async function storeUserBotToken(
   serverId: string,
-  discordUserId: string,
+  _discordUserId: string,
   accessToken: string,
   refreshToken: string,
   expiresIn: number,
@@ -72,27 +52,19 @@ export async function storeUserBotToken(
   userId: string,
   twitchLogin: string
 ): Promise<void> {
-  try {
-    await db.collection('servers').doc(serverId).collection('users').doc(discordUserId).collection('tokens').doc('twitchBot').set({
-      accessToken,
-      refreshToken,
-      expiresAt: Date.now() + (expiresIn * 1000),
-      username,
-      userId,
-      twitchLogin,
-      updatedAt: new Date().toISOString(),
-    });
-    console.log(`[Token] Stored bot token for user ${discordUserId} (${username})`);
-  } catch (error) {
-    console.error(`[Token] Error storing bot token for user ${discordUserId}:`, error);
-    throw error;
-  }
+  db.set('config', dbKey(serverId), {
+    accessToken,
+    refreshToken,
+    expiresAt: Date.now() + (expiresIn * 1000),
+    username: twitchLogin || username,
+    userId,
+    serverId,
+    updatedAt: new Date().toISOString(),
+  });
+  console.log(`[Token] Stored bot token for server ${serverId} (${twitchLogin})`);
 }
 
-/**
- * Refresh user's bot token
- */
-async function refreshUserBotToken(serverId: string, discordUserId: string, refreshToken: string): Promise<string | null> {
+export async function refreshUserBotToken(serverId: string, _discordUserId: string, refreshToken: string): Promise<string | null> {
   try {
     const response = await fetch('https://id.twitch.tv/oauth2/token', {
       method: 'POST',
@@ -106,66 +78,52 @@ async function refreshUserBotToken(serverId: string, discordUserId: string, refr
     });
 
     if (!response.ok) {
-      console.error(`[Token] Refresh failed for user ${discordUserId}:`, response.status);
+      console.error(`[Token] Refresh failed for server ${serverId}:`, response.status);
       return null;
     }
 
     const data = await response.json();
+    const existing = db.get('config', dbKey(serverId)) || {};
 
-    db.update('config', 'twitch_bot', {
-      access_token: data.access_token,
-      refresh_token: data.refresh_token || refreshToken,
+    db.set('config', dbKey(serverId), {
+      ...existing,
+      accessToken: data.access_token,
+      refreshToken: data.refresh_token || refreshToken,
       expiresAt: Date.now() + (data.expires_in * 1000),
       updatedAt: new Date().toISOString(),
     });
 
-    console.log(`[Token] Refreshed bot token`);
+    console.log(`[Token] Refreshed token for server ${serverId}`);
     return data.access_token;
   } catch (error) {
-    console.error(`[Token] Error refreshing token:`, error);
+    console.error(`[Token] Error refreshing token for server ${serverId}:`, error);
     return null;
   }
 }
 
-export { refreshUserBotToken };
-
-/**
- * Get all users with bot tokens
- */
-export async function getAllUsersWithTokens(serverId: string): Promise<Array<{discordUserId: string, twitchLogin: string, username: string}>> {
+export async function getAllUsersWithTokens(_serverId: string): Promise<Array<{ discordUserId: string; twitchLogin: string; username: string }>> {
+  // In the per-server model, each server has one bot token (the user who authorized).
+  // Return that user's info.
   try {
-    const usersSnapshot = await db.collection('servers').doc(serverId).collection('users').get();
-    const usersWithTokens: Array<{discordUserId: string, twitchLogin: string, username: string}> = [];
-
-    for (const userDoc of usersSnapshot.docs) {
-      const tokenDoc = await db.collection(`servers/${serverId}/users/${userDoc.id}/tokens`).doc('twitchBot').get();
-      if (tokenDoc.exists) {
-        const data = tokenDoc.data() as UserTokens;
-        usersWithTokens.push({
-          discordUserId: userDoc.id,
-          twitchLogin: data.twitchLogin,
-          username: data.username,
-        });
-      }
-    }
-
-    return usersWithTokens;
-  } catch (error) {
-    console.error('[Token] Error getting users with tokens:', error);
+    const data = db.get('config', dbKey(_serverId));
+    if (!data?.accessToken || !data?.username) return [];
+    return [{
+      discordUserId: data.userId || 'unknown',
+      twitchLogin: data.username,
+      username: data.username,
+    }];
+  } catch {
     return [];
   }
 }
 
-/**
- * Validate token
- */
 export async function validateToken(token: string): Promise<boolean> {
   try {
     const response = await fetch('https://id.twitch.tv/oauth2/validate', {
       headers: { 'Authorization': `OAuth ${token}` },
     });
     return response.ok;
-  } catch (error) {
+  } catch {
     return false;
   }
 }

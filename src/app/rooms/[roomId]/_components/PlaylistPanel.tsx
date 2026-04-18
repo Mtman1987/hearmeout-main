@@ -11,8 +11,8 @@ type PlaylistPanelProps = {
     onPlaySong: (songId: string) => void;
     currentTrackId: string;
     isPlayerControlAllowed: boolean;
-    onRemoveSong: (songId: string) => void;
-    onClearPlaylist: () => void;
+    onRemoveSong?: (songId: string) => void;
+    onClearPlaylist?: () => void;
 }
 
 export default function PlaylistPanel({ playlist, onPlaySong, currentTrackId, isPlayerControlAllowed, onRemoveSong, onClearPlaylist }: PlaylistPanelProps) {
@@ -22,7 +22,7 @@ export default function PlaylistPanel({ playlist, onPlaySong, currentTrackId, is
                 <CardTitle className="font-headline flex items-center gap-2">
                     <ListMusic /> Up Next
                 </CardTitle>
-                 {isPlayerControlAllowed && playlist.length > 0 && (
+                 {isPlayerControlAllowed && onClearPlaylist && playlist.length > 0 && (
                     <Button variant="ghost" size="sm" onClick={onClearPlaylist}>Clear</Button>
                 )}
             </CardHeader>

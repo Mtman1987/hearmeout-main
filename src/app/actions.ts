@@ -5,7 +5,7 @@ import type { ModerateContentOutput } from "@/ai/flows/sentiment-based-moderatio
 import { getYoutubeInfo as getYoutubeInfoFlow } from "@/ai/flows/get-youtube-info-flow";
 import type { PlaylistItem } from "@/types/playlist";
 import { AccessToken } from 'livekit-server-sdk';
-import { sendControlEmbed } from '@/bots/discord-bot';
+import { sendControlEmbed } from '@/lib/discord-embed';
 
 export async function runModeration(
   conversationHistory: string
@@ -77,6 +77,30 @@ export async function generateLiveKitToken(roomName: string, participantIdentity
     console.error('[generateLiveKitToken] Error:', errorMessage);
     throw new Error(errorMessage);
   }
+}
+
+export async function generateMusicRoomToken(roomName: string, participantIdentity: string, participantName: string, isDJ: boolean) {
+  const apiKey = process.env.LIVEKIT_API_KEY;
+  const apiSecret = process.env.LIVEKIT_API_SECRET;
+  if (!apiKey || !apiSecret) throw new Error('LiveKit credentials not configured.');
+
+  // DJ bot gets a fixed identity, listeners get prefixed identity to avoid collision
+  const identity = isDJ ? 'HearMeOutDJ' : `listener-${participantIdentity}`;
+
+  const at = new AccessToken(apiKey, apiSecret, {
+    identity,
+    name: isDJ ? 'HearMeOut DJ' : participantName,
+    ttl: '6h',
+  });
+
+  at.addGrant({
+    room: `${roomName}-music`,
+    roomJoin: true,
+    canPublish: isDJ,
+    canSubscribe: true,
+  });
+
+  return await at.toJwt();
 }
 
 export async function postToDiscord(

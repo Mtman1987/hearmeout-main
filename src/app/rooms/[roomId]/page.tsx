@@ -6,11 +6,10 @@ import { LiveKitRoom, useConnectionState, useRoomContext } from '@livekit/compon
 import { ConnectionState } from 'livekit-client';
 import { SidebarProvider, SidebarInset, SidebarTrigger, useSidebar } from '@/components/ui/sidebar';
 import { Button } from "@/components/ui/button";
-import { Copy, MessageSquare, X, LoaderCircle, Music, FrameIcon } from 'lucide-react';
+import { Copy, MessageSquare, X, LoaderCircle, FrameIcon, Music } from 'lucide-react';
 import LeftSidebar from '@/app/components/LeftSidebar';
 import UserList from './_components/UserList';
 import ChatBox from './_components/ChatBox';
-import MusicPlayerCard from './_components/MusicPlayerCard';
 import PlaylistPanel from './_components/PlaylistPanel';
 import AddMusicPanel from './_components/AddMusicPanel';
 import VoiceQueue from './_components/VoiceQueue';
@@ -20,10 +19,11 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { useSession } from '@/hooks/use-session';
 import { useDoc } from '@/hooks/use-db';
 import { dbUpdate, dbSet } from '@/lib/db-helpers';
-import { generateLiveKitToken, postToDiscord } from '@/app/actions';
+import { generateLiveKitToken, generateMusicRoomToken } from '@/app/actions';
 import { PlaylistItem } from "@/types/playlist";
 import { usePopout } from '@/components/PopoutWidgets/PopoutProvider';
 import { dbGet } from '@/lib/db-helpers';
+import { Room as LKRoom, RoomEvent, Track, RemoteTrack } from 'livekit-client';
 
 interface RoomData {
   id: string;
@@ -32,12 +32,11 @@ interface RoomData {
   playlist: PlaylistItem[];
   currentTrackId?: string;
   isPlaying?: boolean;
-  djId?: string;
-  djDisplayName?: string;
+  djActive?: boolean;
 }
 
-function RoomHeader({ roomName, onToggleChat, isDJ, onClaimDJ, onRelinquishDJ, isOwner, onOpenChatWidget }: {
-    roomName: string; onToggleChat: () => void; isDJ: boolean; onClaimDJ: () => void; onRelinquishDJ: () => void; isOwner: boolean; onOpenChatWidget: () => void;
+function RoomHeader({ roomName, onToggleChat, onOpenChatWidget, showDJ, onToggleDJ }: {
+    roomName: string; onToggleChat: () => void; onOpenChatWidget: () => void; showDJ: boolean; onToggleDJ: () => void;
 }) {
     const { isMobile } = useSidebar();
     const params = useParams();
@@ -45,7 +44,7 @@ function RoomHeader({ roomName, onToggleChat, isDJ, onClaimDJ, onRelinquishDJ, i
 
     const copyOverlayUrl = () => {
         navigator.clipboard.writeText(`${window.location.origin}/overlay/${params.roomId}`);
-        toast({ title: "Overlay URL Copied!", description: "You can now paste this into your streaming software." });
+        toast({ title: "Overlay URL Copied!", description: "Paste this into OBS as a browser source." });
     };
 
     return (
@@ -57,16 +56,14 @@ function RoomHeader({ roomName, onToggleChat, isDJ, onClaimDJ, onRelinquishDJ, i
             </div>
             <div className="flex flex-initial items-center justify-end space-x-2">
                 <Tooltip><TooltipTrigger asChild>
-<Button variant="outline" size="icon" onClick={isDJ ? onRelinquishDJ : onClaimDJ}><Music className="h-4 w-4" /></Button>
-                </TooltipTrigger><TooltipContent><p>{isDJ ? 'Stop being the DJ' : 'Become the DJ'}</p></TooltipContent></Tooltip>
+                    <Button variant={showDJ ? "secondary" : "outline"} size="icon" onClick={onToggleDJ}><Music className="h-4 w-4" /></Button>
+                </TooltipTrigger><TooltipContent><p>{showDJ ? 'Hide DJ' : 'Show DJ'}</p></TooltipContent></Tooltip>
                 <Tooltip><TooltipTrigger asChild>
                     <Button variant="outline" size="icon" onClick={onOpenChatWidget}><MessageSquare className="h-4 w-4" /></Button>
                 </TooltipTrigger><TooltipContent><p>Pop-out Chat Widget</p></TooltipContent></Tooltip>
-                {isOwner && (
-                    <Tooltip><TooltipTrigger asChild>
-                        <Button variant="outline" size="icon" onClick={copyOverlayUrl}><Copy className="h-4 w-4" /></Button>
-                    </TooltipTrigger><TooltipContent><p>Copy Overlay URL</p></TooltipContent></Tooltip>
-                )}
+                <Tooltip><TooltipTrigger asChild>
+                    <Button variant="outline" size="icon" onClick={copyOverlayUrl}><Copy className="h-4 w-4" /></Button>
+                </TooltipTrigger><TooltipContent><p>Copy Overlay URL for OBS</p></TooltipContent></Tooltip>
                 <Tooltip><TooltipTrigger asChild>
                     <Button variant="outline" size="icon" onClick={onToggleChat}><FrameIcon className="h-5 w-5" /></Button>
                 </TooltipTrigger><TooltipContent><p>Toggle Chat Sidebar</p></TooltipContent></Tooltip>
@@ -98,26 +95,107 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
     const router = useRouter();
     const [chatOpen, setChatOpen] = useState(false);
     const [voiceToken, setVoiceToken] = useState<string | undefined>(undefined);
-    const [activePanels, setActivePanels] = useState({ playlist: true, add: true });
     const [localVolume, setLocalVolume] = useState(0.5);
+    const [musicStatus, setMusicStatus] = useState<string | null>(null);
+    const [musicExpanded, setMusicExpanded] = useState(false);
+    const [showDJ, setShowDJ] = useState(true);
 
-const { data: userSettings } = useDoc<{ streamMode?: boolean; twitchChannel?: string }>(
+    const { data: userSettings } = useDoc<{ streamMode?: boolean; twitchChannel?: string }>(
       user ? `rooms/${roomId}/users` : null,
       user?.uid || null,
     );
 
-    const isDJ = !!user && !!room.djId && user.uid === room.djId;
     const isAdmin = !!user && !!(user as any).isAdmin;
     const isOwner = !!user && (user.uid === room.ownerId || isAdmin);
+    const canControl = !!user;
 
-    // Check if user is banned from this room
+    const musicRoomRef = useRef<LKRoom | null>(null);
+    const musicAudioRef = useRef<HTMLAudioElement | null>(null);
+
+    // Connect to LiveKit Music Room as subscriber.
+    // The room owner/DJ already hears the music locally from /dj/[roomId]
+    // (WebAudio monitor). Subscribing here too would cause double playback,
+    // so owners skip this subscription entirely.
+    useEffect(() => {
+        if (isUserLoading || !user || !roomId) return;
+        if (isOwner) {
+            setMusicStatus('hosting (monitor on DJ tab)');
+            return;
+        }
+        let cancelled = false;
+
+        const connectMusicRoom = async () => {
+            try {
+                console.log('[MusicRoom] Connecting as listener...');
+                const token = await generateMusicRoomToken(roomId, user.uid, user.displayName || 'Listener', false);
+                const livekitUrl = process.env.NEXT_PUBLIC_LIVEKIT_URL;
+                if (!livekitUrl || cancelled) return;
+
+                const lkRoom = new LKRoom();
+                await lkRoom.connect(livekitUrl, token);
+                if (cancelled) { lkRoom.disconnect(); return; }
+                musicRoomRef.current = lkRoom;
+                console.log('[MusicRoom] Connected! Participants:', lkRoom.remoteParticipants.size);
+                setMusicStatus('connected');
+
+                const attachTrack = (track: RemoteTrack) => {
+                    if (track.kind === Track.Kind.Audio) {
+                        console.log('[MusicRoom] 🎵 Audio track received — attaching');
+                        if (!musicAudioRef.current) musicAudioRef.current = new Audio();
+                        track.attach(musicAudioRef.current);
+                        musicAudioRef.current.volume = localVolume;
+                        musicAudioRef.current.play().catch(e => console.warn('[MusicRoom] Autoplay blocked:', e));
+                        setMusicStatus('🎵 streaming');
+                    }
+                };
+
+                lkRoom.remoteParticipants.forEach(p => {
+                    console.log('[MusicRoom] Remote participant:', p.identity, 'tracks:', p.trackPublications.size);
+                    p.trackPublications.forEach(pub => {
+                        if (pub.track && pub.isSubscribed) attachTrack(pub.track as RemoteTrack);
+                    });
+                });
+
+                lkRoom.on(RoomEvent.TrackSubscribed, (track) => {
+                    console.log('[MusicRoom] TrackSubscribed:', track.kind, track.source);
+                    attachTrack(track);
+                });
+                lkRoom.on(RoomEvent.TrackUnsubscribed, () => {
+                    console.log('[MusicRoom] Track unsubscribed');
+                    if (musicAudioRef.current) { musicAudioRef.current.srcObject = null; }
+                    setMusicStatus('connected');
+                });
+                lkRoom.on(RoomEvent.ParticipantConnected, (p) => {
+                    console.log('[MusicRoom] Participant joined:', p.identity);
+                });
+            } catch (err) {
+                console.error('[MusicRoom] Connection error:', err);
+                setMusicStatus('error');
+            }
+        };
+
+        connectMusicRoom();
+        return () => {
+            cancelled = true;
+            musicRoomRef.current?.disconnect();
+            musicRoomRef.current = null;
+            if (musicAudioRef.current) { musicAudioRef.current.srcObject = null; }
+        };
+    }, [user, isUserLoading, roomId, isOwner]);
+
+    // Sync volume changes to the audio element
+    useEffect(() => {
+        if (musicAudioRef.current) musicAudioRef.current.volume = localVolume;
+    }, [localVolume]);
+
+    // Check if user is banned
     const [isBanned, setIsBanned] = React.useState(false);
     useEffect(() => {
       if (!user || !roomId) return;
       dbGet(`rooms/${roomId}/banned`, user.uid).then(data => { if (data) setIsBanned(true); });
     }, [user, roomId]);
 
-    // Poll for move instructions (admin moved us to another room)
+    // Poll for move instructions
     useEffect(() => {
       if (!user || !roomId) return;
       const checkMove = async () => {
@@ -130,7 +208,7 @@ const { data: userSettings } = useDoc<{ streamMode?: boolean; twitchChannel?: st
       };
       const interval = setInterval(checkMove, 3000);
       return () => clearInterval(interval);
-    }, [user, roomId, room, router, toast]);
+    }, [user, roomId, router, toast]);
 
     if (isBanned) {
       return (
@@ -142,29 +220,16 @@ const { data: userSettings } = useDoc<{ streamMode?: boolean; twitchChannel?: st
       );
     }
 
-    const handleClaimDJ = useCallback(() => {
-        if (!user) { toast({ variant: 'destructive', title: 'Authentication Error', description: 'You must be signed in to become the DJ.' }); return; }
-        dbUpdate('rooms', roomId, { djId: user.uid, djDisplayName: user.displayName || 'Anonymous DJ' });
-    }, [user, roomId, toast]);
-
-    const handleRelinquishDJ = useCallback(() => {
-        if (!isDJ) return;
-        dbUpdate('rooms', roomId, { djId: '', djDisplayName: '', isPlaying: false });
-    }, [roomId, isDJ]);
-
     useEffect(() => {
         if (isUserLoading || !user || !roomId) return;
-        if (voiceToken) return; // Don't regenerate if we already have a token
-        
+        if (voiceToken) return;
         let isCancelled = false;
-
         const setup = async () => {
             dbSet(`rooms/${roomId}/users`, user.uid, {
                 uid: user.uid,
                 displayName: user.displayName,
                 photoURL: user.photoURL || `https://picsum.photos/seed/${user.uid}/100/100`,
             }, true);
-
             try {
                 const token = await generateLiveKitToken(roomId, user.uid, user.displayName!, JSON.stringify({ photoURL: user.photoURL || `https://picsum.photos/seed/${user.uid}/100/100` }));
                 if (!isCancelled) setVoiceToken(token);
@@ -174,52 +239,21 @@ const { data: userSettings } = useDoc<{ streamMode?: boolean; twitchChannel?: st
         };
         setup();
         return () => { isCancelled = true; };
-    }, [user, isUserLoading, roomId, toast]); // Removed voiceToken from dependencies
+    }, [user, isUserLoading, roomId, toast]);
 
-    const currentTrack = room.playlist?.find((t: any) => t.id === room.currentTrackId);
-
-    const handlePlayNext = useCallback(() => {
-        if (!isDJ) return;
-        const { playlist, currentTrackId } = room;
-        if (!playlist || playlist.length === 0) return;
-        const nextIndex = (playlist.findIndex((t: any) => t.id === currentTrackId) + 1) % playlist.length;
-        dbUpdate('rooms', roomId, { currentTrackId: playlist[nextIndex].id, isPlaying: true });
-    }, [room, roomId, isDJ]);
-
-    const handlePlayPrev = useCallback(() => {
-        if (!isDJ) return;
-        const { playlist, currentTrackId } = room;
-        if (!playlist || playlist.length === 0) return;
-        const prevIndex = (playlist.findIndex((t: any) => t.id === currentTrackId) - 1 + playlist.length) % playlist.length;
-        dbUpdate('rooms', roomId, { currentTrackId: playlist[prevIndex].id, isPlaying: true });
-    }, [room, roomId, isDJ]);
-
-    const handlePlaySong = useCallback((songId: string) => { if (isDJ) dbUpdate('rooms', roomId, { currentTrackId: songId, isPlaying: true }); }, [roomId, isDJ]);
-    const handleRemoveSong = useCallback((songId: string) => { if (!isDJ) return; dbUpdate('rooms', roomId, { playlist: room.playlist.filter((s: any) => s.id !== songId) }); }, [room, roomId, isDJ]);
-    const handleClearPlaylist = useCallback(() => { if (isDJ) dbUpdate('rooms', roomId, { playlist: [], currentTrackId: '', isPlaying: false }); }, [roomId, isDJ]);
-    const handlePlayPause = useCallback((playing: boolean) => { if (isDJ) dbUpdate('rooms', roomId, { isPlaying: playing }); }, [roomId, isDJ]);
+    const handlePlaySong = useCallback((songId: string) => { if (canControl) dbUpdate('rooms', roomId, { currentTrackId: songId, isPlaying: true }); }, [roomId, canControl]);
+    const handleRemoveSong = useCallback((songId: string) => {
+        dbUpdate('rooms', roomId, { playlist: room.playlist.filter((s: any) => s.id !== songId) });
+    }, [room, roomId]);
+    const handleClearPlaylist = useCallback(() => { dbUpdate('rooms', roomId, { playlist: [], currentTrackId: '', isPlaying: false }); }, [roomId]);
 
     const handleAddItems = useCallback((items: PlaylistItem[]) => {
-        if (!isDJ) return;
+        if (!canControl) return;
         const newPlaylist = [...(room.playlist || []), ...items];
         const updates: any = { playlist: newPlaylist };
         if ((!room.isPlaying || !room.currentTrackId) && items.length > 0) { updates.currentTrackId = items[0].id; updates.isPlaying = true; }
         dbUpdate('rooms', roomId, updates);
-    }, [room, roomId, isDJ]);
-
-    const handlePostToDiscord = useCallback(async () => {
-        if (!user) { toast({ variant: 'destructive', title: 'Error', description: 'You must be logged in.' }); return; }
-        try {
-            const userData = await dbGet(`rooms/${roomId}/users`, user.uid);
-            if (!userData?.discordGuildId) { toast({ variant: 'destructive', title: 'Discord Not Configured', description: 'Set your Discord server ID in your user card menu first.' }); return; }
-            const channelId = userData.discordSelectedChannel;
-            if (!channelId) { toast({ variant: 'destructive', title: 'No Channel Selected', description: 'Select a channel in the chat widget first.' }); return; }
-            await postToDiscord(channelId, roomId, room?.name || 'HearMeOut Room');
-            toast({ title: "Posted to Discord!", description: `Control embed sent to selected channel` });
-        } catch (error: any) {
-            toast({ variant: "destructive", title: "Discord Error", description: error.message || "Could not post to Discord." });
-        }
-    }, [user, roomId, toast]);
+    }, [room, roomId, canControl]);
 
     const livekitUrl = process.env.NEXT_PUBLIC_LIVEKIT_URL;
 
@@ -234,31 +268,45 @@ const { data: userSettings } = useDoc<{ streamMode?: boolean; twitchChannel?: st
 
     return (
       <LiveKitRoom serverUrl={livekitUrl} token={voiceToken} connect={true} audio={!userSettings?.streamMode} video={false}
-          options={{ autoSubscribe: true, dynacast: true, adaptiveStream: true }}
+          options={{ dynacast: true, adaptiveStream: true }}
           onError={(err) => { toast({ variant: 'destructive', title: 'Connection Error', description: err.message }); }}>
         <div className={cn("bg-secondary/30 md:peer-data-[state=collapsed]:peer-data-[variant=inset]:ml-[calc(var(--sidebar-width-icon)_+_1rem)] md:peer-data-[variant=inset]:ml-[calc(var(--sidebar-width)_+_1rem)] duration-200 transition-[margin-left,margin-right]", chatOpen && "md:mr-[28rem]")}>
             <SidebarInset>
                 <div className="flex flex-col h-screen relative">
-                    <RoomHeader roomName={room.name} onToggleChat={() => setChatOpen(!chatOpen)} isDJ={isDJ} onClaimDJ={handleClaimDJ} onRelinquishDJ={handleRelinquishDJ} isOwner={isOwner} onOpenChatWidget={() => openPopout('chat', { width: 450, height: 600 })} />
+                    <RoomHeader roomName={room.name} onToggleChat={() => setChatOpen(!chatOpen)} onOpenChatWidget={() => openPopout('chat', { width: 450, height: 600 })} showDJ={showDJ} onToggleDJ={() => setShowDJ(v => !v)} />
+
+                    {/* Playlist toggle bar */}
+                    <div className="sticky top-16 z-20 bg-background/95 backdrop-blur-sm border-b">
+                        <div className="flex items-center justify-between px-4 h-10">
+                            <p className="text-sm text-muted-foreground">
+                                {room.playlist?.length ? `${room.playlist.length} song${room.playlist.length > 1 ? 's' : ''} in queue` : 'No songs in queue'}
+                            </p>
+                            <Button variant="ghost" size="sm" onClick={() => setMusicExpanded(v => !v)}>
+                                {musicExpanded ? 'Hide Queue' : 'Show Queue'}
+                            </Button>
+                        </div>
+                        {musicExpanded && (
+                            <div className="absolute left-0 right-0 top-10 z-50 bg-background border-b shadow-lg max-h-[60vh] overflow-y-auto">
+                                <div className="p-4 space-y-4">
+                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                        <PlaylistPanel playlist={room.playlist || []} currentTrackId={room.currentTrackId || ''} isPlayerControlAllowed={canControl} onPlaySong={handlePlaySong} onRemoveSong={handleRemoveSong} onClearPlaylist={handleClearPlaylist} />
+                                        {canControl && <AddMusicPanel onAddItems={handleAddItems} onClose={() => setMusicExpanded(false)} canAddMusic={true} />}
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+                    </div>
+                    {musicExpanded && <div className="fixed inset-0 z-10" onClick={() => setMusicExpanded(false)} />}
+
                     <main className="flex-1 p-4 md:p-6 overflow-y-auto space-y-6">
-                        {isDJ ? (
-                            <div className="flex flex-col lg:flex-row gap-6">
-                                <div className="lg:w-1/3 shrink-0">
-                                    <MusicPlayerCard currentTrack={currentTrack} playing={!!room.isPlaying} isPlayerControlAllowed={true} onPlayPause={handlePlayPause} onPlayNext={handlePlayNext} onPlayPrev={handlePlayPrev} onTogglePanel={(panel) => setActivePanels(p => ({ ...p, [panel]: !p[panel] }))} activePanels={activePanels} volume={localVolume} onVolumeChange={setLocalVolume} isDJ={isDJ} roomId={roomId} />
-                                </div>
-                                <div className="flex-1 grid grid-cols-1 md:grid-cols-2 gap-6 items-start">
-                                    {activePanels.playlist && <div className={cn({ 'md:col-span-2': !activePanels.add })}><PlaylistPanel playlist={room.playlist || []} currentTrackId={room.currentTrackId || ''} isPlayerControlAllowed={true} onPlaySong={handlePlaySong} onRemoveSong={handleRemoveSong} onClearPlaylist={handleClearPlaylist} /></div>}
-                                    {activePanels.add && <div className={cn({ 'md:col-span-2': !activePanels.playlist })}><AddMusicPanel onAddItems={handleAddItems} onClose={() => {}} canAddMusic={true} /></div>}
-                                </div>
-                            </div>
-                        ) : room.djDisplayName ? (
-                            <div className="text-center text-muted-foreground py-16">
-                                <h3 className="text-xl font-semibold">{room.djDisplayName} is the DJ</h3>
-                                <p className="mt-2">Sit back and enjoy the music!</p>
-                            </div>
-                        ) : null}
-                        <UserList roomId={roomId} />
-                        {(isDJ || isOwner) && <VoiceQueue roomId={roomId} />}
+                        <UserList
+                          roomId={roomId}
+                          musicStatus={musicStatus}
+                          localVolume={localVolume}
+                          onVolumeChange={setLocalVolume}
+                          showDJ={showDJ}
+                        />
+                        {isOwner && <VoiceQueue roomId={roomId} />}
                     </main>
                 </div>
             </SidebarInset>

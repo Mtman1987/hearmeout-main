@@ -2,14 +2,136 @@ import { NextRequest, NextResponse } from 'next/server';
 import tmi from 'tmi.js';
 import { addSongToPlaylist, getRoomState } from '@/lib/bot-actions';
 import { db, ensureDb } from '@/lib/db';
+import { existsSync, readFileSync } from 'fs';
+import { join } from 'path';
 
-let client: tmi.Client | null = null;
+// Per-server bot connections — multi-tenant ready
+// Key: serverId, Value: { client, channels, tokens }
+interface BotInstance {
+  client: tmi.Client;
+  channels: Map<string, string>; // twitchChannel -> roomId
+  tokens: ServerBotTokens;
+}
+
+interface ServerBotTokens {
+  accessToken: string;
+  refreshToken: string;
+  username: string;
+  userId?: string;
+  serverId: string;
+}
+
+const botInstances = new Map<string, BotInstance>();
 let isInitialized = false;
-const activeChannels = new Map<string, string>();
-let botTokens: { access_token: string; refresh_token: string; username: string } | null = null;
 
-async function refreshToken() {
-  if (!botTokens?.refresh_token) return null;
+// --- Token management (per-server) ---
+
+function dbTokenKey(serverId: string) {
+  return `twitch_bot_${serverId}`;
+}
+
+function loadTokensFromDB(serverId: string): ServerBotTokens | null {
+  const data = db.get('config', dbTokenKey(serverId));
+  if (!data?.accessToken) return null;
+  return { ...data, serverId };
+}
+
+function saveTokensToDB(tokens: ServerBotTokens) {
+  db.set('config', dbTokenKey(tokens.serverId), {
+    accessToken: tokens.accessToken,
+    refreshToken: tokens.refreshToken,
+    username: tokens.username,
+    userId: tokens.userId || '',
+    serverId: tokens.serverId,
+    updatedAt: new Date().toISOString(),
+  });
+}
+
+/**
+ * Load tokens from DSH's local-db-export.
+ * DSH is the auth authority — tokens are stored per-server.
+ * Path: DiscordStreamHub/local-db-export/servers/{serverId}/config/twitchBotOAuth.json
+ */
+function loadTokensFromDSH(serverId: string): ServerBotTokens | null {
+  const searchPaths = [
+    join(process.cwd(), '..', 'DiscordStreamHub', 'local-db-export', 'servers', serverId, 'config', 'twitchBotOAuth.json'),
+    join(process.cwd(), '..', 'DiscordStreamHub', 'data', 'servers', serverId, 'config', 'twitchBotOAuth.json'),
+  ];
+
+  for (const p of searchPaths) {
+    try {
+      if (!existsSync(p)) continue;
+      const raw = JSON.parse(readFileSync(p, 'utf8'));
+      if (!raw.accessToken) continue;
+      console.log(`[Twitch Bot] Loaded DSH tokens from ${p} (user: ${raw.botUsername})`);
+      return {
+        accessToken: raw.accessToken,
+        refreshToken: raw.refreshToken || '',
+        username: raw.botUsername || '',
+        userId: raw.botUserId || '',
+        serverId,
+      };
+    } catch { /* skip */ }
+  }
+  return null;
+}
+
+function loadTokensFromSeedFile(serverId: string): ServerBotTokens | null {
+  const seedPath = join(process.cwd(), 'data', `twitch-bot-seed-${serverId}.json`);
+  try {
+    if (!existsSync(seedPath)) return null;
+    const raw = JSON.parse(readFileSync(seedPath, 'utf8'));
+    if (!raw.accessToken) return null;
+    console.log(`[Twitch Bot] Loaded seed file for: ${raw.username}`);
+    return {
+      accessToken: raw.accessToken,
+      refreshToken: raw.refreshToken || '',
+      username: raw.username || '',
+      userId: raw.userId || '',
+      serverId,
+    };
+  } catch { return null; }
+}
+
+function resolveTokens(serverId: string): ServerBotTokens | null {
+  // 1. HMO's own DB (previously cached from DSH or OAuth callback)
+  let tokens = loadTokensFromDB(serverId);
+  if (tokens) return tokens;
+
+  // 2. Seed file (from seed-twitch-token.js)
+  tokens = loadTokensFromSeedFile(serverId);
+  if (tokens) {
+    saveTokensToDB(tokens);
+    console.log(`[Twitch Bot] Loaded seed file into DB for server ${serverId}`);
+    return tokens;
+  }
+
+  // 3. DSH export files (DSH = auth authority)
+  tokens = loadTokensFromDSH(serverId);
+  if (tokens) {
+    saveTokensToDB(tokens);
+    console.log(`[Twitch Bot] Cached DSH tokens into HMO DB for server ${serverId}`);
+    return tokens;
+  }
+
+  // 4. Env vars as last resort (single-server dev fallback)
+  if (process.env.TWITCH_BOT_OAUTH_TOKEN) {
+    tokens = {
+      accessToken: process.env.TWITCH_BOT_OAUTH_TOKEN,
+      refreshToken: process.env.TWITCH_BOT_REFRESH_TOKEN || '',
+      username: process.env.TWITCH_BOT_USERNAME || process.env.TWITCH_BROADCASTER_USERNAME || '',
+      serverId,
+    };
+    saveTokensToDB(tokens);
+    console.log('[Twitch Bot] Using env var tokens (dev fallback)');
+    return tokens;
+  }
+
+  return null;
+}
+
+async function refreshBotToken(tokens: ServerBotTokens): Promise<boolean> {
+  if (!tokens.refreshToken) return false;
 
   try {
     const res = await fetch('https://id.twitch.tv/oauth2/token', {
@@ -19,64 +141,78 @@ async function refreshToken() {
         client_id: process.env.TWITCH_CLIENT_ID || process.env.NEXT_PUBLIC_TWITCH_CLIENT_ID || '',
         client_secret: process.env.TWITCH_CLIENT_SECRET || '',
         grant_type: 'refresh_token',
-        refresh_token: botTokens.refresh_token,
+        refresh_token: tokens.refreshToken,
       }),
     });
 
     if (!res.ok) {
-      console.error('[Twitch Bot] Refresh HTTP error:', res.status, await res.text().catch(() => ''));
-      return null;
+      console.error(`[Twitch Bot] Refresh failed for server ${tokens.serverId}:`, res.status);
+      return false;
     }
 
-    const tokens = await res.json();
-    botTokens.access_token = tokens.access_token;
-    if (tokens.refresh_token) botTokens.refresh_token = tokens.refresh_token;
-
-    db.update('config', 'twitch_bot', {
-      access_token: tokens.access_token,
-      refresh_token: tokens.refresh_token || botTokens.refresh_token,
-      updated_at: new Date().toISOString(),
-    });
-
-    console.log('[Twitch Bot] Token refreshed successfully');
-    return `oauth:${tokens.access_token}`;
+    const data = await res.json();
+    tokens.accessToken = data.access_token;
+    if (data.refresh_token) tokens.refreshToken = data.refresh_token;
+    saveTokensToDB(tokens);
+    console.log(`[Twitch Bot] Token refreshed for ${tokens.username} (server ${tokens.serverId})`);
+    return true;
   } catch (e) {
-    console.error('[Twitch Bot] Token refresh failed:', e);
-    return null;
+    console.error('[Twitch Bot] Token refresh error:', e);
+    return false;
   }
 }
 
-function syncChannels() {
-  if (!client) return;
+async function validateAndRefresh(tokens: ServerBotTokens): Promise<boolean> {
+  try {
+    const res = await fetch('https://id.twitch.tv/oauth2/validate', {
+      headers: { 'Authorization': `OAuth ${tokens.accessToken}` },
+    });
+    if (res.ok) {
+      const info = await res.json();
+      console.log(`[Twitch Bot] Token valid: ${info.login} (expires ${info.expires_in}s)`);
+      if (info.login) tokens.username = info.login;
+      return true;
+    }
+  } catch { /* fall through to refresh */ }
+
+  console.log(`[Twitch Bot] Token invalid for ${tokens.username}, attempting refresh...`);
+  return refreshBotToken(tokens);
+}
+
+// --- Channel sync (per-server bot instance) ---
+
+function syncChannels(serverId: string, instance: BotInstance) {
+  const { client, channels: activeChannels, tokens } = instance;
 
   try {
     const rooms = db.list('rooms');
     const newChannels = new Map<string, string>();
 
-    // Always join the broadcaster's channel
-    const broadcasterChannel = (process.env.TWITCH_BROADCASTER_USERNAME || 'mtman1987').toLowerCase();
-
-    // Find or create a default room for the broadcaster
+    // Find or create a default room
     let defaultRoomId = 'default';
     if (rooms.length > 0) {
       defaultRoomId = rooms[0].id;
     } else {
-      // Auto-create a default room so !sr has somewhere to queue songs
       db.set('rooms', 'default', {
         name: 'Main Room',
-        ownerId: process.env.HARDCODED_ADMIN_DISCORD_ID || 'admin',
+        ownerId: 'admin',
         playlist: [],
         currentTrackId: '',
         isPlaying: false,
-        djId: '',
-        djDisplayName: '',
         createdAt: new Date().toISOString(),
       });
       console.log('[Twitch Bot] Auto-created default room');
     }
 
-    newChannels.set(broadcasterChannel, defaultRoomId);
+    // Always join these channels
+    newChannels.set('mtman1987', defaultRoomId);
 
+    // Join the bot user's own channel if different
+    if (tokens.username && tokens.username.toLowerCase() !== 'mtman1987') {
+      newChannels.set(tokens.username.toLowerCase(), defaultRoomId);
+    }
+
+    // Also join channels from room user settings
     for (const room of rooms) {
       const users = db.list(`rooms/${room.id}/users`);
       for (const user of users) {
@@ -86,278 +222,223 @@ function syncChannels() {
       }
     }
 
-    for (const [channel] of activeChannels) {
-      if (!newChannels.has(channel)) {
-        client.part(channel).catch(e => console.error(`Failed to leave ${channel}:`, e));
+    // Part channels we no longer need
+    for (const [ch] of activeChannels) {
+      if (!newChannels.has(ch)) {
+        client.part(ch).catch(e => console.error(`Failed to leave ${ch}:`, e));
       }
     }
 
-    for (const [channel, roomId] of newChannels) {
-      if (!activeChannels.has(channel)) {
-        client.join(channel).catch(e => console.error(`Failed to join ${channel}:`, e));
-        console.log(`[Twitch Bot] Joined channel: ${channel} (room: ${roomId})`);
+    // Join new channels
+    for (const [ch, roomId] of newChannels) {
+      if (!activeChannels.has(ch)) {
+        client.join(ch).catch(e => console.error(`Failed to join ${ch}:`, e));
+        console.log(`[Twitch Bot] Joined #${ch} -> room ${roomId}`);
       }
     }
 
     activeChannels.clear();
-    newChannels.forEach((roomId, channel) => activeChannels.set(channel, roomId));
-    console.log(`[Twitch Bot] Active channels:`, Object.fromEntries(activeChannels));
+    newChannels.forEach((roomId, ch) => activeChannels.set(ch, roomId));
   } catch (error) {
-    console.error('[Twitch Bot] Error syncing channels:', error);
+    console.error('[Twitch Bot] syncChannels error:', error);
   }
 }
 
-function onMessageHandler(target: string, context: tmi.ChatUserstate, msg: string, self: boolean) {
-  if (self || !client) return;
+// --- Message handler ---
 
-  const channelName = target.replace('#', '').toLowerCase();
-  const targetRoomId = activeChannels.get(channelName);
-  if (!targetRoomId) return;
+function createMessageHandler(instance: BotInstance) {
+  return function onMessage(target: string, context: tmi.ChatUserstate, msg: string, self: boolean) {
+    if (self || !instance.client) return;
 
-  const message = msg.trim().toLowerCase();
-  const requester = context['display-name'] || 'Someone from Twitch';
+    const channelName = target.replace('#', '').toLowerCase();
+    const targetRoomId = instance.channels.get(channelName);
+    if (!targetRoomId) return;
 
-  if (message.startsWith('!sr ')) {
-    const songQuery = msg.substring(4).trim();
-    if (!songQuery) {
-      client.say(target, `@${requester}, usage: !sr [song name or YouTube URL]`);
-      return;
-    }
-    addSongToPlaylist(songQuery, targetRoomId, `${requester} (Twitch)`)
-      .then(result => {
-        client!.say(target, result.success ? `✅ @${requester} ${result.message}` : `❌ @${requester} Sorry: ${result.message}`);
-      })
-      .catch(() => {
-        client!.say(target, `❌ @${requester} A critical error occurred.`);
-      });
-  }
+    const message = msg.trim().toLowerCase();
+    const requester = context['display-name'] || 'Someone from Twitch';
+    const client = instance.client;
 
-  if (message === '!np') {
-    getRoomState(targetRoomId).then(roomState => {
-      if (!roomState?.currentTrack) {
-        client!.say(target, "🎵 No song is currently playing. Use !sr to request one!");
+    if (message.startsWith('!sr ')) {
+      const songQuery = msg.substring(4).trim();
+      if (!songQuery) {
+        client.say(target, `@${requester}, usage: !sr [song name or YouTube URL]`);
         return;
       }
-      const status = roomState.isPlaying ? "▶️ Playing" : "⏸️ Paused";
-      client!.say(target, `${status}: "${roomState.currentTrack.title}" by ${roomState.currentTrack.artist}`);
-    }).catch(() => {
-      client!.say(target, "❌ Error fetching now playing info.");
-    });
-  }
+      addSongToPlaylist(songQuery, targetRoomId, `${requester} (Twitch)`)
+        .then(result => {
+          client.say(target, result.success
+            ? `✅ @${requester} ${result.message}`
+            : `❌ @${requester} Sorry: ${result.message}`);
+        })
+        .catch(() => {
+          client.say(target, `❌ @${requester} A critical error occurred.`);
+        });
+    }
 
-  if (message === '!status') {
-    getRoomState(targetRoomId).then(roomState => {
-      const status = roomState?.isPlaying ? "▶️ Playing" : "⏸️ Paused";
-      client!.say(target, `🎵 DJ: ${roomState?.djDisplayName || 'None'} | ${status} | Queue: ${roomState?.playlistLength || 0} songs`);
-    }).catch(() => {
-      client!.say(target, "❌ Error fetching status.");
-    });
-  }
+    if (message === '!np') {
+      getRoomState(targetRoomId).then(state => {
+        if (!state?.currentTrack) { client.say(target, "🎵 Nothing playing. Use !sr to request!"); return; }
+        const s = state.isPlaying ? "▶️" : "⏸️";
+        client.say(target, `${s} "${state.currentTrack.title}" by ${state.currentTrack.artist}`);
+      }).catch(() => client.say(target, "❌ Error fetching now playing."));
+    }
 
-  if (message === '!help' || message === '!commands') {
-    client.say(target, "🎵 Commands: !sr [song/URL] | !np | !status | !help");
-  }
+    if (message === '!status') {
+      getRoomState(targetRoomId).then(state => {
+        const s = state?.isPlaying ? "▶️" : "⏸️";
+        client.say(target, `🎵 DJ: ${state?.djDisplayName || 'None'} | ${s} | Queue: ${state?.playlistLength || 0}`);
+      }).catch(() => client.say(target, "❌ Error fetching status."));
+    }
+
+    if (message === '!help' || message === '!commands') {
+      client.say(target, "🎵 Commands: !sr [song/URL] | !np | !status | !help");
+    }
+  };
 }
 
-async function initializeTwitchBot() {
-  if (isInitialized) return;
+// --- Bot lifecycle ---
 
-  await ensureDb();
+async function startBotForServer(serverId: string): Promise<boolean> {
+  if (botInstances.has(serverId)) return true;
 
-  // Load bot tokens from DB (moved from top-level to avoid race condition)
-  if (!botTokens) {
-    const twitchUsers = db.list('users').filter((u: any) => u.id.startsWith('twitch_'));
-    if (twitchUsers.length > 0) botTokens = twitchUsers[0].data;
+  const tokens = resolveTokens(serverId);
+  if (!tokens) {
+    console.error(`[Twitch Bot] No tokens for server ${serverId}. Authorize via DSH settings.`);
+    return false;
   }
 
-  let botData = db.get('config', 'twitch_bot');
-  if (!botData) {
-    // Try fetching from DSH's shared database
-    try {
-      const DSH_URL = process.env.DSH_URL || 'https://discord-stream-hub-new.fly.dev';
-      const serverId = process.env.HARDCODED_GUILD_ID || '1240832965865635881';
-      const res = await fetch(`${DSH_URL}/api/db?path=users/twitch_${serverId}`);
-      if (res.ok) {
-        const dshData = await res.json();
-        if (dshData.exists && dshData.data) {
-          const d = dshData.data;
-          botData = {
-            access_token: d.accessToken || d.access_token,
-            refresh_token: d.refreshToken || d.refresh_token || '',
-            username: d.username || d.displayName || 'Athenabot87',
-          };
-          db.set('config', 'twitch_bot', botData);
-          console.log('[Twitch Bot] Loaded tokens from DSH');
-        }
-      }
-    } catch (e) {
-      console.log('[Twitch Bot] Could not fetch from DSH');
-    }
-  }
-  if (!botData) {
-    try {
-      const sharedPath = '/data/hearmeout-twitch-auth.json';
-      const fs = await import('fs/promises');
-      const data = await fs.readFile(sharedPath, 'utf8');
-      const sharedTokens = JSON.parse(data);
-      db.set('config', 'twitch_bot', sharedTokens);
-      botData = sharedTokens;
-    } catch (e) {
-      console.log('[Twitch Bot] No shared tokens found');
-    }
-  }
-  if (!botData && process.env.TWITCH_BOT_OAUTH_TOKEN) {
-    botData = {
-      access_token: process.env.TWITCH_BOT_OAUTH_TOKEN,
-      refresh_token: '',
-      username: process.env.TWITCH_BOT_USERNAME || 'Athenabot87',
-    };
-    db.set('config', 'twitch_bot', botData);
-    console.log('[Twitch Bot] Using env var tokens');
-  }
-  if (!botData) {
-    console.error('[Twitch Bot] No tokens in DB. Authorize bot in settings.');
-    return;
+  const valid = await validateAndRefresh(tokens);
+  if (!valid) {
+    console.error(`[Twitch Bot] Token invalid/unrefreshable for server ${serverId}`);
+    return false;
   }
 
-  botTokens = botData;
-  console.log('[Twitch Bot] Loaded tokens for:', botTokens?.username);
-
-  // Validate token before connecting — refresh if expired
-  let tokenValid = false;
-  try {
-    const validateRes = await fetch('https://id.twitch.tv/oauth2/validate', {
-      headers: { 'Authorization': `OAuth ${botTokens!.access_token}` },
-    });
-    tokenValid = validateRes.ok;
-    if (!tokenValid) console.log('[Twitch Bot] Token invalid (status:', validateRes.status, ')');
-  } catch { console.log('[Twitch Bot] Token validation request failed'); }
-
-  if (!tokenValid && botTokens!.refresh_token) {
-    console.log('[Twitch Bot] Refreshing expired token...');
-    const newToken = await refreshToken();
-    if (newToken) {
-      console.log('[Twitch Bot] Token refreshed, proceeding');
-    } else {
-      console.error('[Twitch Bot] Refresh failed — bot may not connect');
-    }
-  } else if (!tokenValid) {
-    console.error('[Twitch Bot] Token invalid, no refresh token. Re-authorize in settings.');
-    return;
-  }
-
-  client = new tmi.client({
+  const channels = new Map<string, string>();
+  const client = new tmi.client({
     identity: {
-      username: botTokens!.username,
-      password: `oauth:${botTokens!.access_token}`,
+      username: tokens.username,
+      password: `oauth:${tokens.accessToken}`,
     },
     channels: [],
   });
 
-  client.on('message', onMessageHandler);
+  const instance: BotInstance = { client, channels, tokens };
+
+  client.on('message', createMessageHandler(instance));
   client.on('connected', () => {
-    console.log('[Twitch Bot] Connected');
-    syncChannels();
-    setInterval(syncChannels, 30000);
+    console.log(`[Twitch Bot] Connected as ${tokens.username} for server ${serverId}`);
+    syncChannels(serverId, instance);
+    setInterval(() => syncChannels(serverId, instance), 30000);
   });
 
-  client.on('notice', async (channel, msgid, message) => {
+  client.on('notice', async (_channel, msgid, message) => {
     if (msgid === 'msg_banned' || message.includes('authentication failed')) {
-      console.log('[Twitch Bot] Auth failed, refreshing token...');
-      const newToken = await refreshToken();
-      if (newToken && client) {
+      console.log(`[Twitch Bot] Auth failed for ${tokens.username}, refreshing...`);
+      const refreshed = await refreshBotToken(tokens);
+      if (refreshed) {
         client.disconnect();
-        client = new tmi.client({
-          identity: { username: botTokens!.username, password: newToken },
+        instance.client = new tmi.client({
+          identity: { username: tokens.username, password: `oauth:${tokens.accessToken}` },
           channels: [],
         });
-        client.connect();
+        instance.client.on('message', createMessageHandler(instance));
+        instance.client.connect();
       }
     }
   });
 
-  await client.connect().catch(console.error);
+  try {
+    await client.connect();
+    botInstances.set(serverId, instance);
+    return true;
+  } catch (e) {
+    console.error(`[Twitch Bot] Connect failed for server ${serverId}:`, e);
+    return false;
+  }
+}
+
+async function initializeAllBots() {
+  if (isInitialized) return;
+  await ensureDb();
+
+  // For now, start bot for the configured server
+  // Multi-tenant: iterate all servers that have tokens
+  const serverId = process.env.HARDCODED_GUILD_ID || '1240832965865635881';
+  await startBotForServer(serverId);
+
   isInitialized = true;
 }
 
-export async function GET(req: NextRequest) {
-  if (!isInitialized) {
-    await initializeTwitchBot();
-  }
+// --- API handlers ---
 
-  // Validate current token
-  let tokenStatus = 'unknown';
-  if (botTokens?.access_token) {
+export async function GET(req: NextRequest) {
+  if (!isInitialized) await initializeAllBots();
+
+  const instances: Record<string, any> = {};
+  for (const [serverId, inst] of botInstances) {
+    let tokenStatus = 'unknown';
     try {
       const v = await fetch('https://id.twitch.tv/oauth2/validate', {
-        headers: { 'Authorization': `OAuth ${botTokens.access_token}` },
+        headers: { 'Authorization': `OAuth ${inst.tokens.accessToken}` },
       });
       if (v.ok) {
         const info = await v.json();
-        tokenStatus = `valid (${info.login}, expires in ${info.expires_in}s)`;
+        tokenStatus = `valid (${info.login}, expires ${info.expires_in}s)`;
       } else {
         tokenStatus = `invalid (${v.status})`;
       }
-    } catch (e) {
-      tokenStatus = 'validation failed';
-    }
-  } else {
-    tokenStatus = 'no token';
+    } catch { tokenStatus = 'validation failed'; }
+
+    instances[serverId] = {
+      connected: inst.client.readyState() === 'OPEN',
+      username: inst.tokens.username,
+      tokenStatus,
+      channels: Object.fromEntries(inst.channels),
+    };
   }
 
   return NextResponse.json({
     status: isInitialized ? 'running' : 'not initialized',
-    connected: client?.readyState() === 'OPEN',
-    botUsername: botTokens?.username || 'none',
-    tokenStatus,
-    hasRefreshToken: !!botTokens?.refresh_token,
-    activeChannels: Object.fromEntries(activeChannels),
-    channelCount: activeChannels.size,
+    serverCount: botInstances.size,
+    instances,
   });
 }
 
-// POST /api/twitch-bot?action=test&channel=mtman1987
 export async function POST(req: NextRequest) {
   const { searchParams } = new URL(req.url);
   const action = searchParams.get('action');
+  const serverId = searchParams.get('serverId') || process.env.HARDCODED_GUILD_ID || '1240832965865635881';
 
   if (action === 'test') {
-    const channel = searchParams.get('channel') || 'mtman1987';
+    if (!isInitialized) await initializeAllBots();
+    const inst = botInstances.get(serverId);
+    if (!inst) return NextResponse.json({ error: `No bot for server ${serverId}` }, { status: 500 });
+    if (inst.client.readyState() !== 'OPEN') return NextResponse.json({ error: 'Not connected' }, { status: 500 });
 
-    if (!isInitialized) await initializeTwitchBot();
-    if (!client) return NextResponse.json({ error: 'Bot not initialized' }, { status: 500 });
-
-    const connected = client.readyState() === 'OPEN';
-    if (!connected) return NextResponse.json({ error: 'Bot not connected to Twitch', readyState: client.readyState() }, { status: 500 });
-
-    const inChannel = activeChannels.has(channel.toLowerCase());
-
+    const channel = searchParams.get('channel') || inst.tokens.username;
     try {
-      if (!inChannel) await client.join(channel);
-      await client.say(channel, `🤖 HearMeOut bot check — I'm alive! (${new Date().toLocaleTimeString()})`);
-      return NextResponse.json({
-        success: true,
-        message: `Test message sent to #${channel}`,
-        wasInChannel: inChannel,
-        activeChannels: Object.fromEntries(activeChannels),
-      });
+      if (!inst.channels.has(channel.toLowerCase())) await inst.client.join(channel);
+      await inst.client.say(channel, `🤖 HearMeOut bot check — alive! (${new Date().toLocaleTimeString()})`);
+      return NextResponse.json({ success: true, channel, channels: Object.fromEntries(inst.channels) });
     } catch (e: any) {
       return NextResponse.json({ error: e.message || String(e) }, { status: 500 });
     }
   }
 
   if (action === 'refresh') {
-    const newToken = await refreshToken();
-    return NextResponse.json({ success: !!newToken, refreshed: !!newToken });
+    const inst = botInstances.get(serverId);
+    if (!inst) return NextResponse.json({ error: 'No bot instance' }, { status: 500 });
+    const ok = await refreshBotToken(inst.tokens);
+    return NextResponse.json({ success: ok });
   }
 
   if (action === 'restart') {
-    if (client) { try { client.disconnect(); } catch {} }
-    client = null;
-    isInitialized = false;
-    await initializeTwitchBot();
-    return NextResponse.json({ success: isInitialized, status: isInitialized ? 'restarted' : 'failed' });
+    const inst = botInstances.get(serverId);
+    if (inst) { try { inst.client.disconnect(); } catch {} }
+    botInstances.delete(serverId);
+    const ok = await startBotForServer(serverId);
+    return NextResponse.json({ success: ok, status: ok ? 'restarted' : 'failed' });
   }
 
-  return NextResponse.json({ error: 'Unknown action. Use ?action=test&channel=xxx or ?action=refresh or ?action=restart' }, { status: 400 });
+  return NextResponse.json({ error: 'Use ?action=test|refresh|restart[&serverId=xxx][&channel=xxx]' }, { status: 400 });
 }

@@ -123,7 +123,7 @@ export default function OverlayCard({ participant, roomId }: OverlayProps) {
         const track = destination.stream.getAudioTracks()[0];
         musicTrackRef.current = await room.localParticipant.publishTrack(track, {
           name: 'overlay-music',
-          source: LivekitClient.Track.Source.Music,
+          source: LivekitClient.Track.Source.Unknown,
         });
 
         toast({ title: 'Overlay Music Active 🎵', description: `Playing: ${currentTrack.title.slice(0, 50)}` });

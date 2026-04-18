@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { readFileSync, existsSync } from 'fs';
+import { readFileSync, existsSync, statSync } from 'fs';
 import { join } from 'path';
 
 const CACHE_DIR = process.env.MUSIC_CACHE_DIR || join(process.cwd(), 'data', 'music');
@@ -13,10 +13,14 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ vide
   }
 
   const file = readFileSync(filePath);
+  const stat = statSync(filePath);
+
   return new NextResponse(file, {
     headers: {
       'Content-Type': 'audio/mpeg',
+      'Content-Length': String(stat.size),
       'Cache-Control': 'public, max-age=604800',
+      'Accept-Ranges': 'bytes',
     },
   });
 }

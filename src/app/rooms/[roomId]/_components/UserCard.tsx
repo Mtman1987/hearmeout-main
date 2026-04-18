@@ -47,7 +47,7 @@ export default function UserCard({ participant, isLocal, isHost, roomId }: { par
   const { devices: audioInputDevices, activeDeviceId: activeAudioInputDeviceId, setDevice: setAudioInputDevice } = useAudioDevice({ kind: 'audioinput' });
   const { devices: audioOutputDevices, activeDeviceId: activeAudioOutputDeviceId, setDevice: setAudioOutputDevice } = useAudioDevice({ kind: 'audiooutput' });
 
-  const allAudioTracks = useTracks([LivekitClient.Track.Source.Microphone, LivekitClient.Track.Source.Unknown], { onlySubscribed: true, participant }).filter(track => track.participant.identity === participant.identity && track.publication);
+  const allAudioTracks = useTracks([LivekitClient.Track.Source.Microphone, LivekitClient.Track.Source.Unknown], { onlySubscribed: true }).filter(track => track.participant.identity === participant.identity && track.publication);
   const { name, identity } = participant;
   const [trackAudioLevel, setTrackAudioLevel] = useState(0);
   const isSpeaking = participant.isSpeaking;
@@ -56,8 +56,8 @@ export default function UserCard({ participant, isLocal, isHost, roomId }: { par
     if (!participant) return;
     const handleAudioLevel = (level: number) => setTrackAudioLevel(level);
     const audioTrack = participant.getTrackPublication(LivekitClient.Track.Source.Microphone);
-    if (audioTrack?.audioTrack) audioTrack.audioTrack.on('audioLevel', handleAudioLevel);
-    return () => { const at = participant.getTrackPublication(LivekitClient.Track.Source.Microphone); if (at?.audioTrack) at.audioTrack.off('audioLevel', handleAudioLevel); };
+    if (audioTrack?.audioTrack) (audioTrack.audioTrack as any).on('audioLevel', handleAudioLevel);
+    return () => { const at = participant.getTrackPublication(LivekitClient.Track.Source.Microphone); if (at?.audioTrack) (at.audioTrack as any).off('audioLevel', handleAudioLevel); };
   }, [participant]);
 
   useEffect(() => { if (isLocal) return; if (volume > 0) { lastNonZeroVolume.current = volume; setIsMutedByMe(false); } else { setIsMutedByMe(true); } }, [volume, isLocal]);

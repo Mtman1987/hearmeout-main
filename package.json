@@ -4,11 +4,9 @@
   "private": true,
   "scripts": {
     "dev": "next dev -p 3001",
-    "twitch-bot": "tsx src/bots/twitch-bot.ts",
     "genkit:dev": "genkit start -- tsx src/ai/dev.ts",
     "genkit:watch": "genkit start -- tsx --watch src/ai/dev.ts",
     "postinstall": "echo Skip",
-    "twitch-bot-standalone": "tsx src/bots/twitch-bot.ts",
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
@@ -52,6 +50,7 @@
     "lucide-react": "^0.475.0",
     "next": "^16.2.3",
     "patch-package": "^8.0.0",
+    "puppeteer": "^24.41.0",
     "react": "^19.2.1",
     "react-day-picker": "^9.11.3",
     "react-dom": "^19.2.1",
@@ -64,6 +63,7 @@
     "tmi.js": "^1.8.5",
     "tweetnacl": "^1.0.3",
     "youtube-sr": "^4.3.8",
+    "youtubei.js": "^17.0.1",
     "yt-dlp-wrap": "^2.3.12",
     "ytdl-core": "^4.11.5",
     "zod": "^3.24.2"

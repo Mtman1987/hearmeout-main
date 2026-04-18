@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { sendControlEmbed } from '@/bots/discord-bot';
+import { sendControlEmbed } from '@/lib/discord-embed';
 
 export async function POST(req: NextRequest) {
   try {

@@ -69,24 +69,13 @@ export default function SettingsPage() {
   }, [toast]);
 
   const [botData, setBotData] = useState<any>(null);
-  const [discordData, setDiscordData] = useState<any>(null);
 
   useEffect(() => {
-    fetch('/api/db?collection=config&id=twitch_bot')
+    const serverId = process.env.NEXT_PUBLIC_HARDCODED_GUILD_ID || '1240832965865635881';
+    fetch(`/api/db?collection=config&id=twitch_bot_${serverId}`)
       .then(res => res.json())
       .then(result => { if (result.exists) setBotData(result.data); })
       .catch(console.error);
-
-    // Check Discord OAuth tokens from DSH
-    const serverId = '1240832965865635881';
-    const apiKey = ''; // DSH allows same-origin GET without key, but cross-origin needs it
-    const headers: Record<string, string> = {};
-    // We're cross-origin from HMO to DSH, so we'd need the key
-    // But the status endpoint doesn't use /api/db, so it should work
-    fetch(`https://discord-stream-hub-new.fly.dev/api/discord/oauth/status?serverId=${serverId}`)
-      .then(res => res.ok ? res.json() : null)
-      .then(result => { if (result?.connected) setDiscordData({ ...result, username: result.user?.username }); })
-      .catch(() => {});
   }, []);
 
   const { data: userData } = useDoc(user ? 'users' : null, user?.uid || null);
@@ -155,7 +144,7 @@ export default function SettingsPage() {
                                         <div className="flex items-center gap-3 p-3 bg-green-50 dark:bg-green-950/30 rounded-lg">
                                             <div className="w-2 h-2 bg-green-500 rounded-full" />
                                             <div>
-                                                <p className="font-semibold text-green-800 dark:text-green-300">Connected as {botData.username}</p>
+                                                <p className="font-semibold text-green-800 dark:text-green-300">Connected as {botData.username || botData.botUsername}</p>
                                                 {botData.updated_at && <p className="text-xs text-green-700 dark:text-green-400">Updated: {new Date(botData.updated_at).toLocaleString()}</p>}
                                             </div>
                                         </div>
@@ -173,20 +162,20 @@ export default function SettingsPage() {
                                         <MessageCircle className="h-5 w-5" />
                                         Discord Bot Status
                                     </CardTitle>
-                                    <CardDescription>Discord OAuth tokens are managed through Discord Stream Hub</CardDescription>
+                                    <CardDescription>Discord bot token is set via environment variable (DISCORD_BOT_TOKEN)</CardDescription>
                                 </CardHeader>
                                 <CardContent>
-                                    {discordData ? (
+                                    {process.env.NEXT_PUBLIC_DISCORD_CLIENT_ID ? (
                                         <div className="flex items-center gap-3 p-3 bg-indigo-50 dark:bg-indigo-950/30 rounded-lg">
                                             <div className="w-2 h-2 bg-indigo-500 rounded-full" />
                                             <div>
-                                                <p className="font-semibold text-indigo-800 dark:text-indigo-300">Connected{discordData.username ? ` as ${discordData.username}` : ''}</p>
-                                                {discordData.updatedAt && <p className="text-xs text-indigo-700 dark:text-indigo-400">Updated: {new Date(discordData.updatedAt).toLocaleString()}</p>}
+                                                <p className="font-semibold text-indigo-800 dark:text-indigo-300">Bot configured</p>
+                                                <p className="text-xs text-indigo-700 dark:text-indigo-400">App ID: {process.env.NEXT_PUBLIC_DISCORD_CLIENT_ID}</p>
                                             </div>
                                         </div>
                                     ) : (
                                         <p className="text-sm text-muted-foreground">
-                                            Not connected. <a href="https://discord-stream-hub-new.fly.dev/settings" target="_blank" className="underline font-medium">Authorize in DSH Settings</a>
+                                            Not configured. Set DISCORD_BOT_TOKEN in environment.
                                         </p>
                                     )}
                                 </CardContent>

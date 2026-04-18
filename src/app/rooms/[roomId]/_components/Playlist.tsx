@@ -11,7 +11,7 @@ export default function Playlist({ playlist, onPlaySong, currentTrackId, isPlaye
     onPlaySong: (songId: string) => void, 
     currentTrackId: string, 
     isPlayerControlAllowed: boolean,
-    onRemoveSong: (songId: string) => void
+    onRemoveSong?: (songId: string) => void
 }) {
   
   if (!playlist || playlist.length === 0) {
@@ -59,7 +59,7 @@ export default function Playlist({ playlist, onPlaySong, currentTrackId, isPlaye
               </div>
               {isPlaying && <Music className="h-5 w-5 text-primary shrink-0" />}
               
-              {isPlayerControlAllowed && (
+              {isPlayerControlAllowed && onRemoveSong && (
                 <Button
                   variant="ghost"
                   size="icon"
