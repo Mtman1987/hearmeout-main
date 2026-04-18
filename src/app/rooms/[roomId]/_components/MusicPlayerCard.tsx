@@ -65,7 +65,7 @@ export default function MusicPlayerCard({
             {playing && currentTrack && (
               <div className="mt-2 flex items-center gap-2 text-xs text-green-500">
                 <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse" />
-                Playing on overlay
+                Playing
               </div>
             )}
           </div>
@@ -104,7 +104,7 @@ export default function MusicPlayerCard({
           <Slider value={[volume]} onValueChange={(value) => onVolumeChange(value[0])} max={1} step={0.05} />
           <span className="text-[10px] text-muted-foreground w-8 text-right">{Math.round(volume * 100)}%</span>
         </div>
-        <p className="text-[10px] text-muted-foreground text-center">Music plays on the OBS overlay — controls are remote</p>
+        <p className="text-[10px] text-muted-foreground text-center">Volume controls your local music level</p>
       </CardContent>
     </Card>
   );

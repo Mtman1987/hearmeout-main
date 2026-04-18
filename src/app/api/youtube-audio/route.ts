@@ -1,78 +1,49 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { existsSync, mkdirSync } from 'fs';
-import { join } from 'path';
-import { exec } from 'child_process';
-import { promisify } from 'util';
+import { extractAudioUrl } from '@/lib/yt-extract';
+import { getCachedUrl } from '@/lib/music-ripper';
 
-const execAsync = promisify(exec);
+// In-memory cache of extracted URLs
+const urlCache = new Map<string, { url: string; expires: number }>();
 
-const YT_DLP = process.env.YT_DLP_PATH || 'yt-dlp';
-const CACHE_DIR = process.env.MUSIC_CACHE_DIR || join(process.cwd(), 'data', 'music');
-
-if (!existsSync(CACHE_DIR)) {
-  mkdirSync(CACHE_DIR, { recursive: true });
-}
-
-function extractVideoId(url: string): string | null {
-  try {
-    const u = new URL(url);
-    if (u.hostname.includes("youtube.com")) return u.searchParams.get("v");
-    if (u.hostname.includes("youtu.be")) return u.pathname.slice(1);
-  } catch {}
+export function getExtractedUrl(videoId: string): string | null {
+  const cached = urlCache.get(videoId);
+  if (cached && cached.expires > Date.now()) return cached.url;
   return null;
 }
 
-export async function GET(req: NextRequest) {
-  const { searchParams } = new URL(req.url);
-  const urlParam = searchParams.get('url') || '';
-  const videoIdParam = searchParams.get('videoId') || '';
-  
-  let videoId: string;
-  if (videoIdParam) {
-    videoId = videoIdParam;
-  } else if (urlParam) {
-    const extracted = extractVideoId(urlParam);
-    if (!extracted) return NextResponse.json({ error: "Invalid YouTube URL" }, { status: 400 });
-    videoId = extracted;
-  } else {
-    return NextResponse.json({ error: "Missing URL or videoId parameter" }, { status: 400 });
-  }
-
-  const youTubeUrl = urlParam || `https://youtube.com/watch?v=${videoId}`;
-  const filePath = join(CACHE_DIR, `${videoId}.mp3`);
-
-  // Serve from cache if exists
-  if (existsSync(filePath)) {
-    console.log(`Cached: ${videoId}`);
-    return NextResponse.json({ audioUrl: `/api/music/${videoId}` });
-  }
-
-  try {
-    console.log(`Extracting audio URL for ${videoId} via yt-dlp...`);
-    const ytDlpCmd = `"${YT_DLP}" -f "bestaudio[ext=m4a]/bestaudio/best" --no-playlist --get-url "${youTubeUrl}"`;
-    const { stdout } = await execAsync(ytDlpCmd);
-    const audioUrl = stdout.trim();
-    if (!audioUrl) throw new Error('No audio stream found');
-
-    console.log(`Found audio stream: ${videoId}`);
-    return NextResponse.json({ audioUrl });
-  } catch (e: any) {
-    console.error('YouTube audio fetch failed:', e.message);
-    // Fallback: try without bestaudio filter if format fails
-    if (e.message.includes('requested format') || e.message.includes('no video formats')) {
-      console.log(`Retrying ${videoId} with simpler format...`);
-      try {
-        const { stdout: fallbackStdout } = await execAsync(`"${YT_DLP}" --no-playlist --get-url "${youTubeUrl}"`);
-        const fallbackUrl = fallbackStdout.trim();
-        if (fallbackUrl) {
-          console.log(`Fallback stream found for ${videoId}`);
-          return NextResponse.json({ audioUrl: fallbackUrl });
-        }
-      } catch (fallbackErr) {
-        console.error('Fallback also failed:', fallbackErr);
-      }
-    }
-    return NextResponse.json({ error: `YouTube fetch failed: ${e.message}` }, { status: 500 });
-  }
+export function setExtractedUrl(videoId: string, url: string) {
+  urlCache.set(videoId, { url, expires: Date.now() + 5 * 60 * 60 * 1000 });
 }
 
+// GET: Extract audio URL for a video
+export async function GET(req: NextRequest) {
+  const videoId = new URL(req.url).searchParams.get('videoId');
+  if (!videoId) return NextResponse.json({ error: 'videoId required' }, { status: 400 });
+
+  // Check mp3 cache
+  const cachedMp3 = getCachedUrl(videoId);
+  if (cachedMp3) {
+    return NextResponse.json({ videoId, cached: true, audioUrl: cachedMp3 });
+  }
+
+  // Check URL cache
+  const cachedUrl = getExtractedUrl(videoId);
+  if (cachedUrl) {
+    return NextResponse.json({ videoId, cached: false, audioUrl: `/api/youtube-audio/stream?videoId=${videoId}` });
+  }
+
+  // Extract via Piped
+  const extracted = await extractAudioUrl(videoId);
+  if (!extracted) {
+    return NextResponse.json({ videoId, cached: false, audioUrl: null, error: 'Extraction failed' }, { status: 404 });
+  }
+
+  // Cache the URL
+  setExtractedUrl(videoId, extracted.url);
+
+  return NextResponse.json({
+    videoId,
+    cached: false,
+    audioUrl: `/api/youtube-audio/stream?videoId=${videoId}`,
+  });
+}

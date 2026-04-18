@@ -4,7 +4,7 @@ const nextConfig = {
     ignoreBuildErrors: true,
   },
 
-  serverExternalPackages: ['sql.js'],
+  serverExternalPackages: ['sql.js', 'puppeteer'],
   images: {
     remotePatterns: [
       { protocol: 'https', hostname: 'i.ytimg.com' },
