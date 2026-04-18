@@ -111,6 +111,8 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
 
     const musicRoomRef = useRef<LKRoom | null>(null);
     const musicAudioRef = useRef<HTMLAudioElement | null>(null);
+    const localVolumeRef = useRef(localVolume);
+    useEffect(() => { localVolumeRef.current = localVolume; }, [localVolume]);
 
     // Connect to LiveKit Music Room as subscriber.
     // The room owner/DJ already hears the music locally from /dj/[roomId]
@@ -143,7 +145,7 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
                         console.log('[MusicRoom] 🎵 Audio track received — attaching');
                         if (!musicAudioRef.current) musicAudioRef.current = new Audio();
                         track.attach(musicAudioRef.current);
-                        musicAudioRef.current.volume = localVolume;
+                        musicAudioRef.current.volume = localVolumeRef.current;
                         musicAudioRef.current.play().catch(e => console.warn('[MusicRoom] Autoplay blocked:', e));
                         setMusicStatus('🎵 streaming');
                     }
@@ -210,16 +212,6 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
       return () => clearInterval(interval);
     }, [user, roomId, router, toast]);
 
-    if (isBanned) {
-      return (
-        <div className="flex-1 flex flex-col items-center justify-center text-center p-4">
-          <h3 className="text-2xl font-bold font-headline mb-4">You are banned from this room</h3>
-          <p className="text-muted-foreground mb-8">Contact the room owner if you think this is a mistake.</p>
-          <Button onClick={() => router.push('/')}>Go Home</Button>
-        </div>
-      );
-    }
-
     useEffect(() => {
         if (isUserLoading || !user || !roomId) return;
         if (voiceToken) return;
@@ -256,6 +248,16 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
     }, [room, roomId, canControl]);
 
     const livekitUrl = process.env.NEXT_PUBLIC_LIVEKIT_URL;
+
+    if (isBanned) {
+      return (
+        <div className="flex-1 flex flex-col items-center justify-center text-center p-4">
+          <h3 className="text-2xl font-bold font-headline mb-4">You are banned from this room</h3>
+          <p className="text-muted-foreground mb-8">Contact the room owner if you think this is a mistake.</p>
+          <Button onClick={() => router.push('/')}>Go Home</Button>
+        </div>
+      );
+    }
 
     if (!livekitUrl || !voiceToken) {
         return (

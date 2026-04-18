@@ -11,6 +11,7 @@ interface BotInstance {
   client: tmi.Client;
   channels: Map<string, string>; // twitchChannel -> roomId
   tokens: ServerBotTokens;
+  syncInterval?: ReturnType<typeof setInterval>;
 }
 
 interface ServerBotTokens {
@@ -327,8 +328,9 @@ async function startBotForServer(serverId: string): Promise<boolean> {
   client.on('message', createMessageHandler(instance));
   client.on('connected', () => {
     console.log(`[Twitch Bot] Connected as ${tokens.username} for server ${serverId}`);
+    if (instance.syncInterval) clearInterval(instance.syncInterval);
     syncChannels(serverId, instance);
-    setInterval(() => syncChannels(serverId, instance), 30000);
+    instance.syncInterval = setInterval(() => syncChannels(serverId, instance), 30000);
   });
 
   client.on('notice', async (_channel, msgid, message) => {
@@ -336,6 +338,7 @@ async function startBotForServer(serverId: string): Promise<boolean> {
       console.log(`[Twitch Bot] Auth failed for ${tokens.username}, refreshing...`);
       const refreshed = await refreshBotToken(tokens);
       if (refreshed) {
+        if (instance.syncInterval) clearInterval(instance.syncInterval);
         client.disconnect();
         instance.client = new tmi.client({
           identity: { username: tokens.username, password: `oauth:${tokens.accessToken}` },
@@ -434,7 +437,10 @@ export async function POST(req: NextRequest) {
 
   if (action === 'restart') {
     const inst = botInstances.get(serverId);
-    if (inst) { try { inst.client.disconnect(); } catch {} }
+    if (inst) {
+      if (inst.syncInterval) clearInterval(inst.syncInterval);
+      try { inst.client.disconnect(); } catch {}
+    }
     botInstances.delete(serverId);
     const ok = await startBotForServer(serverId);
     return NextResponse.json({ success: ok, status: ok ? 'restarted' : 'failed' });
