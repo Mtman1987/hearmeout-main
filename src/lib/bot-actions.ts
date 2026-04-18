@@ -97,6 +97,9 @@ export async function addSongToPlaylist(
     if (!room.isPlaying || !room.currentTrackId) {
       updates.currentTrackId = videoId;
       updates.isPlaying = true;
+      if (room.currentTrackId) {
+        updates.playHistory = [...(room.playHistory || []), room.currentTrackId].slice(-50);
+      }
     }
 
     db.update('rooms', roomId, updates);
@@ -129,8 +132,73 @@ export async function skipTrack(roomId: string): Promise<{ success: boolean; mes
   if (!playlist.length) return { success: false, message: 'Playlist is empty.' };
   const currentIndex = playlist.findIndex((t: any) => t.id === room.currentTrackId);
   const nextTrack = playlist[(currentIndex + 1) % playlist.length];
-  db.update('rooms', roomId, { currentTrackId: nextTrack.id, isPlaying: true });
+  const updates: any = { currentTrackId: nextTrack.id, isPlaying: true };
+  if (room.currentTrackId) {
+    updates.playHistory = [...(room.playHistory || []), room.currentTrackId].slice(-50);
+  }
+  db.update('rooms', roomId, updates);
   return { success: true, message: 'Skipped to next track.' };
+}
+
+export async function autoRadioNext(roomId: string): Promise<{ success: boolean; message: string }> {
+  if (!roomId) return { success: false, message: 'No room ID provided.' };
+  await ensureDb();
+  const room = db.get('rooms', roomId);
+  if (!room) return { success: false, message: 'Room not found.' };
+  if (!room.autoRadio) return { success: false, message: 'Auto-radio is not enabled.' };
+
+  const playHistory: string[] = room.playHistory || [];
+  const playlist: PlaylistItem[] = room.playlist || [];
+
+  const recentTracks = [...playlist].reverse().slice(0, 5);
+  const historyIds = new Set<string>([...playHistory, ...playlist.map((t) => t.id)]);
+
+  let seedQuery = 'music';
+  if (recentTracks.length > 0) {
+    const seed = recentTracks[Math.floor(Math.random() * recentTracks.length)];
+    seedQuery = seed.artist && seed.artist !== 'Unknown Artist' && seed.artist !== 'Unknown'
+      ? `${seed.artist} music`
+      : seed.title;
+  }
+
+  try {
+    const results = await YouTube.search(seedQuery, { limit: 10, type: 'video' });
+    const candidates = results.filter((v) => v.id && !historyIds.has(v.id));
+    if (!candidates.length) return { success: false, message: 'No new songs found for auto-radio.' };
+
+    const video = candidates[Math.floor(Math.random() * Math.min(candidates.length, 5))];
+    const videoId = video.id!;
+    const newTrack: PlaylistItem = {
+      id: videoId,
+      title: video.title || 'Untitled',
+      artist: video.channel?.name || 'Unknown Artist',
+      url: video.url,
+      thumbnail: video.thumbnail?.url,
+      artId: selectArtId(videoId),
+      duration: video.duration || 180000,
+      addedBy: 'Auto-Radio',
+      addedAt: new Date(),
+      plays: 0,
+      source: 'web' as const,
+    };
+
+    const newPlaylist = [...playlist, newTrack];
+    const historySeed = room.currentTrackId
+      ? [...playHistory, room.currentTrackId]
+      : playHistory;
+    const newHistory = [...historySeed, videoId].slice(-50);
+    db.update('rooms', roomId, {
+      playlist: newPlaylist,
+      currentTrackId: videoId,
+      isPlaying: true,
+      playHistory: newHistory,
+    });
+
+    return { success: true, message: `Auto-radio queued: "${newTrack.title}"` };
+  } catch (error: any) {
+    console.error('[Auto-Radio] Error:', error);
+    return { success: false, message: 'Auto-radio search failed.' };
+  }
 }
 
 export async function getRoomState(roomId: string) {

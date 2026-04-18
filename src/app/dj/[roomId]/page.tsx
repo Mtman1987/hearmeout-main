@@ -19,6 +19,8 @@ interface RoomData {
   currentTrackId: string;
   isPlaying: boolean;
   djActive: boolean;
+  autoRadio?: boolean;
+  playHistory?: string[];
 }
 
 function extractVideoId(trackId: string, trackUrl?: string): string {
@@ -50,6 +52,7 @@ export default function DJPage() {
   const roomDataRef = useRef<RoomData | null>(null);
   const lastTrackRef = useRef<string | null>(null);
   const liveRef = useRef(false);
+  const autoRadioRequestedRef = useRef(false);
 
   const [status, setStatus] = useState('Click "Start DJ Session" to begin');
   const [currentTrack, setCurrentTrack] = useState('');
@@ -259,6 +262,14 @@ export default function DJPage() {
         if (!currentTrackId) {
           if (!audioEl.paused) audioEl.pause();
           setCurrentTrack('');
+          if (data.autoRadio && liveRef.current && !autoRadioRequestedRef.current) {
+            autoRadioRequestedRef.current = true;
+            fetch('/api/auto-radio', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ roomId }),
+            }).catch(() => {});
+          }
           return;
         }
 
@@ -267,6 +278,7 @@ export default function DJPage() {
 
         if (lastTrackRef.current !== currentTrackId) {
           lastTrackRef.current = currentTrackId;
+          autoRadioRequestedRef.current = false;
           setCurrentTrack(track?.title || videoId);
           if (wantPlay && liveRef.current) {
             await loadAndPlay(videoId);
@@ -296,8 +308,32 @@ export default function DJPage() {
   // Auto-advance when a track ends
   const handleEnded = useCallback(() => {
     const r = roomDataRef.current;
-    if (!r?.playlist?.length) return;
+    if (!r?.playlist?.length) {
+      if (r?.autoRadio && !autoRadioRequestedRef.current) {
+        autoRadioRequestedRef.current = true;
+        fetch('/api/auto-radio', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ roomId }),
+        }).catch(() => {});
+      }
+      return;
+    }
     const i = r.playlist.findIndex((t) => t.id === r.currentTrackId);
+    const isLastTrack = i === r.playlist.length - 1;
+
+    if (isLastTrack && r.autoRadio) {
+      if (!autoRadioRequestedRef.current) {
+        autoRadioRequestedRef.current = true;
+        fetch('/api/auto-radio', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ roomId }),
+        }).catch(() => {});
+      }
+      return;
+    }
+
     const next = r.playlist[(i + 1) % r.playlist.length];
     if (!next) return;
     fetch('/api/db', {

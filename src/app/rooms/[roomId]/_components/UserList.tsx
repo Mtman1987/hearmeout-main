@@ -17,6 +17,8 @@ export interface RoomData {
   currentTrackId?: string;
   isPlaying?: boolean;
   djActive?: boolean;
+  autoRadio?: boolean;
+  playHistory?: string[];
 }
 
 interface UserListProps {
@@ -25,9 +27,11 @@ interface UserListProps {
   localVolume: number;
   onVolumeChange: (v: number) => void;
   showDJ: boolean;
+  autoRadio?: boolean;
+  onToggleAutoRadio?: () => void;
 }
 
-export default function UserList({ roomId, musicStatus, localVolume, onVolumeChange, showDJ }: UserListProps) {
+export default function UserList({ roomId, musicStatus, localVolume, onVolumeChange, showDJ, autoRadio, onToggleAutoRadio }: UserListProps) {
   const { user } = useSession();
   const { localParticipant } = useLocalParticipant();
   const remoteParticipants = useRemoteParticipants();
@@ -63,6 +67,8 @@ export default function UserList({ roomId, musicStatus, localVolume, onVolumeCha
               localVolume={localVolume}
               onVolumeChange={onVolumeChange}
               canControl={canControl}
+              autoRadio={autoRadio}
+              onToggleAutoRadio={onToggleAutoRadio}
             />
           )}
           {/* Real users */}
