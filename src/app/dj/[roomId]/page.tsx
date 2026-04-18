@@ -310,7 +310,11 @@ export default function DJPage() {
             await loadAndPlay(videoId);
           }
         } else if (liveRef.current) {
-          if (wantPlay && audioEl.paused) {
+          // Don't resurrect a naturally-ended track: while auto-radio is
+          // searching for the next song, audioEl is paused+ended but the DB
+          // still shows the same currentTrackId with isPlaying:true. Playing
+          // here would restart the track from the beginning for everyone.
+          if (wantPlay && audioEl.paused && !audioEl.ended) {
             try {
               await audioEl.play();
             } catch {}
