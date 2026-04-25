@@ -59,7 +59,7 @@ export default function DJPage() {
   const [isLive, setIsLive] = useState(false);
   const [isPlayingLocal, setIsPlayingLocal] = useState(false);
   const [monitorVolume, setMonitorVolume] = useState(0.6);
-  const [monitorMuted, setMonitorMuted] = useState(false);
+  const [monitorMuted, setMonitorMuted] = useState(true);
   const monitorVolumeRef = useRef(monitorVolume);
   const monitorMutedRef = useRef(monitorMuted);
   useEffect(() => { monitorVolumeRef.current = monitorVolume; }, [monitorVolume]);
