@@ -61,6 +61,26 @@ export async function startDJ(roomId: string): Promise<{ success: boolean; messa
     console.log(`[DJ] Navigating to ${djUrl}`);
     await page.goto(djUrl, { waitUntil: 'networkidle2', timeout: 30000 });
 
+    // The DJ page exposes window.__HEARMEOUT_DJ__ = { startSession, stopSession }
+    // once mounted. In a headless browser there is no human to click "Start
+    // DJ Session", so we wait for that bridge and invoke startSession ourselves.
+    // Without this, the page sits idle, never connects to LiveKit, and listeners
+    // hear silence even though the DB shows "playing".
+    try {
+      await page.waitForFunction(
+        () => Boolean((window as unknown as { __HEARMEOUT_DJ__?: { startSession?: () => unknown } }).__HEARMEOUT_DJ__?.startSession),
+        { timeout: 15000 }
+      );
+      await page.evaluate(async () => {
+        const bridge = (window as unknown as { __HEARMEOUT_DJ__?: { startSession?: () => Promise<void> | void } }).__HEARMEOUT_DJ__;
+        await bridge?.startSession?.();
+      });
+      console.log(`[DJ] startSession invoked in headless page for ${roomId}`);
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.error(`[DJ:${roomId}] Failed to invoke startSession in headless page:`, message);
+    }
+
     const instance: DJInstance = { browser, page, roomId, startedAt: new Date() };
     instances.set(roomId, instance);
 
