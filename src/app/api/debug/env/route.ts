@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { getBaseUrl, getDiscordClientId, getDshUrl, getHardcodedGuildId } from '@/lib/runtime-config';
 
 export async function GET() {
   const envStatus = {
@@ -9,9 +10,11 @@ export async function GET() {
       url: process.env.NEXT_PUBLIC_LIVEKIT_URL || 'NOT SET',
     },
     discord: {
-      clientIdSet: !!process.env.NEXT_PUBLIC_DISCORD_CLIENT_ID,
-      clientId: process.env.NEXT_PUBLIC_DISCORD_CLIENT_ID || 'NOT SET',
+      clientIdSet: !!getDiscordClientId(),
+      clientId: getDiscordClientId(),
       secretSet: !!process.env.DISCORD_CLIENT_SECRET,
+      dshUrl: getDshUrl(),
+      guildId: getHardcodedGuildId(),
     },
     twitch: {
       clientIdSet: !!process.env.NEXT_PUBLIC_TWITCH_CLIENT_ID,
@@ -21,7 +24,7 @@ export async function GET() {
       dbFile: process.env.DB_FILE || '/data/app.db',
       musicCacheDir: process.env.MUSIC_CACHE_DIR || '/data/music',
     },
-    baseUrl: process.env.NEXT_PUBLIC_BASE_URL || 'NOT SET',
+    baseUrl: getBaseUrl(),
   };
 
   return NextResponse.json(envStatus);

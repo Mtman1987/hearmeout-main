@@ -11,7 +11,6 @@ interface BotInstance {
   client: tmi.Client;
   channels: Map<string, string>; // twitchChannel -> roomId
   tokens: ServerBotTokens;
-  syncInterval?: ReturnType<typeof setInterval>;
 }
 
 interface ServerBotTokens {
@@ -249,34 +248,44 @@ function syncChannels(serverId: string, instance: BotInstance) {
 
 function createMessageHandler(instance: BotInstance) {
   return function onMessage(target: string, context: tmi.ChatUserstate, msg: string, self: boolean) {
-    if (self || !instance.client) return;
+    // Allow Discord bridge messages even if sent by the same bot account
+    const isDiscordBridgeMessage = msg.trim().startsWith('[Discord]');
+    if ((self && !isDiscordBridgeMessage) || !instance.client) return;
 
     const channelName = target.replace('#', '').toLowerCase();
     const targetRoomId = instance.channels.get(channelName);
     if (!targetRoomId) return;
 
-    const message = msg.trim().toLowerCase();
+    // Match commands anywhere in the message (handles Discord bridge prefixes, badges, etc.)
+    const message = msg.trim();
+    const messageLower = message.toLowerCase();
     const requester = context['display-name'] || 'Someone from Twitch';
     const client = instance.client;
 
-    if (message.startsWith('!sr ')) {
-      const songQuery = msg.substring(4).trim();
+    // Extract requester name from Discord bridge format: [Discord] username: !sr ...
+    let displayRequester = requester;
+    const bridgeMatch = message.match(/^\[Discord\]\s*(.+?):\s*!/i);
+    if (bridgeMatch) displayRequester = bridgeMatch[1].trim();
+
+    const srIndex = messageLower.indexOf('!sr ');
+    if (srIndex !== -1) {
+      const songQuery = message.substring(srIndex + 4).trim();
       if (!songQuery) {
-        client.say(target, `@${requester}, usage: !sr [song name or YouTube URL]`);
+        client.say(target, `@${displayRequester}, usage: !sr [song name or YouTube URL]`);
         return;
       }
-      addSongToPlaylist(songQuery, targetRoomId, `${requester} (Twitch)`)
+      addSongToPlaylist(songQuery, targetRoomId, `${displayRequester} (Twitch)`)
         .then(result => {
           client.say(target, result.success
-            ? `✅ @${requester} ${result.message}`
-            : `❌ @${requester} Sorry: ${result.message}`);
+            ? `✅ @${displayRequester} ${result.message}`
+            : `❌ @${displayRequester} Sorry: ${result.message}`);
         })
         .catch(() => {
-          client.say(target, `❌ @${requester} A critical error occurred.`);
+          client.say(target, `❌ @${displayRequester} A critical error occurred.`);
         });
     }
 
-    if (message === '!np') {
+    if (messageLower.includes('!np')) {
       getRoomState(targetRoomId).then(state => {
         if (!state?.currentTrack) { client.say(target, "🎵 Nothing playing. Use !sr to request!"); return; }
         const s = state.isPlaying ? "▶️" : "⏸️";
@@ -284,48 +293,20 @@ function createMessageHandler(instance: BotInstance) {
       }).catch(() => client.say(target, "❌ Error fetching now playing."));
     }
 
-    if (message === '!status') {
+    if (messageLower.includes('!status')) {
       getRoomState(targetRoomId).then(state => {
         const s = state?.isPlaying ? "▶️" : "⏸️";
         client.say(target, `🎵 DJ: ${state?.djDisplayName || 'None'} | ${s} | Queue: ${state?.playlistLength || 0}`);
       }).catch(() => client.say(target, "❌ Error fetching status."));
     }
 
-    if (message === '!help' || message === '!commands') {
+    if (messageLower.includes('!help') || messageLower.includes('!commands')) {
       client.say(target, "🎵 Commands: !sr [song/URL] | !np | !status | !help");
     }
   };
 }
 
 // --- Bot lifecycle ---
-
-function attachBotHandlers(instance: BotInstance, serverId: string) {
-  const { client, tokens } = instance;
-  client.on('message', createMessageHandler(instance));
-  client.on('connected', () => {
-    console.log(`[Twitch Bot] Connected as ${tokens.username} for server ${serverId}`);
-    if (instance.syncInterval) clearInterval(instance.syncInterval);
-    syncChannels(serverId, instance);
-    instance.syncInterval = setInterval(() => syncChannels(serverId, instance), 30000);
-  });
-
-  client.on('notice', async (_channel, msgid, message) => {
-    if (msgid === 'msg_banned' || message.includes('authentication failed')) {
-      console.log(`[Twitch Bot] Auth failed for ${tokens.username}, refreshing...`);
-      const refreshed = await refreshBotToken(tokens);
-      if (refreshed) {
-        if (instance.syncInterval) clearInterval(instance.syncInterval);
-        try { instance.client.disconnect(); } catch {}
-        instance.client = new tmi.client({
-          identity: { username: tokens.username, password: `oauth:${tokens.accessToken}` },
-          channels: [],
-        });
-        attachBotHandlers(instance, serverId);
-        instance.client.connect();
-      }
-    }
-  });
-}
 
 async function startBotForServer(serverId: string): Promise<boolean> {
   if (botInstances.has(serverId)) return true;
@@ -352,10 +333,32 @@ async function startBotForServer(serverId: string): Promise<boolean> {
   });
 
   const instance: BotInstance = { client, channels, tokens };
-  attachBotHandlers(instance, serverId);
+
+  client.on('message', createMessageHandler(instance));
+  client.on('connected', () => {
+    console.log(`[Twitch Bot] Connected as ${tokens.username} for server ${serverId}`);
+    syncChannels(serverId, instance);
+    setInterval(() => syncChannels(serverId, instance), 30000);
+  });
+
+  client.on('notice', async (_channel, msgid, message) => {
+    if (msgid === 'msg_banned' || message.includes('authentication failed')) {
+      console.log(`[Twitch Bot] Auth failed for ${tokens.username}, refreshing...`);
+      const refreshed = await refreshBotToken(tokens);
+      if (refreshed) {
+        client.disconnect();
+        instance.client = new tmi.client({
+          identity: { username: tokens.username, password: `oauth:${tokens.accessToken}` },
+          channels: [],
+        });
+        instance.client.on('message', createMessageHandler(instance));
+        instance.client.connect();
+      }
+    }
+  });
 
   try {
-    await instance.client.connect();
+    await client.connect();
     botInstances.set(serverId, instance);
     return true;
   } catch (e) {
@@ -441,10 +444,7 @@ export async function POST(req: NextRequest) {
 
   if (action === 'restart') {
     const inst = botInstances.get(serverId);
-    if (inst) {
-      if (inst.syncInterval) clearInterval(inst.syncInterval);
-      try { inst.client.disconnect(); } catch {}
-    }
+    if (inst) { try { inst.client.disconnect(); } catch {} }
     botInstances.delete(serverId);
     const ok = await startBotForServer(serverId);
     return NextResponse.json({ success: ok, status: ok ? 'restarted' : 'failed' });

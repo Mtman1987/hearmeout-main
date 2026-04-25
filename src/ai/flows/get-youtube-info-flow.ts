@@ -33,18 +33,34 @@ export async function getYoutubeInfo(input: GetYoutubeInfoInput): Promise<Playli
     if (isUrl) {
       const isPlaylistUrl = /[?&]list=/.test(input.url);
       if (isPlaylistUrl) {
-        const playlist = await YouTube.getPlaylist(input.url, { fetchAll: true });
-        if (!playlist || playlist.videos.length === 0) return null;
-        videos = playlist.videos;
+        try {
+          const playlist = await YouTube.getPlaylist(input.url, { fetchAll: true });
+          if (!playlist || playlist.videos.length === 0) return null;
+          videos = playlist.videos.filter(v => v?.id);
+        } catch (err) {
+          console.error('[YouTube Playlist] Error:', err);
+          return null;
+        }
       } else {
-        const video = await YouTube.getVideo(input.url);
-        if (!video) return null;
-        videos.push(video);
+        try {
+          const video = await YouTube.getVideo(input.url);
+          if (!video) return null;
+          videos.push(video);
+        } catch (err) {
+          console.error('[YouTube Video] Error:', err);
+          return null;
+        }
       }
     } else {
-      const searchResults = await YouTube.search(input.url, { limit: 1, type: 'video' });
-      if (!searchResults || searchResults.length === 0) return null;
-      videos.push(searchResults[0]);
+      try {
+        const searchResults = await YouTube.search(input.url, { limit: 3, type: 'video' });
+        const valid = searchResults?.filter(v => v?.id && v?.title);
+        if (!valid?.length) return null;
+        videos.push(valid[0]);
+      } catch (searchErr) {
+        console.error('[YouTube Search] Error:', searchErr);
+        return null;
+      }
     }
 
     if (videos.length === 0) return null;

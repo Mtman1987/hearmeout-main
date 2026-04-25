@@ -1,5 +1,29 @@
 import { NextRequest, NextResponse } from 'next/server';
 
+const DISCORD_API_BASE = 'https://discord.com/api/v10';
+
+async function readDiscordError(response: Response): Promise<unknown> {
+  try {
+    const text = await response.text();
+    if (!text) return response.statusText || 'Unknown error';
+
+    try {
+      return JSON.parse(text);
+    } catch {
+      return text;
+    }
+  } catch {
+    return response.statusText || 'Unknown error';
+  }
+}
+
+function errorResponse(message: string, status: number, details?: unknown) {
+  return NextResponse.json(
+    details === undefined ? { error: message } : { error: message, details },
+    { status }
+  );
+}
+
 export async function GET(req: NextRequest) {
   try {
     const { searchParams } = new URL(req.url);
@@ -8,32 +32,33 @@ export async function GET(req: NextRequest) {
     const after = searchParams.get('after');
 
     if (!channelId) {
-      return NextResponse.json({ error: 'Missing channelId' }, { status: 400 });
+      return errorResponse('Missing channelId', 400);
     }
 
     const botToken = process.env.DISCORD_BOT_TOKEN;
     if (!botToken) {
-      return NextResponse.json({ error: 'Bot not configured' }, { status: 500 });
+      return errorResponse('Bot not configured', 500);
     }
 
     const url = after
-      ? `https://discord.com/api/v10/channels/${channelId}/messages?limit=${limit}&after=${after}`
-      : `https://discord.com/api/v10/channels/${channelId}/messages?limit=${limit}`;
+      ? `${DISCORD_API_BASE}/channels/${channelId}/messages?limit=${limit}&after=${after}`
+      : `${DISCORD_API_BASE}/channels/${channelId}/messages?limit=${limit}`;
 
     const response = await fetch(url, {
       headers: {
-        'Authorization': `Bot ${botToken}`,
+        Authorization: `Bot ${botToken}`,
       },
     });
 
     if (!response.ok) {
-      return NextResponse.json({ error: 'Failed to fetch messages' }, { status: response.status });
+      const details = await readDiscordError(response);
+      return errorResponse('Failed to fetch messages', response.status, details);
     }
 
     const messages = await response.json();
     return NextResponse.json(messages);
   } catch (error) {
     console.error('Error fetching Discord messages:', error);
-    return NextResponse.json({ error: 'Internal error' }, { status: 500 });
+    return errorResponse('Internal error', 500);
   }
 }

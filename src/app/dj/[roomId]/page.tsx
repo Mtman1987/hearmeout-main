@@ -432,6 +432,44 @@ export default function DJPage() {
     } catch {}
   }, []);
 
+  useEffect(() => {
+    (window as any).__HEARMEOUT_DJ__ = { startSession, stopSession };
+
+    const recoverPlayback = async () => {
+      if (!liveRef.current) return;
+
+      try {
+        await audioContextRef.current?.resume();
+      } catch {}
+
+      const audioEl = audioRef.current;
+      if (audioEl && roomDataRef.current?.isPlaying && audioEl.paused && !audioEl.ended) {
+        try {
+          await audioEl.play();
+        } catch {}
+      }
+    };
+
+    const handleVisibilityRecovery = () => {
+      if (!document.hidden) {
+        void recoverPlayback();
+      }
+    };
+
+    window.addEventListener('focus', handleVisibilityRecovery);
+    window.addEventListener('pageshow', handleVisibilityRecovery);
+    document.addEventListener('visibilitychange', handleVisibilityRecovery);
+
+    return () => {
+      if ((window as any).__HEARMEOUT_DJ__) {
+        delete (window as any).__HEARMEOUT_DJ__;
+      }
+      window.removeEventListener('focus', handleVisibilityRecovery);
+      window.removeEventListener('pageshow', handleVisibilityRecovery);
+      document.removeEventListener('visibilitychange', handleVisibilityRecovery);
+    };
+  }, [startSession, stopSession]);
+
   // Cleanup on unmount
   useEffect(() => {
     return () => {
@@ -557,6 +595,8 @@ export default function DJPage() {
               value={Math.min(position, duration || 0)}
               onChange={(e) => seekTo(parseFloat(e.target.value))}
               disabled={!duration}
+              aria-label="Seek through the current track"
+              title="Seek through the current track"
               style={{ width: '100%' }}
             />
           </div>
@@ -587,6 +627,7 @@ export default function DJPage() {
               onChange={(e) => setMonitorVolume(parseFloat(e.target.value))}
               style={{ flex: 1 }}
               aria-label="Monitor volume"
+              title="Adjust your local monitor volume"
             />
             <span style={{ width: 36, textAlign: 'right' }}>
               {Math.round(monitorVolume * 100)}%

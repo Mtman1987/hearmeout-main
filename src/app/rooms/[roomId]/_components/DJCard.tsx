@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useCallback, useEffect, useRef } from 'react';
+import React, { useState, useCallback, useEffect } from 'react';
 import { Music, Play, Pause, SkipForward, SkipBack, Volume2, VolumeX, Power, PowerOff, Radio } from 'lucide-react';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Card, CardContent } from '@/components/ui/card';
@@ -28,45 +28,112 @@ interface DJCardProps {
 }
 
 export default function DJCard({
-  roomId, playlist, currentTrackId, isPlaying, djActive,
-  musicStatus, localVolume, onVolumeChange, canControl,
-  autoRadio, onToggleAutoRadio,
+  roomId,
+  playlist,
+  currentTrackId,
+  isPlaying,
+  djActive,
+  musicStatus,
+  localVolume,
+  onVolumeChange,
+  canControl,
+  autoRadio,
+  onToggleAutoRadio,
 }: DJCardProps) {
   const { toast } = useToast();
-  const [djPopupOpen, setDjPopupOpen] = useState(false);
-  const popupRef = useRef<Window | null>(null);
-  const currentTrack = playlist?.find(t => t.id === currentTrackId);
+  const [djRunning, setDjRunning] = useState(false);
+  const [isBusy, setIsBusy] = useState(false);
+  const currentTrack = playlist?.find((t) => t.id === currentTrackId);
   const isStreaming = musicStatus === '🎵 streaming';
+  const isMuted = localVolume === 0;
 
-  // Check if popup is still open
   useEffect(() => {
-    if (!djPopupOpen) return;
-    const check = setInterval(() => {
-      if (popupRef.current?.closed) {
-        setDjPopupOpen(false);
-        popupRef.current = null;
-        dbUpdate('rooms', roomId, { djActive: false });
+    let cancelled = false;
+
+    const syncDjState = async () => {
+      try {
+        const res = await fetch(`/api/dj?roomId=${encodeURIComponent(roomId)}`, {
+          cache: 'no-store',
+        });
+        const data = await res.json();
+        if (!cancelled && typeof data?.running === 'boolean') {
+          setDjRunning(data.running);
+        }
+      } catch {
+        // Ignore transient polling errors.
       }
-    }, 1000);
-    return () => clearInterval(check);
-  }, [djPopupOpen, roomId]);
+    };
 
-  const djLinkRef = useRef<HTMLAnchorElement | null>(null);
+    syncDjState();
+    const interval = setInterval(syncDjState, 5000);
 
-  const handleStartDJ = useCallback(() => {
-    // Programmatically click a real anchor — browsers always open these as tabs
-    djLinkRef.current?.click();
-    // Small delay to let the tab open before updating state
-    setTimeout(() => setDjPopupOpen(true), 500);
-    toast({ title: '🎵 DJ Tab Opened', description: 'Switch to the DJ tab and click Start Broadcasting.' });
-  }, [toast]);
-
-  const handleStopDJ = useCallback(() => {
-    popupRef.current?.close();
-    popupRef.current = null;
-    setDjPopupOpen(false);
-    dbUpdate('rooms', roomId, { djActive: false, isPlaying: false });
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
   }, [roomId]);
+
+  const handleStartDJ = useCallback(async () => {
+    setIsBusy(true);
+    try {
+      const res = await fetch('/api/dj', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'start', roomId }),
+      });
+      const data = await res.json();
+
+      if (!res.ok || !data?.success) {
+        throw new Error(data?.message || 'Failed to start DJ session.');
+      }
+
+      setDjRunning(true);
+      toast({
+        title: '🎵 DJ session started',
+        description: 'The server-side DJ runner is now broadcasting in the room.',
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unable to start the DJ session.';
+      toast({
+        title: 'DJ start failed',
+        description: message,
+        variant: 'destructive',
+      });
+    } finally {
+      setIsBusy(false);
+    }
+  }, [roomId, toast]);
+
+  const handleStopDJ = useCallback(async () => {
+    setIsBusy(true);
+    try {
+      const res = await fetch('/api/dj', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'stop', roomId }),
+      });
+      const data = await res.json();
+
+      if (!res.ok || !data?.success) {
+        throw new Error(data?.message || 'Failed to stop DJ session.');
+      }
+
+      setDjRunning(false);
+      toast({
+        title: 'DJ session stopped',
+        description: 'The server-side DJ runner has been shut down.',
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unable to stop the DJ session.';
+      toast({
+        title: 'DJ stop failed',
+        description: message,
+        variant: 'destructive',
+      });
+    } finally {
+      setIsBusy(false);
+    }
+  }, [roomId, toast]);
 
   const handlePlayPause = useCallback(() => {
     if (canControl) dbUpdate('rooms', roomId, { isPlaying: !isPlaying });
@@ -74,19 +141,17 @@ export default function DJCard({
 
   const handleNext = useCallback(() => {
     if (!canControl || !playlist?.length) return;
-    const i = playlist.findIndex(t => t.id === currentTrackId);
+    const i = playlist.findIndex((t) => t.id === currentTrackId);
     const next = playlist[(i + 1) % playlist.length];
     if (next) dbUpdate('rooms', roomId, { currentTrackId: next.id, isPlaying: true });
   }, [roomId, playlist, currentTrackId, canControl]);
 
   const handlePrev = useCallback(() => {
     if (!canControl || !playlist?.length) return;
-    const i = playlist.findIndex(t => t.id === currentTrackId);
+    const i = playlist.findIndex((t) => t.id === currentTrackId);
     const prev = playlist[(i - 1 + playlist.length) % playlist.length];
     if (prev) dbUpdate('rooms', roomId, { currentTrackId: prev.id, isPlaying: true });
   }, [roomId, playlist, currentTrackId, canControl]);
-
-  const isMuted = localVolume === 0;
 
   return (
     <Card className="flex flex-col h-full relative">
@@ -96,19 +161,23 @@ export default function DJCard({
       <CardContent className="p-4 flex flex-col gap-4 flex-grow relative z-10">
         <div className="flex items-start gap-4">
           <div className="relative">
-            <Avatar className={cn(
-              'h-16 w-16 transition-all duration-200',
-              isStreaming && 'ring-4 ring-purple-400 ring-offset-2 ring-offset-background shadow-lg',
-              djActive && !isStreaming && 'ring-2 ring-yellow-400/50 ring-offset-2 ring-offset-background',
-            )}>
+            <Avatar
+              className={cn(
+                'h-16 w-16 transition-all duration-200',
+                isStreaming && 'ring-4 ring-purple-400 ring-offset-2 ring-offset-background shadow-lg',
+                djActive && !isStreaming && 'ring-2 ring-yellow-400/50 ring-offset-2 ring-offset-background',
+              )}
+            >
               <AvatarImage src="https://api.dicebear.com/7.x/bottts/svg?seed=hearmeout-dj&backgroundColor=7c3aed" />
               <AvatarFallback>🎵</AvatarFallback>
             </Avatar>
-            {djActive && (
-              <div className={cn(
-                'absolute -bottom-1 -right-1 rounded-full p-1 border-2 border-card',
-                isStreaming ? 'bg-green-500' : 'bg-yellow-500',
-              )}>
+            {djRunning && (
+              <div
+                className={cn(
+                  'absolute -bottom-1 -right-1 rounded-full p-1 border-2 border-card',
+                  isStreaming ? 'bg-green-500' : 'bg-yellow-500',
+                )}
+              >
                 <Music className="w-3 h-3 text-white" />
               </div>
             )}
@@ -122,16 +191,24 @@ export default function DJCard({
               </p>
             ) : (
               <p className="text-sm text-muted-foreground">
-                {djPopupOpen ? 'DJ window open — click Start Broadcasting' : 'Click Start DJ to begin'}
+                {djRunning ? 'DJ session running — the server-side runner is active' : 'Click Start DJ to begin'}
               </p>
             )}
             {musicStatus && musicStatus !== 'idle' && (
-              <p className={cn('text-xs mt-0.5',
-                musicStatus.includes('streaming') ? 'text-green-400' :
-                musicStatus === 'connected' ? 'text-blue-400' :
-                musicStatus === 'error' ? 'text-red-400' :
-                'text-yellow-400'
-              )}>{musicStatus}</p>
+              <p
+                className={cn(
+                  'text-xs mt-0.5',
+                  musicStatus.includes('streaming')
+                    ? 'text-green-400'
+                    : musicStatus === 'connected'
+                      ? 'text-blue-400'
+                      : musicStatus === 'error'
+                        ? 'text-red-400'
+                        : 'text-yellow-400',
+                )}
+              >
+                {musicStatus}
+              </p>
             )}
           </div>
         </div>
@@ -140,62 +217,97 @@ export default function DJCard({
           <SpeakingIndicator audioLevel={isStreaming ? 0.6 : 0} />
 
           <div className="flex items-center justify-center gap-1">
-            <Tooltip><TooltipTrigger asChild>
-              <Button variant="ghost" size="icon" className="h-8 w-8" onClick={handlePrev} disabled={!canControl || !playlist?.length}>
-                <SkipBack className="h-4 w-4" />
-              </Button>
-            </TooltipTrigger><TooltipContent><p>Previous</p></TooltipContent></Tooltip>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button variant="ghost" size="icon" className="h-8 w-8" onClick={handlePrev} disabled={!canControl || !playlist?.length}>
+                  <SkipBack className="h-4 w-4" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>
+                <p>Previous</p>
+              </TooltipContent>
+            </Tooltip>
 
-            <Tooltip><TooltipTrigger asChild>
-              <Button variant="ghost" size="icon" className="h-10 w-10" onClick={handlePlayPause} disabled={!canControl}>
-                {isPlaying ? <Pause className="h-5 w-5" /> : <Play className="h-5 w-5" />}
-              </Button>
-            </TooltipTrigger><TooltipContent><p>{isPlaying ? 'Pause' : 'Play'}</p></TooltipContent></Tooltip>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button variant="ghost" size="icon" className="h-10 w-10" onClick={handlePlayPause} disabled={!canControl}>
+                  {isPlaying ? <Pause className="h-5 w-5" /> : <Play className="h-5 w-5" />}
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>
+                <p>{isPlaying ? 'Pause' : 'Play'}</p>
+              </TooltipContent>
+            </Tooltip>
 
-            <Tooltip><TooltipTrigger asChild>
-              <Button variant="ghost" size="icon" className="h-8 w-8" onClick={handleNext} disabled={!canControl || !playlist?.length}>
-                <SkipForward className="h-4 w-4" />
-              </Button>
-            </TooltipTrigger><TooltipContent><p>Next</p></TooltipContent></Tooltip>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button variant="ghost" size="icon" className="h-8 w-8" onClick={handleNext} disabled={!canControl || !playlist?.length}>
+                  <SkipForward className="h-4 w-4" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>
+                <p>Next</p>
+              </TooltipContent>
+            </Tooltip>
           </div>
 
           <div className="flex items-center gap-2">
-            <Tooltip><TooltipTrigger asChild>
-              <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => onVolumeChange(isMuted ? 0.5 : 0)}>
-                {isMuted ? <VolumeX className="h-4 w-4" /> : <Volume2 className="h-4 w-4" />}
-              </Button>
-            </TooltipTrigger><TooltipContent><p>{isMuted ? 'Unmute' : 'Mute'}</p></TooltipContent></Tooltip>
-            <Slider value={[localVolume]} onValueChange={v => onVolumeChange(v[0])} max={1} step={0.05} />
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => onVolumeChange(isMuted ? 0.5 : 0)}>
+                  {isMuted ? <VolumeX className="h-4 w-4" /> : <Volume2 className="h-4 w-4" />}
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>
+                <p>{isMuted ? 'Unmute' : 'Mute'}</p>
+              </TooltipContent>
+            </Tooltip>
+            <Slider value={[localVolume]} onValueChange={(v) => onVolumeChange(v[0])} max={1} step={0.05} />
           </div>
 
-          <Tooltip><TooltipTrigger asChild>
-            <Button
-              variant={djPopupOpen ? 'destructive' : 'default'}
-              size="sm"
-              className="w-full gap-2"
-              onClick={djPopupOpen ? handleStopDJ : handleStartDJ}
-            >
-              {djPopupOpen ? <><PowerOff className="h-4 w-4" /> Stop DJ</> :
-                <><Power className="h-4 w-4" /> Start DJ</>}
-            </Button>
-          </TooltipTrigger><TooltipContent><p>{djPopupOpen ? 'Close the DJ window' : 'Open DJ tab to play music for everyone'}</p></TooltipContent></Tooltip>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant={djRunning ? 'destructive' : 'default'}
+                size="sm"
+                className="w-full gap-2"
+                onClick={djRunning ? handleStopDJ : handleStartDJ}
+                disabled={isBusy}
+              >
+                {djRunning ? (
+                  <>
+                    <PowerOff className="h-4 w-4" /> Stop DJ
+                  </>
+                ) : (
+                  <>
+                    <Power className="h-4 w-4" /> Start DJ
+                  </>
+                )}
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>
+              <p>{djRunning ? 'Stop the server-side DJ runner' : 'Start the server-side DJ runner'}</p>
+            </TooltipContent>
+          </Tooltip>
 
           {canControl && (
-            <Tooltip><TooltipTrigger asChild>
-              <Button
-                variant={autoRadio ? 'secondary' : 'outline'}
-                size="sm"
-                className="w-full gap-2 mt-2"
-                onClick={onToggleAutoRadio}
-              >
-                <Radio className="h-4 w-4" />
-                {autoRadio ? 'Auto-Radio ON' : 'Auto-Radio OFF'}
-              </Button>
-            </TooltipTrigger><TooltipContent><p>When enabled, automatically finds and plays related songs when the playlist runs out</p></TooltipContent></Tooltip>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant={autoRadio ? 'secondary' : 'outline'}
+                  size="sm"
+                  className="w-full gap-2 mt-2"
+                  onClick={onToggleAutoRadio}
+                >
+                  <Radio className="h-4 w-4" />
+                  {autoRadio ? 'Auto-Radio ON' : 'Auto-Radio OFF'}
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>
+                <p>When enabled, automatically finds and plays related songs when the playlist runs out</p>
+              </TooltipContent>
+            </Tooltip>
           )}
-
-          {/* Hidden anchor to force open as tab */}
-          <a ref={djLinkRef} href={`/dj/${roomId}`} target="_blank" rel="noopener" className="hidden" />
         </div>
       </CardContent>
     </Card>

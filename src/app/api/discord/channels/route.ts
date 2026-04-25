@@ -1,22 +1,44 @@
 import { NextRequest, NextResponse } from 'next/server';
 
-type CachedChannels = { channels: any[], timestamp: number };
+type CachedChannels = { channels: any[]; timestamp: number };
 
+const DISCORD_API_BASE = 'https://discord.com/api/v10';
 const cache = new Map<string, CachedChannels>();
 const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+
+async function readDiscordError(response: Response): Promise<unknown> {
+  try {
+    const text = await response.text();
+    if (!text) return response.statusText || 'Unknown error';
+
+    try {
+      return JSON.parse(text);
+    } catch {
+      return text;
+    }
+  } catch {
+    return response.statusText || 'Unknown error';
+  }
+}
+
+function errorResponse(message: string, status: number, details?: unknown) {
+  return NextResponse.json(
+    details === undefined ? { error: message } : { error: message, details },
+    { status }
+  );
+}
 
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
   const guildId = searchParams.get('guildId');
 
   if (!guildId) {
-    return NextResponse.json({ error: 'Missing guildId' }, { status: 400 });
+    return errorResponse('Missing guildId', 400);
   }
 
-  // Check cache
   const cached = cache.get(guildId);
   const now = Date.now();
-  if (cached && (now - cached.timestamp) < CACHE_TTL) {
+  if (cached && now - cached.timestamp < CACHE_TTL) {
     console.log(`[Discord Channels API] Cache hit for guild ${guildId} (${cached.channels.length} channels)`);
     return NextResponse.json(cached.channels);
   }
@@ -25,35 +47,34 @@ export async function GET(req: NextRequest) {
 
   const botToken = process.env.DISCORD_BOT_TOKEN;
   console.log('[Discord Channels API] Bot token exists:', !!botToken);
-  
+
   if (!botToken) {
-    return NextResponse.json({ error: 'Bot not configured' }, { status: 500 });
+    return errorResponse('Bot not configured', 500);
   }
 
   try {
-    const response = await fetch(`https://discord.com/api/v10/guilds/${guildId}/channels`, {
+    const response = await fetch(`${DISCORD_API_BASE}/guilds/${guildId}/channels`, {
       headers: {
-        'Authorization': `Bot ${botToken}`,
+        Authorization: `Bot ${botToken}`,
       },
     });
 
     console.log('[Discord Channels API] Discord API response status:', response.status);
 
     if (!response.ok) {
-      const errorText = await response.text();
-      console.error('[Discord Channels API] Discord API error:', errorText);
-      return NextResponse.json({ error: 'Failed to fetch channels' }, { status: response.status });
+      const details = await readDiscordError(response);
+      console.error('[Discord Channels API] Discord API error:', details);
+      return errorResponse('Failed to fetch channels', response.status, details);
     }
 
     const channels = await response.json();
     console.log(`[Discord Channels API] Fetched ${channels.length} channels for ${guildId}`);
-    
-    // Cache result
+
     cache.set(guildId, { channels, timestamp: now });
-    
+
     return NextResponse.json(channels);
   } catch (error) {
     console.error('[Discord Channels API] Error:', error);
-    return NextResponse.json({ error: 'Internal error' }, { status: 500 });
+    return errorResponse('Internal error', 500);
   }
 }

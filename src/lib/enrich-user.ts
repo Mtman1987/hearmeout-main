@@ -2,18 +2,19 @@
 // isAdmin is pre-computed by DSH during Discord sync based on admin role config
 
 import { db, ensureDb } from '@/lib/db';
-
-const DSH_URL = 'https://discord-stream-hub-new.fly.dev';
-const SERVER_ID = process.env.HARDCODED_GUILD_ID || '1240832965865635881';
+import { getDshUrl, getHardcodedGuildId } from '@/lib/runtime-config';
 
 export async function enrichUserFromDSH(discordId: string): Promise<Record<string, any> | null> {
   await ensureDb();
+
   const uid = discordId.startsWith('discord_') ? discordId : `discord_${discordId}`;
   const rawId = uid.replace('discord_', '');
+  const serverId = getHardcodedGuildId();
 
   try {
-    const res = await fetch(`${DSH_URL}/api/db?path=servers/${SERVER_ID}/users/${rawId}`);
+    const res = await fetch(`${getDshUrl()}/api/db?path=servers/${serverId}/users/${rawId}`);
     if (!res.ok) return null;
+
     const data = await res.json();
     if (!data.exists || !data.data) return null;
 
@@ -28,12 +29,13 @@ export async function enrichUserFromDSH(discordId: string): Promise<Record<strin
     if (dsh.displayName) enriched.displayName = dsh.displayName;
     if (dsh.avatarUrl) enriched.photoURL = dsh.avatarUrl;
     enriched.isAdmin = dsh.isAdmin === true;
-    enriched.discordGuildId = SERVER_ID;
+    enriched.discordGuildId = serverId;
     enriched.enrichedAt = new Date().toISOString();
 
-    db.set('users', uid, enriched, { merge: true });
+    await db.setAsync('users', uid, enriched, { merge: true });
 
-    return { ...db.get('users', uid), ...enriched };
+    const currentUser = (await db.getAsync('users', uid)) || {};
+    return { ...currentUser, ...enriched };
   } catch (error) {
     console.error('[EnrichUser] Failed to fetch DSH profile:', error);
     return null;

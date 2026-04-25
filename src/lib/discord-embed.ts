@@ -4,7 +4,25 @@
  * HMO just tells DSH what to send and where.
  */
 
-const DSH_URL = process.env.DSH_URL || process.env.NEXT_PUBLIC_DSH_URL || 'https://discord-stream-hub-new.fly.dev';
+import { getDshUrl } from '@/lib/runtime-config';
+
+async function readResponseError(res: Response): Promise<string> {
+  const fallback = res.statusText || 'Unknown error';
+
+  try {
+    const text = await res.text();
+    if (!text) return fallback;
+
+    try {
+      const parsed = JSON.parse(text) as { error?: string; message?: string; details?: unknown };
+      return parsed.error || parsed.message || text;
+    } catch {
+      return text;
+    }
+  } catch {
+    return fallback;
+  }
+}
 
 export async function sendControlEmbed(
   channelId: string,
@@ -31,7 +49,7 @@ export async function sendControlEmbed(
 
   buttons.push({ type: 2, style: 4, label: 'Close', emoji: { name: '❌' }, custom_id: `room_close:${roomId || 'room'}` });
 
-  const res = await fetch(`${DSH_URL}/api/discord/post`, {
+  const res = await fetch(`${getDshUrl()}/api/discord/post`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -47,8 +65,8 @@ export async function sendControlEmbed(
   });
 
   if (!res.ok) {
-    const err = await res.json().catch(() => ({ error: 'Unknown error' }));
-    throw new Error(`DSH embed post failed: ${err.error || res.statusText}`);
+    const error = await readResponseError(res);
+    throw new Error(`DSH embed post failed: ${error}`);
   }
 
   return res.json();

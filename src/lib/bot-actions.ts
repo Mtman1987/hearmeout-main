@@ -58,17 +58,23 @@ export async function addSongToPlaylist(
       }
     } else {
       // Search YouTube
-      const results = await YouTube.search(songQuery, { limit: 1, type: 'video' });
-      if (!results.length) {
-        return { success: false, message: `No results for "${songQuery}". Try a different search.` };
+      try {
+        const results = await YouTube.search(songQuery, { limit: 3, type: 'video' });
+        const valid = results?.filter(v => v?.id && v?.title);
+        if (!valid?.length) {
+          return { success: false, message: `No results for "${songQuery}". Try a different search.` };
+        }
+        const video = valid[0];
+        videoId = video.id!;
+        title = video.title || 'Untitled';
+        artist = video.channel?.name || 'Unknown Artist';
+        url = video.url;
+        thumbnail = video.thumbnail?.url;
+        duration = video.duration || 180000;
+      } catch (searchErr) {
+        console.error('[!sr] YouTube search error:', searchErr);
+        return { success: false, message: `Search failed for "${songQuery}". Try a YouTube URL instead.` };
       }
-      const video = results[0];
-      videoId = video.id!;
-      title = video.title || 'Untitled';
-      artist = video.channel?.name || 'Unknown Artist';
-      url = video.url;
-      thumbnail = video.thumbnail?.url;
-      duration = video.duration || 180000;
     }
 
     console.log(`[!sr] Found: "${title}" by ${artist} (${videoId})`);
@@ -149,24 +155,83 @@ export async function autoRadioNext(roomId: string): Promise<{ success: boolean;
 
   const playHistory: string[] = room.playHistory || [];
   const playlist: PlaylistItem[] = room.playlist || [];
+  const recentTracks = [...playlist].reverse().slice(0, 8);
 
-  const recentTracks = [...playlist].reverse().slice(0, 5);
-  const historyIds = new Set<string>([...playHistory, ...playlist.map((t) => t.id)]);
+  const recentHistory = playHistory.slice(-25);
+  const historyIds = new Set<string>([
+    ...recentHistory,
+    ...(room.currentTrackId ? [room.currentTrackId] : []),
+  ]);
 
-  let seedQuery = 'music';
+  const seedQueries = new Set<string>();
+  seedQueries.add('music');
+  seedQueries.add('official audio');
+  seedQueries.add('radio edit');
+
   if (recentTracks.length > 0) {
     const seed = recentTracks[Math.floor(Math.random() * recentTracks.length)];
-    seedQuery = seed.artist && seed.artist !== 'Unknown Artist' && seed.artist !== 'Unknown'
-      ? `${seed.artist} music`
-      : seed.title;
+    if (seed.artist && seed.artist !== 'Unknown Artist' && seed.artist !== 'Unknown') {
+      seedQueries.add(`${seed.artist} music`);
+      seedQueries.add(`${seed.artist} official audio`);
+      seedQueries.add(`${seed.artist} topic`);
+    }
+    if (seed.title) {
+      seedQueries.add(seed.title);
+    }
   }
 
-  try {
-    const results = await YouTube.search(seedQuery, { limit: 10, type: 'video' });
-    const candidates = results.filter((v) => v.id && !historyIds.has(v.id));
-    if (!candidates.length) return { success: false, message: 'No new songs found for auto-radio.' };
+  const queries = Array.from(seedQueries);
 
-    const video = candidates[Math.floor(Math.random() * Math.min(candidates.length, 5))];
+  try {
+    for (const seedQuery of queries) {
+      const results = await YouTube.search(seedQuery, { limit: 10, type: 'video' });
+      const candidates = (results || []).filter((v) => v?.id && v?.title && !historyIds.has(v.id!));
+
+      if (!candidates.length) {
+        continue;
+      }
+
+      const video = candidates[Math.floor(Math.random() * Math.min(candidates.length, 5))];
+      const videoId = video.id!;
+      const newTrack: PlaylistItem = {
+        id: videoId,
+        title: video.title || 'Untitled',
+        artist: video.channel?.name || 'Unknown Artist',
+        url: video.url,
+        thumbnail: video.thumbnail?.url,
+        artId: selectArtId(videoId),
+        duration: video.duration || 180000,
+        addedBy: 'Auto-Radio',
+        addedAt: new Date(),
+        plays: 0,
+        source: 'web' as const,
+      };
+
+      const newPlaylist = [...playlist, newTrack];
+      const historySeed = room.currentTrackId
+        ? [...playHistory, room.currentTrackId]
+        : playHistory;
+      const newHistory = [...historySeed, videoId].slice(-50);
+
+      db.update('rooms', roomId, {
+        playlist: newPlaylist,
+        currentTrackId: videoId,
+        isPlaying: true,
+        playHistory: newHistory,
+      });
+
+      return { success: true, message: `Auto-radio queued: "${newTrack.title}"` };
+    }
+
+    const fallbackQuery = recentTracks[0]?.title || recentTracks[0]?.artist || 'music';
+    const fallbackResults = await YouTube.search(fallbackQuery, { limit: 10, type: 'video' });
+    const fallbackCandidates = (fallbackResults || []).filter((v) => v?.id && v?.title);
+
+    if (!fallbackCandidates.length) {
+      return { success: false, message: 'No new songs found for auto-radio.' };
+    }
+
+    const video = fallbackCandidates.find((v) => !historyIds.has(v.id!)) || fallbackCandidates[0];
     const videoId = video.id!;
     const newTrack: PlaylistItem = {
       id: videoId,
@@ -187,6 +252,7 @@ export async function autoRadioNext(roomId: string): Promise<{ success: boolean;
       ? [...playHistory, room.currentTrackId]
       : playHistory;
     const newHistory = [...historySeed, videoId].slice(-50);
+
     db.update('rooms', roomId, {
       playlist: newPlaylist,
       currentTrackId: videoId,

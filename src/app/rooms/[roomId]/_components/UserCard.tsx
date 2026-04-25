@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useEffect, useRef, useState } from 'react';
-import { Headphones, Mic, MicOff, MoreVertical, Move, Pen, ShieldOff, Trash2, UserX, Volume2, VolumeX, LoaderCircle, LogOut, Radio, MessageSquare, Music, ListMusic, Users } from 'lucide-react';
+import { Headphones, Mic, MicOff, MoreVertical, Move, Pen, ShieldOff, Trash2, UserX, Volume2, VolumeX, LoaderCircle, LogOut, Radio, MessageSquare, Music, ListMusic, Users, Monitor } from 'lucide-react';
 import { useTracks, AudioTrack, useRoomContext } from '@livekit/components-react';
 import * as LivekitClient from 'livekit-client';
 import { useSession } from '@/hooks/use-session';
@@ -120,6 +120,17 @@ export default function UserCard({ participant, isLocal, isHost, roomId }: { par
       localStorage.setItem('overlay-hidden-users', JSON.stringify([]));
       window.dispatchEvent(new Event('storage'));
       toast({ title: 'Profiles Restored', description: `${hiddenUsers.length} hidden profile(s) restored` });
+    }
+  };
+
+  const handleToggleScreenShare = async () => {
+    if (!room) return;
+    const isScreenSharing = room.localParticipant.isScreenShareEnabled;
+    try {
+      await room.localParticipant.setScreenShareEnabled(!isScreenSharing, { audio: true });
+      toast({ title: isScreenSharing ? 'Screen Share Stopped' : 'Screen Sharing', description: isScreenSharing ? 'You stopped sharing your screen.' : 'Your screen is now visible to everyone in the room.' });
+    } catch (e: any) {
+      if (e.name !== 'NotAllowedError') toast({ variant: 'destructive', title: 'Screen Share Failed', description: e.message });
     }
   };
 
@@ -249,6 +260,7 @@ export default function UserCard({ participant, isLocal, isHost, roomId }: { par
                             </Popover>
                             <DropdownMenu><DropdownMenuTrigger asChild><Button variant="ghost" size="icon" className="h-7 w-7"><MoreVertical className="h-4 w-4" /></Button></DropdownMenuTrigger>
                                 <DropdownMenuContent align="start">
+                                    <DropdownMenuItem onClick={handleToggleScreenShare}><Monitor className="mr-2 h-4 w-4" /><span>{room?.localParticipant.isScreenShareEnabled ? '✓ Stop Screen Share' : 'Share Screen'}</span></DropdownMenuItem>
                                     <DropdownMenuItem onClick={handleToggleStreamMode}><Radio className="mr-2 h-4 w-4" /><span>{streamMode ? '✓ Stream Mode' : 'Stream Mode'}</span></DropdownMenuItem>
                                     <DropdownMenuSeparator />
                                     <DropdownMenuItem onClick={() => setTwitchDialogOpen(true)}><Radio className="mr-2 h-4 w-4" /><span>Twitch Bot</span></DropdownMenuItem>
