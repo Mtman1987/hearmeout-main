@@ -496,7 +496,17 @@ export async function POST(req: NextRequest) {
 
   if (action === 'restart') {
     const inst = botInstances.get(serverId);
-    if (inst) { try { inst.client.disconnect(); } catch {} }
+    if (inst) {
+      // Clear the sync interval explicitly. The 'disconnected' handler also
+      // clears it, but client.disconnect() can throw (and is caught below),
+      // in which case the disconnected event never fires and the interval
+      // would otherwise leak.
+      if (inst.syncIntervalId) {
+        clearInterval(inst.syncIntervalId);
+        inst.syncIntervalId = undefined;
+      }
+      try { inst.client.disconnect(); } catch { /* ignore */ }
+    }
     botInstances.delete(serverId);
     const ok = await startBotForServer(serverId);
     return NextResponse.json({ success: ok, status: ok ? 'restarted' : 'failed' });

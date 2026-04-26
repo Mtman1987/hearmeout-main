@@ -80,9 +80,21 @@ function serveCachedMp3(filePath: string, range: string | null): NextResponse {
   };
 
   if (range) {
+    // RFC 7233: support both "bytes=A-B" and the "last N bytes" suffix form
+    // "bytes=-N". The previous parser treated bytes=-500 as bytes=0-500.
     const match = /bytes=(\d*)-(\d*)/.exec(range);
-    const start = match && match[1] ? parseInt(match[1], 10) : 0;
-    const end = match && match[2] ? parseInt(match[2], 10) : size - 1;
+    const rawStart = match && match[1] !== '' ? parseInt(match[1], 10) : null;
+    const rawEnd = match && match[2] !== '' ? parseInt(match[2], 10) : null;
+    let start: number;
+    let end: number;
+    if (rawStart === null && rawEnd !== null) {
+      // Suffix range: last rawEnd bytes
+      start = Math.max(0, size - rawEnd);
+      end = size - 1;
+    } else {
+      start = rawStart ?? 0;
+      end = rawEnd ?? size - 1;
+    }
     if (Number.isNaN(start) || Number.isNaN(end) || start > end || end >= size) {
       return new NextResponse('Invalid range', {
         status: 416,
