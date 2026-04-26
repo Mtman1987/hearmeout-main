@@ -32,21 +32,24 @@ interface RoomDoc {
 }
 
 // firestore.rules grant `allow read: if request.auth != null ||
-// resource.data.isPrivate == false`, i.e. any authenticated user may read
-// every room regardless of its isPrivate flag, and unauthenticated users
-// may only read public rooms. Mirror that here: require a session, then
-// expose every room.
+// resource.data.isPrivate == false`, i.e. authenticated users may read every
+// room regardless of isPrivate, while unauthenticated users may only read
+// public rooms. Mirror that here:
+//   - authenticated session  -> return every room
+//   - no session             -> return only rooms with isPrivate !== true
+// (matches DSH / Discord-activity callers that hit this endpoint without a
+// session cookie and only need public listings.)
 export async function GET(req: NextRequest) {
   try {
     const session = await getSession();
-    if (!session) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
 
     await ensureDb();
     const activeOnly = new URL(req.url).searchParams.get('active') === 'true';
 
-    const visibleRooms = db.list('rooms') as RoomDoc[];
+    const allRooms = db.list('rooms') as RoomDoc[];
+    const visibleRooms = session
+      ? allRooms
+      : allRooms.filter((room) => room.data.isPrivate !== true);
 
     const sessions = visibleRooms.map((room) => {
       const d = room.data;
