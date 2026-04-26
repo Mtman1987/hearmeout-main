@@ -31,11 +31,11 @@ interface RoomDoc {
   };
 }
 
-// firestore.rules require request.auth != null for reading
-// rooms/{roomId}/{subcollection}/{docId}, and only allow unauthenticated reads
-// of rooms where isPrivate == false. Mirror those constraints here:
-//   - require an authenticated session
-//   - only include private rooms if the caller owns them
+// firestore.rules grant `allow read: if request.auth != null ||
+// resource.data.isPrivate == false`, i.e. any authenticated user may read
+// every room regardless of its isPrivate flag, and unauthenticated users
+// may only read public rooms. Mirror that here: require a session, then
+// expose every room.
 export async function GET(req: NextRequest) {
   try {
     const session = await getSession();
@@ -46,11 +46,7 @@ export async function GET(req: NextRequest) {
     await ensureDb();
     const activeOnly = new URL(req.url).searchParams.get('active') === 'true';
 
-    const rooms = db.list('rooms') as RoomDoc[];
-    const visibleRooms = rooms.filter((room) => {
-      if (!room.data.isPrivate) return true;
-      return room.data.ownerId === session.uid;
-    });
+    const visibleRooms = db.list('rooms') as RoomDoc[];
 
     const sessions = visibleRooms.map((room) => {
       const d = room.data;
