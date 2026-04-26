@@ -29,11 +29,16 @@ export async function POST(request: NextRequest) {
       name: isDJ ? 'HearMeOut DJ' : userName,
     });
 
+    // Music room: only the headless DJ may publish (everyone else listens).
+    // Voice room: every participant may publish their mic + screen share;
+    // setting canPublish:false here broke both mic and screen-share for
+    // listeners. canPublishData stays on so chat/data messages still work.
     at.addGrant({
       roomJoin: true,
       room: actualRoom,
-      canPublish: musicRoom ? !!isDJ : false,
+      canPublish: musicRoom ? !!isDJ : true,
       canSubscribe: true,
+      canPublishData: true,
     });
 
     const token = await at.toJwt();
