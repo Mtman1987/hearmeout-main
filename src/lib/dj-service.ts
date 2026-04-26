@@ -84,6 +84,22 @@ export async function startDJ(roomId: string): Promise<{ success: boolean; messa
     const instance: DJInstance = { browser, page, roomId, startedAt: new Date() };
     instances.set(roomId, instance);
 
+    // If Chromium crashes or the page is closed unexpectedly, drop the entry
+    // so a subsequent startDJ for the same room actually relaunches instead of
+    // returning the misleading "already running" no-op.
+    browser.on('disconnected', () => {
+      if (instances.get(roomId) === instance) {
+        instances.delete(roomId);
+        console.warn(`[DJ:${roomId}] Chromium disconnected, instance cleared`);
+      }
+    });
+    page.on('close', () => {
+      if (instances.get(roomId) === instance) {
+        instances.delete(roomId);
+        console.warn(`[DJ:${roomId}] Page closed, instance cleared`);
+      }
+    });
+
     console.log(`[DJ] Started for room ${roomId}. Active instances: ${instances.size}`);
     return { success: true, message: 'DJ started.' };
   } catch (err: any) {

@@ -118,6 +118,11 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
 
     const musicRoomRef = useRef<LKRoom | null>(null);
     const musicAudioRef = useRef<HTMLAudioElement | null>(null);
+    // Mirror localVolume into a ref so the music-room useEffect's track-attach
+    // closure always reads the current value (the effect is intentionally not
+    // re-run on every volume change — that would tear down LiveKit).
+    const localVolumeRef = useRef(localVolume);
+    useEffect(() => { localVolumeRef.current = localVolume; }, [localVolume]);
 
     const streamMode = !!userSettings?.streamMode;
 
@@ -153,7 +158,7 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
                         console.log('[MusicRoom] 🎵 Audio track received — attaching');
                         if (!musicAudioRef.current) musicAudioRef.current = new Audio();
                         track.attach(musicAudioRef.current);
-                        musicAudioRef.current.volume = localVolume;
+                        musicAudioRef.current.volume = localVolumeRef.current;
                         musicAudioRef.current.play().catch(e => console.warn('[MusicRoom] Autoplay blocked:', e));
                         setMusicStatus('🎵 streaming');
                     }

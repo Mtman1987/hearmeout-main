@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { extractAudioUrl } from '@/lib/yt-extract';
-import { existsSync, readFileSync } from 'fs';
+import { createReadStream, existsSync, statSync } from 'fs';
+import type { ReadStream } from 'fs';
 import { join } from 'path';
 
 const CACHE_DIR = process.env.MUSIC_CACHE_DIR || join(process.cwd(), 'data', 'music');
@@ -19,17 +20,13 @@ export async function GET(req: NextRequest) {
   const videoId = new URL(req.url).searchParams.get('videoId');
   if (!videoId) return new NextResponse('videoId required', { status: 400 });
 
-  // Serve cached mp3 if available
+  // Serve cached mp3 if available. Stream from disk + honour Range requests
+  // so HTML5 audio can seek without re-downloading the whole file and the
+  // Node event loop isn't blocked synchronously reading multi-MB MP3s
+  // (which used to cause audible stutter on shared rooms).
   const mp3Path = join(CACHE_DIR, `${videoId}.mp3`);
   if (existsSync(mp3Path)) {
-    const data = readFileSync(mp3Path);
-    return new NextResponse(data, {
-      headers: {
-        'Content-Type': 'audio/mpeg',
-        'Content-Length': data.length.toString(),
-        'Cache-Control': 'public, max-age=86400',
-      },
-    });
+    return serveCachedMp3(mp3Path, req.headers.get('range'));
   }
 
   // Get or extract URL
@@ -71,6 +68,59 @@ export async function GET(req: NextRequest) {
     console.error(`[stream] Proxy error for ${videoId}:`, err.message);
     return new NextResponse('Stream error', { status: 500 });
   }
+}
+
+function serveCachedMp3(filePath: string, range: string | null): NextResponse {
+  const stat = statSync(filePath);
+  const size = stat.size;
+  const headers: Record<string, string> = {
+    'Content-Type': 'audio/mpeg',
+    'Accept-Ranges': 'bytes',
+    'Cache-Control': 'public, max-age=86400',
+  };
+
+  if (range) {
+    const match = /bytes=(\d*)-(\d*)/.exec(range);
+    const start = match && match[1] ? parseInt(match[1], 10) : 0;
+    const end = match && match[2] ? parseInt(match[2], 10) : size - 1;
+    if (Number.isNaN(start) || Number.isNaN(end) || start > end || end >= size) {
+      return new NextResponse('Invalid range', {
+        status: 416,
+        headers: { 'Content-Range': `bytes */${size}` },
+      });
+    }
+    headers['Content-Range'] = `bytes ${start}-${end}/${size}`;
+    headers['Content-Length'] = String(end - start + 1);
+    return new NextResponse(toWebStream(createReadStream(filePath, { start, end })), {
+      status: 206,
+      headers,
+    });
+  }
+
+  headers['Content-Length'] = String(size);
+  return new NextResponse(toWebStream(createReadStream(filePath)), {
+    status: 200,
+    headers,
+  });
+}
+
+// Wrap a Node fs.ReadStream as a Web ReadableStream<Uint8Array> compatible
+// with NextResponse's BodyInit type, without pulling Readable.toWeb's
+// `ReadableStream<any>` (which Next 16 + TS strict mode rejects).
+function toWebStream(stream: ReadStream): ReadableStream<Uint8Array> {
+  return new ReadableStream<Uint8Array>({
+    start(controller) {
+      stream.on('data', (chunk) => {
+        const buf = typeof chunk === 'string' ? Buffer.from(chunk) : (chunk as Buffer);
+        controller.enqueue(new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength));
+      });
+      stream.on('end', () => controller.close());
+      stream.on('error', (err) => controller.error(err));
+    },
+    cancel() {
+      stream.destroy();
+    },
+  });
 }
 
 function proxyResponse(cdnRes: Response): NextResponse {

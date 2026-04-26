@@ -11,6 +11,7 @@ interface BotInstance {
   client: tmi.Client;
   channels: Map<string, string>; // twitchChannel -> roomId
   tokens: ServerBotTokens;
+  syncIntervalId?: ReturnType<typeof setInterval>;
 }
 
 interface ServerBotTokens {
@@ -246,30 +247,50 @@ function syncChannels(serverId: string, instance: BotInstance) {
 
 // --- Message handler ---
 
+// Extract the command portion of a chat message. Strips an optional Discord
+// bridge prefix ("[Discord] username: ") and returns:
+//   - displayRequester: the human's name (sender of the bridged message,
+//     or the original Twitch user)
+//   - commandLine: the message starting at the command marker ("!"), so
+//     a single message produces a single command + its arguments.
+function parseCommand(message: string, twitchRequester: string): { displayRequester: string; commandLine: string | null } {
+  let displayRequester = twitchRequester;
+  let body = message;
+
+  const bridgeMatch = body.match(/^\[Discord\]\s*(.+?):\s*(.+)$/i);
+  if (bridgeMatch) {
+    displayRequester = bridgeMatch[1].trim();
+    body = bridgeMatch[2];
+  }
+
+  const cmdMatch = body.match(/(?:^|\s)(![\w]+)(?:\s|$)/);
+  if (!cmdMatch) return { displayRequester, commandLine: null };
+
+  const cmdStart = body.indexOf(cmdMatch[1]);
+  return { displayRequester, commandLine: body.slice(cmdStart).trim() };
+}
+
 function createMessageHandler(instance: BotInstance) {
   return function onMessage(target: string, context: tmi.ChatUserstate, msg: string, self: boolean) {
     // Allow Discord bridge messages even if sent by the same bot account
-    const isDiscordBridgeMessage = msg.trim().startsWith('[Discord]');
+    const trimmed = msg.trim();
+    const isDiscordBridgeMessage = trimmed.startsWith('[Discord]');
     if ((self && !isDiscordBridgeMessage) || !instance.client) return;
 
     const channelName = target.replace('#', '').toLowerCase();
     const targetRoomId = instance.channels.get(channelName);
     if (!targetRoomId) return;
 
-    // Match commands anywhere in the message (handles Discord bridge prefixes, badges, etc.)
-    const message = msg.trim();
-    const messageLower = message.toLowerCase();
     const requester = context['display-name'] || 'Someone from Twitch';
+    const { displayRequester, commandLine } = parseCommand(trimmed, requester);
+    if (!commandLine) return;
+
+    const [rawCmd, ...args] = commandLine.split(/\s+/);
+    const cmd = rawCmd.toLowerCase();
     const client = instance.client;
 
-    // Extract requester name from Discord bridge format: [Discord] username: !sr ...
-    let displayRequester = requester;
-    const bridgeMatch = message.match(/^\[Discord\]\s*(.+?):\s*!/i);
-    if (bridgeMatch) displayRequester = bridgeMatch[1].trim();
-
-    const srIndex = messageLower.indexOf('!sr ');
-    if (srIndex !== -1) {
-      const songQuery = message.substring(srIndex + 4).trim();
+    if (cmd === '!sr') {
+      const songQuery = args.join(' ').trim();
       if (!songQuery) {
         client.say(target, `@${displayRequester}, usage: !sr [song name or YouTube URL]`);
         return;
@@ -283,25 +304,29 @@ function createMessageHandler(instance: BotInstance) {
         .catch(() => {
           client.say(target, `❌ @${displayRequester} A critical error occurred.`);
         });
+      return;
     }
 
-    if (messageLower.includes('!np')) {
+    if (cmd === '!np') {
       getRoomState(targetRoomId).then(state => {
         if (!state?.currentTrack) { client.say(target, "🎵 Nothing playing. Use !sr to request!"); return; }
         const s = state.isPlaying ? "▶️" : "⏸️";
         client.say(target, `${s} "${state.currentTrack.title}" by ${state.currentTrack.artist}`);
       }).catch(() => client.say(target, "❌ Error fetching now playing."));
+      return;
     }
 
-    if (messageLower.includes('!status')) {
+    if (cmd === '!status') {
       getRoomState(targetRoomId).then(state => {
         const s = state?.isPlaying ? "▶️" : "⏸️";
         client.say(target, `🎵 DJ: ${state?.djDisplayName || 'None'} | ${s} | Queue: ${state?.playlistLength || 0}`);
       }).catch(() => client.say(target, "❌ Error fetching status."));
+      return;
     }
 
-    if (messageLower.includes('!help') || messageLower.includes('!commands')) {
+    if (cmd === '!help' || cmd === '!commands') {
       client.say(target, "🎵 Commands: !sr [song/URL] | !np | !status | !help");
+      return;
     }
   };
 }
@@ -333,29 +358,7 @@ async function startBotForServer(serverId: string): Promise<boolean> {
   });
 
   const instance: BotInstance = { client, channels, tokens };
-
-  client.on('message', createMessageHandler(instance));
-  client.on('connected', () => {
-    console.log(`[Twitch Bot] Connected as ${tokens.username} for server ${serverId}`);
-    syncChannels(serverId, instance);
-    setInterval(() => syncChannels(serverId, instance), 30000);
-  });
-
-  client.on('notice', async (_channel, msgid, message) => {
-    if (msgid === 'msg_banned' || message.includes('authentication failed')) {
-      console.log(`[Twitch Bot] Auth failed for ${tokens.username}, refreshing...`);
-      const refreshed = await refreshBotToken(tokens);
-      if (refreshed) {
-        client.disconnect();
-        instance.client = new tmi.client({
-          identity: { username: tokens.username, password: `oauth:${tokens.accessToken}` },
-          channels: [],
-        });
-        instance.client.on('message', createMessageHandler(instance));
-        instance.client.connect();
-      }
-    }
-  });
+  attachClientHandlers(serverId, instance);
 
   try {
     await client.connect();
@@ -365,6 +368,55 @@ async function startBotForServer(serverId: string): Promise<boolean> {
     console.error(`[Twitch Bot] Connect failed for server ${serverId}:`, e);
     return false;
   }
+}
+
+// Wire up all event handlers on instance.client. Used both at first start and
+// after a forced reconnect (e.g. on auth-failed notice). The previous version
+// only re-attached `message` after reconnect, which silently disabled
+// `connected` (no channel sync) and `notice` (no further token refresh on
+// auth failure). It also leaked a setInterval on every `connected` event
+// because the handle was never stored or cleared.
+function attachClientHandlers(serverId: string, instance: BotInstance) {
+  const { client, tokens } = instance;
+
+  client.on('message', createMessageHandler(instance));
+
+  client.on('connected', () => {
+    console.log(`[Twitch Bot] Connected as ${tokens.username} for server ${serverId}`);
+    syncChannels(serverId, instance);
+    if (instance.syncIntervalId) clearInterval(instance.syncIntervalId);
+    instance.syncIntervalId = setInterval(() => syncChannels(serverId, instance), 30000);
+  });
+
+  client.on('disconnected', () => {
+    if (instance.syncIntervalId) {
+      clearInterval(instance.syncIntervalId);
+      instance.syncIntervalId = undefined;
+    }
+  });
+
+  client.on('notice', async (_channel, msgid, message) => {
+    if (msgid === 'msg_banned' || message.includes('authentication failed')) {
+      console.log(`[Twitch Bot] Auth failed for ${tokens.username}, refreshing...`);
+      const refreshed = await refreshBotToken(tokens);
+      if (!refreshed) return;
+
+      try { instance.client.disconnect(); } catch { /* ignore */ }
+      if (instance.syncIntervalId) {
+        clearInterval(instance.syncIntervalId);
+        instance.syncIntervalId = undefined;
+      }
+
+      instance.client = new tmi.client({
+        identity: { username: tokens.username, password: `oauth:${tokens.accessToken}` },
+        channels: [],
+      });
+      attachClientHandlers(serverId, instance);
+      instance.client.connect().catch((e) => {
+        console.error(`[Twitch Bot] Reconnect failed for server ${serverId}:`, e);
+      });
+    }
+  });
 }
 
 async function initializeAllBots() {
