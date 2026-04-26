@@ -13,23 +13,37 @@ interface DJInstance {
 
 const instances = new Map<string, DJInstance>();
 
+// Rooms whose startDJ() call is mid-flight. Populated synchronously before any
+// `await` so a second concurrent start request for the same roomId can be
+// rejected before it spawns a duplicate Chromium process (~150MB each).
+const pending = new Set<string>();
+
 const CHROMIUM_PATH = process.env.PUPPETEER_EXECUTABLE_PATH || '/usr/bin/chromium';
 const BASE_URL = process.env.NEXT_PUBLIC_APP_URL || process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3001';
 
 export async function startDJ(roomId: string): Promise<{ success: boolean; message: string }> {
+  // Synchronous guards - run before any await so two concurrent callers can't
+  // both pass and each launch their own Chromium. The pending check covers
+  // the (long) window between launch start and `instances.set` below.
   if (instances.has(roomId)) {
     return { success: true, message: 'DJ already running for this room.' };
   }
+  if (pending.has(roomId)) {
+    return { success: false, message: 'DJ is already starting for this room.' };
+  }
 
-  // Limit concurrent instances (Chromium uses ~150MB each, Fly.io has 1GB)
-  if (instances.size >= 3) {
+  // Limit concurrent instances (Chromium uses ~150MB each, Fly.io has 1GB).
+  // Counted in-flight starts toward the cap so we don't temporarily exceed it.
+  if (instances.size + pending.size >= 3) {
     return { success: false, message: 'Maximum concurrent DJ instances reached (3). Stop another room first.' };
   }
 
+  pending.add(roomId);
+  let browser: Browser | null = null;
   try {
     console.log(`[DJ] Starting for room ${roomId}...`);
 
-    const browser = await puppeteer.launch({
+    browser = await puppeteer.launch({
       executablePath: CHROMIUM_PATH,
       headless: true,
       args: [
@@ -65,7 +79,9 @@ export async function startDJ(roomId: string): Promise<{ success: boolean; messa
     // once mounted. In a headless browser there is no human to click "Start
     // DJ Session", so we wait for that bridge and invoke startSession ourselves.
     // Without this, the page sits idle, never connects to LiveKit, and listeners
-    // hear silence even though the DB shows "playing".
+    // hear silence even though the DB shows "playing". A failure here means the
+    // page can't actually publish audio, so we tear the browser down and surface
+    // a real error instead of registering a useless ~150MB Chromium ghost.
     try {
       await page.waitForFunction(
         () => Boolean((window as unknown as { __HEARMEOUT_DJ__?: { startSession?: () => unknown } }).__HEARMEOUT_DJ__?.startSession),
@@ -79,6 +95,9 @@ export async function startDJ(roomId: string): Promise<{ success: boolean; messa
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
       console.error(`[DJ:${roomId}] Failed to invoke startSession in headless page:`, message);
+      await browser.close().catch(() => {});
+      browser = null;
+      return { success: false, message: `DJ page failed to start session: ${message}` };
     }
 
     const instance: DJInstance = { browser, page, roomId, startedAt: new Date() };
@@ -104,7 +123,12 @@ export async function startDJ(roomId: string): Promise<{ success: boolean; messa
     return { success: true, message: 'DJ started.' };
   } catch (err: any) {
     console.error(`[DJ] Failed to start for room ${roomId}:`, err.message);
+    if (browser) {
+      await browser.close().catch(() => {});
+    }
     return { success: false, message: `Failed to start DJ: ${err.message}` };
+  } finally {
+    pending.delete(roomId);
   }
 }
 
