@@ -32,13 +32,17 @@ interface RoomDoc {
 }
 
 // firestore.rules grant `allow read: if request.auth != null ||
-// resource.data.isPrivate == false`, i.e. authenticated users may read every
-// room regardless of isPrivate, while unauthenticated users may only read
-// public rooms. Mirror that here:
-//   - authenticated session  -> return every room
-//   - no session             -> return only rooms with isPrivate !== true
-// (matches DSH / Discord-activity callers that hit this endpoint without a
-// session cookie and only need public listings.)
+// resource.data.isPrivate == false` for /rooms/{roomId}, and
+// `allow read, write: if request.auth != null` for every subcollection
+// under /rooms/{roomId}. Mirror that here:
+//   - authenticated session  -> return every room, with full user listings
+//                               from rooms/{roomId}/users.
+//   - no session             -> return only rooms whose isPrivate field is
+//                               explicitly `false` (matching firestore's
+//                               `isPrivate == false` semantics, which treats
+//                               missing/null as private), and omit the
+//                               protected /users subcollection from the
+//                               response.
 export async function GET(req: NextRequest) {
   try {
     const session = await getSession();
@@ -49,11 +53,13 @@ export async function GET(req: NextRequest) {
     const allRooms = db.list('rooms') as RoomDoc[];
     const visibleRooms = session
       ? allRooms
-      : allRooms.filter((room) => room.data.isPrivate !== true);
+      : allRooms.filter((room) => room.data.isPrivate === false);
 
     const sessions = visibleRooms.map((room) => {
       const d = room.data;
-      const users = db.list(`rooms/${room.id}/users`) as RoomUserDoc[];
+      // /rooms/{roomId}/users is an auth-required subcollection per
+      // firestore.rules; only fan out when the caller is authenticated.
+      const users = session ? (db.list(`rooms/${room.id}/users`) as RoomUserDoc[]) : [];
       const track = d.playlist?.find((t) => t.id === d.currentTrackId);
 
       return {
