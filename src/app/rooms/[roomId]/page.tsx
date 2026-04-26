@@ -97,7 +97,12 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
     const router = useRouter();
     const [chatOpen, setChatOpen] = useState(false);
     const [voiceToken, setVoiceToken] = useState<string | undefined>(undefined);
-    const [localVolume, setLocalVolume] = useState(0.5);
+    const [localVolume, setLocalVolume] = useState(() => {
+        if (typeof window === 'undefined') return 0.1;
+        const saved = window.localStorage.getItem('hearmeout:musicVolume');
+        const n = saved ? Number(saved) : NaN;
+        return Number.isFinite(n) && n >= 0 && n <= 1 ? n : 0.1;
+    });
     const [musicStatus, setMusicStatus] = useState<string | null>(null);
     const [musicExpanded, setMusicExpanded] = useState(false);
     const [showDJ, setShowDJ] = useState(true);
@@ -114,9 +119,19 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
     const musicRoomRef = useRef<LKRoom | null>(null);
     const musicAudioRef = useRef<HTMLAudioElement | null>(null);
 
-    // Connect to LiveKit Music Room as subscriber
+    const streamMode = !!userSettings?.streamMode;
+
+    // Connect to LiveKit Music Room as subscriber.
+    // Stream Mode is for streamers who use the OBS overlay (/overlay/[roomId]) as a
+    // dedicated music browser-source. To keep music out of the broadcaster's VOD
+    // (which captures their browser audio), we skip subscribing here when stream
+    // mode is on — the overlay subscribes to music, the room tab carries voices only.
     useEffect(() => {
         if (isUserLoading || !user || !roomId) return;
+        if (streamMode) {
+            setMusicStatus('stream-mode (music in overlay)');
+            return;
+        }
         let cancelled = false;
 
         const connectMusicRoom = async () => {
@@ -176,11 +191,14 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
             musicRoomRef.current = null;
             if (musicAudioRef.current) { musicAudioRef.current.srcObject = null; }
         };
-    }, [user, isUserLoading, roomId]);
+    }, [user, isUserLoading, roomId, streamMode]);
 
-    // Sync volume changes to the audio element
+    // Sync volume changes to the audio element + persist for next session
     useEffect(() => {
         if (musicAudioRef.current) musicAudioRef.current.volume = localVolume;
+        if (typeof window !== 'undefined') {
+            window.localStorage.setItem('hearmeout:musicVolume', String(localVolume));
+        }
     }, [localVolume]);
 
     // Check if user is banned
