@@ -157,10 +157,15 @@ export async function autoRadioNext(roomId: string): Promise<{ success: boolean;
   const playlist: PlaylistItem[] = room.playlist || [];
   const recentTracks = [...playlist].reverse().slice(0, 8);
 
+  // Dedup against: recent play history, the currently-playing track, and
+  // every track already in the playlist. The last bit prevents auto-radio
+  // from re-queueing a song that's already sitting in the playlist (which
+  // would cause the same track to play twice when the playlist advances).
   const recentHistory = playHistory.slice(-25);
   const historyIds = new Set<string>([
     ...recentHistory,
     ...(room.currentTrackId ? [room.currentTrackId] : []),
+    ...playlist.map((t) => t.id),
   ]);
 
   const seedQueries = new Set<string>();

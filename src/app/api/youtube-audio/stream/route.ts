@@ -17,8 +17,17 @@ function getUrl(videoId: string): string | null {
 
 // GET: Stream audio from CDN through our server (same-origin proxy)
 export async function GET(req: NextRequest) {
-  const videoId = new URL(req.url).searchParams.get('videoId');
-  if (!videoId) return new NextResponse('videoId required', { status: 400 });
+  const rawVideoId = new URL(req.url).searchParams.get('videoId');
+  if (!rawVideoId) return new NextResponse('videoId required', { status: 400 });
+
+  // YouTube video IDs are 11 chars of [A-Za-z0-9_-]. Enforce that exactly so
+  // the value can never escape CACHE_DIR via path traversal (e.g. ../etc/...).
+  // The same sanitised id is used for the on-disk extension upstream, so the
+  // cache hit/miss behaviour is unchanged for legitimate ids.
+  if (!/^[A-Za-z0-9_-]{1,64}$/.test(rawVideoId)) {
+    return new NextResponse('Invalid videoId', { status: 400 });
+  }
+  const videoId = rawVideoId;
 
   // Serve cached mp3 if available. Stream from disk + honour Range requests
   // so HTML5 audio can seek without re-downloading the whole file and the
