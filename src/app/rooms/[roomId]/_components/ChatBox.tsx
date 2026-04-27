@@ -119,7 +119,7 @@ export default function ChatBox() {
   return (
     <Card className="flex flex-col h-full w-full border-0 shadow-none rounded-none bg-transparent">
       <CardHeader className="px-4 py-3">
-        <CardTitle className="font-headline text-base flex items-center gap-2">Admin Chat</CardTitle>
+        <CardTitle className="font-headline text-base flex items-center gap-2">Room Chat</CardTitle>
       </CardHeader>
       <CardContent className="flex-1 flex flex-col gap-3 overflow-hidden px-4 pb-0 pt-0">
         <ScrollArea className="flex-1 pr-4 -mr-4" ref={scrollAreaRef}>
@@ -157,8 +157,8 @@ export default function ChatBox() {
       </CardContent>
       <CardFooter className="px-4 py-3">
         <form onSubmit={handleSubmit} className="flex w-full items-center gap-2">
-          <Textarea placeholder={user ? "Message..." : "Sign in to chat"} value={input} onChange={(e) => setInput(e.target.value)}
-            className="flex-1 min-h-[36px] max-h-[80px] resize-none text-sm" rows={1} onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleSubmit(e); } }} disabled={isPending || !user} />
+          <Textarea placeholder={user ? "Type a message..." : "Sign in to chat"} value={input} onChange={(e) => setInput(e.target.value)}
+            className="flex-1 min-h-[40px] max-h-[120px] resize-none text-sm" rows={1} onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleSubmit(e); } }} disabled={isPending || !user} />
           <Button type="submit" size="icon" className="shrink-0" disabled={isPending || !input.trim() || !user}><Send className="h-4 w-4" /></Button>
         </form>
       </CardFooter>
