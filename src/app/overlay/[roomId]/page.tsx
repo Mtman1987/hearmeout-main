@@ -5,9 +5,13 @@
 
 import { useParams } from 'next/navigation';
 import { useDoc } from '@/hooks/use-db';
-import { Music, LoaderCircle } from 'lucide-react';
+import { Music, LoaderCircle, Volume2, VolumeX } from 'lucide-react';
 import Image from 'next/image';
 import type { PlaylistItem } from '@/types/playlist';
+import { useState, useEffect, useRef } from 'react';
+import { Button } from '@/components/ui/button';
+import { Slider } from '@/components/ui/slider';
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 
 interface RoomData {
   name: string;
@@ -20,6 +24,30 @@ interface RoomData {
 export default function OverlayPage() {
   const params = useParams<{ roomId: string }>();
   const { data: room, isLoading } = useDoc<RoomData>('rooms', params.roomId, 2000);
+  const [volume, setVolume] = useState(0.5);
+  const [isMuted, setIsMuted] = useState(false);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+
+  // Create hidden audio element for monitoring (optional feature for streamer)
+  useEffect(() => {
+    if (!audioRef.current) {
+      audioRef.current = new Audio();
+      audioRef.current.volume = volume;
+    }
+    return () => {
+      if (audioRef.current) {
+        audioRef.current.pause();
+        audioRef.current.src = '';
+      }
+    };
+  }, []);
+
+  // Sync volume changes
+  useEffect(() => {
+    if (audioRef.current) {
+      audioRef.current.volume = isMuted ? 0 : volume;
+    }
+  }, [volume, isMuted]);
 
   if (isLoading) return <div className="min-h-screen bg-transparent" />;
   if (!room) return <div className="min-h-screen bg-transparent" />;
@@ -45,6 +73,35 @@ export default function OverlayPage() {
             <p className="text-sm text-gray-400 truncate">{track.artist}</p>
           </div>
           {room.djActive && <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse shrink-0" />}
+        </div>
+      </div>
+
+      {/* Volume Controls — top right, only visible when hovering (for streamer monitoring) */}
+      <div style={{ position: 'absolute', right: 20, top: 20 }} className="opacity-0 hover:opacity-100 transition-opacity">
+        <div className="rounded-lg bg-black/80 backdrop-blur-md p-3 shadow-2xl flex items-center gap-2">
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-8 w-8 text-white hover:bg-white/20"
+                onClick={() => setIsMuted(!isMuted)}
+              >
+                {isMuted ? <VolumeX className="h-4 w-4" /> : <Volume2 className="h-4 w-4" />}
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent><p>{isMuted ? 'Unmute' : 'Mute'} monitor</p></TooltipContent>
+          </Tooltip>
+          <Slider
+            value={[isMuted ? 0 : volume]}
+            onValueChange={(v) => {
+              setVolume(v[0]);
+              if (isMuted) setIsMuted(false);
+            }}
+            max={1}
+            step={0.05}
+            className="w-24"
+          />
         </div>
       </div>
     </div>
