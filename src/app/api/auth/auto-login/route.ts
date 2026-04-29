@@ -2,10 +2,11 @@ import { NextRequest, NextResponse } from 'next/server';
 import { db, ensureDb } from '@/lib/db';
 import { setSessionCookie } from '@/lib/auth';
 import { enrichUserFromDSH } from '@/lib/enrich-user';
+import { config } from '@/lib/config';
+import { verifyDshRedirect } from '@/lib/dsh-redirect';
 
-const SERVER_ID = process.env.HARDCODED_GUILD_ID || '1240832965865635881';
-const DSH_URL = 'https://discord-stream-hub-new.fly.dev';
-const DB_API_KEY = process.env.DB_API_KEY || '';
+const DSH_URL = config.dshUrl;
+const DB_API_KEY = config.dbApiKey;
 
 export async function POST(req: NextRequest) {
   await ensureDb();
@@ -13,6 +14,24 @@ export async function POST(req: NextRequest) {
   try {
     const body = await req.json().catch(() => ({}));
     const targetUserId = body.userId; // specific user ID from DSH redirect
+
+    // Account-takeover protection (audit S11): require a valid DSH signature
+    // before we'll set a session cookie for an arbitrary user_id.
+    // body.exp + body.sig are forwarded from DSH's redirect query.
+    if (targetUserId) {
+      const verifyParams = new URLSearchParams();
+      verifyParams.set('user_id', String(targetUserId));
+      if (body.exp) verifyParams.set('exp', String(body.exp));
+      if (body.sig) verifyParams.set('sig', String(body.sig));
+      const verify = verifyDshRedirect('discord', verifyParams);
+      if (!verify.ok) {
+        console.warn('[auto-login] rejected unsigned request:', verify.reason);
+        return NextResponse.json(
+          { success: false, error: 'invalid_dsh_signature' },
+          { status: 401 },
+        );
+      }
+    }
 
     // If a specific user ID was provided, look up that exact user
     if (targetUserId) {

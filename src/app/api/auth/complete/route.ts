@@ -2,8 +2,10 @@ import { NextRequest, NextResponse } from 'next/server';
 import { db, ensureDb } from '@/lib/db';
 import { setSessionCookie } from '@/lib/auth';
 import { enrichUserFromDSH } from '@/lib/enrich-user';
+import { config } from '@/lib/config';
+import { verifyDshRedirect } from '@/lib/dsh-redirect';
 
-const BASE_URL = process.env.NEXT_PUBLIC_BASE_URL || 'https://hearmeout-main.fly.dev';
+const BASE_URL = config.baseUrl;
 
 export async function GET(req: NextRequest) {
   await ensureDb();
@@ -14,6 +16,13 @@ export async function GET(req: NextRequest) {
 
     if (!userId) {
       return NextResponse.redirect(`${BASE_URL}/login?error=no_user_id`);
+    }
+
+    // Account-takeover protection (audit S12)
+    const verify = verifyDshRedirect('discord', searchParams);
+    if (!verify.ok) {
+      console.warn('[auth/complete] rejected unsigned redirect:', verify.reason);
+      return NextResponse.redirect(`${BASE_URL}/login?error=invalid_dsh_redirect`);
     }
 
     const uid = userId.startsWith('discord_') ? userId : `discord_${userId}`;
