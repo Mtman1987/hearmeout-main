@@ -22,21 +22,22 @@ export async function GET(request: NextRequest) {
   const collection = searchParams.get('collection');
   const id = searchParams.get('id');
   const filtersParam = searchParams.get('filters');
-
-  const publicRead = isPublicRoomsRead(collection, filtersParam);
-  if (!publicRead) {
-    const session = await getSession();
-    if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-  }
+  const session = await getSession();
 
   await ensureDb();
 
+  // By-ID reads always require auth
   if (collection && id) {
+    if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     const data = db.get(collection, id);
     return NextResponse.json({ exists: !!data, data, id });
   }
 
+  // Filtered queries: allow unauthenticated for public rooms only
   if (collection && filtersParam) {
+    if (!session && !isPublicRoomsRead(collection, filtersParam)) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
     try {
       const filters = JSON.parse(filtersParam);
       const docs = db.query(collection, filters);
@@ -45,6 +46,9 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: 'Invalid filters JSON' }, { status: 400 });
     }
   }
+
+  // List and fallback require auth
+  if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
   if (collection) {
     const docs = db.list(collection);
