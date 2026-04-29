@@ -338,10 +338,14 @@ export default function DJPage() {
           } else {
             const next = playlist?.[(idx + 1) % playlist.length];
             if (next && next.id !== currentTrackId) {
+              const fallbackUpdates: Record<string, unknown> = { currentTrackId: next.id, isPlaying: true };
+              if (currentTrackId) {
+                fallbackUpdates.playHistory = [...(data.playHistory || []), currentTrackId].slice(-50);
+              }
               fetch('/api/db', {
                 method: 'PATCH',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ collection: 'rooms', id: roomId, data: { currentTrackId: next.id, isPlaying: true } }),
+                body: JSON.stringify({ collection: 'rooms', id: roomId, data: fallbackUpdates }),
               }).catch(() => {});
             }
           }
@@ -378,14 +382,14 @@ export default function DJPage() {
 
     const next = r.playlist[(i + 1) % r.playlist.length];
     if (!next) return;
+    const updates: Record<string, unknown> = { currentTrackId: next.id, isPlaying: true };
+    if (r.currentTrackId) {
+      updates.playHistory = [...(r.playHistory || []), r.currentTrackId].slice(-50);
+    }
     fetch('/api/db', {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        collection: 'rooms',
-        id: roomId,
-        data: { currentTrackId: next.id, isPlaying: true },
-      }),
+      body: JSON.stringify({ collection: 'rooms', id: roomId, data: updates }),
     }).catch(() => {});
   }, [roomId, requestAutoRadio]);
 
