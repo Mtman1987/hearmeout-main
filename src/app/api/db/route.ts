@@ -2,14 +2,20 @@ import { NextRequest, NextResponse } from 'next/server';
 import { db, ensureDb } from '@/lib/db';
 import { getSession } from '@/lib/auth';
 
-export async function GET(request: NextRequest) {
-  const session = await getSession();
-  if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+// Collections that allow unauthenticated reads (public data)
+const PUBLIC_READ_COLLECTIONS = new Set(['rooms']);
 
+export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
   const collection = searchParams.get('collection');
   const id = searchParams.get('id');
   const filtersParam = searchParams.get('filters');
+
+  // Require auth for non-public collections
+  if (!collection || !PUBLIC_READ_COLLECTIONS.has(collection)) {
+    const session = await getSession();
+    if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
 
   await ensureDb();
 

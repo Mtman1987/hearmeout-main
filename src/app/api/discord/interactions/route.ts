@@ -104,19 +104,22 @@ export async function POST(req: NextRequest) {
 
       const deferResponse = NextResponse.json({ type: InteractionResponseType.DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE, data: { flags: 64 } });
 
-      const followupClientId = process.env.NEXT_PUBLIC_DISCORD_CLIENT_ID;
-      if (followupClientId) {
-        (async () => {
-          try {
-            db.set(`rooms/${roomId}/voiceQueue`, userId, { userId, username, addedAt: new Date().toISOString(), platform: 'discord' });
-            const queue = db.query(`rooms/${roomId}/voiceQueue`, undefined, { field: 'addedAt', dir: 'asc' });
-            const position = queue.findIndex(d => d.id === userId) + 1;
+      (async () => {
+        try {
+          db.set(`rooms/${roomId}/voiceQueue`, userId, { userId, username, addedAt: new Date().toISOString(), platform: 'discord' });
+          const queue = db.query(`rooms/${roomId}/voiceQueue`, undefined, { field: 'addedAt', dir: 'asc' });
+          const position = queue.findIndex(d => d.id === userId) + 1;
+          const followupClientId = process.env.NEXT_PUBLIC_DISCORD_CLIENT_ID;
+          if (followupClientId) {
             await sendFollowup(followupClientId, token, `✅ You've been added to the voice chat queue!\n**Position:** #${position}\n\nThe streamer will send you an invite link when it's your turn!`);
-          } catch {
+          }
+        } catch {
+          const followupClientId = process.env.NEXT_PUBLIC_DISCORD_CLIENT_ID;
+          if (followupClientId) {
             await sendFollowup(followupClientId, token, '❌ Error joining queue.');
           }
-        })();
-      }
+        }
+      })();
 
       return deferResponse;
     }
