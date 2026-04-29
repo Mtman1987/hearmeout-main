@@ -5,9 +5,9 @@ import { getSession } from '@/lib/auth';
 // Collections that allow unauthenticated reads (with restrictions)
 const PUBLIC_READ_COLLECTIONS = new Set(['rooms']);
 
-// Filter out private documents for unauthenticated reads
+// Filter to only documents with isPrivate explicitly false (matches firestore.rules)
 function filterPublic(docs: any[]): any[] {
-  return docs.filter(d => !d.data?.isPrivate && !d.isPrivate);
+  return docs.filter(d => d.data?.isPrivate === false);
 }
 
 export async function GET(request: NextRequest) {
@@ -28,8 +28,8 @@ export async function GET(request: NextRequest) {
 
   if (collection && id) {
     const data = db.get(collection, id);
-    // Block unauthenticated access to private rooms
-    if (!session && isPublicCollection && data?.isPrivate) {
+    // Block unauthenticated access unless isPrivate is explicitly false
+    if (!session && isPublicCollection && (!data || data.isPrivate !== false)) {
       return NextResponse.json({ exists: false });
     }
     return NextResponse.json({ exists: !!data, data, id });

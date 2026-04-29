@@ -19,7 +19,7 @@ interface Favorite {
 export async function GET(req: NextRequest) {
   const session = await getSession();
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-  const userId = new URL(req.url).searchParams.get('userId') || session.uid;
+  const userId = session.uid;
   if (!userId) return NextResponse.json({ error: 'userId required' }, { status: 400 });
 
   await ensureDb();
@@ -34,9 +34,8 @@ export async function GET(req: NextRequest) {
 export async function POST(req: NextRequest) {
   const session = await getSession();
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-  const body = await req.json();
-  const userId = body.userId || session.uid;
-  const { videoId, title, artist, url, thumbnail } = body;
+  const { videoId, title, artist, url, thumbnail } = await req.json();
+  const userId = session.uid;
   if (!userId || !videoId) return NextResponse.json({ error: 'userId and videoId required' }, { status: 400 });
 
   await ensureDb();
@@ -100,9 +99,8 @@ export async function POST(req: NextRequest) {
 export async function DELETE(req: NextRequest) {
   const session = await getSession();
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-  const body = await req.json();
-  const userId = body.userId || session.uid;
-  const { videoId } = body;
+  const { videoId } = await req.json();
+  const userId = session.uid;
   if (!userId || !videoId) return NextResponse.json({ error: 'userId and videoId required' }, { status: 400 });
 
   await ensureDb();
