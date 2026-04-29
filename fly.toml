@@ -4,7 +4,6 @@ primary_region = "iad"
 [build]
   dockerfile = "Dockerfile"
   [build.args]
-    NEXT_PUBLIC_APP_URL = "https://hearmeout-main.fly.dev"
     NEXT_PUBLIC_BASE_URL = "https://hearmeout-main.fly.dev"
     NEXT_PUBLIC_DISCORD_CLIENT_ID = "1279582181768957963"
     NEXT_PUBLIC_LIVEKIT_URL = "wss://hearmeout-6ntnbsdm.livekit.cloud"
