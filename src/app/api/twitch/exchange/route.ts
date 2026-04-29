@@ -6,13 +6,15 @@ export async function POST(req: NextRequest) {
   const session = await getSession();
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
+  await ensureDb();
+  const userDoc = db.get('users', session.uid);
+  if (!userDoc?.isAdmin) return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+
   const { code } = await req.json();
 
   if (!code) {
     return NextResponse.json({ error: 'Missing code' }, { status: 400 });
   }
-
-  await ensureDb();
 
   const clientId = process.env.TWITCH_CLIENT_ID || process.env.NEXT_PUBLIC_TWITCH_CLIENT_ID;
   const clientSecret = process.env.TWITCH_CLIENT_SECRET;
