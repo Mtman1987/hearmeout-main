@@ -26,9 +26,17 @@ export async function GET(request: NextRequest) {
 
   await ensureDb();
 
-  // By-ID reads always require auth
+  // By-ID reads: public rooms (isPrivate===false) are readable without auth
   if (collection && id) {
-    if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    if (!session) {
+      if (collection === 'rooms') {
+        const data = db.get(collection, id);
+        if (data && data.isPrivate === false) {
+          return NextResponse.json({ exists: true, data, id });
+        }
+      }
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
     const data = db.get(collection, id);
     return NextResponse.json({ exists: !!data, data, id });
   }
