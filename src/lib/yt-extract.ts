@@ -2,10 +2,17 @@
 // Your PC runs yt-dlp with residential IP → sends URL to Fly.io → Fly.io proxies audio
 // Fallback: yt-dlp on server (will likely fail on cloud IP but worth trying)
 
-import { exec } from 'child_process';
+import { execFile } from 'child_process';
 import { promisify } from 'util';
 
-const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
+
+const VIDEO_ID_RE = /^[A-Za-z0-9_-]{1,16}$/;
+
+function sanitizeVideoId(id: string): string {
+  if (!VIDEO_ID_RE.test(id)) throw new Error(`Invalid video ID: ${id}`);
+  return id;
+}
 
 const LOCAL_EXTRACTOR_URL = process.env.LOCAL_EXTRACTOR_URL || '';
 const LOCAL_EXTRACTOR_SECRET = process.env.LOCAL_EXTRACTOR_SECRET || 'hmo-extract-2026';
@@ -52,9 +59,11 @@ async function tryLocalExtractor(videoId: string): Promise<ExtractedAudio | null
 
 async function tryYtDlpServer(videoId: string): Promise<ExtractedAudio | null> {
   try {
-    console.log(`[YTExtract] Trying server yt-dlp for ${videoId}...`);
-    const { stdout } = await execAsync(
-      `yt-dlp --no-warnings -f "bestaudio[ext=m4a]/bestaudio" --get-url "https://www.youtube.com/watch?v=${videoId}"`,
+    const safeId = sanitizeVideoId(videoId);
+    console.log(`[YTExtract] Trying server yt-dlp for ${safeId}...`);
+    const { stdout } = await execFileAsync(
+      'yt-dlp',
+      ['--no-warnings', '-f', 'bestaudio[ext=m4a]/bestaudio', '--get-url', `https://www.youtube.com/watch?v=${safeId}`],
       { timeout: 30000 }
     );
 

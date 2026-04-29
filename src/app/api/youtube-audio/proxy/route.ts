@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { getSession } from '@/lib/auth';
 
 // In-memory store of client-extracted URLs (videoId → directUrl)
 // These are extracted by the DJ's browser and sent here for proxying
@@ -6,6 +7,9 @@ const extractedUrls = new Map<string, { url: string; expires: number }>();
 
 // POST: Client sends an extracted googlevideo URL for a video
 export async function POST(req: NextRequest) {
+  const session = await getSession();
+  if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+
   const { videoId, audioUrl } = await req.json();
   if (!videoId || !audioUrl) {
     return NextResponse.json({ error: 'videoId and audioUrl required' }, { status: 400 });

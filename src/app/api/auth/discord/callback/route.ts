@@ -63,7 +63,7 @@ export async function GET(req: NextRequest) {
     if (!existing) {
       const avatar = searchParams.get('avatar');
       const photoURL = avatar
-        ? `https://cdn.discordapp.com/avatars/${userId}/${avatar}.png`
+        ? `https://cdn.discordapp.com/avatars/${legacyUserId}/${avatar}.png`
         : null;
       await db.setAsync('users', uid, {
         id: uid,
