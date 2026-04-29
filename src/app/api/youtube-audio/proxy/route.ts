@@ -5,7 +5,6 @@ import { isValidVideoId } from '@/lib/validate-video-id';
 // In-memory store of client-extracted URLs (videoId → directUrl)
 // These are extracted by the DJ's browser and sent here for proxying.
 const extractedUrls = new Map<string, { url: string; expires: number }>();
-const VIDEO_ID_RE = /^[A-Za-z0-9_-]{1,16}$/;
 
 // Allowed base hosts for the upstream audio URL. A candidate host must
 // EITHER exactly equal one of these OR end with `.` + one of these — so
@@ -48,9 +47,6 @@ export async function POST(req: NextRequest) {
   }
   if (!isAllowedAudioUrl(audioUrl)) {
     return NextResponse.json({ error: 'audioUrl must be an https URL on a YouTube CDN' }, { status: 400 });
-  }
-  if (!VIDEO_ID_RE.test(videoId)) {
-    return NextResponse.json({ error: 'Invalid video ID' }, { status: 400 });
   }
 
   // Cache for 5 hours (URLs expire in ~6)

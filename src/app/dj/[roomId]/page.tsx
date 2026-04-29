@@ -230,6 +230,30 @@ export default function DJPage() {
       audioEl.load();
     }
 
+    // Audit C1: previously stopSession only stopped the published track and
+    // disconnected from LiveKit, but left the WebAudio graph intact. On the
+    // next "go live" the old MediaStreamAudioDestinationNode would still be
+    // connected, but `createMediaElementSource(audioEl)` cannot be called
+    // twice on the same element, so the second start would publish an
+    // already-ended track and listeners would hear silence. Tear the whole
+    // graph down here so a fresh ensureAudioGraph() rebuilds it cleanly.
+    try {
+      sourceNodeRef.current?.disconnect();
+    } catch {}
+    sourceNodeRef.current = null;
+    try {
+      monitorGainRef.current?.disconnect();
+    } catch {}
+    monitorGainRef.current = null;
+    try {
+      publishDestRef.current?.disconnect();
+    } catch {}
+    publishDestRef.current = null;
+    try {
+      audioContextRef.current?.close();
+    } catch {}
+    audioContextRef.current = null;
+
     liveRef.current = false;
     setIsLive(false);
     setStatus('Session stopped');

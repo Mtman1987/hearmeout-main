@@ -2,10 +2,12 @@ import { NextRequest, NextResponse } from 'next/server';
 import { db, ensureDb } from '@/lib/db';
 import { setSessionCookie } from '@/lib/auth';
 import { enrichUserFromDSH } from '@/lib/enrich-user';
+import { config } from '@/lib/config';
+import { verifyDshRedirect } from '@/lib/dsh-redirect';
 
-const BASE_URL = process.env.NEXT_PUBLIC_BASE_URL || 'https://hearmeout-main.fly.dev';
-const DSH_URL = 'https://discord-stream-hub-new.fly.dev';
-const DB_API_KEY = process.env.DB_API_KEY || '';
+const BASE_URL = config.baseUrl;
+const DSH_URL = config.dshUrl;
+const DB_API_KEY = config.dbApiKey;
 
 export async function GET(req: NextRequest) {
   await ensureDb();
@@ -15,6 +17,12 @@ export async function GET(req: NextRequest) {
   const success = searchParams.get('success');
   const userId = searchParams.get('user_id');
   if (success === 'true' && userId) {
+    // Account-takeover protection (audit S10): verify DSH signed this redirect
+    const verify = verifyDshRedirect('discord', searchParams);
+    if (!verify.ok) {
+      console.warn('[auth/discord/callback] rejected unsigned/forged redirect:', verify.reason);
+      return NextResponse.redirect(`${BASE_URL}/login?error=invalid_dsh_redirect`);
+    }
     try {
       // Fetch user's Discord tokens from shared user-specific tokens collection
       const headers: Record<string, string> = {};
@@ -56,6 +64,13 @@ export async function GET(req: NextRequest) {
   const username = searchParams.get('username');
 
   if (legacyUserId && username) {
+    // Account-takeover protection (audit S10): legacy flow needs the same
+    // signature check as the success-flag branch.
+    const verify = verifyDshRedirect('discord', searchParams);
+    if (!verify.ok) {
+      console.warn('[auth/discord/callback] rejected unsigned/forged legacy redirect:', verify.reason);
+      return NextResponse.redirect(`${BASE_URL}/login?error=invalid_dsh_redirect`);
+    }
     const uid = `discord_${legacyUserId}`;
 
     // User already exists in shared SQLite (DSH wrote it) — just set HMO's session cookie
@@ -86,8 +101,8 @@ export async function GET(req: NextRequest) {
   }
 
   // Bounce to DSH OAuth flow
-  const clientId = process.env.NEXT_PUBLIC_DISCORD_CLIENT_ID || '1279582181768957963';
-  const dshCallback = 'https://discord-stream-hub-new.fly.dev/api/discord/oauth/callback';
+  const clientId = config.discordClientId;
+  const dshCallback = `${DSH_URL}/api/discord/oauth/callback`;
   const discordUrl = `https://discord.com/api/oauth2/authorize?client_id=${clientId}&redirect_uri=${encodeURIComponent(dshCallback)}&response_type=code&scope=identify%20email&state=hearmeout`;
   return NextResponse.redirect(discordUrl);
 }
