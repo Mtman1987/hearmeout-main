@@ -3,12 +3,25 @@
 // Fly.io server calls this to get audio URLs, then proxies the audio itself
 
 const http = require('http');
-const { exec } = require('child_process');
+const { execFile } = require('child_process');
 const { promisify } = require('util');
-const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
 
 const PORT = 7777;
-const SECRET = process.env.EXTRACTOR_SECRET || 'hmo-extract-2026';
+// Must be set via env. The service is typically exposed over ngrok/localtunnel
+// so a hardcoded default would mean anyone reading this file could auth.
+const SECRET = process.env.EXTRACTOR_SECRET;
+
+if (!SECRET || SECRET.length < 16) {
+  console.error('\n[Extractor] ERROR: EXTRACTOR_SECRET env var is required and must be at least 16 chars.');
+  console.error('            Generate one with: node -e "console.log(require(\'crypto\').randomBytes(24).toString(\'hex\'))"');
+  console.error('            Then set EXTRACTOR_SECRET=<value> before starting this process.\n');
+  process.exit(1);
+}
+
+// 11-char YouTube video IDs only. Prevents shell/arg injection even though
+// execFile already doesn't use a shell.
+const VIDEO_ID_RE = /^[A-Za-z0-9_-]{11}$/;
 
 const server = http.createServer(async (req, res) => {
   // CORS
@@ -37,17 +50,25 @@ const server = http.createServer(async (req, res) => {
     const url = new URL(req.url, `http://localhost:${PORT}`);
     const videoId = url.searchParams.get('videoId');
 
-    if (!videoId) {
+    if (!videoId || !VIDEO_ID_RE.test(videoId)) {
       res.writeHead(400, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ error: 'videoId required' }));
+      res.end(JSON.stringify({ error: 'valid 11-char videoId required' }));
       return;
     }
 
     console.log(`[Extract] ${videoId}...`);
 
     try {
-      const { stdout } = await execAsync(
-        `yt-dlp --no-warnings -f "bestaudio[ext=m4a]/bestaudio" --get-url "https://www.youtube.com/watch?v=${videoId}"`,
+      // execFile with argv — no shell, so even if the regex above were looser
+      // there'd be nothing to inject into.
+      const { stdout } = await execFileAsync(
+        'yt-dlp',
+        [
+          '--no-warnings',
+          '-f', 'bestaudio[ext=m4a]/bestaudio',
+          '--get-url',
+          `https://www.youtube.com/watch?v=${videoId}`,
+        ],
         { timeout: 30000 }
       );
 
@@ -75,7 +96,7 @@ const server = http.createServer(async (req, res) => {
 
 server.listen(PORT, () => {
   console.log(`\n🎵 HearMeOut Local Extractor running on http://localhost:${PORT}`);
-  console.log(`   Secret: ${SECRET}`);
+  console.log(`   EXTRACTOR_SECRET is set (length ${SECRET.length})`);
   console.log(`   Expose with: npx localtunnel --port ${PORT} --subdomain hmo-extract`);
   console.log(`   Or use ngrok: ngrok http ${PORT}\n`);
 });

@@ -371,7 +371,7 @@ function RoomPageContent() {
     const { user, isLoading: isUserLoading } = useSession();
     const { data: room, isLoading: isRoomLoading, error: roomError } = useDoc<RoomData>('rooms', params.roomId, 2000);
 
-    if (isRoomLoading || !room) {
+    if (isRoomLoading) {
         return (
             <div className="flex flex-col h-screen">
                 <LeftSidebar roomId={params.roomId} />
@@ -385,7 +385,7 @@ function RoomPageContent() {
         );
     }
 
-    if (roomError) {
+    if (roomError || !room) {
         return (
             <div className="flex flex-col h-screen">
                 <LeftSidebar roomId={params.roomId} />
