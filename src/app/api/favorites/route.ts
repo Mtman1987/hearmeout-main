@@ -22,6 +22,7 @@ export async function GET(req: NextRequest) {
 
   const userId = new URL(req.url).searchParams.get('userId');
   if (!userId) return NextResponse.json({ error: 'userId required' }, { status: 400 });
+  if (userId !== session.uid) return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
 
   await ensureDb();
   const data = db.get('favorites', userId);
