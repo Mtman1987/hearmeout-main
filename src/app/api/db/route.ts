@@ -9,6 +9,8 @@ const ADMIN_COLLECTIONS = new Set(['config']);
 
 function isAllowedCollection(collection: string): 'allowed' | 'admin' | 'denied' {
   if (ALLOWED_COLLECTIONS.has(collection)) return 'allowed';
+  // Room subcollections: rooms/{roomId}/{subcollection} (matches firestore.rules)
+  if (/^rooms\/[^/]+\/[^/]+$/.test(collection)) return 'allowed';
   if (ADMIN_COLLECTIONS.has(collection)) return 'admin';
   return 'denied';
 }
