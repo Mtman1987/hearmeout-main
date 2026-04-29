@@ -6,10 +6,13 @@ import { getExtractedUrl, setExtractedUrl } from '@/lib/audio-url-cache';
 // Re-export for any consumers that imported from here
 export { getExtractedUrl, setExtractedUrl } from '@/lib/audio-url-cache';
 
+const VIDEO_ID_RE = /^[A-Za-z0-9_-]{1,16}$/;
+
 // GET: Extract audio URL for a video
 export async function GET(req: NextRequest) {
   const videoId = new URL(req.url).searchParams.get('videoId');
   if (!videoId) return NextResponse.json({ error: 'videoId required' }, { status: 400 });
+  if (!VIDEO_ID_RE.test(videoId)) return NextResponse.json({ error: 'Invalid video ID' }, { status: 400 });
 
   // Check mp3 cache
   const cachedMp3 = getCachedUrl(videoId);

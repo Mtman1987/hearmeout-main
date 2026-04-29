@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db, ensureDb } from '@/lib/db';
 import { ripAndCache, isCached, getCachedUrl } from '@/lib/music-ripper';
+import { getSession } from '@/lib/auth';
 
 const MAX_FAVORITES = 10;
 
@@ -16,6 +17,9 @@ interface Favorite {
 
 // GET /api/favorites?userId=xxx
 export async function GET(req: NextRequest) {
+  const session = await getSession();
+  if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+
   const userId = new URL(req.url).searchParams.get('userId');
   if (!userId) return NextResponse.json({ error: 'userId required' }, { status: 400 });
 
@@ -29,6 +33,9 @@ export async function GET(req: NextRequest) {
 
 // POST /api/favorites — heart a song
 export async function POST(req: NextRequest) {
+  const session = await getSession();
+  if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+
   const { userId, videoId, title, artist, url, thumbnail } = await req.json();
   if (!userId || !videoId) return NextResponse.json({ error: 'userId and videoId required' }, { status: 400 });
 
@@ -91,6 +98,9 @@ export async function POST(req: NextRequest) {
 
 // DELETE /api/favorites — remove a favorite
 export async function DELETE(req: NextRequest) {
+  const session = await getSession();
+  if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+
   const { userId, videoId } = await req.json();
   if (!userId || !videoId) return NextResponse.json({ error: 'userId and videoId required' }, { status: 400 });
 

@@ -4,6 +4,7 @@ import { getSession } from '@/lib/auth';
 // In-memory store of client-extracted URLs (videoId → directUrl)
 // These are extracted by the DJ's browser and sent here for proxying
 const extractedUrls = new Map<string, { url: string; expires: number }>();
+const VIDEO_ID_RE = /^[A-Za-z0-9_-]{1,16}$/;
 
 // POST: Client sends an extracted googlevideo URL for a video
 export async function POST(req: NextRequest) {
@@ -13,6 +14,9 @@ export async function POST(req: NextRequest) {
   const { videoId, audioUrl } = await req.json();
   if (!videoId || !audioUrl) {
     return NextResponse.json({ error: 'videoId and audioUrl required' }, { status: 400 });
+  }
+  if (!VIDEO_ID_RE.test(videoId)) {
+    return NextResponse.json({ error: 'Invalid video ID' }, { status: 400 });
   }
 
   // Cache for 5 hours (URLs expire in ~6)
@@ -26,6 +30,7 @@ export async function POST(req: NextRequest) {
 export async function GET(req: NextRequest) {
   const videoId = new URL(req.url).searchParams.get('videoId');
   if (!videoId) return new NextResponse('videoId required', { status: 400 });
+  if (!VIDEO_ID_RE.test(videoId)) return new NextResponse('Invalid video ID', { status: 400 });
 
   const cached = extractedUrls.get(videoId);
   if (!cached || cached.expires < Date.now()) {
