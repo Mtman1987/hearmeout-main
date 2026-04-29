@@ -1,9 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth';
+import { DSH_URL, HARDCODED_GUILD_ID } from '@/lib/constants';
 
-const DSH_URL = 'https://discord-stream-hub-new.fly.dev';
 const DB_API_KEY = process.env.DB_API_KEY || '';
-const SERVER_ID = process.env.HARDCODED_GUILD_ID || '1240832965865635881';
+const SERVER_ID = process.env.HARDCODED_GUILD_ID || HARDCODED_GUILD_ID;
 const CHAT_PATH = `servers/${SERVER_ID}/config/adminChat`;
 
 export async function GET() {

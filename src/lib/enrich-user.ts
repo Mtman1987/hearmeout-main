@@ -2,9 +2,9 @@
 // isAdmin is pre-computed by DSH during Discord sync based on admin role config
 
 import { db, ensureDb } from '@/lib/db';
+import { DSH_URL, HARDCODED_GUILD_ID } from '@/lib/constants';
 
-const DSH_URL = 'https://discord-stream-hub-new.fly.dev';
-const SERVER_ID = process.env.HARDCODED_GUILD_ID || '1240832965865635881';
+const SERVER_ID = process.env.HARDCODED_GUILD_ID || HARDCODED_GUILD_ID;
 
 export async function enrichUserFromDSH(discordId: string): Promise<Record<string, any> | null> {
   await ensureDb();

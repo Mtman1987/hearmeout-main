@@ -1,0 +1,28 @@
+app = "hmo-dj-worker"
+primary_region = "iad"
+
+[build]
+  dockerfile = "worker/Dockerfile"
+
+[env]
+  NODE_ENV = "production"
+  PORT = "3002"
+
+[http_service]
+  internal_port = 3002
+  force_https = true
+  auto_stop_machines = false
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [[http_service.checks]]
+    interval = "15s"
+    timeout = "5s"
+    grace_period = "30s"
+    method = "GET"
+    path = "/health"
+
+[[vm]]
+  memory = "2gb"
+  cpu_kind = "shared"
+  cpus = 2

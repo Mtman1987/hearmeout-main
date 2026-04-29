@@ -25,6 +25,7 @@ function resolveJwtSecret(): string {
   return DEV_FALLBACK_SECRET;
 }
 const JWT_SECRET = resolveJwtSecret();
+
 const COOKIE_NAME = 'hmo_session';
 const COOKIE_MAX_AGE = 30 * 24 * 60 * 60; // 30 days
 
@@ -70,7 +71,7 @@ export async function setSessionCookie(uid: string): Promise<void> {
   const cookieStore = await cookies();
   cookieStore.set(COOKIE_NAME, token, {
     httpOnly: true,
-    secure: process.env.NODE_ENV === 'production',
+    secure: process.env.NODE_ENV !== 'development',
     sameSite: 'lax',
     maxAge: COOKIE_MAX_AGE,
     path: '/',

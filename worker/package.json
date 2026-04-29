@@ -1,0 +1,22 @@
+{
+  "name": "hmo-dj-worker",
+  "version": "1.0.0",
+  "description": "DJ Worker for HearMeOut — handles music lookup, download, scraping, conversion, and streaming",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "nodemon src/server.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "puppeteer": "^24.41.0",
+    "cors": "^2.8.5",
+    "dotenv": "^16.0.3"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.1"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  }
+}

@@ -121,7 +121,6 @@ export async function POST(request: NextRequest) {
   if (access === 'admin' && !(await isAdmin(session.uid))) return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
 
   const safeData = sanitizeUserWrite(collection, data);
-
   if (id) {
     db.set(collection, id, safeData, { merge: !!merge });
     return NextResponse.json({ success: true, id });
