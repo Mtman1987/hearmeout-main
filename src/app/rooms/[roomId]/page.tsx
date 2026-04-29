@@ -24,6 +24,7 @@ import { PlaylistItem } from "@/types/playlist";
 import { usePopout } from '@/components/PopoutWidgets/PopoutProvider';
 import { dbGet } from '@/lib/db-helpers';
 import { Room as LKRoom, RoomEvent, Track, RemoteTrack } from 'livekit-client';
+import { useDJPublisher } from '@/hooks/use-dj-publisher';
 
 interface RoomData {
   id: string;
@@ -115,17 +116,22 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
     const musicAudioRef = useRef<HTMLAudioElement | null>(null);
     const localVolumeRef = useRef(localVolume);
     useEffect(() => { localVolumeRef.current = localVolume; }, [localVolume]);
+    const streamModeRef = useRef(false);
+
+    // Embedded DJ publisher (host only) — hidden player that publishes
+    // audio to the LiveKit music room. Everyone (including host) hears
+    // via the subscription below.
+    const djPublisher = useDJPublisher(roomId, room, isOwner ? user?.uid ?? null : null);
+
+    const isStreamMode = !!userSettings?.streamMode;
+    useEffect(() => { streamModeRef.current = isStreamMode; }, [isStreamMode]);
 
     // Connect to LiveKit Music Room as subscriber.
-    // The room owner/DJ already hears the music locally from /dj/[roomId]
-    // (WebAudio monitor). Subscribing here too would cause double playback,
-    // so owners skip this subscription entirely.
+    // Everyone subscribes — including the host (the DJ publishes under
+    // a separate identity so the host receives its own music via LiveKit
+    // like every other participant).
     useEffect(() => {
         if (isUserLoading || !user || !roomId) return;
-        if (isOwner) {
-            setMusicStatus('hosting (monitor on DJ tab)');
-            return;
-        }
         let cancelled = false;
 
         const connectMusicRoom = async () => {
@@ -147,7 +153,7 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
                         console.log('[MusicRoom] 🎵 Audio track received — attaching');
                         if (!musicAudioRef.current) musicAudioRef.current = new Audio();
                         track.attach(musicAudioRef.current);
-                        musicAudioRef.current.volume = localVolumeRef.current;
+                        musicAudioRef.current.volume = streamModeRef.current ? 0 : localVolumeRef.current;
                         musicAudioRef.current.play().catch(e => console.warn('[MusicRoom] Autoplay blocked:', e));
                         setMusicStatus('🎵 streaming');
                     }
@@ -185,12 +191,15 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
             musicRoomRef.current = null;
             if (musicAudioRef.current) { musicAudioRef.current.srcObject = null; }
         };
-    }, [user, isUserLoading, roomId, isOwner]);
+    }, [user, isUserLoading, roomId]);
 
-    // Sync volume changes to the audio element
+    // Sync volume changes to the audio element.
+    // Stream-mode users hear music only from the OBS overlay, so mute here.
     useEffect(() => {
-        if (musicAudioRef.current) musicAudioRef.current.volume = localVolume;
-    }, [localVolume]);
+        if (musicAudioRef.current) {
+            musicAudioRef.current.volume = isStreamMode ? 0 : localVolume;
+        }
+    }, [localVolume, isStreamMode]);
 
     // Check if user is banned
     const [isBanned, setIsBanned] = React.useState(false);
@@ -315,6 +324,9 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
                           showDJ={showDJ}
                           autoRadio={room.autoRadio}
                           onToggleAutoRadio={handleToggleAutoRadio}
+                          djIsLive={djPublisher.isLive}
+                          onStartDJ={djPublisher.startSession}
+                          onStopDJ={djPublisher.stopSession}
                         />
                         {isOwner && <VoiceQueue roomId={roomId} />}
                     </main>
