@@ -7,7 +7,10 @@ import { cookies } from 'next/headers';
 import { createHmac } from 'crypto';
 import { db, ensureDb } from '@/lib/db';
 
-const JWT_SECRET = process.env.JWT_SECRET || process.env.DISCORD_CLIENT_SECRET || 'hearmeout-dev-secret';
+const JWT_SECRET = process.env.JWT_SECRET || process.env.DISCORD_CLIENT_SECRET || '';
+if (!JWT_SECRET && process.env.NODE_ENV === 'production') {
+  console.error('[Auth] CRITICAL: No JWT_SECRET or DISCORD_CLIENT_SECRET set. Sessions will not work.');
+}
 const COOKIE_NAME = 'hmo_session';
 const COOKIE_MAX_AGE = 30 * 24 * 60 * 60; // 30 days
 

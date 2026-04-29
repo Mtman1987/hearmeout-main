@@ -29,7 +29,10 @@ async function sendFollowup(clientId: string, token: string, content: string): P
 async function handlePlayPauseButton(body: any, token: string): Promise<void> {
   const targetRoomId = process.env.TARGET_ROOM_ID;
   const clientId = process.env.NEXT_PUBLIC_DISCORD_CLIENT_ID;
-  if (!targetRoomId || !clientId) { await sendFollowup(clientId!, token, '❌ Bot not configured.'); return; }
+  if (!targetRoomId || !clientId) {
+    if (clientId) await sendFollowup(clientId, token, '❌ Bot not configured.');
+    return;
+  }
 
   try {
     const roomData = db.get('rooms', targetRoomId);
@@ -37,18 +40,21 @@ async function handlePlayPauseButton(body: any, token: string): Promise<void> {
     const newState = !roomData.isPlaying;
     db.update('rooms', targetRoomId, { isPlaying: newState });
     await sendFollowup(clientId, token, newState ? '▶️ Playing' : '⏸️ Paused');
-  } catch { await sendFollowup(clientId!, token, '❌ Error updating playback state.'); }
+  } catch { await sendFollowup(clientId, token, '❌ Error updating playback state.'); }
 }
 
 async function handleSkipButton(body: any, token: string): Promise<void> {
   const targetRoomId = process.env.TARGET_ROOM_ID;
   const clientId = process.env.NEXT_PUBLIC_DISCORD_CLIENT_ID;
-  if (!targetRoomId || !clientId) { await sendFollowup(clientId!, token, '❌ Bot not configured.'); return; }
+  if (!targetRoomId || !clientId) {
+    if (clientId) await sendFollowup(clientId, token, '❌ Bot not configured.');
+    return;
+  }
 
   try {
     const result = await skipTrack(targetRoomId);
     await sendFollowup(clientId, token, result.success ? `✅ ${result.message}` : `❌ ${result.message}`);
-  } catch { await sendFollowup(clientId!, token, '❌ Error skipping track.'); }
+  } catch { await sendFollowup(clientId, token, '❌ Error skipping track.'); }
 }
 
 export async function POST(req: NextRequest) {
@@ -98,15 +104,19 @@ export async function POST(req: NextRequest) {
 
       const deferResponse = NextResponse.json({ type: InteractionResponseType.DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE, data: { flags: 64 } });
 
-      (async () => {
-        try {
-          db.set(`rooms/${roomId}/voiceQueue`, userId, { userId, username, addedAt: new Date().toISOString(), platform: 'discord' });
-          const queue = db.query(`rooms/${roomId}/voiceQueue`, undefined, { field: 'addedAt', dir: 'asc' });
-          const position = queue.findIndex(d => d.id === userId) + 1;
-          const clientId = process.env.NEXT_PUBLIC_DISCORD_CLIENT_ID;
-          await sendFollowup(clientId!, token, `✅ You've been added to the voice chat queue!\n**Position:** #${position}\n\nThe streamer will send you an invite link when it's your turn!`);
-        } catch { const clientId = process.env.NEXT_PUBLIC_DISCORD_CLIENT_ID; await sendFollowup(clientId!, token, '❌ Error joining queue.'); }
-      })();
+      const followupClientId = process.env.NEXT_PUBLIC_DISCORD_CLIENT_ID;
+      if (followupClientId) {
+        (async () => {
+          try {
+            db.set(`rooms/${roomId}/voiceQueue`, userId, { userId, username, addedAt: new Date().toISOString(), platform: 'discord' });
+            const queue = db.query(`rooms/${roomId}/voiceQueue`, undefined, { field: 'addedAt', dir: 'asc' });
+            const position = queue.findIndex(d => d.id === userId) + 1;
+            await sendFollowup(followupClientId, token, `✅ You've been added to the voice chat queue!\n**Position:** #${position}\n\nThe streamer will send you an invite link when it's your turn!`);
+          } catch {
+            await sendFollowup(followupClientId, token, '❌ Error joining queue.');
+          }
+        })();
+      }
 
       return deferResponse;
     }

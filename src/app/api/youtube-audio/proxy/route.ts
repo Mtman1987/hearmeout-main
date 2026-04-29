@@ -4,6 +4,15 @@ import { getSession } from '@/lib/auth';
 // In-memory store of client-extracted URLs (videoId → directUrl)
 // These are extracted by the DJ's browser and sent here for proxying
 const extractedUrls = new Map<string, { url: string; expires: number }>();
+const MAX_PROXY_CACHE = 200;
+
+// Periodically clean up expired entries
+setInterval(() => {
+  const now = Date.now();
+  for (const [key, entry] of extractedUrls) {
+    if (entry.expires <= now) extractedUrls.delete(key);
+  }
+}, 10 * 60 * 1000).unref();
 
 // POST: Client sends an extracted googlevideo URL for a video
 export async function POST(req: NextRequest) {
@@ -15,6 +24,11 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'videoId and audioUrl required' }, { status: 400 });
   }
 
+  // Enforce cache size limit
+  if (extractedUrls.size >= MAX_PROXY_CACHE) {
+    const oldest = extractedUrls.keys().next().value;
+    if (oldest !== undefined) extractedUrls.delete(oldest);
+  }
   // Cache for 5 hours (URLs expire in ~6)
   extractedUrls.set(videoId, { url: audioUrl, expires: Date.now() + 5 * 60 * 60 * 1000 });
   console.log(`[Proxy] Registered URL for ${videoId}`);

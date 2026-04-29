@@ -3,6 +3,9 @@ import { db, ensureDb } from '@/lib/db';
 import { getSession } from '@/lib/auth';
 
 export async function GET(request: NextRequest) {
+  const session = await getSession();
+  if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+
   const { searchParams } = new URL(request.url);
   const collection = searchParams.get('collection');
   const id = searchParams.get('id');
@@ -16,7 +19,12 @@ export async function GET(request: NextRequest) {
   }
 
   if (collection && filtersParam) {
-    const filters = JSON.parse(filtersParam);
+    let filters;
+    try {
+      filters = JSON.parse(filtersParam);
+    } catch {
+      return NextResponse.json({ error: 'Invalid filters JSON' }, { status: 400 });
+    }
     const docs = db.query(collection, filters);
     return NextResponse.json(docs);
   }
@@ -53,6 +61,9 @@ export async function POST(request: NextRequest) {
 }
 
 export async function PATCH(request: NextRequest) {
+  const session = await getSession();
+  if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+
   await ensureDb();
   const { collection, id, data } = await request.json();
   if (!collection || !id || !data) {

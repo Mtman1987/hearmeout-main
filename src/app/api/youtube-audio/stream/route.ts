@@ -1,18 +1,26 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { extractAudioUrl } from '@/lib/yt-extract';
 import { existsSync, readFileSync } from 'fs';
-import { join } from 'path';
+import { join, resolve } from 'path';
 import { getExtractedUrl, setExtractedUrl, deleteExtractedUrl } from '@/lib/audio-url-cache';
 
 const CACHE_DIR = process.env.MUSIC_CACHE_DIR || join(process.cwd(), 'data', 'music');
+const VIDEO_ID_RE = /^[A-Za-z0-9_-]{1,16}$/;
 
 // GET: Stream audio from CDN through our server (same-origin proxy)
 export async function GET(req: NextRequest) {
   const videoId = new URL(req.url).searchParams.get('videoId');
   if (!videoId) return new NextResponse('videoId required', { status: 400 });
 
+  if (!VIDEO_ID_RE.test(videoId)) {
+    return new NextResponse('Invalid video ID', { status: 400 });
+  }
+
   // Serve cached mp3 if available
-  const mp3Path = join(CACHE_DIR, `${videoId}.mp3`);
+  const mp3Path = resolve(CACHE_DIR, `${videoId}.mp3`);
+  if (!mp3Path.startsWith(resolve(CACHE_DIR))) {
+    return new NextResponse('Invalid path', { status: 400 });
+  }
   if (existsSync(mp3Path)) {
     const data = readFileSync(mp3Path);
     return new NextResponse(data, {

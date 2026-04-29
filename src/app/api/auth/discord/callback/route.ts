@@ -52,30 +52,29 @@ export async function GET(req: NextRequest) {
   }
 
   // Legacy flow - DSH redirected here after doing the real OAuth + writing user to shared SQLite
-  const legacyUserId = searchParams.get('user_id');
   const username = searchParams.get('username');
 
-  if (legacyUserId && username) {
-    const uid = `discord_${legacyUserId}`;
+  if (userId && username) {
+    const uid = `discord_${userId}`;
 
     // User already exists in shared SQLite (DSH wrote it) — just set HMO's session cookie
     const existing = await db.getAsync('users', uid);
     if (!existing) {
       const avatar = searchParams.get('avatar');
       const photoURL = avatar
-        ? `https://cdn.discordapp.com/avatars/${legacyUserId}/${avatar}.png`
+        ? `https://cdn.discordapp.com/avatars/${userId}/${avatar}.png`
         : null;
       await db.setAsync('users', uid, {
         id: uid,
         username,
         displayName: username,
         photoURL,
-        discordId: legacyUserId,
+        discordId: userId,
       });
     }
 
     await setSessionCookie(uid);
-    enrichUserFromDSH(legacyUserId).catch(() => {});
+    enrichUserFromDSH(userId).catch(() => {});
     return NextResponse.redirect(`${BASE_URL}/`);
   }
 

@@ -15,7 +15,7 @@ function sanitizeVideoId(id: string): string {
 }
 
 const LOCAL_EXTRACTOR_URL = process.env.LOCAL_EXTRACTOR_URL || '';
-const LOCAL_EXTRACTOR_SECRET = process.env.LOCAL_EXTRACTOR_SECRET || 'hmo-extract-2026';
+const LOCAL_EXTRACTOR_SECRET = process.env.LOCAL_EXTRACTOR_SECRET || '';
 
 export interface ExtractedAudio {
   url: string;

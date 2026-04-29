@@ -379,6 +379,10 @@ async function initializeAllBots() {
 // --- API handlers ---
 
 export async function GET(req: NextRequest) {
+  const { getSession } = await import('@/lib/auth');
+  const session = await getSession();
+  if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+
   if (!isInitialized) await initializeAllBots();
 
   const instances: Record<string, any> = {};
@@ -412,6 +416,10 @@ export async function GET(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
+  const { getSession } = await import('@/lib/auth');
+  const session = await getSession();
+  if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+
   const { searchParams } = new URL(req.url);
   const action = searchParams.get('action');
   const serverId = searchParams.get('serverId') || process.env.HARDCODED_GUILD_ID || '1240832965865635881';
