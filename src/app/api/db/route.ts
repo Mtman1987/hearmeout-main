@@ -2,14 +2,32 @@ import { NextRequest, NextResponse } from 'next/server';
 import { db, ensureDb } from '@/lib/db';
 import { getSession } from '@/lib/auth';
 
-export async function GET(request: NextRequest) {
-  const session = await getSession();
-  if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+// Allow unauthenticated reads for public rooms (matches firestore.rules);
+// all other collections require a session.
+function isPublicRoomsRead(collection: string | null, filtersParam: string | null): boolean {
+  if (collection !== 'rooms') return false;
+  if (!filtersParam) return false;
+  try {
+    const filters = JSON.parse(filtersParam);
+    return Array.isArray(filters) && filters.some(
+      (f: any) => f.field === 'isPrivate' && f.op === '==' && f.value === false,
+    );
+  } catch {
+    return false;
+  }
+}
 
+export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
   const collection = searchParams.get('collection');
   const id = searchParams.get('id');
   const filtersParam = searchParams.get('filters');
+
+  const publicRead = isPublicRoomsRead(collection, filtersParam);
+  if (!publicRead) {
+    const session = await getSession();
+    if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
 
   await ensureDb();
 
