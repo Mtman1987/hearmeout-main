@@ -34,8 +34,10 @@ export async function GET(request: NextRequest) {
   const roomId = searchParams.get('roomId');
 
   if (roomId) {
-    return NextResponse.json({ running: isDJRunning(roomId) });
+    const running = await isDJRunning(roomId);
+    return NextResponse.json({ running });
   }
 
-  return NextResponse.json({ instances: getActiveInstances() });
+  const instances = await getActiveInstances();
+  return NextResponse.json({ instances });
 }

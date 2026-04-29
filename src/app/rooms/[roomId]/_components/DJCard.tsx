@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useCallback } from 'react';
-import { Music, Play, Pause, SkipForward, SkipBack, Volume2, VolumeX, Power, PowerOff, Radio } from 'lucide-react';
+import { Music, Play, Pause, SkipForward, SkipBack, Volume2, VolumeX, Power, PowerOff, Radio, LoaderCircle } from 'lucide-react';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -25,6 +25,7 @@ interface DJCardProps {
   autoRadio?: boolean;
   onToggleAutoRadio?: () => void;
   djIsLive: boolean;
+  djStarting?: boolean;
   onStartDJ: () => void;
   onStopDJ: () => void;
 }
@@ -33,7 +34,7 @@ export default function DJCard({
   roomId, playlist, currentTrackId, isPlaying, djActive,
   musicStatus, localVolume, onVolumeChange, canControl,
   autoRadio, onToggleAutoRadio,
-  djIsLive, onStartDJ, onStopDJ,
+  djIsLive, djStarting, onStartDJ, onStopDJ,
 }: DJCardProps) {
   const currentTrack = playlist?.find(t => t.id === currentTrackId);
   const isStreaming = musicStatus === '🎵 streaming';
@@ -144,8 +145,10 @@ export default function DJCard({
               size="sm"
               className="w-full gap-2"
               onClick={djIsLive ? onStopDJ : onStartDJ}
+              disabled={djStarting}
             >
-              {djIsLive ? <><PowerOff className="h-4 w-4" /> Stop DJ</> :
+              {djStarting ? <><LoaderCircle className="h-4 w-4 animate-spin" /> Starting...</> :
+                djIsLive ? <><PowerOff className="h-4 w-4" /> Stop DJ</> :
                 <><Power className="h-4 w-4" /> Start DJ</>}
             </Button>
           </TooltipTrigger><TooltipContent><p>{djIsLive ? 'Stop broadcasting music' : 'Start broadcasting music to everyone'}</p></TooltipContent></Tooltip>
