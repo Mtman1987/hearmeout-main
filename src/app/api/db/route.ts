@@ -6,6 +6,14 @@ import { getSession } from '@/lib/auth';
 // 'config' requires admin; all others require any authenticated session.
 const ALLOWED_COLLECTIONS = new Set(['rooms', 'users']);
 const ADMIN_COLLECTIONS = new Set(['config']);
+const PROTECTED_USER_FIELDS = ['isAdmin'];
+
+function sanitizeUserWrite(collection: string, data: Record<string, any>): Record<string, any> {
+  if (collection !== 'users') return data;
+  const cleaned = { ...data };
+  for (const field of PROTECTED_USER_FIELDS) delete cleaned[field];
+  return cleaned;
+}
 
 function isAllowedCollection(collection: string): 'allowed' | 'admin' | 'denied' {
   if (ALLOWED_COLLECTIONS.has(collection)) return 'allowed';
@@ -112,14 +120,16 @@ export async function POST(request: NextRequest) {
   if (access === 'denied') return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
   if (access === 'admin' && !(await isAdmin(session.uid))) return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
 
+  const safeData = sanitizeUserWrite(collection, data);
+
   if (id) {
-    db.set(collection, id, data, { merge: !!merge });
+    db.set(collection, id, safeData, { merge: !!merge });
     return NextResponse.json({ success: true, id });
   }
 
   // Auto-generate ID
   const newId = `auto_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-  db.set(collection, newId, data);
+  db.set(collection, newId, safeData);
   return NextResponse.json({ success: true, id: newId });
 }
 
@@ -137,7 +147,7 @@ export async function PATCH(request: NextRequest) {
   if (access === 'denied') return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
   if (access === 'admin' && !(await isAdmin(session.uid))) return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
 
-  db.update(collection, id, data);
+  db.update(collection, id, sanitizeUserWrite(collection, data));
   return NextResponse.json({ success: true });
 }
 
