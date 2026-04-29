@@ -38,6 +38,7 @@ export async function POST(req: NextRequest) {
 
   const { userId, videoId, title, artist, url, thumbnail } = await req.json();
   if (!userId || !videoId) return NextResponse.json({ error: 'userId and videoId required' }, { status: 400 });
+  if (userId !== session.uid) return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
 
   await ensureDb();
   const data = db.get('favorites', userId) || { songs: [] };
@@ -103,6 +104,7 @@ export async function DELETE(req: NextRequest) {
 
   const { userId, videoId } = await req.json();
   if (!userId || !videoId) return NextResponse.json({ error: 'userId and videoId required' }, { status: 400 });
+  if (userId !== session.uid) return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
 
   await ensureDb();
   const data = db.get('favorites', userId);

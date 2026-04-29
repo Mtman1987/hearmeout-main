@@ -2,6 +2,23 @@ import { NextRequest, NextResponse } from 'next/server';
 import { db, ensureDb } from '@/lib/db';
 import { getSession } from '@/lib/auth';
 
+// Collections accessible via the generic /api/db endpoint (matches firestore.rules).
+// 'config' requires admin; all others require any authenticated session.
+const ALLOWED_COLLECTIONS = new Set(['rooms', 'users']);
+const ADMIN_COLLECTIONS = new Set(['config']);
+
+function isAllowedCollection(collection: string): 'allowed' | 'admin' | 'denied' {
+  if (ALLOWED_COLLECTIONS.has(collection)) return 'allowed';
+  if (ADMIN_COLLECTIONS.has(collection)) return 'admin';
+  return 'denied';
+}
+
+async function isAdmin(uid: string): Promise<boolean> {
+  await ensureDb();
+  const userDoc = db.get('users', uid);
+  return !!userDoc?.isAdmin;
+}
+
 // Allow unauthenticated reads for public rooms (matches firestore.rules);
 // all other collections require a session.
 function isPublicRoomsRead(collection: string | null, filtersParam: string | null): boolean {
@@ -37,6 +54,9 @@ export async function GET(request: NextRequest) {
       }
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
+    const access = isAllowedCollection(collection);
+    if (access === 'denied') return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+    if (access === 'admin' && !(await isAdmin(session.uid))) return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
     const data = db.get(collection, id);
     return NextResponse.json({ exists: !!data, data, id });
   }
@@ -45,6 +65,11 @@ export async function GET(request: NextRequest) {
   if (collection && filtersParam) {
     if (!session && !isPublicRoomsRead(collection, filtersParam)) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+    if (session) {
+      const access = isAllowedCollection(collection);
+      if (access === 'denied') return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+      if (access === 'admin' && !(await isAdmin(session.uid))) return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
     }
     try {
       const filters = JSON.parse(filtersParam);
@@ -59,6 +84,9 @@ export async function GET(request: NextRequest) {
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
   if (collection) {
+    const access = isAllowedCollection(collection);
+    if (access === 'denied') return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+    if (access === 'admin' && !(await isAdmin(session.uid))) return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
     const docs = db.list(collection);
     return NextResponse.json(docs);
   }
@@ -77,6 +105,10 @@ export async function POST(request: NextRequest) {
   if (!collection || !data) {
     return NextResponse.json({ error: 'Missing collection or data' }, { status: 400 });
   }
+
+  const access = isAllowedCollection(collection);
+  if (access === 'denied') return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+  if (access === 'admin' && !(await isAdmin(session.uid))) return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
 
   if (id) {
     db.set(collection, id, data, { merge: !!merge });
@@ -98,6 +130,11 @@ export async function PATCH(request: NextRequest) {
   if (!collection || !id || !data) {
     return NextResponse.json({ error: 'Missing fields' }, { status: 400 });
   }
+
+  const access = isAllowedCollection(collection);
+  if (access === 'denied') return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+  if (access === 'admin' && !(await isAdmin(session.uid))) return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+
   db.update(collection, id, data);
   return NextResponse.json({ success: true });
 }
@@ -111,6 +148,11 @@ export async function DELETE(request: NextRequest) {
   if (!collection || !id) {
     return NextResponse.json({ error: 'Missing fields' }, { status: 400 });
   }
+
+  const access = isAllowedCollection(collection);
+  if (access === 'denied') return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+  if (access === 'admin' && !(await isAdmin(session.uid))) return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+
   db.delete(collection, id);
   return NextResponse.json({ success: true });
 }
