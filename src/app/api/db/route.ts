@@ -2,8 +2,13 @@ import { NextRequest, NextResponse } from 'next/server';
 import { db, ensureDb } from '@/lib/db';
 import { getSession } from '@/lib/auth';
 
-// Collections that allow unauthenticated reads (public data)
+// Collections that allow unauthenticated reads (with restrictions)
 const PUBLIC_READ_COLLECTIONS = new Set(['rooms']);
+
+// Filter out private documents for unauthenticated reads
+function filterPublic(docs: any[]): any[] {
+  return docs.filter(d => !d.data?.isPrivate && !d.isPrivate);
+}
 
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
@@ -11,16 +16,22 @@ export async function GET(request: NextRequest) {
   const id = searchParams.get('id');
   const filtersParam = searchParams.get('filters');
 
+  const session = await getSession();
+  const isPublicCollection = collection && PUBLIC_READ_COLLECTIONS.has(collection);
+
   // Require auth for non-public collections
-  if (!collection || !PUBLIC_READ_COLLECTIONS.has(collection)) {
-    const session = await getSession();
-    if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  if (!isPublicCollection && !session) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
   await ensureDb();
 
   if (collection && id) {
     const data = db.get(collection, id);
+    // Block unauthenticated access to private rooms
+    if (!session && isPublicCollection && data?.isPrivate) {
+      return NextResponse.json({ exists: false });
+    }
     return NextResponse.json({ exists: !!data, data, id });
   }
 
@@ -31,12 +42,14 @@ export async function GET(request: NextRequest) {
     } catch {
       return NextResponse.json({ error: 'Invalid filters JSON' }, { status: 400 });
     }
-    const docs = db.query(collection, filters);
+    let docs = db.query(collection, filters);
+    if (!session && isPublicCollection) docs = filterPublic(docs);
     return NextResponse.json(docs);
   }
 
   if (collection) {
-    const docs = db.list(collection);
+    let docs = db.list(collection);
+    if (!session && isPublicCollection) docs = filterPublic(docs);
     return NextResponse.json(docs);
   }
 
