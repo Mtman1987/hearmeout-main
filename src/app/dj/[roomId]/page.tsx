@@ -71,6 +71,22 @@ export default function DJPage() {
     document.title = isLive ? '🔴 DJ LIVE — HearMeOut' : '🎵 HearMeOut DJ';
   }, [isLive]);
 
+  // Expose control surface for Puppeteer (hmo-dj-worker) auto-start
+  useEffect(() => {
+    (window as any).__HEARMEOUT_DJ__ = {
+      startSession: () => {
+        const btn = document.getElementById('dj-start-btn');
+        if (btn) btn.click();
+      },
+      stopSession: () => {
+        const btn = document.getElementById('dj-stop-btn');
+        if (btn) btn.click();
+      },
+      getStatus: () => ({ isLive: liveRef.current, status }),
+    };
+    return () => { delete (window as any).__HEARMEOUT_DJ__; };
+  }, [status]);
+
   // Keep monitor gain in sync with UI controls (only affects DJ's own ears)
   useEffect(() => {
     if (monitorGainRef.current) {
@@ -508,6 +524,7 @@ export default function DJPage() {
 
       {!isLive ? (
         <button
+          id="dj-start-btn"
           onClick={startSession}
           style={{
             width: '100%',
@@ -543,7 +560,7 @@ export default function DJPage() {
             <button onClick={skipNext} style={controlBtn}>
               ⏭
             </button>
-            <button onClick={stopSession} style={{ ...controlBtn, background: '#dc2626' }}>
+            <button id="dj-stop-btn" onClick={stopSession} style={{ ...controlBtn, background: '#dc2626' }}>
               ⏹
             </button>
           </div>

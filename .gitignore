@@ -165,4 +165,7 @@ credentials/
 private.key
 id_rsa
 id_dsa
+
+# secrets — never commit
+youtube-cookies.txt
 ```
