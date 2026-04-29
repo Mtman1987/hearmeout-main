@@ -1,17 +1,21 @@
 'use client';
 
-// OBS Overlay — shows now-playing info for stream display
-// Music playback is handled by the server-side DJ bot, not this page
+// OBS Overlay — shows now-playing info for stream display AND plays
+// music audio via LiveKit WebRTC. Streamers capture this browser source
+// in OBS so music audio is on a separate channel from speakers' voices,
+// allowing them to strip music for copyright reasons.
 
 import { useParams } from 'next/navigation';
 import { useDoc } from '@/hooks/use-db';
-import { Music, LoaderCircle, Volume2, VolumeX } from 'lucide-react';
+import { Music, Volume2, VolumeX } from 'lucide-react';
 import Image from 'next/image';
 import type { PlaylistItem } from '@/types/playlist';
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { Button } from '@/components/ui/button';
 import { Slider } from '@/components/ui/slider';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
+import { Room as LKRoom, RoomEvent, Track, RemoteTrack } from 'livekit-client';
+import { generateMusicRoomToken } from '@/app/actions';
 
 interface RoomData {
   name: string;
@@ -23,31 +27,77 @@ interface RoomData {
 
 export default function OverlayPage() {
   const params = useParams<{ roomId: string }>();
-  const { data: room, isLoading } = useDoc<RoomData>('rooms', params.roomId, 2000);
+  const roomId = params.roomId;
+  const { data: room, isLoading } = useDoc<RoomData>('rooms', roomId, 2000);
   const [volume, setVolume] = useState(0.5);
   const [isMuted, setIsMuted] = useState(false);
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const musicRoomRef = useRef<LKRoom | null>(null);
+  const volumeRef = useRef(volume);
+  const mutedRef = useRef(isMuted);
 
-  // Create hidden audio element for monitoring (optional feature for streamer)
-  useEffect(() => {
-    if (!audioRef.current) {
-      audioRef.current = new Audio();
-      audioRef.current.volume = volume;
-    }
-    return () => {
-      if (audioRef.current) {
-        audioRef.current.pause();
-        audioRef.current.src = '';
-      }
-    };
-  }, []);
+  useEffect(() => { volumeRef.current = volume; }, [volume]);
+  useEffect(() => { mutedRef.current = isMuted; }, [isMuted]);
 
-  // Sync volume changes
+  // Sync volume changes to the audio element
   useEffect(() => {
     if (audioRef.current) {
       audioRef.current.volume = isMuted ? 0 : volume;
     }
   }, [volume, isMuted]);
+
+  // Connect to LiveKit Music Room and play audio through this overlay.
+  // When used as an OBS browser source, this makes the music audio
+  // capturable on a separate channel from speakers.
+  const connectToMusicRoom = useCallback(async () => {
+    if (musicRoomRef.current || !roomId) return;
+
+    try {
+      const token = await generateMusicRoomToken(roomId, `overlay-${roomId}`, 'Overlay', false);
+      const livekitUrl = process.env.NEXT_PUBLIC_LIVEKIT_URL;
+      if (!livekitUrl || !token) return;
+
+      const lkRoom = new LKRoom();
+      await lkRoom.connect(livekitUrl, token);
+      musicRoomRef.current = lkRoom;
+      console.log('[Overlay] Connected to music room');
+
+      const attachTrack = (track: RemoteTrack) => {
+        if (track.kind === Track.Kind.Audio) {
+          console.log('[Overlay] Audio track received — attaching');
+          if (!audioRef.current) audioRef.current = new Audio();
+          track.attach(audioRef.current);
+          audioRef.current.volume = mutedRef.current ? 0 : volumeRef.current;
+          audioRef.current.play().catch(e => console.warn('[Overlay] Autoplay blocked:', e));
+        }
+      };
+
+      lkRoom.remoteParticipants.forEach(p => {
+        p.trackPublications.forEach(pub => {
+          if (pub.track && pub.isSubscribed) attachTrack(pub.track as RemoteTrack);
+        });
+      });
+
+      lkRoom.on(RoomEvent.TrackSubscribed, (track) => attachTrack(track));
+      lkRoom.on(RoomEvent.TrackUnsubscribed, () => {
+        if (audioRef.current) audioRef.current.srcObject = null;
+      });
+    } catch (err) {
+      console.error('[Overlay] Music room error:', err);
+    }
+  }, [roomId]);
+
+  useEffect(() => {
+    connectToMusicRoom();
+    return () => {
+      musicRoomRef.current?.disconnect();
+      musicRoomRef.current = null;
+      if (audioRef.current) {
+        audioRef.current.pause();
+        audioRef.current.srcObject = null;
+      }
+    };
+  }, [connectToMusicRoom]);
 
   if (isLoading) return <div className="min-h-screen bg-transparent" />;
   if (!room) return <div className="min-h-screen bg-transparent" />;

@@ -116,14 +116,43 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
     const localVolumeRef = useRef(localVolume);
     useEffect(() => { localVolumeRef.current = localVolume; }, [localVolume]);
 
+    const isStreamMode = !!userSettings?.streamMode;
+
+    // DJ start/stop via server-side API (Puppeteer on hmo-dj-worker)
+    const [djStarting, setDjStarting] = useState(false);
+    const handleStartDJ = useCallback(async () => {
+        setDjStarting(true);
+        try {
+            const res = await fetch('/api/dj', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ action: 'start', roomId }),
+            });
+            const data = await res.json();
+            if (!data.success) toast({ variant: 'destructive', title: 'DJ Error', description: data.message });
+        } catch (err) {
+            toast({ variant: 'destructive', title: 'DJ Error', description: 'Failed to start DJ' });
+        } finally {
+            setDjStarting(false);
+        }
+    }, [roomId, toast]);
+
+    const handleStopDJ = useCallback(async () => {
+        try {
+            await fetch('/api/dj', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ action: 'stop', roomId }),
+            });
+        } catch {}
+    }, [roomId]);
+
     // Connect to LiveKit Music Room as subscriber.
-    // The room owner/DJ already hears the music locally from /dj/[roomId]
-    // (WebAudio monitor). Subscribing here too would cause double playback,
-    // so owners skip this subscription entirely.
+    // Stream-mode users skip this — they hear music from the OBS overlay.
     useEffect(() => {
         if (isUserLoading || !user || !roomId) return;
-        if (isOwner) {
-            setMusicStatus('hosting (monitor on DJ tab)');
+        if (isStreamMode) {
+            setMusicStatus('stream mode (music in overlay)');
             return;
         }
         let cancelled = false;
@@ -185,11 +214,13 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
             musicRoomRef.current = null;
             if (musicAudioRef.current) { musicAudioRef.current.srcObject = null; }
         };
-    }, [user, isUserLoading, roomId, isOwner]);
+    }, [user, isUserLoading, roomId, isStreamMode]);
 
     // Sync volume changes to the audio element
     useEffect(() => {
-        if (musicAudioRef.current) musicAudioRef.current.volume = localVolume;
+        if (musicAudioRef.current) {
+            musicAudioRef.current.volume = localVolume;
+        }
     }, [localVolume]);
 
     // Check if user is banned
@@ -315,6 +346,10 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
                           showDJ={showDJ}
                           autoRadio={room.autoRadio}
                           onToggleAutoRadio={handleToggleAutoRadio}
+                          djIsLive={!!room.djActive}
+                          djStarting={djStarting}
+                          onStartDJ={handleStartDJ}
+                          onStopDJ={handleStopDJ}
                         />
                         {isOwner && <VoiceQueue roomId={roomId} />}
                     </main>
