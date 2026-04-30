@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { addSongToPlaylist, updateRoomPlayState, skipTrack } from '@/lib/bot-actions';
+import { addSongToPlaylist, skipTrack } from '@/lib/bot-actions';
 import { db, ensureDb } from '@/lib/db';
 import nacl from 'tweetnacl';
 

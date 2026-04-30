@@ -378,7 +378,7 @@ async function initializeAllBots() {
 
 // --- API handlers ---
 
-export async function GET(req: NextRequest) {
+export async function GET() {
   if (!isInitialized) await initializeAllBots();
 
   const instances: Record<string, any> = {};

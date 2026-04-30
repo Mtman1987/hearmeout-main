@@ -3,11 +3,9 @@
 import { useEffect, useState, Suspense } from "react";
 import { Button } from "@/components/ui/button";
 import {
-
   Card,
   CardContent,
   CardDescription,
-  CardFooter,
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
@@ -17,17 +15,6 @@ import { ChevronLeft, LoaderCircle } from "lucide-react";
 import { useSession } from '@/hooks/use-session';
 import { useRouter, useSearchParams } from 'next/navigation';
 
-const DiscordIcon = () => (
-    <svg role="img" width="20" height="20" viewBox="0 0 24 24" fill="currentColor" xmlns="http://www.w3.org/2000/svg">
-        <path d="M16.29 5.23a10.08 10.08 0 0 0-2.2-.62.84.84 0 0 0-1 .75c.18.25.36.5.52.75a8.62 8.62 0 0 0-4.14 0c.16-.25.34-.5.52-.75a.84.84 0 0 0-1-.75 10.08 10.08 0 0 0-2.2.62.81.81 0 0 0-.54.78c-.28 3.24.78 6.28 2.82 8.25a.85.85 0 0 0 .93.12 7.55 7.55 0 0 0 1.45-.87.82.82 0 0 1 .9-.06 6.53 6.53 0 0 0 2.22 0 .82.82 0 0 1 .9.06 7.55 7.55 0 0 0 1.45.87.85.85 0 0 0 .93-.12c2.04-1.97 3.1-5 2.82-8.25a.81.81 0 0 0-.55-.78zM10 11.85a1.45 1.45 0 0 1-1.45-1.45A1.45 1.45 0 0 1 10 8.95a1.45 1.45 0 0 1 1.45 1.45A1.45 1.45 0 0 1 10 11.85zm4 0a1.45 1.45 0 0 1-1.45-1.45A1.45 1.45 0 0 1 14 8.95a1.45 1.45 0 0 1 1.45 1.45A1.45 1.45 0 0 1 14 11.85z"/>
-    </svg>
-);
-
-const TwitchIcon = () => (
-    <svg role="img" width="20" height="20" viewBox="0 0 24 24" fill="currentColor" xmlns="http://www.w3.org/2000/svg">
-        <path d="M2.149 0L.537 4.119v16.845h5.373V24l4.298-2.985h3.582L22.388 12V0H2.149zm19.104 11.194l-3.582 3.582H14.18l-3.209 3.209v-3.209H5.91V1.493h15.343v9.701zM11.94 4.119h2.149v5.373h-2.149V4.119zm-5.373 0h2.149v5.373H6.567V4.119z"/>
-    </svg>
-);
 
 function LoginContent() {
   const { user, isLoading, refresh } = useSession();

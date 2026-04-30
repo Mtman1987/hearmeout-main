@@ -1,15 +1,18 @@
-const { FlatCompat } = require('@eslint/eslintrc');
-const path = require('path');
-
-const compat = new FlatCompat({ baseDirectory: __dirname });
+const parser = require('@typescript-eslint/parser');
+const plugin = require('@typescript-eslint/eslint-plugin');
 
 module.exports = [
-  ...compat.extends('next/core-web-vitals', 'next/typescript'),
   {
     files: ['**/*.{js,jsx,ts,tsx}'],
     languageOptions: {
-      ecmaVersion: 'latest',
-      sourceType: 'module',
+      parser,
+      parserOptions: {
+        ecmaVersion: 'latest',
+        sourceType: 'module',
+      },
+    },
+    plugins: {
+      '@typescript-eslint': plugin,
     },
     rules: {
       'no-unused-vars': 'error',
