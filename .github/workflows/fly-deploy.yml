@@ -30,6 +30,6 @@ jobs:
       - uses: actions/checkout@v4
       - uses: superfly/flyctl-actions/setup-flyctl@master
       - name: Deploy hmo-dj-worker
-        run: flyctl deploy . --remote-only --config worker/fly.toml
+        run: flyctl deploy . --remote-only --config worker/fly.toml --yes
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN_WORKER || secrets.FLY_API_TOKEN }}
