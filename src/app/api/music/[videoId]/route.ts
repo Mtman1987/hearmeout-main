@@ -1,30 +1,37 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { readFileSync, existsSync, statSync } from 'fs';
-import { join } from 'path';
 import { isValidVideoId } from '@/lib/validate-video-id';
 
-const CACHE_DIR = process.env.MUSIC_CACHE_DIR || join(process.cwd(), 'data', 'music');
+const DJ_WORKER_URL = process.env.DJ_WORKER_URL || '';
+const DJ_WORKER_SECRET = process.env.DJ_WORKER_SECRET || '';
 
 export async function GET(req: NextRequest, { params }: { params: Promise<{ videoId: string }> }) {
   const { videoId } = await params;
   if (!isValidVideoId(videoId)) {
     return NextResponse.json({ error: 'Invalid video ID' }, { status: 400 });
   }
-  const filePath = join(CACHE_DIR, `${videoId}.mp3`);
 
-  if (!existsSync(filePath)) {
-    return NextResponse.json({ error: 'Not found' }, { status: 404 });
-  }
+  if (!DJ_WORKER_URL) return new NextResponse('Worker not configured', { status: 503 });
 
-  const file = readFileSync(filePath);
-  const stat = statSync(filePath);
+  try {
+    const workerRes = await fetch(`${DJ_WORKER_URL}/music/${videoId}`, {
+      headers: { Authorization: `Bearer ${DJ_WORKER_SECRET}` },
+    });
 
-  return new NextResponse(file, {
-    headers: {
+    if (!workerRes.ok) {
+      return NextResponse.json({ error: 'Not found' }, { status: 404 });
+    }
+
+    const h: Record<string, string> = {
       'Content-Type': 'audio/mpeg',
-      'Content-Length': String(stat.size),
       'Cache-Control': 'public, max-age=604800',
       'Accept-Ranges': 'bytes',
-    },
-  });
+    };
+    const cl = workerRes.headers.get('content-length');
+    if (cl) h['Content-Length'] = cl;
+
+    return new NextResponse(workerRes.body, { headers: h });
+  } catch (err: any) {
+    console.error(`[Music] Worker proxy error for ${videoId}:`, err.message);
+    return NextResponse.json({ error: 'Stream error' }, { status: 500 });
+  }
 }

@@ -7,6 +7,11 @@ primary_region = "iad"
 [env]
   NODE_ENV = "production"
   PORT = "3002"
+  MUSIC_CACHE_DIR = "/data/music"
+
+[mounts]
+  source = "dj_data"
+  destination = "/data"
 
 [http_service]
   internal_port = 3002
@@ -23,6 +28,6 @@ primary_region = "iad"
     path = "/health"
 
 [[vm]]
-  memory = "2gb"
+  memory = "4gb"
   cpu_kind = "shared"
-  cpus = 2
+  cpus = 4

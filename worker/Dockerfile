@@ -1,29 +1,30 @@
-FROM node:22-alpine
+FROM node:22-slim
 
-RUN apk add --no-cache \
-    ca-certificates \
+RUN apt-get update && apt-get install -y \
+    curl \
+    python3 \
+    ffmpeg \
     chromium \
-    freetype \
-    harfbuzz \
-    nss \
-    ttf-freefont
+    && curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o /usr/local/bin/yt-dlp \
+    && chmod a+rx /usr/local/bin/yt-dlp \
+    && rm -rf /var/lib/apt/lists/*
 
-ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
 ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
-ENV NODE_ENV=production
-ENV PORT=3002
+ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
+
+RUN yt-dlp --version
 
 WORKDIR /app
 
 COPY worker/package*.json ./
-RUN if [ -f package-lock.json ]; then \
-      npm ci --omit=dev; \
-    else \
-      npm install --omit=dev; \
-    fi
+RUN npm ci --omit=dev
 
 COPY worker/src ./src
 
 EXPOSE 3002
 
-CMD ["node", "src/server.js"]
+ENV NODE_ENV=production
+ENV PORT=3002
+ENV MUSIC_CACHE_DIR=/data/music
+
+CMD ["sh", "-c", "yt-dlp -U 2>/dev/null; exec node src/server.js"]
