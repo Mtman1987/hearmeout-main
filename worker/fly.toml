@@ -2,7 +2,7 @@ app = "hmo-dj-worker"
 primary_region = "iad"
 
 [build]
-  dockerfile = "worker/Dockerfile"
+  dockerfile = "Dockerfile"
 
 [env]
   NODE_ENV = "production"

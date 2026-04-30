@@ -14,7 +14,7 @@ const ModerateContentOutputSchema = z.object({
 });
 export type ModerateContentOutput = z.infer<typeof ModerateContentOutputSchema>;
 
-export async function moderateContent(): Promise<ModerateContentOutput> {
+export async function moderateContent(_input?: ModerateContentInput): Promise<ModerateContentOutput> {
   // Genkit disabled - returning safe default
   return { overallSentiment: 'Neutral', isHarmful: false };
 }
