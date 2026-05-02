@@ -19,3 +19,6 @@ Status: 🔧 Production deploy issues resolved step-by-step.
 - Step 1: Edit config → deploy → verify no ESLint logs
 
 Test: Twitch chat !sr → song queue → ripper trigger.
+
+## Future work
+- Add `!sr` handling to the admin chat surface so Discord, Twitch, and admin chat all accept song requests through the same flow.

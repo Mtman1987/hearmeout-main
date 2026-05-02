@@ -5,6 +5,7 @@ import { ExternalLink, RefreshCw } from 'lucide-react';
 import { useSession } from '@/hooks/use-session';
 import { useDoc } from '@/hooks/use-db';
 import { useToast } from '@/hooks/use-toast';
+import { DSH_URL } from '@/lib/constants';
 
 interface ChatWidgetProps {
   id: string; position: { x: number; y: number }; size: { width: number; height: number };
@@ -36,7 +37,7 @@ export function ChatWidget({ id, position, size, onPositionChange, onSizeChange,
   };
 
   const openInNewTab = () => {
-    const url = `${DSH_URL}/headless/forwarding?serverId=${serverId}`;
+    const url = `${DSH_URL}/forwarding?serverId=${encodeURIComponent(serverId)}&embed=1`;
     window.open(url, '_blank');
   };
 
@@ -46,9 +47,7 @@ export function ChatWidget({ id, position, size, onPositionChange, onSizeChange,
     </DraggableContainer>;
   }
 
-  const DSH_URL = 'https://discord-stream-hub-new.fly.dev';
-
-  const iframeUrl = `${DSH_URL}/headless/forwarding?serverId=${serverId}`;
+  const iframeUrl = `${DSH_URL}/forwarding?serverId=${encodeURIComponent(serverId)}&embed=1`;
 
   return (
     <DraggableContainer id={id} position={position} size={size} onPositionChange={onPositionChange} onSizeChange={onSizeChange} onClose={onClose} title="💬 Chat">
@@ -70,7 +69,7 @@ export function ChatWidget({ id, position, size, onPositionChange, onSizeChange,
             src={iframeUrl}
             className="w-full h-full border-0"
             title="Chat Feed"
-            allow="clipboard-read; clipboard-write"
+            allow="clipboard-read; clipboard-write; autoplay; fullscreen"
           />
         </div>
       </div>

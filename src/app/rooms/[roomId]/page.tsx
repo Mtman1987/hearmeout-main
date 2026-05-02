@@ -312,7 +312,7 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
         <div className={cn("bg-secondary/30 md:peer-data-[state=collapsed]:peer-data-[variant=inset]:ml-[calc(var(--sidebar-width-icon)_+_1rem)] md:peer-data-[variant=inset]:ml-[calc(var(--sidebar-width)_+_1rem)] duration-200 transition-[margin-left,margin-right]", chatOpen && "md:mr-[28rem]")}>
             <SidebarInset>
                 <div className="flex flex-col h-screen relative">
-                    <RoomHeader roomName={room.name} onToggleChat={() => setChatOpen(!chatOpen)} onOpenChatWidget={() => openPopout('chat', { width: 450, height: 600 })} showDJ={showDJ} onToggleDJ={() => setShowDJ(v => !v)} />
+                    <RoomHeader roomName={room.name} onToggleChat={() => setChatOpen(!chatOpen)} onOpenChatWidget={() => openPopout('chat', { width: 880, height: 760 })} showDJ={showDJ} onToggleDJ={() => setShowDJ(v => !v)} />
 
                     {/* Playlist toggle bar */}
                     <div className="sticky top-16 z-20 bg-background/95 backdrop-blur-sm border-b">
