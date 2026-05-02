@@ -1,7 +1,8 @@
 import { isValidVideoId } from './validate-video-id';
+import { getDjWorkerSecret, getDjWorkerUrl } from './dj-worker-config';
 
-const DJ_WORKER_URL = process.env.DJ_WORKER_URL || '';
-const DJ_WORKER_SECRET = process.env.DJ_WORKER_SECRET || '';
+const DJ_WORKER_URL = getDjWorkerUrl();
+const DJ_WORKER_SECRET = getDjWorkerSecret();
 
 async function workerFetch(path: string, options: RequestInit = {}): Promise<Response> {
   return fetch(`${DJ_WORKER_URL}${path}`, {
