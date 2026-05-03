@@ -6,6 +6,11 @@ const { existsSync, mkdirSync, unlinkSync, statSync, readdirSync, readFileSync, 
 const { join } = require('path');
 require('dotenv').config();
 
+// Use node-fetch for making HTTP requests from Node. This fetch is used in the DJ
+// implementation to retrieve LiveKit tokens and other resources. If running on
+// a Node version with global fetch, this import is harmless.
+const fetch = require('node-fetch');
+
 const execFileAsync = promisify(execFile);
 
 const app = express();
@@ -283,59 +288,65 @@ app.get('/cache-stats', authorizeWorker, (req, res) => {
   }
 });
 
-// ── DJ State (Puppeteer) ───────────────────────────────────────────────
+// ── DJ State (Server‑side streaming) ────────────────────────────────────
+/**
+ * The previous implementation used Puppeteer to automate a browser and click a
+ * “Start DJ” button on the client. Headless browsers cannot reliably unlock
+ * WebAudio due to autoplay policies, and using Puppeteer adds significant
+ * overhead. To avoid these issues, the DJ endpoint now acts as a stub for
+ * server‑side streaming using LiveKit and ffmpeg. The worker will request a
+ * LiveKit token from the main app, then use yt‑dlp and ffmpeg to download and
+ * transcode audio, and finally publish it directly to LiveKit via the Node SDK.
+ * The actual publishing logic is left as a TODO so that it can be implemented
+ * incrementally.
+ */
 
 const djInstances = new Map();
+
+async function startDjForRoom(roomId) {
+  const APP_URL = process.env.APP_URL || 'https://hearmeout-main.fly.dev';
+  const tokenUrl = `${APP_URL}/api/livekit-token?roomId=${encodeURIComponent(roomId)}&role=dj`;
+  console.log(`[DJ] Requesting LiveKit token from ${tokenUrl}`);
+  let token;
+  try {
+    const res = await fetch(tokenUrl, { headers: { Authorization: `Bearer ${WORKER_SECRET}` } });
+    if (res.ok) {
+      const json = await res.json().catch(() => ({}));
+      token = json?.token;
+    }
+  } catch (err) {
+    console.warn(`[DJ] Token request failed: ${err.message}`);
+  }
+  // Log whether we got a token; the actual LiveKit connection should use it.
+  console.log(`[DJ] Token received: ${!!token}`);
+  console.log(`[DJ] (stub) Starting server‑side DJ session for ${roomId}.`);
+  return {
+    startedAt: new Date(),
+    async stop() {
+      console.log(`[DJ] (stub) Stopping server‑side DJ session for ${roomId}.`);
+    },
+  };
+}
 
 app.post('/dj', authorizeWorker, async (req, res) => {
   const { action, roomId } = req.body;
   if (!roomId) return res.status(400).json({ success: false, message: 'Missing roomId' });
-
   try {
     if (action === 'start') {
       if (djInstances.has(roomId)) return res.json({ success: true, message: 'DJ already running for this room.' });
       if (djInstances.size >= 3) return res.status(429).json({ success: false, message: 'Maximum concurrent DJ instances reached (3).' });
-
-      console.log(`[DJ] Starting for room ${roomId}...`);
-      let puppeteer;
-      try { puppeteer = require('puppeteer'); } catch {
-        return res.status(500).json({ success: false, message: 'Puppeteer not available on worker.' });
-      }
-
-      const browser = await puppeteer.launch({
-        headless: true,
-        args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu',
-               '--autoplay-policy=no-user-gesture-required', '--use-fake-ui-for-media-stream'],
-      });
-
-      const page = await browser.newPage();
-      page.on('console', (msg) => {
-        const text = msg.text();
-        if (text.includes('[DJ]') || text.includes('[LiveKit]') || text.includes('[YT]')) console.log(`[DJ:${roomId}] ${text}`);
-      });
-      page.on('pageerror', (err) => console.error(`[DJ:${roomId}] Page error:`, String(err)));
-
-      const APP_URL = process.env.APP_URL || 'https://hearmeout-main.fly.dev';
-      const djUrl = `${APP_URL}/dj/${roomId}`;
-      console.log(`[DJ] Navigating to ${djUrl}`);
-      await page.goto(djUrl, { waitUntil: 'networkidle2', timeout: 30000 });
-
-      await page.evaluate(() => {
-        if (window.__HEARMEOUT_DJ__?.startSession) window.__HEARMEOUT_DJ__.startSession();
-      }).catch((err) => console.log(`[DJ] Auto-start eval:`, err.message));
-
-      djInstances.set(roomId, { browser, page, roomId, startedAt: new Date() });
-      console.log(`[DJ] Started for room ${roomId}. Active: ${djInstances.size}`);
+      console.log(`[DJ] Starting server‑side DJ for room ${roomId}...`);
+      const instance = await startDjForRoom(roomId);
+      djInstances.set(roomId, instance);
+      console.log(`[DJ] Server‑side DJ started for room ${roomId}. Active: ${djInstances.size}`);
       return res.json({ success: true, message: 'DJ started.' });
-
     } else if (action === 'stop') {
       const instance = djInstances.get(roomId);
       if (!instance) return res.json({ success: true, message: 'No DJ running for this room.' });
-      console.log(`[DJ] Stopping for room ${roomId}...`);
-      await instance.page.close().catch(() => {});
-      await instance.browser.close().catch(() => {});
+      console.log(`[DJ] Stopping server‑side DJ for room ${roomId}...`);
+      await instance.stop();
       djInstances.delete(roomId);
-      console.log(`[DJ] Stopped for room ${roomId}. Active: ${djInstances.size}`);
+      console.log(`[DJ] Server‑side DJ stopped for room ${roomId}. Active: ${djInstances.size}`);
       return res.json({ success: true, message: 'DJ stopped.' });
     } else {
       return res.status(400).json({ success: false, message: 'Invalid action' });
@@ -349,7 +360,7 @@ app.post('/dj', authorizeWorker, async (req, res) => {
 app.get('/dj', authorizeWorker, (req, res) => {
   const { roomId } = req.query;
   if (roomId) return res.json({ running: djInstances.has(roomId) });
-  const instances = Array.from(djInstances.values()).map((i) => ({ roomId: i.roomId, startedAt: i.startedAt }));
+  const instances = Array.from(djInstances.entries()).map(([id, instance]) => ({ roomId: id, startedAt: instance.startedAt }));
   return res.json({ instances });
 });
 

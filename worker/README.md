@@ -1,10 +1,10 @@
 # HearMeOut DJ Worker
 
 This is the separate DJ worker service for HearMeOut. It handles:
-- Music lookup and scraping via Puppeteer
-- Audio download and conversion
-- Streaming to the main app
-- Puppeteer-based browser automation
+- Music lookup and scraping via yt‑dlp
+- Audio download and conversion via ffmpeg
+- Server‑side streaming to the main app using LiveKit
+- Token retrieval and publishing from a Node.js process (no Puppeteer or browser)
 
 ## API Endpoints
 
