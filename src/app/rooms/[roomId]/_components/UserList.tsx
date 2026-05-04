@@ -17,6 +17,7 @@ export interface RoomData {
   currentTrackId?: string;
   isPlaying?: boolean;
   djActive?: boolean;
+  djStatus?: string;
   autoRadio?: boolean;
   playHistory?: string[];
 }
@@ -24,6 +25,7 @@ export interface RoomData {
 interface UserListProps {
   roomId: string;
   musicStatus: string | null;
+  djStatus?: string;
   localVolume: number;
   onVolumeChange: (v: number) => void;
   showDJ: boolean;
@@ -33,9 +35,13 @@ interface UserListProps {
   djStarting?: boolean;
   onStartDJ: () => void;
   onStopDJ: () => void;
+  onPlaySong: (songId: string) => void;
+  onRemoveSong: (songId: string) => void;
+  onClearPlaylist: () => void;
+  onAddItems: (items: PlaylistItem[]) => void;
 }
 
-export default function UserList({ roomId, musicStatus, localVolume, onVolumeChange, showDJ, autoRadio, onToggleAutoRadio, djIsLive, djStarting, onStartDJ, onStopDJ }: UserListProps) {
+export default function UserList({ roomId, musicStatus, djStatus, localVolume, onVolumeChange, showDJ, autoRadio, onToggleAutoRadio, djIsLive, djStarting, onStartDJ, onStopDJ, onPlaySong, onRemoveSong, onClearPlaylist, onAddItems }: UserListProps) {
   const { user } = useSession();
   const { localParticipant } = useLocalParticipant();
   const remoteParticipants = useRemoteParticipants();
@@ -67,6 +73,7 @@ export default function UserList({ roomId, musicStatus, localVolume, onVolumeCha
               currentTrackId={room?.currentTrackId}
               isPlaying={room?.isPlaying}
               djActive={room?.djActive}
+              djStatus={room?.djStatus || djStatus}
               musicStatus={musicStatus}
               localVolume={localVolume}
               onVolumeChange={onVolumeChange}
@@ -77,6 +84,10 @@ export default function UserList({ roomId, musicStatus, localVolume, onVolumeCha
               djStarting={djStarting}
               onStartDJ={onStartDJ}
               onStopDJ={onStopDJ}
+              onPlaySong={onPlaySong}
+              onRemoveSong={onRemoveSong}
+              onClearPlaylist={onClearPlaylist}
+              onAddItems={onAddItems}
             />
           )}
           {/* Real users */}

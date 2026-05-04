@@ -19,6 +19,7 @@ interface RoomData {
   currentTrackId: string;
   isPlaying: boolean;
   djActive: boolean;
+  djStatus?: string;
   autoRadio?: boolean;
   playHistory?: string[];
 }
@@ -66,6 +67,18 @@ export default function DJPage() {
   useEffect(() => { monitorMutedRef.current = monitorMuted; }, [monitorMuted]);
   const [duration, setDuration] = useState(0);
   const [position, setPosition] = useState(0);
+
+  const patchRoomState = useCallback((data: Record<string, unknown>) => {
+    fetch('/api/db', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        collection: 'rooms',
+        id: roomId,
+        data,
+      }),
+    }).catch(() => {});
+  }, [roomId]);
 
   useEffect(() => {
     document.title = isLive ? '🔴 DJ LIVE — HearMeOut' : '🎵 HearMeOut DJ';
@@ -194,21 +207,13 @@ export default function DJPage() {
       await connectLiveKit();
       await publishTrackIfNeeded();
 
-      fetch('/api/db', {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          collection: 'rooms',
-          id: roomId,
-          data: { djActive: true },
-        }),
-      }).catch(() => {});
+      patchRoomState({ djActive: true, djStatus: 'DJ connected. Waiting for a playable track.' });
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
       console.error('[DJ] startSession error:', err);
       setStatus(`ERROR: ${message}`);
     }
-  }, [connectLiveKit, ensureAudioGraph, publishTrackIfNeeded, roomId]);
+  }, [connectLiveKit, ensureAudioGraph, patchRoomState, publishTrackIfNeeded]);
 
   const stopSession = useCallback(() => {
     try {
@@ -258,32 +263,43 @@ export default function DJPage() {
     setIsLive(false);
     setStatus('Session stopped');
 
-    fetch('/api/db', {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        collection: 'rooms',
-        id: roomId,
-        data: { djActive: false, isPlaying: false },
-      }),
-    }).catch(() => {});
-  }, [roomId]);
+    patchRoomState({ djActive: false, isPlaying: false, djStatus: 'DJ stopped' });
+  }, [patchRoomState]);
 
   // Load a new video's audio stream into the audio element
   const loadAndPlay = useCallback(async (videoId: string) => {
     const audioEl = audioRef.current;
     if (!audioEl) return;
-    const nextSrc = `/api/youtube-audio/stream?videoId=${encodeURIComponent(videoId)}`;
+
+    setStatus(`Preparing audio for ${videoId}...`);
+    patchRoomState({ djStatus: 'Preparing audio...' });
+
+    const infoRes = await fetch(`/api/youtube-audio?videoId=${encodeURIComponent(videoId)}`, { cache: 'no-store' });
+    if (!infoRes.ok) {
+      const body = await infoRes.json().catch(() => null);
+      const message = body?.error || `Audio extraction failed (${infoRes.status})`;
+      setStatus(`ERROR: ${message}`);
+      patchRoomState({ djStatus: message, isPlaying: false });
+      return;
+    }
+
+    const info = await infoRes.json().catch(() => null);
+    const nextSrc = info?.audioUrl || `/api/youtube-audio/stream?videoId=${encodeURIComponent(videoId)}`;
     if (audioEl.src !== new URL(nextSrc, window.location.origin).toString()) {
       audioEl.src = nextSrc;
       audioEl.load();
     }
     try {
       await audioEl.play();
+      setStatus('🔴 LIVE — playing and broadcasting');
+      patchRoomState({ djStatus: 'Streaming music' });
     } catch (e) {
       console.warn('[DJ] audio.play() failed (will retry on next poll):', e);
+      const message = e instanceof Error ? e.message : 'audio.play failed';
+      setStatus(`ERROR: ${message}`);
+      patchRoomState({ djStatus: message });
     }
-  }, []);
+  }, [patchRoomState]);
 
   // Fire a single /api/auto-radio request, deduped by autoRadioRequestedRef.
   // The ref stays true until either a new currentTrackId is observed (cleared
@@ -488,17 +504,9 @@ export default function DJPage() {
       try {
         audioContextRef.current?.close();
       } catch {}
-      fetch('/api/db', {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          collection: 'rooms',
-          id: roomId,
-          data: { djActive: false },
-        }),
-      }).catch(() => {});
+      patchRoomState({ djActive: false, djStatus: 'DJ closed' });
     };
-  }, [roomId]);
+  }, [patchRoomState]);
 
   return (
     <div
@@ -655,6 +663,11 @@ export default function DJPage() {
         ref={audioRef}
         onPlay={() => setIsPlayingLocal(true)}
         onPause={() => setIsPlayingLocal(false)}
+        onError={() => {
+          const message = 'Audio source failed to load';
+          setStatus(`ERROR: ${message}`);
+          patchRoomState({ djStatus: message, isPlaying: false });
+        }}
         onEnded={handleEnded}
         onLoadedMetadata={(e) => setDuration((e.currentTarget.duration) || 0)}
         onTimeUpdate={(e) => setPosition(e.currentTarget.currentTime)}

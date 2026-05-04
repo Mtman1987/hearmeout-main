@@ -46,6 +46,23 @@ export default function OverlayPage() {
     }
   }, [volume, isMuted]);
 
+  useEffect(() => {
+    const unlockOverlayAudio = () => {
+      const audio = audioRef.current;
+      if (!audio || !audio.srcObject) return;
+      audio.volume = mutedRef.current ? 0 : volumeRef.current;
+      void audio.play().catch(() => {});
+    };
+    window.addEventListener('pointerdown', unlockOverlayAudio, { passive: true });
+    window.addEventListener('keydown', unlockOverlayAudio);
+    window.addEventListener('touchstart', unlockOverlayAudio, { passive: true });
+    return () => {
+      window.removeEventListener('pointerdown', unlockOverlayAudio);
+      window.removeEventListener('keydown', unlockOverlayAudio);
+      window.removeEventListener('touchstart', unlockOverlayAudio);
+    };
+  }, []);
+
   // Connect to LiveKit Music Room and play audio through this overlay.
   // When used as an OBS browser source, this makes the music audio
   // capturable on a separate channel from speakers.

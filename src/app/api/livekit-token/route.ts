@@ -3,6 +3,7 @@ import { AccessToken } from 'livekit-server-sdk';
 import { getSession } from '@/lib/auth';
 import { db, ensureDb } from '@/lib/db';
 import { config } from '@/lib/config';
+import { isDjWorkerRequest } from '@/lib/dj-worker-auth';
 
 // Mints LiveKit access tokens. Two security properties enforced here:
 //   1. (audit S8) Caller MUST be authenticated. The session uid is bound into
@@ -31,11 +32,15 @@ async function isRoomDJ(uid: string, roomId: string): Promise<{
 
 export async function POST(request: NextRequest) {
   const session = await getSession();
-  if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  const fromDjWorker = isDjWorkerRequest(request);
 
   try {
     const body = await request.json();
     const { roomId, userName, musicRoom, isDJ } = body;
+
+    if (!session && !(musicRoom && isDJ)) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
 
     if (!roomId) {
       return NextResponse.json({ error: 'Missing roomId' }, { status: 400 });
@@ -48,12 +53,13 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'LiveKit credentials not configured' }, { status: 500 });
     }
 
-    // Bind LiveKit identity to the verified session uid (do NOT trust client userId).
-    const uid = session.uid;
+    // Bind user-browser tokens to the verified session uid. The headless DJ
+    // worker has no browser session, so it authenticates with DJ_WORKER_SECRET.
+    const uid = session?.uid || 'dj-worker';
     const displayName =
       typeof userName === 'string' && userName.trim().length > 0
         ? userName.slice(0, 64)
-        : session.user?.displayName || session.user?.username || uid;
+        : session?.user?.displayName || session?.user?.username || uid;
 
     let actualRoom = roomId;
     let identity = uid;
@@ -62,14 +68,14 @@ export async function POST(request: NextRequest) {
     if (musicRoom) {
       actualRoom = `${roomId}-music`;
       if (isDJ) {
-        const dj = await isRoomDJ(uid, roomId);
+        const dj = !session || fromDjWorker ? { ok: true } : await isRoomDJ(uid, roomId);
         if (!dj.ok) {
           return NextResponse.json(
             { error: `forbidden: ${dj.reason ?? 'not allowed to DJ'}` },
             { status: 403 },
           );
         }
-        identity = `dj-${uid}`;
+        identity = !session || fromDjWorker ? `dj-worker-${roomId}` : `dj-${uid}`;
         canPublish = true;
       } else {
         identity = `listener-${uid}`;

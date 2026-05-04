@@ -10,8 +10,6 @@ import { Copy, MessageSquare, X, LoaderCircle, FrameIcon, Music } from 'lucide-r
 import LeftSidebar from '@/app/components/LeftSidebar';
 import UserList from './_components/UserList';
 import ChatBox from './_components/ChatBox';
-import PlaylistPanel from './_components/PlaylistPanel';
-import AddMusicPanel from './_components/AddMusicPanel';
 import VoiceQueue from './_components/VoiceQueue';
 import { cn } from "@/lib/utils";
 import { useToast } from '@/hooks/use-toast';
@@ -33,12 +31,13 @@ interface RoomData {
   currentTrackId?: string;
   isPlaying?: boolean;
   djActive?: boolean;
+  djStatus?: string;
   autoRadio?: boolean;
   playHistory?: string[];
 }
 
-function RoomHeader({ roomName, onToggleChat, onOpenChatWidget, showDJ, onToggleDJ }: {
-    roomName: string; onToggleChat: () => void; onOpenChatWidget: () => void; showDJ: boolean; onToggleDJ: () => void;
+function RoomHeader({ roomName, onToggleChat, showDJ, onToggleDJ }: {
+    roomName: string; onToggleChat: () => void; showDJ: boolean; onToggleDJ: () => void;
 }) {
     const { isMobile } = useSidebar();
     const params = useParams();
@@ -60,9 +59,6 @@ function RoomHeader({ roomName, onToggleChat, onOpenChatWidget, showDJ, onToggle
                 <Tooltip><TooltipTrigger asChild>
                     <Button variant={showDJ ? "secondary" : "outline"} size="icon" onClick={onToggleDJ}><Music className="h-4 w-4" /></Button>
                 </TooltipTrigger><TooltipContent><p>{showDJ ? 'Hide DJ' : 'Show DJ'}</p></TooltipContent></Tooltip>
-                <Tooltip><TooltipTrigger asChild>
-                    <Button variant="outline" size="icon" onClick={onOpenChatWidget}><MessageSquare className="h-4 w-4" /></Button>
-                </TooltipTrigger><TooltipContent><p>Pop-out Chat Widget</p></TooltipContent></Tooltip>
                 <Tooltip><TooltipTrigger asChild>
                     <Button variant="outline" size="icon" onClick={copyOverlayUrl}><Copy className="h-4 w-4" /></Button>
                 </TooltipTrigger><TooltipContent><p>Copy Overlay URL for OBS</p></TooltipContent></Tooltip>
@@ -99,8 +95,7 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
     const [voiceToken, setVoiceToken] = useState<string | undefined>(undefined);
     const [localVolume, setLocalVolume] = useState(0.5);
     const [musicStatus, setMusicStatus] = useState<string | null>(null);
-    const [musicExpanded, setMusicExpanded] = useState(false);
-    const [showDJ, setShowDJ] = useState(true);
+    const [showDJ, setShowDJ] = useState(false);
 
     const { data: userSettings } = useDoc<{ streamMode?: boolean; twitchChannel?: string }>(
       user ? `rooms/${roomId}/users` : null,
@@ -129,7 +124,11 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
                 body: JSON.stringify({ action: 'start', roomId }),
             });
             const data = await res.json();
-            if (!data.success) toast({ variant: 'destructive', title: 'DJ Error', description: data.message });
+            if (!data.success) {
+                toast({ variant: 'destructive', title: 'DJ Error', description: data.message });
+            } else {
+                toast({ title: 'DJ Connected', description: data.message || 'HearMeOut DJ is starting.' });
+            }
         } catch (err) {
             toast({ variant: 'destructive', title: 'DJ Error', description: 'Failed to start DJ' });
         } finally {
@@ -139,13 +138,21 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
 
     const handleStopDJ = useCallback(async () => {
         try {
-            await fetch('/api/dj', {
+            const res = await fetch('/api/dj', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ action: 'stop', roomId }),
             });
-        } catch {}
-    }, [roomId]);
+            const data = await res.json().catch(() => null);
+            if (!res.ok || data?.success === false) {
+                toast({ variant: 'destructive', title: 'DJ Error', description: data?.message || data?.error || 'Failed to stop DJ' });
+            } else {
+                toast({ title: 'DJ Disconnected', description: data?.message || 'HearMeOut DJ stopped.' });
+            }
+        } catch {
+            toast({ variant: 'destructive', title: 'DJ Error', description: 'Failed to stop DJ' });
+        }
+    }, [roomId, toast]);
 
     // Connect to LiveKit Music Room as subscriber.
     // Stream-mode users skip this — they hear music from the OBS overlay.
@@ -222,6 +229,23 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
             musicAudioRef.current.volume = localVolume;
         }
     }, [localVolume]);
+
+    useEffect(() => {
+        const unlockMusicAudio = () => {
+            const audio = musicAudioRef.current;
+            if (!audio || !audio.srcObject) return;
+            audio.volume = localVolumeRef.current;
+            void audio.play().catch(() => {});
+        };
+        window.addEventListener('pointerdown', unlockMusicAudio, { passive: true });
+        window.addEventListener('keydown', unlockMusicAudio);
+        window.addEventListener('touchstart', unlockMusicAudio, { passive: true });
+        return () => {
+            window.removeEventListener('pointerdown', unlockMusicAudio);
+            window.removeEventListener('keydown', unlockMusicAudio);
+            window.removeEventListener('touchstart', unlockMusicAudio);
+        };
+    }, []);
 
     // Check if user is banned
     const [isBanned, setIsBanned] = React.useState(false);
@@ -312,30 +336,7 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
         <div className={cn("bg-secondary/30 md:peer-data-[state=collapsed]:peer-data-[variant=inset]:ml-[calc(var(--sidebar-width-icon)_+_1rem)] md:peer-data-[variant=inset]:ml-[calc(var(--sidebar-width)_+_1rem)] duration-200 transition-[margin-left,margin-right]", chatOpen && "md:mr-[28rem]")}>
             <SidebarInset>
                 <div className="flex flex-col h-screen relative">
-                    <RoomHeader roomName={room.name} onToggleChat={() => setChatOpen(!chatOpen)} onOpenChatWidget={() => openPopout('chat', { width: 880, height: 760 })} showDJ={showDJ} onToggleDJ={() => setShowDJ(v => !v)} />
-
-                    {/* Playlist toggle bar */}
-                    <div className="sticky top-16 z-20 bg-background/95 backdrop-blur-sm border-b">
-                        <div className="flex items-center justify-between px-4 h-10">
-                            <p className="text-sm text-muted-foreground">
-                                {room.playlist?.length ? `${room.playlist.length} song${room.playlist.length > 1 ? 's' : ''} in queue` : 'No songs in queue'}
-                            </p>
-                            <Button variant="ghost" size="sm" onClick={() => setMusicExpanded(v => !v)}>
-                                {musicExpanded ? 'Hide Queue' : 'Show Queue'}
-                            </Button>
-                        </div>
-                        {musicExpanded && (
-                            <div className="absolute left-0 right-0 top-10 z-50 bg-background border-b shadow-lg max-h-[60vh] overflow-y-auto">
-                                <div className="p-4 space-y-4">
-                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                        <PlaylistPanel playlist={room.playlist || []} currentTrackId={room.currentTrackId || ''} isPlayerControlAllowed={canControl} onPlaySong={handlePlaySong} onRemoveSong={handleRemoveSong} onClearPlaylist={handleClearPlaylist} />
-                                        {canControl && <AddMusicPanel onAddItems={handleAddItems} onClose={() => setMusicExpanded(false)} canAddMusic={true} />}
-                                    </div>
-                                </div>
-                            </div>
-                        )}
-                    </div>
-                    {musicExpanded && <div className="fixed inset-0 z-10" onClick={() => setMusicExpanded(false)} />}
+                    <RoomHeader roomName={room.name} onToggleChat={() => setChatOpen(!chatOpen)} showDJ={showDJ} onToggleDJ={() => setShowDJ(v => !v)} />
 
                     <main className="flex-1 p-4 md:p-6 overflow-y-auto space-y-6">
                         <UserList
@@ -344,12 +345,17 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
                           localVolume={localVolume}
                           onVolumeChange={setLocalVolume}
                           showDJ={showDJ}
+                          djStatus={room.djStatus}
                           autoRadio={room.autoRadio}
                           onToggleAutoRadio={handleToggleAutoRadio}
                           djIsLive={!!room.djActive}
                           djStarting={djStarting}
                           onStartDJ={handleStartDJ}
                           onStopDJ={handleStopDJ}
+                          onPlaySong={handlePlaySong}
+                          onRemoveSong={handleRemoveSong}
+                          onClearPlaylist={handleClearPlaylist}
+                          onAddItems={handleAddItems}
                         />
                         {isOwner && <VoiceQueue roomId={roomId} />}
                     </main>
@@ -359,7 +365,11 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
         <div className={cn("fixed inset-y-0 right-0 z-40 w-full sm:max-w-md transform transition-transform duration-300 ease-in-out bg-card border-l", chatOpen ? "translate-x-0" : "translate-x-full")}>
             <div className="relative h-full">
                 <Button variant="ghost" size="icon" onClick={() => setChatOpen(false)} className="absolute top-4 right-4 z-50 md:hidden"><X className="h-5 w-5" /></Button>
-                <ChatBox />
+                <ChatBox
+                  onOpenSpaceChat={() => openPopout('chat', { width: 440, height: 620 }, { source: 'space' })}
+                  onOpenTwitchChat={() => openPopout('chat', { width: 440, height: 620 }, { source: 'twitch' })}
+                  onOpenDiscordChat={() => openPopout('chat', { width: 520, height: 680 }, { source: 'discord' })}
+                />
             </div>
         </div>
       </LiveKitRoom>

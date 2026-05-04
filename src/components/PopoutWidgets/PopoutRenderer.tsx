@@ -28,8 +28,11 @@ export function PopoutRenderer() {
               size={popout.size}
               onPositionChange={(pos) => updatePopout(popout.id, { position: pos })}
               onSizeChange={(size) => updatePopout(popout.id, { size })}
+              opacity={popout.opacity}
+              onOpacityChange={(opacity) => updatePopout(popout.id, { opacity })}
               onClose={() => closePopout(popout.id)}
               roomId={roomId}
+              source={popout.customSettings?.source}
             />
           );
         }

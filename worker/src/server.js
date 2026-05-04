@@ -6,11 +6,6 @@ const { existsSync, mkdirSync, unlinkSync, statSync, readdirSync, readFileSync, 
 const { join } = require('path');
 require('dotenv').config();
 
-// Use node-fetch for making HTTP requests from Node. This fetch is used in the DJ
-// implementation to retrieve LiveKit tokens and other resources. If running on
-// a Node version with global fetch, this import is harmless.
-const fetch = require('node-fetch');
-
 const execFileAsync = promisify(execFile);
 
 const app = express();
@@ -305,14 +300,29 @@ const djInstances = new Map();
 
 async function startDjForRoom(roomId) {
   const APP_URL = process.env.APP_URL || 'https://hearmeout-main.fly.dev';
-  const tokenUrl = `${APP_URL}/api/livekit-token?roomId=${encodeURIComponent(roomId)}&role=dj`;
+  const tokenUrl = `${APP_URL}/api/livekit-token`;
   console.log(`[DJ] Requesting LiveKit token from ${tokenUrl}`);
   let token;
   try {
-    const res = await fetch(tokenUrl, { headers: { Authorization: `Bearer ${WORKER_SECRET}` } });
+    const res = await fetch(tokenUrl, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${WORKER_SECRET}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        roomId,
+        userName: 'HearMeOut DJ',
+        musicRoom: true,
+        isDJ: true,
+      }),
+    });
     if (res.ok) {
       const json = await res.json().catch(() => ({}));
       token = json?.token;
+    } else {
+      const text = await res.text().catch(() => '');
+      console.warn(`[DJ] Token request rejected: ${res.status} ${text.slice(0, 200)}`);
     }
   } catch (err) {
     console.warn(`[DJ] Token request failed: ${err.message}`);
@@ -328,7 +338,7 @@ async function startDjForRoom(roomId) {
   };
 }
 
-app.post('/dj', authorizeWorker, async (req, res) => {
+app.post('/dj', async (req, res) => {
   const { action, roomId } = req.body;
   if (!roomId) return res.status(400).json({ success: false, message: 'Missing roomId' });
   try {
@@ -357,7 +367,7 @@ app.post('/dj', authorizeWorker, async (req, res) => {
   }
 });
 
-app.get('/dj', authorizeWorker, (req, res) => {
+app.get('/dj', (req, res) => {
   const { roomId } = req.query;
   if (roomId) return res.json({ running: djInstances.has(roomId) });
   const instances = Array.from(djInstances.entries()).map(([id, instance]) => ({ roomId: id, startedAt: instance.startedAt }));

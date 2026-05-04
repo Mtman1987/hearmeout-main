@@ -23,7 +23,17 @@ export async function startDJ(roomId: string): Promise<{ success: boolean; messa
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ action: 'start', roomId }),
     });
-    return await res.json();
+    const data = await res.json().catch(() => null);
+    if (!res.ok) {
+      if (res.status === 401) {
+        return {
+          success: false,
+          message: 'DJ worker rejected the app secret. Set the same DJ_WORKER_SECRET on hearmeout-main and hmo-dj-worker.',
+        };
+      }
+      return { success: false, message: data?.message || data?.error || `Worker returned ${res.status}` };
+    }
+    return data;
   } catch (err: any) {
     console.error('[DJ] Worker request failed:', err.message);
     return { success: false, message: `Worker error: ${err.message}` };
@@ -38,7 +48,17 @@ export async function stopDJ(roomId: string): Promise<{ success: boolean; messag
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ action: 'stop', roomId }),
     });
-    return await res.json();
+    const data = await res.json().catch(() => null);
+    if (!res.ok) {
+      if (res.status === 401) {
+        return {
+          success: false,
+          message: 'DJ worker rejected the app secret. Set the same DJ_WORKER_SECRET on hearmeout-main and hmo-dj-worker.',
+        };
+      }
+      return { success: false, message: data?.message || data?.error || `Worker returned ${res.status}` };
+    }
+    return data;
   } catch (err: any) {
     console.error('[DJ] Worker stop failed:', err.message);
     return { success: false, message: `Worker error: ${err.message}` };

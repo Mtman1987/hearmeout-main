@@ -3,6 +3,7 @@
 import React, { useRef, useState, useEffect } from 'react';
 import { cn } from '@/lib/utils';
 import { X } from 'lucide-react';
+import { Slider } from '@/components/ui/slider';
 
 interface DraggableContainerProps {
   id: string;
@@ -10,6 +11,8 @@ interface DraggableContainerProps {
   size: { width: number; height: number };
   onPositionChange: (pos: { x: number; y: number }) => void;
   onSizeChange: (size: { width: number; height: number }) => void;
+  opacity?: number;
+  onOpacityChange?: (opacity: number) => void;
   children: React.ReactNode;
   title?: string;
   onClose?: () => void;
@@ -21,6 +24,8 @@ export function DraggableContainer({
   size,
   onPositionChange,
   onSizeChange,
+  opacity = 1,
+  onOpacityChange,
   children,
   title,
   onClose,
@@ -85,6 +90,7 @@ export function DraggableContainer({
         top: `${position.y}px`,
         width: `${size.width}px`,
         height: `${size.height}px`,
+        opacity,
       }}
     >
       {/* Header - Draggable */}
@@ -93,15 +99,27 @@ export function DraggableContainer({
         onMouseDown={handleMouseDown}
       >
         <h3 className="text-sm font-semibold text-foreground">{title || 'Widget'}</h3>
-        {onClose && (
-          <button
-            onClick={onClose}
-            className="text-muted-foreground hover:text-foreground transition-colors ml-2 flex-shrink-0"
-            data-no-drag
-          >
-            <X className="w-4 h-4" />
-          </button>
-        )}
+        <div className="flex items-center gap-2" data-no-drag>
+          {onOpacityChange && (
+            <Slider
+              aria-label="Widget opacity"
+              value={[opacity]}
+              min={0.2}
+              max={1}
+              step={0.05}
+              onValueChange={(value) => onOpacityChange(value[0])}
+              className="w-20"
+            />
+          )}
+          {onClose && (
+            <button
+              onClick={onClose}
+              className="text-muted-foreground hover:text-foreground transition-colors ml-2 flex-shrink-0"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Content */}

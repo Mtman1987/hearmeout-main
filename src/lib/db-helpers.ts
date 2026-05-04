@@ -8,12 +8,21 @@ export function dbSet(collection: string, id: string, data: any, merge = false) 
   }).catch(console.error);
 }
 
-export function dbUpdate(collection: string, id: string, data: any) {
-  fetch('/api/db', {
+export async function dbUpdateStrict(collection: string, id: string, data: any) {
+  const res = await fetch('/api/db', {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ collection, id, data }),
-  }).catch(console.error);
+  });
+  const result = await res.json().catch(() => null);
+  if (!res.ok || result?.error) {
+    throw new Error(result?.error || `DB update failed (${res.status})`);
+  }
+  return result;
+}
+
+export function dbUpdate(collection: string, id: string, data: any) {
+  dbUpdateStrict(collection, id, data).catch(console.error);
 }
 
 export function dbDelete(collection: string, id: string) {

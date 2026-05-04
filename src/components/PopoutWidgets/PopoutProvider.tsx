@@ -8,6 +8,7 @@ export interface PopoutState {
   isOpen: boolean;
   position: { x: number; y: number };
   size: { width: number; height: number };
+  opacity?: number;
   isDocked?: boolean;
   dockPosition?: 'top' | 'bottom' | 'left' | 'right';
   customSettings?: Record<string, any>;
@@ -17,7 +18,8 @@ interface PopoutContextType {
   popouts: PopoutState[];
   openPopout: (
     type: PopoutState['type'],
-    initialSize?: { width: number; height: number }
+    initialSize?: { width: number; height: number },
+    customSettings?: Record<string, any>
   ) => void;
   closePopout: (id: string) => void;
   updatePopout: (id: string, updates: Partial<PopoutState>) => void;
@@ -52,8 +54,8 @@ export function PopoutProvider({ children }: { children: ReactNode }) {
   }, [popouts, isHydrated]);
 
   const openPopout = useCallback(
-    (type: PopoutState['type'], initialSize = { width: 400, height: 300 }) => {
-      const id = `${type}-${Date.now()}`;
+    (type: PopoutState['type'], initialSize = { width: 400, height: 300 }, customSettings: Record<string, any> = {}) => {
+      const id = `${type}-${customSettings.source || 'widget'}-${Date.now()}`;
       const newPopout: PopoutState = {
         id,
         type,
@@ -63,6 +65,8 @@ export function PopoutProvider({ children }: { children: ReactNode }) {
           y: Math.max(20, window.innerHeight - initialSize.height - 20),
         },
         size: initialSize,
+        opacity: 1,
+        customSettings,
       };
       setPopouts((prev) => [...prev, newPopout]);
     },

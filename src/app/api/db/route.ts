@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db, ensureDb } from '@/lib/db';
 import { getSession } from '@/lib/auth';
+import { isDjWorkerRequest } from '@/lib/dj-worker-auth';
 
 // Collections accessible via the generic /api/db endpoint (matches firestore.rules).
 // 'config' requires admin; all others require any authenticated session.
@@ -50,12 +51,13 @@ export async function GET(request: NextRequest) {
   const id = searchParams.get('id');
   const filtersParam = searchParams.get('filters');
   const session = await getSession();
+  const fromDjWorker = isDjWorkerRequest(request);
 
   await ensureDb();
 
   // By-ID reads: public rooms (isPrivate===false) are readable without auth
   if (collection && id) {
-    if (!session) {
+    if (!session && !fromDjWorker) {
       if (collection === 'rooms') {
         const data = db.get(collection, id);
         if (data && data.isPrivate === false) {
@@ -64,9 +66,12 @@ export async function GET(request: NextRequest) {
       }
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
+    if (fromDjWorker && collection !== 'rooms') {
+      return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+    }
     const access = isAllowedCollection(collection);
     if (access === 'denied') return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
-    if (access === 'admin' && !(await isAdmin(session.uid))) return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+    if (access === 'admin' && (!session || !(await isAdmin(session.uid)))) return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
     const data = db.get(collection, id);
     return NextResponse.json({ exists: !!data, data, id });
   }
@@ -134,7 +139,8 @@ export async function POST(request: NextRequest) {
 
 export async function PATCH(request: NextRequest) {
   const session = await getSession();
-  if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  const fromDjWorker = isDjWorkerRequest(request);
+  if (!session && !fromDjWorker) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
   await ensureDb();
   const { collection, id, data } = await request.json();
@@ -142,9 +148,13 @@ export async function PATCH(request: NextRequest) {
     return NextResponse.json({ error: 'Missing fields' }, { status: 400 });
   }
 
+  if (fromDjWorker && collection !== 'rooms') {
+    return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+  }
+
   const access = isAllowedCollection(collection);
   if (access === 'denied') return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
-  if (access === 'admin' && !(await isAdmin(session.uid))) return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+  if (access === 'admin' && (!session || !(await isAdmin(session.uid)))) return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
 
   db.update(collection, id, sanitizeUserWrite(collection, data));
   return NextResponse.json({ success: true });
