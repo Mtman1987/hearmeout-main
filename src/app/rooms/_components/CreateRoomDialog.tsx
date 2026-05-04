@@ -20,10 +20,6 @@ export function CreateRoomDialog() {
   const [roomName, setRoomName] = useState('');
   const [description, setDescription] = useState('');
   const [isPrivate, setIsPrivate] = useState(false);
-  const [link1Label, setLink1Label] = useState('');
-  const [link1Url, setLink1Url] = useState('');
-  const [link2Label, setLink2Label] = useState('');
-  const [link2Url, setLink2Url] = useState('');
   const [isCreating, setIsCreating] = useState(false);
   const { toast } = useToast();
   const router = useRouter();
@@ -45,17 +41,12 @@ export function CreateRoomDialog() {
         description,
         ownerId: user.uid,
         isPrivate,
-        link1Label: link1Label.trim() || undefined,
-        link1Url: link1Url.trim() || undefined,
-        link2Label: link2Label.trim() || undefined,
-        link2Url: link2Url.trim() || undefined,
         createdAt: new Date().toISOString(),
         playlist: [],
         isPlaying: false,
       });
 
       setRoomName(''); setDescription(''); setIsPrivate(false);
-      setLink1Label(''); setLink1Url(''); setLink2Label(''); setLink2Url('');
       setOpen(false);
       toast({ title: 'Room Created!', description: `"${roomName}" has been successfully created.` });
       router.push(`/rooms/${newId}`);
@@ -89,22 +80,6 @@ export function CreateRoomDialog() {
           <div className="grid grid-cols-4 items-center gap-4">
             <Label htmlFor="is-private" className="text-right">Private</Label>
             <div className="col-span-3"><Switch id="is-private" checked={isPrivate} onCheckedChange={setIsPrivate} /></div>
-          </div>
-          <div className="grid grid-cols-4 items-center gap-4">
-            <Label htmlFor="link1-label" className="text-right text-xs">Link 1 Label</Label>
-            <Input id="link1-label" value={link1Label} onChange={(e) => setLink1Label(e.target.value)} className="col-span-3" placeholder="e.g., Twitch, YouTube" />
-          </div>
-          <div className="grid grid-cols-4 items-center gap-4">
-            <Label htmlFor="link1-url" className="text-right text-xs">Link 1 URL</Label>
-            <Input id="link1-url" value={link1Url} onChange={(e) => setLink1Url(e.target.value)} className="col-span-3" placeholder="https://..." />
-          </div>
-          <div className="grid grid-cols-4 items-center gap-4">
-            <Label htmlFor="link2-label" className="text-right text-xs">Link 2 Label</Label>
-            <Input id="link2-label" value={link2Label} onChange={(e) => setLink2Label(e.target.value)} className="col-span-3" placeholder="e.g., Discord, TikTok" />
-          </div>
-          <div className="grid grid-cols-4 items-center gap-4">
-            <Label htmlFor="link2-url" className="text-right text-xs">Link 2 URL</Label>
-            <Input id="link2-url" value={link2Url} onChange={(e) => setLink2Url(e.target.value)} className="col-span-3" placeholder="https://..." />
           </div>
         </div>
         <DialogFooter>

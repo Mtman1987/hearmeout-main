@@ -1,33 +1,107 @@
-// Server-side Puppeteer DJ service
-// Manages one headless Chromium instance per room
-// Launches the internal /dj/{roomId} page which handles YouTube playback + LiveKit publishing
+// DJ Service — forwards to the hmo-dj-worker when DJ_WORKER_URL is set
+// (production), falls back to local Puppeteer for development.
 
-import puppeteer, { Browser, Page } from 'puppeteer';
+const DJ_WORKER_URL = process.env.DJ_WORKER_URL || '';
+const DJ_WORKER_SECRET = process.env.DJ_WORKER_SECRET || '';
+
+// ── Worker-backed implementation (production) ──────────────────────────
+
+async function workerFetch(
+  path: string,
+  options: RequestInit = {},
+): Promise<Response> {
+  return fetch(`${DJ_WORKER_URL}${path}`, {
+    ...options,
+    headers: {
+      ...((options.headers as Record<string, string>) || {}),
+      Authorization: `Bearer ${DJ_WORKER_SECRET}`,
+    },
+  });
+}
+
+async function startDJWorker(roomId: string): Promise<{ success: boolean; message: string }> {
+  try {
+    const res = await workerFetch('/dj', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'start', roomId }),
+    });
+    return await res.json();
+  } catch (err: any) {
+    console.error('[DJ] Worker request failed:', err.message);
+    return { success: false, message: `Worker error: ${err.message}` };
+  }
+}
+
+async function stopDJWorker(roomId: string): Promise<{ success: boolean; message: string }> {
+  try {
+    const res = await workerFetch('/dj', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'stop', roomId }),
+    });
+    return await res.json();
+  } catch (err: any) {
+    console.error('[DJ] Worker stop failed:', err.message);
+    return { success: false, message: `Worker error: ${err.message}` };
+  }
+}
+
+async function isDJRunningWorker(roomId: string): Promise<boolean> {
+  try {
+    const res = await workerFetch(`/dj?roomId=${encodeURIComponent(roomId)}`);
+    const data = await res.json();
+    return !!data.running;
+  } catch {
+    return false;
+  }
+}
+
+async function getActiveInstancesWorker(): Promise<Array<{ roomId: string; startedAt: Date }>> {
+  try {
+    const res = await workerFetch('/dj');
+    const data = await res.json();
+    return (data.instances || []).map((i: any) => ({
+      roomId: i.roomId,
+      startedAt: new Date(i.startedAt),
+    }));
+  } catch {
+    return [];
+  }
+}
+
+// ── Local Puppeteer implementation (development) ───────────────────────
 
 interface DJInstance {
-  browser: Browser;
-  page: Page;
+  browser: any;
+  page: any;
   roomId: string;
   startedAt: Date;
 }
 
-const instances = new Map<string, DJInstance>();
+const localInstances = new Map<string, DJInstance>();
 
 const CHROMIUM_PATH = process.env.PUPPETEER_EXECUTABLE_PATH || '/usr/bin/chromium';
 const BASE_URL = process.env.NEXT_PUBLIC_APP_URL || process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3001';
 
-export async function startDJ(roomId: string): Promise<{ success: boolean; message: string }> {
-  if (instances.has(roomId)) {
+async function startDJLocal(roomId: string): Promise<{ success: boolean; message: string }> {
+  if (localInstances.has(roomId)) {
     return { success: true, message: 'DJ already running for this room.' };
   }
 
-  // Limit concurrent instances (Chromium uses ~150MB each, Fly.io has 1GB)
-  if (instances.size >= 3) {
+  if (localInstances.size >= 3) {
     return { success: false, message: 'Maximum concurrent DJ instances reached (3). Stop another room first.' };
   }
 
   try {
-    console.log(`[DJ] Starting for room ${roomId}...`);
+    console.log(`[DJ] Starting locally for room ${roomId}...`);
+
+    let puppeteer: any;
+    try {
+      puppeteer = await import('puppeteer');
+    } catch {
+      return { success: false, message: 'Puppeteer not available. Set DJ_WORKER_URL for production.' };
+    }
 
     const browser = await puppeteer.launch({
       executablePath: CHROMIUM_PATH,
@@ -44,27 +118,30 @@ export async function startDJ(roomId: string): Promise<{ success: boolean; messa
 
     const page = await browser.newPage();
 
-    // Log console output from the DJ page
-    page.on('console', msg => {
+    page.on('console', (msg: any) => {
       const text = msg.text();
       if (text.includes('[DJ]') || text.includes('[LiveKit]') || text.includes('[YT]')) {
         console.log(`[DJ:${roomId}] ${text}`);
       }
     });
 
-    page.on('pageerror', (err) => {
+    page.on('pageerror', (err: any) => {
       console.error(`[DJ:${roomId}] Page error:`, String(err));
     });
 
-    // Navigate to the internal DJ page
     const djUrl = `${BASE_URL}/dj/${roomId}`;
     console.log(`[DJ] Navigating to ${djUrl}`);
     await page.goto(djUrl, { waitUntil: 'networkidle2', timeout: 30000 });
 
-    const instance: DJInstance = { browser, page, roomId, startedAt: new Date() };
-    instances.set(roomId, instance);
+    // Auto-start the session via the exposed control surface
+    await page.evaluate(() => {
+      if ((window as any).__HEARMEOUT_DJ__?.startSession) {
+        (window as any).__HEARMEOUT_DJ__.startSession();
+      }
+    }).catch((err: any) => console.log(`[DJ] Auto-start eval:`, err.message));
 
-    console.log(`[DJ] Started for room ${roomId}. Active instances: ${instances.size}`);
+    localInstances.set(roomId, { browser, page, roomId, startedAt: new Date() });
+    console.log(`[DJ] Started for room ${roomId}. Active: ${localInstances.size}`);
     return { success: true, message: 'DJ started.' };
   } catch (err: any) {
     console.error(`[DJ] Failed to start for room ${roomId}:`, err.message);
@@ -72,8 +149,8 @@ export async function startDJ(roomId: string): Promise<{ success: boolean; messa
   }
 }
 
-export async function stopDJ(roomId: string): Promise<{ success: boolean; message: string }> {
-  const instance = instances.get(roomId);
+async function stopDJLocal(roomId: string): Promise<{ success: boolean; message: string }> {
+  const instance = localInstances.get(roomId);
   if (!instance) {
     return { success: true, message: 'No DJ running for this room.' };
   }
@@ -82,21 +159,35 @@ export async function stopDJ(roomId: string): Promise<{ success: boolean; messag
     console.log(`[DJ] Stopping for room ${roomId}...`);
     await instance.page.close().catch(() => {});
     await instance.browser.close().catch(() => {});
-    instances.delete(roomId);
-    console.log(`[DJ] Stopped for room ${roomId}. Active instances: ${instances.size}`);
+    localInstances.delete(roomId);
+    console.log(`[DJ] Stopped for room ${roomId}. Active: ${localInstances.size}`);
     return { success: true, message: 'DJ stopped.' };
   } catch (err: any) {
-    instances.delete(roomId);
+    localInstances.delete(roomId);
     return { success: false, message: `Error stopping DJ: ${err.message}` };
   }
 }
 
-export function isDJRunning(roomId: string): boolean {
-  return instances.has(roomId);
+// ── Public API — routes to worker or local based on config ─────────────
+
+const useWorker = !!DJ_WORKER_URL;
+
+export async function startDJ(roomId: string) {
+  return useWorker ? startDJWorker(roomId) : startDJLocal(roomId);
 }
 
-export function getActiveInstances(): Array<{ roomId: string; startedAt: Date }> {
-  return Array.from(instances.values()).map(i => ({
+export async function stopDJ(roomId: string) {
+  return useWorker ? stopDJWorker(roomId) : stopDJLocal(roomId);
+}
+
+export function isDJRunning(roomId: string): boolean | Promise<boolean> {
+  if (useWorker) return isDJRunningWorker(roomId);
+  return localInstances.has(roomId);
+}
+
+export function getActiveInstances() {
+  if (useWorker) return getActiveInstancesWorker();
+  return Array.from(localInstances.values()).map(i => ({
     roomId: i.roomId,
     startedAt: i.startedAt,
   }));

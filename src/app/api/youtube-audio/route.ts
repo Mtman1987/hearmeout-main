@@ -1,24 +1,17 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { extractAudioUrl } from '@/lib/yt-extract';
 import { getCachedUrl } from '@/lib/music-ripper';
+import { getExtractedUrl, setExtractedUrl } from '@/lib/audio-url-cache';
+import { isValidVideoId } from '@/lib/validate-video-id';
 
-// In-memory cache of extracted URLs
-const urlCache = new Map<string, { url: string; expires: number }>();
-
-export function getExtractedUrl(videoId: string): string | null {
-  const cached = urlCache.get(videoId);
-  if (cached && cached.expires > Date.now()) return cached.url;
-  return null;
-}
-
-export function setExtractedUrl(videoId: string, url: string) {
-  urlCache.set(videoId, { url, expires: Date.now() + 5 * 60 * 60 * 1000 });
-}
+// Re-export for any consumers that imported from here
+export { getExtractedUrl, setExtractedUrl } from '@/lib/audio-url-cache';
 
 // GET: Extract audio URL for a video
 export async function GET(req: NextRequest) {
   const videoId = new URL(req.url).searchParams.get('videoId');
   if (!videoId) return NextResponse.json({ error: 'videoId required' }, { status: 400 });
+  if (!isValidVideoId(videoId)) return NextResponse.json({ error: 'Invalid video ID' }, { status: 400 });
 
   // Check mp3 cache
   const cachedMp3 = getCachedUrl(videoId);

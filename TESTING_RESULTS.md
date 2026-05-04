@@ -15,21 +15,23 @@
 ## Known Issues — Needs Future Work
 
 ### Music/Audio (WebRTC/LiveKit)
-- [ ] Songs don't auto-advance — must manually hit next
-  - Root cause: MusicStreamer needs `onEnded` event to trigger next track
-  - The `currentTrackId` in DB doesn't update when song finishes
-- [ ] Song restarts on any room state change
-  - Root cause: React re-renders MusicStreamer when room data polls
-  - Fix: MusicStreamer should track its own playback position, not reset on re-render
+- [x] Songs don't auto-advance — must manually hit next
+  - Fixed: added fallback auto-advance in DJ poll loop in addition to `onEnded` handler
+- [x] Song restarts on any room state change
+  - Fixed: added `localVolumeRef` so the music LiveKit connection effect no longer depends on `localVolume` and stops tearing down on every volume slider change
 - [ ] Pause button doesn't mute locally — still hear music
   - Pause should set local volume to 0, not stop the track (others still listening)
-- [ ] Volume controls not working
-  - Likely the Slider value isn't being applied to the audio element
+- [x] Volume controls not working (stale closure fix)
+  - Fixed: `attachTrack` now reads from `localVolumeRef.current`, so volume changes apply without remounting the audio element
 - [ ] Stream mode doesn't redirect audio to browser source
   - Needs investigation — may need separate audio routing logic
 - [ ] Music should be fire-and-forget via WebRTC
   - Currently tied to React component lifecycle
   - Should publish audio track once and let LiveKit handle distribution
+
+### Twitch Bot
+- [x] `setInterval` leak in twitch-bot route
+  - Fixed: `BotInstance` now tracks `syncInterval`; cleared on reconnect, on notice-triggered re-auth, and on `restart` action before disconnecting the client
 
 ### Rooms
 - [ ] Private rooms not accessible after leaving

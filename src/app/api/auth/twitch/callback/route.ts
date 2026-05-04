@@ -1,9 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db, ensureDb } from '@/lib/db';
 import { setSessionCookie } from '@/lib/auth';
+import { config } from '@/lib/config';
+import { verifyDshRedirect } from '@/lib/dsh-redirect';
 
-const BASE_URL = process.env.NEXT_PUBLIC_BASE_URL || 'https://hearmeout-main.fly.dev';
-const DSH_URL = 'https://discord-stream-hub-new.fly.dev';
+const BASE_URL = config.baseUrl;
+const DSH_URL = config.dshUrl;
 
 export async function GET(req: NextRequest) {
   await ensureDb();
@@ -17,6 +19,12 @@ export async function GET(req: NextRequest) {
   const userId = searchParams.get('user_id');
   const username = searchParams.get('username');
   if (success === 'true' && userId && username) {
+    // Account-takeover protection (audit S10)
+    const verify = verifyDshRedirect('twitch', searchParams);
+    if (!verify.ok) {
+      console.warn('[auth/twitch/callback] rejected unsigned/forged redirect:', verify.reason);
+      return NextResponse.redirect(`${BASE_URL}/login?error=invalid_dsh_redirect`);
+    }
     const uid = `twitch_${userId}`;
     const displayName = searchParams.get('display_name') || username;
     const photoURL = searchParams.get('photo_url') || null;
@@ -73,7 +81,7 @@ export async function GET(req: NextRequest) {
 
   // User login — redirect to DSH Twitch OAuth (DSH has the client secret)
   if (!code) {
-    const clientId = process.env.TWITCH_CLIENT_ID || process.env.NEXT_PUBLIC_TWITCH_CLIENT_ID || 'rxmohc28tthq0nudfd6iwx0sgy88dp';
+    const clientId = process.env.TWITCH_CLIENT_ID || config.twitchClientId;
     const dshCallback = `${DSH_URL}/api/twitch/oauth/callback`;
     const twitchUrl = `https://id.twitch.tv/oauth2/authorize?client_id=${clientId}&redirect_uri=${encodeURIComponent(dshCallback)}&response_type=code&scope=user:read:email&state=hearmeout`;
     return NextResponse.redirect(twitchUrl);

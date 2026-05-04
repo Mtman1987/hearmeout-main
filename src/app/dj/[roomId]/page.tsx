@@ -60,12 +60,32 @@ export default function DJPage() {
   const [isPlayingLocal, setIsPlayingLocal] = useState(false);
   const [monitorVolume, setMonitorVolume] = useState(0.6);
   const [monitorMuted, setMonitorMuted] = useState(false);
+  const monitorVolumeRef = useRef(monitorVolume);
+  const monitorMutedRef = useRef(monitorMuted);
+  useEffect(() => { monitorVolumeRef.current = monitorVolume; }, [monitorVolume]);
+  useEffect(() => { monitorMutedRef.current = monitorMuted; }, [monitorMuted]);
   const [duration, setDuration] = useState(0);
   const [position, setPosition] = useState(0);
 
   useEffect(() => {
     document.title = isLive ? '🔴 DJ LIVE — HearMeOut' : '🎵 HearMeOut DJ';
   }, [isLive]);
+
+  // Expose control surface for Puppeteer (hmo-dj-worker) auto-start
+  useEffect(() => {
+    (window as any).__HEARMEOUT_DJ__ = {
+      startSession: () => {
+        const btn = document.getElementById('dj-start-btn');
+        if (btn) btn.click();
+      },
+      stopSession: () => {
+        const btn = document.getElementById('dj-stop-btn');
+        if (btn) btn.click();
+      },
+      getStatus: () => ({ isLive: liveRef.current, status }),
+    };
+    return () => { delete (window as any).__HEARMEOUT_DJ__; };
+  }, [status]);
 
   // Keep monitor gain in sync with UI controls (only affects DJ's own ears)
   useEffect(() => {
@@ -98,7 +118,7 @@ export default function DJPage() {
       src.connect(publishDest);
 
       const monitorGain = ctx.createGain();
-      monitorGain.gain.value = monitorMuted ? 0 : monitorVolume;
+      monitorGain.gain.value = monitorMutedRef.current ? 0 : monitorVolumeRef.current;
       monitorGainRef.current = monitorGain;
       src.connect(monitorGain);
       monitorGain.connect(ctx.destination);
@@ -112,7 +132,7 @@ export default function DJPage() {
 
     const tracks = publishDestRef.current!.stream.getAudioTracks();
     return tracks[0] || null;
-  }, [monitorMuted, monitorVolume]);
+  }, []);
 
   const connectLiveKit = useCallback(async (): Promise<void> => {
     if (livekitRoomRef.current) return;
@@ -210,6 +230,30 @@ export default function DJPage() {
       audioEl.load();
     }
 
+    // Audit C1: previously stopSession only stopped the published track and
+    // disconnected from LiveKit, but left the WebAudio graph intact. On the
+    // next "go live" the old MediaStreamAudioDestinationNode would still be
+    // connected, but `createMediaElementSource(audioEl)` cannot be called
+    // twice on the same element, so the second start would publish an
+    // already-ended track and listeners would hear silence. Tear the whole
+    // graph down here so a fresh ensureAudioGraph() rebuilds it cleanly.
+    try {
+      sourceNodeRef.current?.disconnect();
+    } catch {}
+    sourceNodeRef.current = null;
+    try {
+      monitorGainRef.current?.disconnect();
+    } catch {}
+    monitorGainRef.current = null;
+    try {
+      publishDestRef.current?.disconnect();
+    } catch {}
+    publishDestRef.current = null;
+    try {
+      audioContextRef.current?.close();
+    } catch {}
+    audioContextRef.current = null;
+
     liveRef.current = false;
     setIsLive(false);
     setStatus('Session stopped');
@@ -306,12 +350,44 @@ export default function DJPage() {
             await loadAndPlay(videoId);
           }
         } else if (liveRef.current) {
-          if (wantPlay && audioEl.paused) {
+          // Don't resurrect a naturally-ended track: while auto-radio is
+          // searching for the next song, audioEl is paused+ended but the DB
+          // still shows the same currentTrackId with isPlaying:true. Playing
+          // here would restart the track from the beginning for everyone.
+          if (wantPlay && audioEl.paused && !audioEl.ended) {
             try {
               await audioEl.play();
             } catch {}
           } else if (!wantPlay && !audioEl.paused) {
             audioEl.pause();
+          }
+        }
+
+        // Fallback auto-advance: if audio has ended (or is very close to end) and we think we're playing
+        if (wantPlay && liveRef.current && audioEl.duration && Number.isFinite(audioEl.duration) && audioEl.currentTime >= audioEl.duration - 0.5 && audioEl.paused) {
+          // Track ended but onEnded didn't fire — advance manually.
+          // Defer to auto-radio on the last track when it's enabled: calling
+          // handleEnded ensures we either queue a new track via the API or
+          // advance normally, matching the onEnded path and avoiding a race
+          // where the fallback wraps the playlist while auto-radio is searching.
+          const idx = playlist?.findIndex((t) => t.id === currentTrackId) ?? -1;
+          const isLastTrack = playlist ? idx === playlist.length - 1 : false;
+
+          if (data.autoRadio && isLastTrack) {
+            requestAutoRadio();
+          } else {
+            const next = playlist?.[(idx + 1) % playlist.length];
+            if (next && next.id !== currentTrackId) {
+              const fallbackUpdates: Record<string, unknown> = { currentTrackId: next.id, isPlaying: true };
+              if (currentTrackId) {
+                fallbackUpdates.playHistory = [...(data.playHistory || []), currentTrackId].slice(-50);
+              }
+              fetch('/api/db', {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ collection: 'rooms', id: roomId, data: fallbackUpdates }),
+              }).catch(() => {});
+            }
           }
         }
       } catch {
@@ -346,14 +422,14 @@ export default function DJPage() {
 
     const next = r.playlist[(i + 1) % r.playlist.length];
     if (!next) return;
+    const updates: Record<string, unknown> = { currentTrackId: next.id, isPlaying: true };
+    if (r.currentTrackId) {
+      updates.playHistory = [...(r.playHistory || []), r.currentTrackId].slice(-50);
+    }
     fetch('/api/db', {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        collection: 'rooms',
-        id: roomId,
-        data: { currentTrackId: next.id, isPlaying: true },
-      }),
+      body: JSON.stringify({ collection: 'rooms', id: roomId, data: updates }),
     }).catch(() => {});
   }, [roomId, requestAutoRadio]);
 
@@ -472,6 +548,7 @@ export default function DJPage() {
 
       {!isLive ? (
         <button
+          id="dj-start-btn"
           onClick={startSession}
           style={{
             width: '100%',
@@ -507,7 +584,7 @@ export default function DJPage() {
             <button onClick={skipNext} style={controlBtn}>
               ⏭
             </button>
-            <button onClick={stopSession} style={{ ...controlBtn, background: '#dc2626' }}>
+            <button id="dj-stop-btn" onClick={stopSession} style={{ ...controlBtn, background: '#dc2626' }}>
               ⏹
             </button>
           </div>

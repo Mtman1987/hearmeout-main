@@ -1,19 +1,21 @@
-import { exec } from 'child_process';
+import { execFile } from 'child_process';
 import { promisify } from 'util';
 import { existsSync, mkdirSync, unlinkSync, statSync, readdirSync } from 'fs';
 import { join } from 'path';
+import { isValidVideoId } from './validate-video-id';
 
-const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
 const YT_DLP = process.env.YT_DLP_PATH || 'yt-dlp';
 const FFMPEG = process.env.FFMPEG_PATH || 'ffmpeg';
 const CACHE_DIR = process.env.MUSIC_CACHE_DIR || join(process.cwd(), 'data', 'music');
 const COOKIES_FILE = ['/data/youtube-cookies.txt', join(process.cwd(), 'youtube-cookies.txt')]
   .find(p => existsSync(p)) || '';
 
-function ytdlpArgs(): string {
-  const args = ['--js-runtimes', 'node'];
-  if (existsSync(COOKIES_FILE)) args.push('--cookies', COOKIES_FILE);
-  return args.join(' ');
+// Extra argv passed to yt-dlp. Everything here is constant / env-controlled, never user input.
+function ytdlpExtraArgs(): string[] {
+  const args: string[] = ['--js-runtimes', 'node'];
+  if (COOKIES_FILE && existsSync(COOKIES_FILE)) args.push('--cookies', COOKIES_FILE);
+  return args;
 }
 
 if (!existsSync(CACHE_DIR)) mkdirSync(CACHE_DIR, { recursive: true });
@@ -22,6 +24,7 @@ if (!existsSync(CACHE_DIR)) mkdirSync(CACHE_DIR, { recursive: true });
 const inProgress = new Map<string, Promise<string | null>>();
 
 export function isCached(videoId: string): boolean {
+  if (!isValidVideoId(videoId)) return false;
   return existsSync(join(CACHE_DIR, `${videoId}.mp3`));
 }
 
@@ -31,6 +34,10 @@ export function getCachedUrl(videoId: string): string | null {
 }
 
 export async function ripAndCache(videoId: string): Promise<string | null> {
+  if (!isValidVideoId(videoId)) {
+    console.error(`[Ripper] Rejecting invalid videoId: ${JSON.stringify(videoId).slice(0, 64)}`);
+    return null;
+  }
   if (isCached(videoId)) return `/api/music/${videoId}`;
 
   // Deduplicate concurrent rips for the same video
@@ -46,15 +53,22 @@ export async function ripAndCache(videoId: string): Promise<string | null> {
 }
 
 async function doRip(videoId: string): Promise<string | null> {
+  // videoId is guaranteed-safe here (11 chars, [A-Za-z0-9_-]) — checked in ripAndCache.
   const url = `https://www.youtube.com/watch?v=${videoId}`;
   const tempM4a = join(CACHE_DIR, `${videoId}.m4a`);
   const finalMp3 = join(CACHE_DIR, `${videoId}.mp3`);
 
   try {
     console.log(`[Ripper] Downloading ${videoId}...`);
-    const extra = ytdlpArgs();
-    const { stdout, stderr } = await execAsync(
-      `"${YT_DLP}" ${extra} -f "bestaudio[ext=m4a]/bestaudio/best" --no-playlist -o "${tempM4a}" "${url}"`,
+    const { stdout, stderr } = await execFileAsync(
+      YT_DLP,
+      [
+        ...ytdlpExtraArgs(),
+        '-f', 'bestaudio[ext=m4a]/bestaudio/best',
+        '--no-playlist',
+        '-o', tempM4a,
+        url,
+      ],
       { timeout: 60000 }
     );
     if (stderr) console.log(`[Ripper] stderr: ${stderr.slice(0, 300)}`);
@@ -63,8 +77,9 @@ async function doRip(videoId: string): Promise<string | null> {
     if (!existsSync(tempM4a)) throw new Error('Download produced no file');
 
     console.log(`[Ripper] Converting ${videoId} to mp3...`);
-    await execAsync(
-      `"${FFMPEG}" -y -i "${tempM4a}" -vn -ab 128k "${finalMp3}"`,
+    await execFileAsync(
+      FFMPEG,
+      ['-y', '-i', tempM4a, '-vn', '-ab', '128k', finalMp3],
       { timeout: 60000 }
     );
 
@@ -86,6 +101,10 @@ async function doRip(videoId: string): Promise<string | null> {
 
 /** Download from a pre-extracted URL (no yt-dlp needed) + convert to mp3 */
 export async function ripWithUrl(videoId: string, audioStreamUrl: string): Promise<string | null> {
+  if (!isValidVideoId(videoId)) {
+    console.error(`[Ripper] Rejecting invalid videoId: ${JSON.stringify(videoId).slice(0, 64)}`);
+    return null;
+  }
   if (isCached(videoId)) return `/api/music/${videoId}`;
   if (inProgress.has(videoId)) return inProgress.get(videoId)!;
 
@@ -113,7 +132,11 @@ async function doRipFromUrl(videoId: string, audioStreamUrl: string): Promise<st
     console.log(`[Ripper] Downloaded ${Math.round(buffer.length / 1024)}KB`);
 
     console.log(`[Ripper] Converting ${videoId} to mp3...`);
-    await execAsync(`"${FFMPEG}" -y -i "${tempFile}" -vn -ab 128k "${finalMp3}"`, { timeout: 60000 });
+    await execFileAsync(
+      FFMPEG,
+      ['-y', '-i', tempFile, '-vn', '-ab', '128k', finalMp3],
+      { timeout: 60000 }
+    );
     try { unlinkSync(tempFile); } catch {}
 
     if (!existsSync(finalMp3)) throw new Error('Conversion produced no file');

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { addSongToPlaylist, updateRoomPlayState, skipTrack } from '@/lib/bot-actions';
 import { db, ensureDb } from '@/lib/db';
+import nacl from 'tweetnacl';
 
 const InteractionType = { PING: 1, APPLICATION_COMMAND: 2, MESSAGE_COMPONENT: 3, APPLICATION_COMMAND_AUTOCOMPLETE: 4, MODAL_SUBMIT: 5 };
 const InteractionResponseType = { PONG: 1, CHANNEL_MESSAGE_WITH_SOURCE: 4, DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE: 5, DEFERRED_UPDATE_MESSAGE: 6, UPDATE_MESSAGE: 7, MODAL: 9 };
@@ -9,7 +10,6 @@ function verifyDiscordRequest(body: string, signature: string, timestamp: string
   try {
     const PUBLIC_KEY = process.env.DISCORD_PUBLIC_KEY;
     if (!PUBLIC_KEY) return false;
-    const nacl = require('tweetnacl');
     return nacl.sign.detached.verify(
       Buffer.from(timestamp + body),
       Buffer.from(signature, 'hex'),
