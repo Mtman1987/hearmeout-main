@@ -35,13 +35,11 @@ interface UserListProps {
   djStarting?: boolean;
   onStartDJ: () => void;
   onStopDJ: () => void;
-  onPlaySong: (songId: string) => void;
-  onRemoveSong: (songId: string) => void;
-  onClearPlaylist: () => void;
-  onAddItems: (items: PlaylistItem[]) => void;
+  onStartAudio: () => void;
+  onOpenQueue: () => void;
 }
 
-export default function UserList({ roomId, musicStatus, djStatus, localVolume, onVolumeChange, showDJ, autoRadio, onToggleAutoRadio, djIsLive, djStarting, onStartDJ, onStopDJ, onPlaySong, onRemoveSong, onClearPlaylist, onAddItems }: UserListProps) {
+export default function UserList({ roomId, musicStatus, djStatus, localVolume, onVolumeChange, showDJ, autoRadio, onToggleAutoRadio, djIsLive, djStarting, onStartDJ, onStopDJ, onStartAudio, onOpenQueue }: UserListProps) {
   const { user } = useSession();
   const { localParticipant } = useLocalParticipant();
   const remoteParticipants = useRemoteParticipants();
@@ -84,10 +82,8 @@ export default function UserList({ roomId, musicStatus, djStatus, localVolume, o
               djStarting={djStarting}
               onStartDJ={onStartDJ}
               onStopDJ={onStopDJ}
-              onPlaySong={onPlaySong}
-              onRemoveSong={onRemoveSong}
-              onClearPlaylist={onClearPlaylist}
-              onAddItems={onAddItems}
+              onStartAudio={onStartAudio}
+              onOpenQueue={onOpenQueue}
             />
           )}
           {/* Real users */}

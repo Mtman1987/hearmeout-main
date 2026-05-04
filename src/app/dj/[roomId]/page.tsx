@@ -10,7 +10,7 @@
 // No getDisplayMedia, no shared-tab UX. The DJ just clicks "Start" once and the
 // playlist advances automatically, controlled from the main room (or chat bots).
 
-import { useParams } from 'next/navigation';
+import { useParams, useSearchParams } from 'next/navigation';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { LocalAudioTrack, Room, Track } from 'livekit-client';
 
@@ -36,6 +36,7 @@ function extractVideoId(trackId: string, trackUrl?: string): string {
 
 export default function DJPage() {
   const params = useParams<{ roomId: string }>();
+  const searchParams = useSearchParams();
   const roomId = params.roomId;
 
   // Audio graph refs
@@ -54,6 +55,7 @@ export default function DJPage() {
   const lastTrackRef = useRef<string | null>(null);
   const liveRef = useRef(false);
   const autoRadioRequestedRef = useRef(false);
+  const autoStartedRef = useRef(false);
 
   const [status, setStatus] = useState('Click "Start DJ Session" to begin');
   const [currentTrack, setCurrentTrack] = useState('');
@@ -214,6 +216,15 @@ export default function DJPage() {
       setStatus(`ERROR: ${message}`);
     }
   }, [connectLiveKit, ensureAudioGraph, patchRoomState, publishTrackIfNeeded]);
+
+  useEffect(() => {
+    if (autoStartedRef.current || isLive || searchParams.get('autostart') !== '1') return;
+    autoStartedRef.current = true;
+    const timeout = window.setTimeout(() => {
+      void startSession();
+    }, 250);
+    return () => window.clearTimeout(timeout);
+  }, [isLive, searchParams, startSession]);
 
   const stopSession = useCallback(() => {
     try {

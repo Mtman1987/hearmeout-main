@@ -27,6 +27,7 @@ export default function Playlist({ playlist, onPlaySong, currentTrackId, isPlaye
       <ul className="space-y-1 p-2">
         {playlist.map((item) => {
           const art = placeholderData.placeholderImages.find(p => p.id === item.artId);
+          const imageUrl = item.thumbnail || art?.imageUrl;
           const isPlaying = item.id === currentTrackId;
 
           return (
@@ -39,15 +40,16 @@ export default function Playlist({ playlist, onPlaySong, currentTrackId, isPlaye
               )}
               onClick={() => isPlayerControlAllowed && onPlaySong(item.id)}
             >
-              {art && 
+              {imageUrl &&
                 <div className="relative w-10 h-10 shrink-0">
                     <Image
-                        src={art.imageUrl}
+                        src={imageUrl}
                         alt={item.title}
                         fill
                         sizes="40px"
                         className="rounded-md object-cover"
-                        data-ai-hint={art.imageHint}
+                        data-ai-hint={item.thumbnail ? 'song thumbnail' : art?.imageHint}
+                        unoptimized
                     />
                 </div>
               }

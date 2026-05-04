@@ -3,6 +3,7 @@
 import React from 'react';
 import { usePopout } from '@/components/PopoutWidgets/PopoutProvider';
 import { ChatWidget } from '@/components/PopoutWidgets/ChatWidget';
+import { QueueWidget } from '@/components/PopoutWidgets/QueueWidget';
 
 export function PopoutRenderer() {
   const { popouts, closePopout, updatePopout } = usePopout();
@@ -33,6 +34,22 @@ export function PopoutRenderer() {
               onClose={() => closePopout(popout.id)}
               roomId={roomId}
               source={popout.customSettings?.source}
+            />
+          );
+        }
+        if (popout.type === 'queue') {
+          return (
+            <QueueWidget
+              key={popout.id}
+              id={popout.id}
+              position={popout.position}
+              size={popout.size}
+              onPositionChange={(pos) => updatePopout(popout.id, { position: pos })}
+              onSizeChange={(size) => updatePopout(popout.id, { size })}
+              opacity={popout.opacity}
+              onOpacityChange={(opacity) => updatePopout(popout.id, { opacity })}
+              onClose={() => closePopout(popout.id)}
+              roomId={roomId}
             />
           );
         }

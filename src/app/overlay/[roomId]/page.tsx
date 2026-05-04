@@ -7,7 +7,7 @@
 
 import { useParams } from 'next/navigation';
 import { useDoc } from '@/hooks/use-db';
-import { Music, Volume2, VolumeX } from 'lucide-react';
+import { Music, Play, Volume2, VolumeX } from 'lucide-react';
 import Image from 'next/image';
 import type { PlaylistItem } from '@/types/playlist';
 import { useState, useEffect, useRef, useCallback } from 'react';
@@ -31,6 +31,7 @@ export default function OverlayPage() {
   const { data: room, isLoading } = useDoc<RoomData>('rooms', roomId, 2000);
   const [volume, setVolume] = useState(0.5);
   const [isMuted, setIsMuted] = useState(false);
+  const [audioReady, setAudioReady] = useState(false);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const musicRoomRef = useRef<LKRoom | null>(null);
   const volumeRef = useRef(volume);
@@ -48,10 +49,7 @@ export default function OverlayPage() {
 
   useEffect(() => {
     const unlockOverlayAudio = () => {
-      const audio = audioRef.current;
-      if (!audio || !audio.srcObject) return;
-      audio.volume = mutedRef.current ? 0 : volumeRef.current;
-      void audio.play().catch(() => {});
+      void startOverlayAudio();
     };
     window.addEventListener('pointerdown', unlockOverlayAudio, { passive: true });
     window.addEventListener('keydown', unlockOverlayAudio);
@@ -61,6 +59,16 @@ export default function OverlayPage() {
       window.removeEventListener('keydown', unlockOverlayAudio);
       window.removeEventListener('touchstart', unlockOverlayAudio);
     };
+  }, []);
+
+  const startOverlayAudio = useCallback(async () => {
+    const lkRoom = musicRoomRef.current;
+    await lkRoom?.startAudio();
+    const audio = audioRef.current;
+    if (!audio || !audio.srcObject) return;
+    audio.volume = mutedRef.current ? 0 : volumeRef.current;
+    await audio.play();
+    setAudioReady(true);
   }, []);
 
   // Connect to LiveKit Music Room and play audio through this overlay.
@@ -85,7 +93,9 @@ export default function OverlayPage() {
           if (!audioRef.current) audioRef.current = new Audio();
           track.attach(audioRef.current);
           audioRef.current.volume = mutedRef.current ? 0 : volumeRef.current;
-          audioRef.current.play().catch(e => console.warn('[Overlay] Autoplay blocked:', e));
+          audioRef.current.play()
+            .then(() => setAudioReady(true))
+            .catch(e => console.warn('[Overlay] Autoplay blocked:', e));
         }
       };
 
@@ -144,8 +154,21 @@ export default function OverlayPage() {
       </div>
 
       {/* Volume Controls — top right, only visible when hovering (for streamer monitoring) */}
-      <div style={{ position: 'absolute', right: 20, top: 20 }} className="opacity-0 hover:opacity-100 transition-opacity">
+      <div style={{ position: 'absolute', right: 20, top: 20 }} className="opacity-20 hover:opacity-100 transition-opacity">
         <div className="rounded-lg bg-black/80 backdrop-blur-md p-3 shadow-2xl flex items-center gap-2">
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-8 w-8 text-white hover:bg-white/20"
+                onClick={() => startOverlayAudio().catch(e => console.warn('[Overlay] start audio failed:', e))}
+              >
+                <Play className="h-4 w-4" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent><p>{audioReady ? 'Audio ready' : 'Start overlay audio'}</p></TooltipContent>
+          </Tooltip>
           <Tooltip>
             <TooltipTrigger asChild>
               <Button

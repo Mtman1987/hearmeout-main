@@ -4,7 +4,7 @@ import React, { createContext, useContext, useState, useCallback, ReactNode, use
 
 export interface PopoutState {
   id: string;
-  type: 'voice' | 'chat';
+  type: 'voice' | 'chat' | 'queue';
   isOpen: boolean;
   position: { x: number; y: number };
   size: { width: number; height: number };

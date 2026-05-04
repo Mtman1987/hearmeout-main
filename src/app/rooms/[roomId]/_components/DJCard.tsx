@@ -11,8 +11,6 @@ import { SpeakingIndicator } from './SpeakingIndicator';
 import { cn } from '@/lib/utils';
 import { dbUpdateStrict } from '@/lib/db-helpers';
 import type { PlaylistItem } from '@/types/playlist';
-import PlaylistPanel from './PlaylistPanel';
-import AddMusicPanel from './AddMusicPanel';
 
 interface DJCardProps {
   roomId: string;
@@ -31,10 +29,8 @@ interface DJCardProps {
   djStarting?: boolean;
   onStartDJ: () => void;
   onStopDJ: () => void;
-  onPlaySong: (songId: string) => void;
-  onRemoveSong: (songId: string) => void;
-  onClearPlaylist: () => void;
-  onAddItems: (items: PlaylistItem[]) => void;
+  onStartAudio: () => void;
+  onOpenQueue: () => void;
 }
 
 export default function DJCard({
@@ -42,12 +38,12 @@ export default function DJCard({
   djStatus, musicStatus, localVolume, onVolumeChange, canControl,
   autoRadio, onToggleAutoRadio,
   djIsLive, djStarting, onStartDJ, onStopDJ,
-  onPlaySong, onRemoveSong, onClearPlaylist, onAddItems,
+  onStartAudio, onOpenQueue,
 }: DJCardProps) {
   const currentTrack = playlist?.find(t => t.id === currentTrackId);
   const isStreaming = musicStatus === '🎵 streaming';
   const [controlError, setControlError] = useState<string | null>(null);
-  const [activePanel, setActivePanel] = useState<'controls' | 'radio' | 'queue' | null>(null);
+  const [activePanel, setActivePanel] = useState<'controls' | 'radio' | null>(null);
   const visibleStatus = controlError || djStatus || musicStatus;
 
   const updatePlayback = useCallback(async (data: Record<string, unknown>) => {
@@ -62,8 +58,9 @@ export default function DJCard({
   }, [canControl, roomId]);
 
   const handlePlayPause = useCallback(() => {
+    onStartAudio();
     void updatePlayback({ isPlaying: !isPlaying });
-  }, [isPlaying, updatePlayback]);
+  }, [isPlaying, onStartAudio, updatePlayback]);
 
   const handleNext = useCallback(() => {
     if (!canControl || !playlist?.length) return;
@@ -130,10 +127,10 @@ export default function DJCard({
           </div>
         </div>
 
-        <div className="space-y-3">
+        <div className="space-y-3 mt-auto">
           <SpeakingIndicator audioLevel={isStreaming ? 0.6 : 0} />
 
-          <div className="flex items-center gap-2">
+          <div className="space-y-2">
             <div className="flex items-center gap-1">
               <Tooltip><TooltipTrigger asChild>
                 <Button variant={activePanel === 'controls' ? 'secondary' : 'ghost'} size="icon" className="h-8 w-8" onClick={() => setActivePanel(activePanel === 'controls' ? null : 'controls')}>
@@ -146,17 +143,24 @@ export default function DJCard({
                 </Button>
               </TooltipTrigger><TooltipContent><p>Auto-radio</p></TooltipContent></Tooltip>
               <Tooltip><TooltipTrigger asChild>
-                <Button variant={activePanel === 'queue' ? 'secondary' : 'ghost'} size="icon" className="h-8 w-8" onClick={() => setActivePanel(activePanel === 'queue' ? null : 'queue')}>
+                <Button variant="ghost" size="icon" className="h-8 w-8" onClick={onOpenQueue}>
                   <ListMusic className="h-4 w-4" />
                 </Button>
-              </TooltipTrigger><TooltipContent><p>Queue</p></TooltipContent></Tooltip>
+              </TooltipTrigger><TooltipContent><p>Pop out queue</p></TooltipContent></Tooltip>
+              <Tooltip><TooltipTrigger asChild>
+                <Button variant="ghost" size="icon" className="h-8 w-8 ml-auto" onClick={onStartAudio}>
+                  <Play className="h-4 w-4" />
+                </Button>
+              </TooltipTrigger><TooltipContent><p>Start audio playback</p></TooltipContent></Tooltip>
             </div>
-            <Tooltip><TooltipTrigger asChild>
-              <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => onVolumeChange(isMuted ? 0.5 : 0)}>
-                {isMuted ? <VolumeX className="h-4 w-4" /> : <Volume2 className="h-4 w-4" />}
-              </Button>
-            </TooltipTrigger><TooltipContent><p>{isMuted ? 'Unmute' : 'Mute'}</p></TooltipContent></Tooltip>
-            <Slider value={[localVolume]} onValueChange={v => onVolumeChange(v[0])} max={1} step={0.05} />
+            <div className="flex items-center gap-2">
+              <Tooltip><TooltipTrigger asChild>
+                <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => onVolumeChange(isMuted ? 0.5 : 0)}>
+                  {isMuted ? <VolumeX className="h-4 w-4" /> : <Volume2 className="h-4 w-4" />}
+                </Button>
+              </TooltipTrigger><TooltipContent><p>{isMuted ? 'Unmute' : 'Mute'}</p></TooltipContent></Tooltip>
+              <Slider value={[localVolume]} onValueChange={v => onVolumeChange(v[0])} max={1} step={0.05} />
+            </div>
           </div>
 
           {activePanel === 'controls' && (
@@ -200,13 +204,6 @@ export default function DJCard({
                   {autoRadio ? 'Auto-Radio ON' : 'Auto-Radio OFF'}
                 </Button>
               </TooltipTrigger><TooltipContent><p>Find related songs when the playlist runs out</p></TooltipContent></Tooltip>
-            </div>
-          )}
-
-          {activePanel === 'queue' && (
-            <div className="rounded-md border bg-muted/20 p-3 space-y-3 max-h-[30rem] overflow-y-auto">
-              <PlaylistPanel playlist={playlist || []} currentTrackId={currentTrackId || ''} isPlayerControlAllowed={canControl} onPlaySong={onPlaySong} onRemoveSong={onRemoveSong} onClearPlaylist={onClearPlaylist} />
-              {canControl && <AddMusicPanel onAddItems={onAddItems} onClose={() => setActivePanel(null)} canAddMusic={true} />}
             </div>
           )}
         </div>

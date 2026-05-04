@@ -115,9 +115,33 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
 
     // DJ start/stop via server-side API (Puppeteer on hmo-dj-worker)
     const [djStarting, setDjStarting] = useState(false);
+    const handleStartMusicAudio = useCallback(async () => {
+        const lkRoom = musicRoomRef.current;
+        try {
+            await lkRoom?.startAudio();
+            const audio = musicAudioRef.current;
+            if (audio) {
+                audio.volume = localVolumeRef.current;
+                await audio.play();
+            }
+            setMusicStatus(prev => prev || 'connected');
+            toast({ title: 'Music Audio Ready', description: 'Music playback is unlocked for this page.' });
+        } catch (err) {
+            toast({
+                variant: 'destructive',
+                title: 'Music Audio Blocked',
+                description: err instanceof Error ? err.message : 'Click again after the DJ stream connects.',
+            });
+        }
+    }, [toast]);
+
     const handleStartDJ = useCallback(async () => {
+        if (typeof window !== 'undefined') {
+            window.open(`/dj/${roomId}?autostart=1`, `hearmeout-dj-${roomId}`, 'width=460,height=760,popup=yes');
+        }
         setDjStarting(true);
         try {
+            await handleStartMusicAudio().catch(() => {});
             const res = await fetch('/api/dj', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -134,7 +158,7 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
         } finally {
             setDjStarting(false);
         }
-    }, [roomId, toast]);
+    }, [handleStartMusicAudio, roomId, toast]);
 
     const handleStopDJ = useCallback(async () => {
         try {
@@ -290,20 +314,6 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
         return () => { isCancelled = true; };
     }, [user, isUserLoading, roomId, toast]);
 
-    const handlePlaySong = useCallback((songId: string) => { if (canControl) dbUpdate('rooms', roomId, { currentTrackId: songId, isPlaying: true }); }, [roomId, canControl]);
-    const handleRemoveSong = useCallback((songId: string) => {
-        dbUpdate('rooms', roomId, { playlist: room.playlist.filter((s: any) => s.id !== songId) });
-    }, [room, roomId]);
-    const handleClearPlaylist = useCallback(() => { dbUpdate('rooms', roomId, { playlist: [], currentTrackId: '', isPlaying: false }); }, [roomId]);
-
-    const handleAddItems = useCallback((items: PlaylistItem[]) => {
-        if (!canControl) return;
-        const newPlaylist = [...(room.playlist || []), ...items];
-        const updates: any = { playlist: newPlaylist };
-        if ((!room.isPlaying || !room.currentTrackId) && items.length > 0) { updates.currentTrackId = items[0].id; updates.isPlaying = true; }
-        dbUpdate('rooms', roomId, updates);
-    }, [room, roomId, canControl]);
-
     const handleToggleAutoRadio = useCallback(() => {
         dbUpdate('rooms', roomId, { autoRadio: !room.autoRadio });
     }, [roomId, room.autoRadio]);
@@ -352,10 +362,8 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
                           djStarting={djStarting}
                           onStartDJ={handleStartDJ}
                           onStopDJ={handleStopDJ}
-                          onPlaySong={handlePlaySong}
-                          onRemoveSong={handleRemoveSong}
-                          onClearPlaylist={handleClearPlaylist}
-                          onAddItems={handleAddItems}
+                          onStartAudio={handleStartMusicAudio}
+                          onOpenQueue={() => openPopout('queue', { width: 760, height: 720 }, { source: 'queue' })}
                         />
                         {isOwner && <VoiceQueue roomId={roomId} />}
                     </main>
