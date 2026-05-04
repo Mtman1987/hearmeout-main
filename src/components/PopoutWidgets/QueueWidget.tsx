@@ -3,7 +3,8 @@
 import React from 'react';
 import { DraggableContainer } from './DraggableContainer';
 import PlaylistPanel from '@/app/rooms/[roomId]/_components/PlaylistPanel';
-import AddMusicPanel from '@/app/rooms/[roomId]/_components/AddMusicPanel';
+import { Button } from '@/components/ui/button';
+import { Plus } from 'lucide-react';
 import { useDoc } from '@/hooks/use-db';
 import { useSession } from '@/hooks/use-session';
 import { dbUpdate } from '@/lib/db-helpers';
@@ -19,6 +20,7 @@ interface QueueWidgetProps {
   onOpacityChange?: (opacity: number) => void;
   onClose: () => void;
   roomId: string;
+  onOpenAddSong?: () => void;
 }
 
 interface RoomData {
@@ -38,6 +40,7 @@ export function QueueWidget({
   onOpacityChange,
   onClose,
   roomId,
+  onOpenAddSong,
 }: QueueWidgetProps) {
   const { user } = useSession();
   const { data: room } = useDoc<RoomData>('rooms', roomId, 2000);
@@ -56,17 +59,6 @@ export function QueueWidget({
     dbUpdate('rooms', roomId, { playlist: [], currentTrackId: '', isPlaying: false });
   }, [roomId]);
 
-  const handleAddItems = React.useCallback((items: PlaylistItem[]) => {
-    if (!canControl) return;
-    const newPlaylist = [...playlist, ...items];
-    const updates: Record<string, unknown> = { playlist: newPlaylist };
-    if ((!room?.isPlaying || !room.currentTrackId) && items.length > 0) {
-      updates.currentTrackId = items[0].id;
-      updates.isPlaying = true;
-    }
-    dbUpdate('rooms', roomId, updates);
-  }, [canControl, playlist, room, roomId]);
-
   return (
     <DraggableContainer
       id={id}
@@ -78,8 +70,16 @@ export function QueueWidget({
       onOpacityChange={onOpacityChange}
       onClose={onClose}
       title="Queue"
+      minimalChrome
     >
       <div className="flex-1 overflow-y-auto p-3 space-y-3">
+        {canControl && onOpenAddSong && (
+          <div className="flex justify-end">
+            <Button size="sm" variant="outline" onClick={onOpenAddSong}>
+              <Plus className="h-4 w-4 mr-1" /> Add Song
+            </Button>
+          </div>
+        )}
         <PlaylistPanel
           playlist={playlist}
           currentTrackId={room?.currentTrackId || ''}
@@ -88,7 +88,6 @@ export function QueueWidget({
           onRemoveSong={handleRemoveSong}
           onClearPlaylist={handleClearPlaylist}
         />
-        {canControl && <AddMusicPanel onAddItems={handleAddItems} onClose={onClose} canAddMusic={true} />}
       </div>
     </DraggableContainer>
   );

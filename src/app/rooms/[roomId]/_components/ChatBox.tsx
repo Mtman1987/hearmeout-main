@@ -19,6 +19,7 @@ interface AdminChatMessage {
 }
 
 interface ChatBoxProps {
+  roomId?: string;
   compact?: boolean;
   onOpenSpaceChat?: () => void;
   onOpenTwitchChat?: () => void;
@@ -39,9 +40,7 @@ export default function ChatBox({ compact = false, onOpenSpaceChat, onOpenTwitch
       const response = await fetch("/api/admin-chat");
       if (response.ok) {
         const data = await response.json();
-        if (data.messages?.length) {
-          setMessages(data.messages.slice(-20));
-        }
+        setMessages((data.messages || []).slice(-100));
       }
     } catch (error) {
       console.error("Failed to fetch admin chat:", error);
@@ -59,7 +58,7 @@ export default function ChatBox({ compact = false, onOpenSpaceChat, onOpenTwitch
       });
 
       if (response.ok) {
-        setMessages((prev) => [...prev, message].slice(-20));
+        setMessages((prev) => [...prev, message].slice(-100));
       }
     } catch (error) {
       console.error("Failed to send admin chat message:", error);

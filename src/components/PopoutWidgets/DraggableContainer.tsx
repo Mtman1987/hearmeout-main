@@ -2,7 +2,7 @@
 
 import React, { useRef, useState, useEffect } from 'react';
 import { cn } from '@/lib/utils';
-import { X } from 'lucide-react';
+import { GripHorizontal, X } from 'lucide-react';
 import { Slider } from '@/components/ui/slider';
 
 interface DraggableContainerProps {
@@ -16,6 +16,7 @@ interface DraggableContainerProps {
   children: React.ReactNode;
   title?: string;
   onClose?: () => void;
+  minimalChrome?: boolean;
 }
 
 export function DraggableContainer({
@@ -29,6 +30,7 @@ export function DraggableContainer({
   children,
   title,
   onClose,
+  minimalChrome = false,
 }: DraggableContainerProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [isDragging, setIsDragging] = useState(false);
@@ -93,34 +95,65 @@ export function DraggableContainer({
         opacity,
       }}
     >
-      {/* Header - Draggable */}
-      <div
-        className="bg-muted px-3 py-2 border-b cursor-grab active:cursor-grabbing flex justify-between items-center rounded-t-md select-none"
-        onMouseDown={handleMouseDown}
-      >
-        <h3 className="text-sm font-semibold text-foreground">{title || 'Widget'}</h3>
-        <div className="flex items-center gap-2" data-no-drag>
-          {onOpacityChange && (
-            <Slider
-              aria-label="Widget opacity"
-              value={[opacity]}
-              min={0.2}
-              max={1}
-              step={0.05}
-              onValueChange={(value) => onOpacityChange(value[0])}
-              className="w-20"
-            />
-          )}
-          {onClose && (
-            <button
-              onClick={onClose}
-              className="text-muted-foreground hover:text-foreground transition-colors ml-2 flex-shrink-0"
-            >
-              <X className="w-4 h-4" />
-            </button>
-          )}
+      {minimalChrome ? (
+        <div className="absolute left-2 right-2 top-2 z-20 flex items-center justify-between gap-2 pointer-events-none">
+          <div
+            className="pointer-events-auto inline-flex items-center gap-1 rounded-md border bg-background/90 px-2 py-1 cursor-grab active:cursor-grabbing select-none"
+            onMouseDown={handleMouseDown}
+          >
+            <GripHorizontal className="w-3 h-3 text-muted-foreground" />
+          </div>
+          <div className="pointer-events-auto inline-flex items-center gap-2 rounded-md border bg-background/90 px-2 py-1" data-no-drag>
+            {onOpacityChange && (
+              <Slider
+                aria-label="Widget opacity"
+                value={[opacity]}
+                min={0.2}
+                max={1}
+                step={0.05}
+                onValueChange={(value) => onOpacityChange(value[0])}
+                className="w-16"
+              />
+            )}
+            {onClose && (
+              <button
+                onClick={onClose}
+                className="text-muted-foreground hover:text-foreground transition-colors flex-shrink-0"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            )}
+          </div>
         </div>
-      </div>
+      ) : (
+        <div
+          className="bg-muted px-3 py-2 border-b cursor-grab active:cursor-grabbing flex justify-between items-center rounded-t-md select-none"
+          onMouseDown={handleMouseDown}
+        >
+          <h3 className="text-sm font-semibold text-foreground">{title || 'Widget'}</h3>
+          <div className="flex items-center gap-2" data-no-drag>
+            {onOpacityChange && (
+              <Slider
+                aria-label="Widget opacity"
+                value={[opacity]}
+                min={0.2}
+                max={1}
+                step={0.05}
+                onValueChange={(value) => onOpacityChange(value[0])}
+                className="w-20"
+              />
+            )}
+            {onClose && (
+              <button
+                onClick={onClose}
+                className="text-muted-foreground hover:text-foreground transition-colors ml-2 flex-shrink-0"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Content */}
       <div className="flex flex-col flex-1 overflow-hidden bg-background">

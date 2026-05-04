@@ -14,8 +14,10 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { Button } from '@/components/ui/button';
 import { Slider } from '@/components/ui/slider';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
+import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { Room as LKRoom, RoomEvent, Track, RemoteTrack } from 'livekit-client';
 import { generateMusicRoomToken } from '@/app/actions';
+import { usePopout } from '@/components/PopoutWidgets/PopoutProvider';
 
 interface RoomData {
   name: string;
@@ -32,6 +34,7 @@ export default function OverlayPage() {
   const [volume, setVolume] = useState(0.5);
   const [isMuted, setIsMuted] = useState(false);
   const [audioReady, setAudioReady] = useState(false);
+  const { popouts, openPopout, closePopout } = usePopout();
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const musicRoomRef = useRef<LKRoom | null>(null);
   const volumeRef = useRef(volume);
@@ -133,6 +136,15 @@ export default function OverlayPage() {
 
   if (!track || !room.isPlaying) return <div className="min-h-screen bg-transparent" />;
 
+  const hasPopout = (source: string) => popouts.some((p) => p.type === 'chat' && p.customSettings?.source === source);
+  const hasQueue = popouts.some((p) => p.type === 'queue');
+  const hasAddSong = popouts.some((p) => p.type === 'addSong');
+  const togglePopout = (kind: 'chat' | 'queue' | 'addSong', source: string, size: { width: number; height: number }) => {
+    const existing = popouts.find((p) => p.type === kind && (kind !== 'chat' || p.customSettings?.source === source));
+    if (existing) closePopout(existing.id);
+    else openPopout(kind, size, { source });
+  };
+
   return (
     <div className="min-h-screen bg-transparent text-white relative">
       {/* Now Playing — bottom left, designed for OBS browser source */}
@@ -169,6 +181,48 @@ export default function OverlayPage() {
             </TooltipTrigger>
             <TooltipContent><p>{audioReady ? 'Audio ready' : 'Start overlay audio'}</p></TooltipContent>
           </Tooltip>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="ghost" size="icon" className="h-8 w-8 text-white hover:bg-white/20">
+                <Music className="h-4 w-4" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-56">
+              <DropdownMenuLabel>Overlay Widgets</DropdownMenuLabel>
+              <DropdownMenuSeparator />
+              <DropdownMenuCheckboxItem
+                checked={hasPopout('space')}
+                onCheckedChange={() => togglePopout('chat', 'space', { width: 440, height: 620 })}
+              >
+                Space Mountain Chat
+              </DropdownMenuCheckboxItem>
+              <DropdownMenuCheckboxItem
+                checked={hasPopout('discord')}
+                onCheckedChange={() => togglePopout('chat', 'discord', { width: 520, height: 680 })}
+              >
+                Discord Chat
+              </DropdownMenuCheckboxItem>
+              <DropdownMenuCheckboxItem
+                checked={hasPopout('twitch')}
+                onCheckedChange={() => togglePopout('chat', 'twitch', { width: 440, height: 620 })}
+              >
+                Twitch Chat
+              </DropdownMenuCheckboxItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuCheckboxItem
+                checked={hasQueue}
+                onCheckedChange={() => togglePopout('queue', 'queue', { width: 760, height: 720 })}
+              >
+                Queue
+              </DropdownMenuCheckboxItem>
+              <DropdownMenuCheckboxItem
+                checked={hasAddSong}
+                onCheckedChange={() => togglePopout('addSong', 'addSong', { width: 460, height: 560 })}
+              >
+                Add Song
+              </DropdownMenuCheckboxItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
           <Tooltip>
             <TooltipTrigger asChild>
               <Button

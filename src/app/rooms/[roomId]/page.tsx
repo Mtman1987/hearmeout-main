@@ -96,6 +96,8 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
     const [localVolume, setLocalVolume] = useState(0.5);
     const [musicStatus, setMusicStatus] = useState<string | null>(null);
     const [showDJ, setShowDJ] = useState(false);
+    const [mountDjEngine, setMountDjEngine] = useState(false);
+    const djEngineRef = useRef<HTMLIFrameElement | null>(null);
 
     const { data: userSettings } = useDoc<{ streamMode?: boolean; twitchChannel?: string }>(
       user ? `rooms/${roomId}/users` : null,
@@ -136,11 +138,14 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
     }, [toast]);
 
     const handleStartDJ = useCallback(async () => {
-        if (typeof window !== 'undefined') {
-            window.open(`/dj/${roomId}?autostart=1`, `hearmeout-dj-${roomId}`, 'width=460,height=760,popup=yes');
-        }
         setDjStarting(true);
         try {
+            setMountDjEngine(true);
+            const startInFrame = () => {
+                const win = djEngineRef.current?.contentWindow as (Window & { __HEARMEOUT_DJ__?: { startSession?: () => void } }) | null;
+                win?.__HEARMEOUT_DJ__?.startSession?.();
+            };
+            startInFrame();
             await handleStartMusicAudio().catch(() => {});
             const res = await fetch('/api/dj', {
                 method: 'POST',
@@ -152,6 +157,8 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
                 toast({ variant: 'destructive', title: 'DJ Error', description: data.message });
             } else {
                 toast({ title: 'DJ Connected', description: data.message || 'HearMeOut DJ is starting.' });
+                window.setTimeout(startInFrame, 250);
+                window.setTimeout(startInFrame, 1000);
             }
         } catch (err) {
             toast({ variant: 'destructive', title: 'DJ Error', description: 'Failed to start DJ' });
@@ -346,6 +353,15 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
         <div className={cn("bg-secondary/30 md:peer-data-[state=collapsed]:peer-data-[variant=inset]:ml-[calc(var(--sidebar-width-icon)_+_1rem)] md:peer-data-[variant=inset]:ml-[calc(var(--sidebar-width)_+_1rem)] duration-200 transition-[margin-left,margin-right]", chatOpen && "md:mr-[28rem]")}>
             <SidebarInset>
                 <div className="flex flex-col h-screen relative">
+                    {mountDjEngine && (
+                        <iframe
+                            ref={djEngineRef}
+                            src={`/dj/${roomId}`}
+                            title={`DJ Engine ${roomId}`}
+                            className="hidden"
+                            allow="autoplay"
+                        />
+                    )}
                     <RoomHeader roomName={room.name} onToggleChat={() => setChatOpen(!chatOpen)} showDJ={showDJ} onToggleDJ={() => setShowDJ(v => !v)} />
 
                     <main className="flex-1 p-4 md:p-6 overflow-y-auto space-y-6">
@@ -364,6 +380,7 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
                           onStopDJ={handleStopDJ}
                           onStartAudio={handleStartMusicAudio}
                           onOpenQueue={() => openPopout('queue', { width: 760, height: 720 }, { source: 'queue' })}
+                          onOpenAddSong={() => openPopout('addSong', { width: 460, height: 560 }, { source: 'addSong' })}
                         />
                         {isOwner && <VoiceQueue roomId={roomId} />}
                     </main>

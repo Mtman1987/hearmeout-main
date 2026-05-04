@@ -4,17 +4,18 @@ import React from 'react';
 import { usePopout } from '@/components/PopoutWidgets/PopoutProvider';
 import { ChatWidget } from '@/components/PopoutWidgets/ChatWidget';
 import { QueueWidget } from '@/components/PopoutWidgets/QueueWidget';
+import { AddSongWidget } from '@/components/PopoutWidgets/AddSongWidget';
 
 export function PopoutRenderer() {
-  const { popouts, closePopout, updatePopout } = usePopout();
+  const { popouts, closePopout, updatePopout, openPopout } = usePopout();
   const [roomId, setRoomId] = React.useState<string>('');
 
   React.useEffect(() => {
     const pathParts = typeof window !== 'undefined' ? window.location.pathname.split('/') : [];
     const roomIndex = pathParts.indexOf('rooms');
-    if (roomIndex !== -1 && pathParts[roomIndex + 1]) {
-      setRoomId(pathParts[roomIndex + 1]);
-    }
+    const overlayIndex = pathParts.indexOf('overlay');
+    if (roomIndex !== -1 && pathParts[roomIndex + 1]) setRoomId(pathParts[roomIndex + 1]);
+    else if (overlayIndex !== -1 && pathParts[overlayIndex + 1]) setRoomId(pathParts[overlayIndex + 1]);
   }, []);
 
   return (
@@ -40,6 +41,23 @@ export function PopoutRenderer() {
         if (popout.type === 'queue') {
           return (
             <QueueWidget
+              key={popout.id}
+              id={popout.id}
+              position={popout.position}
+              size={popout.size}
+              onPositionChange={(pos) => updatePopout(popout.id, { position: pos })}
+              onSizeChange={(size) => updatePopout(popout.id, { size })}
+              opacity={popout.opacity}
+              onOpacityChange={(opacity) => updatePopout(popout.id, { opacity })}
+              onClose={() => closePopout(popout.id)}
+              roomId={roomId}
+              onOpenAddSong={() => openPopout('addSong', { width: 460, height: 560 }, { source: 'addSong' })}
+            />
+          );
+        }
+        if (popout.type === 'addSong') {
+          return (
+            <AddSongWidget
               key={popout.id}
               id={popout.id}
               position={popout.position}

@@ -1,10 +1,11 @@
 'use client';
 
 import React, { createContext, useContext, useState, useCallback, ReactNode, useEffect } from 'react';
+import { usePathname } from 'next/navigation';
 
 export interface PopoutState {
   id: string;
-  type: 'voice' | 'chat' | 'queue';
+  type: 'voice' | 'chat' | 'queue' | 'addSong';
   isOpen: boolean;
   position: { x: number; y: number };
   size: { width: number; height: number };
@@ -28,30 +29,41 @@ interface PopoutContextType {
 
 const PopoutContext = createContext<PopoutContextType | undefined>(undefined);
 
-const STORAGE_KEY = 'hearmeout-popout-state';
+function getScopeFromPath(pathname: string): string {
+  const parts = pathname.split('/').filter(Boolean);
+  if (parts[0] === 'rooms' && parts[1]) return `room:${parts[1]}`;
+  if (parts[0] === 'overlay' && parts[1]) return `overlay:${parts[1]}`;
+  return 'global';
+}
 
 export function PopoutProvider({ children }: { children: ReactNode }) {
+  const pathname = usePathname();
+  const scope = getScopeFromPath(pathname || '/');
+  const storageKey = `hearmeout-popout-state:${scope}`;
   const [popouts, setPopouts] = useState<PopoutState[]>([]);
   const [isHydrated, setIsHydrated] = useState(false);
 
   useEffect(() => {
-    const saved = localStorage.getItem(STORAGE_KEY);
+    const saved = localStorage.getItem(storageKey);
     if (saved) {
       try {
         const parsed = JSON.parse(saved);
         setPopouts(parsed);
       } catch (e) {
         console.error('Failed to restore popout state:', e);
+        setPopouts([]);
       }
+    } else {
+      setPopouts([]);
     }
     setIsHydrated(true);
-  }, []);
+  }, [storageKey]);
 
   useEffect(() => {
     if (isHydrated) {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(popouts));
+      localStorage.setItem(storageKey, JSON.stringify(popouts));
     }
-  }, [popouts, isHydrated]);
+  }, [popouts, isHydrated, storageKey]);
 
   const openPopout = useCallback(
     (type: PopoutState['type'], initialSize = { width: 400, height: 300 }, customSettings: Record<string, any> = {}) => {

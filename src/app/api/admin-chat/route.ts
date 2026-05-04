@@ -7,9 +7,6 @@ const SERVER_ID = process.env.HARDCODED_GUILD_ID || HARDCODED_GUILD_ID;
 const CHAT_PATH = `servers/${SERVER_ID}/config/adminChat`;
 
 export async function GET() {
-  const session = await getSession();
-  if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-
   try {
     const res = await fetch(`${DSH_URL}/api/db?path=${CHAT_PATH}`);
     if (!res.ok) return NextResponse.json({ messages: [] });
