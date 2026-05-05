@@ -111,6 +111,7 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
     const musicRoomRef = useRef<LKRoom | null>(null);
     const musicAudioRef = useRef<HTMLAudioElement | null>(null);
     const localVolumeRef = useRef(localVolume);
+    const userGestureUnlockedRef = useRef(false);
     useEffect(() => { localVolumeRef.current = localVolume; }, [localVolume]);
 
     const isStreamMode = !!userSettings?.streamMode;
@@ -120,6 +121,7 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
     const handleStartMusicAudio = useCallback(async () => {
         const lkRoom = musicRoomRef.current;
         try {
+            userGestureUnlockedRef.current = true;
             await lkRoom?.startAudio();
             const audio = musicAudioRef.current;
             if (audio) {
@@ -215,7 +217,9 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
                         if (!musicAudioRef.current) musicAudioRef.current = new Audio();
                         track.attach(musicAudioRef.current);
                         musicAudioRef.current.volume = localVolumeRef.current;
-                        musicAudioRef.current.play().catch(e => console.warn('[MusicRoom] Autoplay blocked:', e));
+                        if (userGestureUnlockedRef.current) {
+                            musicAudioRef.current.play().catch(e => console.warn('[MusicRoom] Autoplay blocked:', e));
+                        }
                         setMusicStatus('🎵 streaming');
                     }
                 };
@@ -263,6 +267,7 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
 
     useEffect(() => {
         const unlockMusicAudio = () => {
+            userGestureUnlockedRef.current = true;
             const audio = musicAudioRef.current;
             if (!audio || !audio.srcObject) return;
             audio.volume = localVolumeRef.current;

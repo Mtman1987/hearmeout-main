@@ -11,7 +11,7 @@ import { getYoutubeInfo } from '@/app/actions';
 import { useToast } from '@/hooks/use-toast';
 
 type AddMusicPanelProps = {
-    onAddItems: (items: PlaylistItem[]) => void;
+    onAddItems: (items: PlaylistItem[]) => Promise<void> | void;
     onClose: () => void;
     canAddMusic: boolean;
 };
@@ -30,13 +30,21 @@ export default function AddMusicPanel({ onAddItems, onClose, canAddMusic }: AddM
         setIsFetching(false);
 
         if (newItems && newItems.length > 0) {
-            onAddItems(newItems);
-            setUrlValue("");
-            setSearchValue("");
-            toast({
-                title: "Music Added!",
-                description: newItems.length > 1 ? `${newItems.length} songs have been added to the queue.` : `"${newItems[0].title}" has been added to the queue.`,
-            })
+            try {
+                await onAddItems(newItems);
+                setUrlValue("");
+                setSearchValue("");
+                toast({
+                    title: "Music Added!",
+                    description: newItems.length > 1 ? `${newItems.length} songs have been added to the queue.` : `"${newItems[0].title}" has been added to the queue.`,
+                });
+            } catch (error) {
+                toast({
+                    variant: 'destructive',
+                    title: 'Queue update failed',
+                    description: error instanceof Error ? error.message : 'Could not write songs to room queue.',
+                });
+            }
         } else {
             toast({
                 variant: 'destructive',

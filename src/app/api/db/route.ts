@@ -111,7 +111,6 @@ export async function GET(request: NextRequest) {
 
 export async function POST(request: NextRequest) {
   const session = await getSession();
-  if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
   await ensureDb();
   const body = await request.json();
@@ -123,7 +122,8 @@ export async function POST(request: NextRequest) {
 
   const access = isAllowedCollection(collection);
   if (access === 'denied') return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
-  if (access === 'admin' && !(await isAdmin(session.uid))) return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+  if (access === 'admin' && (!session || !(await isAdmin(session.uid)))) return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+  if (!session && access !== 'allowed') return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
   const safeData = sanitizeUserWrite(collection, data);
   if (id) {
@@ -140,7 +140,7 @@ export async function POST(request: NextRequest) {
 export async function PATCH(request: NextRequest) {
   const session = await getSession();
   const fromDjWorker = isDjWorkerRequest(request);
-  if (!session && !fromDjWorker) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  const allowUnauthedRoomWrite = !session && !fromDjWorker;
 
   await ensureDb();
   const { collection, id, data } = await request.json();
@@ -150,6 +150,9 @@ export async function PATCH(request: NextRequest) {
 
   if (fromDjWorker && collection !== 'rooms') {
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+  }
+  if (allowUnauthedRoomWrite && collection !== 'rooms') {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
   const access = isAllowedCollection(collection);

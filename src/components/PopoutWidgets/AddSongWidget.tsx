@@ -4,7 +4,7 @@ import React from 'react';
 import { DraggableContainer } from './DraggableContainer';
 import AddMusicPanel from '@/app/rooms/[roomId]/_components/AddMusicPanel';
 import { useDoc } from '@/hooks/use-db';
-import { dbUpdate } from '@/lib/db-helpers';
+import { dbUpdateStrict } from '@/lib/db-helpers';
 import type { PlaylistItem } from '@/types/playlist';
 
 interface AddSongWidgetProps {
@@ -38,7 +38,7 @@ export function AddSongWidget({
 }: AddSongWidgetProps) {
   const { data: room } = useDoc<RoomData>('rooms', roomId, 2000);
 
-  const handleAddItems = React.useCallback((items: PlaylistItem[]) => {
+  const handleAddItems = React.useCallback(async (items: PlaylistItem[]) => {
     const current = room?.playlist || [];
     const newPlaylist = [...current, ...items];
     const updates: Record<string, unknown> = { playlist: newPlaylist };
@@ -46,7 +46,7 @@ export function AddSongWidget({
       updates.currentTrackId = items[0].id;
       updates.isPlaying = true;
     }
-    dbUpdate('rooms', roomId, updates);
+    await dbUpdateStrict('rooms', roomId, updates);
   }, [room, roomId]);
 
   return (
