@@ -39,6 +39,7 @@ export default function OverlayPage() {
   const musicRoomRef = useRef<LKRoom | null>(null);
   const volumeRef = useRef(volume);
   const mutedRef = useRef(isMuted);
+  const overlayIdentityRef = useRef<string>('');
 
   useEffect(() => { volumeRef.current = volume; }, [volume]);
   useEffect(() => { mutedRef.current = isMuted; }, [isMuted]);
@@ -81,7 +82,22 @@ export default function OverlayPage() {
     if (musicRoomRef.current || !roomId) return;
 
     try {
-      const token = await generateMusicRoomToken(roomId, `overlay-${roomId}`, 'Overlay', false);
+      if (!overlayIdentityRef.current) {
+        const tabId = (() => {
+          try {
+            const key = 'hmo_overlay_tab_id';
+            const existing = sessionStorage.getItem(key);
+            if (existing) return existing;
+            const generated = Math.random().toString(36).slice(2, 8);
+            sessionStorage.setItem(key, generated);
+            return generated;
+          } catch {
+            return Math.random().toString(36).slice(2, 8);
+          }
+        })();
+        overlayIdentityRef.current = `overlay-${roomId}-${tabId}`;
+      }
+      const token = await generateMusicRoomToken(roomId, overlayIdentityRef.current, 'Overlay', false);
       const livekitUrl = process.env.NEXT_PUBLIC_LIVEKIT_URL;
       if (!livekitUrl || !token) return;
 
@@ -111,6 +127,15 @@ export default function OverlayPage() {
       lkRoom.on(RoomEvent.TrackSubscribed, (track) => attachTrack(track));
       lkRoom.on(RoomEvent.TrackUnsubscribed, () => {
         if (audioRef.current) audioRef.current.srcObject = null;
+      });
+      lkRoom.on(RoomEvent.Disconnected, (reason) => {
+        console.warn('[Overlay] Music room disconnected:', reason);
+      });
+      lkRoom.on(RoomEvent.Reconnecting, () => {
+        console.warn('[Overlay] Music room reconnecting...');
+      });
+      lkRoom.on(RoomEvent.Reconnected, () => {
+        console.log('[Overlay] Music room reconnected');
       });
     } catch (err) {
       console.error('[Overlay] Music room error:', err);

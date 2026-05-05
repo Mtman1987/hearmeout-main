@@ -110,6 +110,7 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
 
     const musicRoomRef = useRef<LKRoom | null>(null);
     const musicAudioRef = useRef<HTMLAudioElement | null>(null);
+    const musicIdentityRef = useRef<string>('');
     const localVolumeRef = useRef(localVolume);
     const userGestureUnlockedRef = useRef(false);
     useEffect(() => { localVolumeRef.current = localVolume; }, [localVolume]);
@@ -200,7 +201,27 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
         const connectMusicRoom = async () => {
             try {
                 console.log('[MusicRoom] Connecting as listener...');
-                const token = await generateMusicRoomToken(roomId, user.uid, user.displayName || 'Listener', false);
+                if (!musicIdentityRef.current) {
+                    const tabId = (() => {
+                        try {
+                            const key = 'hmo_music_tab_id';
+                            const existing = sessionStorage.getItem(key);
+                            if (existing) return existing;
+                            const generated = Math.random().toString(36).slice(2, 8);
+                            sessionStorage.setItem(key, generated);
+                            return generated;
+                        } catch {
+                            return Math.random().toString(36).slice(2, 8);
+                        }
+                    })();
+                    musicIdentityRef.current = `${user.uid}-${tabId}`;
+                }
+                const token = await generateMusicRoomToken(
+                    roomId,
+                    musicIdentityRef.current,
+                    user.displayName || 'Listener',
+                    false,
+                );
                 const livekitUrl = process.env.NEXT_PUBLIC_LIVEKIT_URL;
                 if (!livekitUrl || cancelled) return;
 
@@ -242,6 +263,15 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
                 });
                 lkRoom.on(RoomEvent.ParticipantConnected, (p) => {
                     console.log('[MusicRoom] Participant joined:', p.identity);
+                });
+                lkRoom.on(RoomEvent.Disconnected, (reason) => {
+                    console.warn('[MusicRoom] Disconnected:', reason);
+                });
+                lkRoom.on(RoomEvent.Reconnecting, () => {
+                    console.warn('[MusicRoom] Reconnecting...');
+                });
+                lkRoom.on(RoomEvent.Reconnected, () => {
+                    console.log('[MusicRoom] Reconnected');
                 });
             } catch (err) {
                 console.error('[MusicRoom] Connection error:', err);
