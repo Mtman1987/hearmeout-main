@@ -3,6 +3,7 @@
 import { PlaylistItem } from "@/types/playlist";
 import { db, ensureDb } from '@/lib/db';
 import YouTube from 'youtube-sr';
+import { getAi } from '@/ai/genkit';
 
 function simpleHash(str: string): number {
   let hash = 0;
@@ -16,6 +17,72 @@ function simpleHash(str: string): number {
 function selectArtId(videoId: string): string {
   const artIds = ["album-art-1", "album-art-2", "album-art-3"];
   return artIds[simpleHash(videoId || '') % artIds.length];
+}
+
+type AutoRadioProfileTrack = {
+  videoId: string;
+  title: string;
+  artist: string;
+  playedAt: number;
+};
+
+type AutoRadioProfiles = Record<string, { recent: AutoRadioProfileTrack[] }>;
+type AutoRadioFailures = Record<string, { count: number; lastFailedAt: number; reason?: string }>;
+
+const AUTO_RADIO_PROFILE_LIMIT = 12;
+const AUTO_RADIO_RECENT_NO_REPEAT = 20;
+const AUTO_RADIO_FAIL_BLOCK_COUNT = 2;
+const AUTO_RADIO_FAIL_BLOCK_MS = 1000 * 60 * 60 * 24 * 14; // 14 days
+
+function updateUserAutoRadioProfile(
+  profiles: AutoRadioProfiles | undefined,
+  userId: string,
+  track: { id: string; title: string; artist: string },
+): AutoRadioProfiles {
+  const nextProfiles: AutoRadioProfiles = { ...(profiles || {}) };
+  const currentRecent = nextProfiles[userId]?.recent || [];
+  const nextRecent: AutoRadioProfileTrack[] = [
+    ...currentRecent,
+    { videoId: track.id, title: track.title, artist: track.artist, playedAt: Date.now() },
+  ].slice(-AUTO_RADIO_PROFILE_LIMIT);
+  nextProfiles[userId] = { recent: nextRecent };
+  return nextProfiles;
+}
+
+function isFailureBlocked(videoId: string, failures: AutoRadioFailures | undefined): boolean {
+  const fail = failures?.[videoId];
+  if (!fail) return false;
+  const isFreshBlock = Date.now() - fail.lastFailedAt < AUTO_RADIO_FAIL_BLOCK_MS;
+  return fail.count >= AUTO_RADIO_FAIL_BLOCK_COUNT && isFreshBlock;
+}
+
+async function suggestQueriesFromAI(seedTracks: AutoRadioProfileTrack[], bannedTitles: string[]): Promise<string[]> {
+  if (!seedTracks.length) return [];
+  try {
+    const ai = getAi();
+    const profile = seedTracks.slice(-30).map((t) => `${t.artist} - ${t.title}`).join('\n');
+    const banned = bannedTitles.slice(-30).join('\n');
+    const prompt = `You are selecting music recommendations for auto radio.
+Return strict JSON only: {"queries": ["artist - title", ...]} with exactly 8 items.
+Rules:
+- Similar vibe to the profile
+- Avoid any exact title in the banned list
+- Favor playable/popular YouTube tracks
+- Include artist in each query
+
+Profile tracks:
+${profile}
+
+Banned titles:
+${banned}`;
+    const res = await ai.generate({ prompt, config: { temperature: 0.7 } });
+    const text = String(res?.text || '').trim();
+    const parsed = JSON.parse(text);
+    const queries = Array.isArray(parsed?.queries) ? parsed.queries : [];
+    return queries.map((q: unknown) => String(q).trim()).filter(Boolean).slice(0, 8);
+  } catch {
+    return [];
+  }
 }
 
 export async function addSongToPlaylist(
@@ -93,6 +160,11 @@ export async function addSongToPlaylist(
     const playlist = room.playlist || [];
     const newPlaylist = [...playlist, newTrack];
     const updates: any = { playlist: newPlaylist };
+    updates.autoRadioProfiles = updateUserAutoRadioProfile(room.autoRadioProfiles, requester || 'unknown', {
+      id: videoId,
+      title,
+      artist,
+    });
 
     if (!room.isPlaying || !room.currentTrackId) {
       updates.currentTrackId = videoId;
@@ -149,33 +221,65 @@ export async function autoRadioNext(roomId: string): Promise<{ success: boolean;
 
   const playHistory: string[] = room.playHistory || [];
   const playlist: PlaylistItem[] = room.playlist || [];
+  const autoRadioProfiles: AutoRadioProfiles = room.autoRadioProfiles || {};
+  const autoRadioFailures: AutoRadioFailures = room.autoRadioFailures || {};
 
-  const recentTracks = [...playlist].reverse().slice(0, 5);
+  const seedFromProfiles: AutoRadioProfileTrack[] = Object.values(autoRadioProfiles)
+    .flatMap((p) => p.recent || [])
+    .sort((a, b) => a.playedAt - b.playedAt)
+    .slice(-40);
+
+  const fallbackSeedTracks: AutoRadioProfileTrack[] = [...playlist]
+    .slice(-10)
+    .map((t) => ({
+      videoId: t.id,
+      title: t.title || 'Unknown Title',
+      artist: t.artist || 'Unknown Artist',
+      playedAt: Date.now(),
+    }));
+  const seedTracks = seedFromProfiles.length ? seedFromProfiles : fallbackSeedTracks;
+
   const historyIds = new Set<string>([...playHistory, ...playlist.map((t) => t.id)]);
+  const recentPlayedIds = new Set(playHistory.slice(-AUTO_RADIO_RECENT_NO_REPEAT));
+  const bannedTitles = [...playlist.map((t) => t.title), ...seedTracks.map((t) => t.title)];
 
-  let seedQuery = 'music';
-  if (recentTracks.length > 0) {
-    const seed = recentTracks[Math.floor(Math.random() * recentTracks.length)];
-    seedQuery = seed.artist && seed.artist !== 'Unknown Artist' && seed.artist !== 'Unknown'
-      ? `${seed.artist} music`
-      : seed.title;
+  const fallbackQueries: string[] = [];
+  const recentArtists = seedTracks.map((t) => t.artist).filter((a) => a && a !== 'Unknown Artist' && a !== 'Unknown');
+  if (recentArtists.length) {
+    fallbackQueries.push(...recentArtists.slice(-6).map((a) => `${a} top songs`));
   }
+  fallbackQueries.push('indie pop mix', 'alt rock hits', 'chill electronic tracks');
+
+  const aiQueries = await suggestQueriesFromAI(seedTracks, bannedTitles);
+  const allQueries = [...aiQueries, ...fallbackQueries];
 
   try {
-    const results = await YouTube.search(seedQuery, { limit: 10, type: 'video' });
-    const candidates = results.filter((v) => v.id && !historyIds.has(v.id));
-    if (!candidates.length) return { success: false, message: 'No new songs found for auto-radio.' };
+    let picked: any | null = null;
+    for (const query of allQueries) {
+      const results = await YouTube.search(query, { limit: 5, type: 'video' });
+      const candidates = results.filter((v) => {
+        if (!v?.id) return false;
+        if (historyIds.has(v.id)) return false;
+        if (recentPlayedIds.has(v.id)) return false;
+        if (isFailureBlocked(v.id, autoRadioFailures)) return false;
+        return true;
+      });
+      if (candidates.length) {
+        picked = candidates[0];
+        break;
+      }
+    }
+    if (!picked?.id) return { success: false, message: 'No new songs found for auto-radio.' };
 
-    const video = candidates[Math.floor(Math.random() * Math.min(candidates.length, 5))];
-    const videoId = video.id!;
+    const videoId = picked.id!;
     const newTrack: PlaylistItem = {
       id: videoId,
-      title: video.title || 'Untitled',
-      artist: video.channel?.name || 'Unknown Artist',
-      url: video.url,
-      thumbnail: video.thumbnail?.url,
+      title: picked.title || 'Untitled',
+      artist: picked.channel?.name || 'Unknown Artist',
+      url: picked.url,
+      thumbnail: picked.thumbnail?.url,
       artId: selectArtId(videoId),
-      duration: video.duration || 180000,
+      duration: picked.duration || 180000,
       addedBy: 'Auto-Radio',
       addedAt: new Date(),
       plays: 0,
@@ -192,6 +296,11 @@ export async function autoRadioNext(roomId: string): Promise<{ success: boolean;
       currentTrackId: videoId,
       isPlaying: true,
       playHistory: newHistory,
+      autoRadioProfiles: updateUserAutoRadioProfile(autoRadioProfiles, 'auto_radio', {
+        id: newTrack.id,
+        title: newTrack.title,
+        artist: newTrack.artist || 'Unknown Artist',
+      }),
     });
 
     return { success: true, message: `Auto-radio queued: "${newTrack.title}"` };
@@ -212,4 +321,19 @@ export async function getRoomState(roomId: string) {
     playlistLength: data.playlist?.length || 0,
     djDisplayName: data.djDisplayName || 'No DJ',
   };
+}
+
+export async function markTrackExtractFailure(roomId: string, videoId: string, reason?: string): Promise<void> {
+  if (!roomId || !videoId) return;
+  await ensureDb();
+  const room = db.get('rooms', roomId);
+  if (!room) return;
+  const failures: AutoRadioFailures = room.autoRadioFailures || {};
+  const existing = failures[videoId] || { count: 0, lastFailedAt: 0 };
+  failures[videoId] = {
+    count: existing.count + 1,
+    lastFailedAt: Date.now(),
+    reason: reason || existing.reason,
+  };
+  db.update('rooms', roomId, { autoRadioFailures: failures });
 }

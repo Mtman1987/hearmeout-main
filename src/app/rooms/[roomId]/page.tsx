@@ -310,11 +310,13 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
         if (voiceToken) return;
         let isCancelled = false;
         const setup = async () => {
-            dbSet(`rooms/${roomId}/users`, user.uid, {
+            const userPresence = {
                 uid: user.uid,
                 displayName: user.displayName,
                 photoURL: user.photoURL || `https://picsum.photos/seed/${user.uid}/100/100`,
-            }, true);
+                lastSeen: Date.now(),
+            };
+            dbSet(`rooms/${roomId}/users`, user.uid, userPresence, true);
             try {
                 const token = await generateLiveKitToken(roomId, user.uid, user.displayName!, JSON.stringify({ photoURL: user.photoURL || `https://picsum.photos/seed/${user.uid}/100/100` }));
                 if (!isCancelled) setVoiceToken(token);
@@ -323,7 +325,28 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
             }
         };
         setup();
-        return () => { isCancelled = true; };
+        const heartbeat = setInterval(() => {
+            dbSet(`rooms/${roomId}/users`, user.uid, { lastSeen: Date.now() }, true);
+        }, 15000);
+
+        const clearPresence = () => {
+            fetch('/api/db', {
+                method: 'DELETE',
+                keepalive: true,
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ collection: `rooms/${roomId}/users`, id: user.uid }),
+            }).catch(() => {});
+        };
+
+        const onPageHide = () => clearPresence();
+        window.addEventListener('pagehide', onPageHide);
+
+        return () => {
+            isCancelled = true;
+            clearInterval(heartbeat);
+            window.removeEventListener('pagehide', onPageHide);
+            clearPresence();
+        };
     }, [user, isUserLoading, roomId, toast]);
 
     const handleToggleAutoRadio = useCallback(() => {

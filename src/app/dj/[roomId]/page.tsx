@@ -285,7 +285,7 @@ export default function DJPage() {
     setStatus(`Preparing audio for ${videoId}...`);
     patchRoomState({ djStatus: 'Preparing audio...' });
 
-    const infoRes = await fetch(`/api/youtube-audio?videoId=${encodeURIComponent(videoId)}`, { cache: 'no-store' });
+    const infoRes = await fetch(`/api/youtube-audio?videoId=${encodeURIComponent(videoId)}&roomId=${encodeURIComponent(roomId)}`, { cache: 'no-store' });
     if (!infoRes.ok) {
       const body = await infoRes.json().catch(() => null);
       const message = body?.error || `Audio extraction failed (${infoRes.status})`;

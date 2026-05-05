@@ -23,13 +23,17 @@ interface Room {
 }
 
 function RoomOnlineUsers({ roomId, roomName }: { roomId: string; roomName: string }) {
-  const { data: users } = useCollection<{ displayName?: string; photoURL?: string }>(`rooms/${roomId}/users`);
-  if (!users || users.length === 0) return null;
+  const { data: users } = useCollection<{ displayName?: string; photoURL?: string; lastSeen?: number }>(`rooms/${roomId}/users`);
+  const activeUsers = (users || []).filter((u: any) => {
+    const lastSeen = Number(u?.lastSeen || 0);
+    return lastSeen > 0 && Date.now() - lastSeen < 45000;
+  });
+  if (!activeUsers.length) return null;
   return (
     <div className="mb-2">
       <p className="text-[10px] text-muted-foreground font-medium mb-1 truncate">{roomName}</p>
       <div className="flex flex-wrap gap-1">
-        {users.slice(0, 8).map((u: any) => (
+        {activeUsers.slice(0, 8).map((u: any) => (
           <Tooltip key={u.id}>
             <TooltipTrigger asChild>
               <Avatar className="h-6 w-6 border-2 border-green-500/60">
@@ -40,7 +44,7 @@ function RoomOnlineUsers({ roomId, roomName }: { roomId: string; roomName: strin
             <TooltipContent side="right"><p>{u.displayName || 'User'}</p></TooltipContent>
           </Tooltip>
         ))}
-        {users.length > 8 && <span className="text-[10px] text-muted-foreground self-center">+{users.length - 8}</span>}
+        {activeUsers.length > 8 && <span className="text-[10px] text-muted-foreground self-center">+{activeUsers.length - 8}</span>}
       </div>
     </div>
   );
