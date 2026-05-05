@@ -10,6 +10,7 @@ export async function GET(req: NextRequest) {
   const videoId = new URL(req.url).searchParams.get('videoId');
   if (!videoId) return new NextResponse('videoId required', { status: 400 });
   if (!isValidVideoId(videoId)) return new NextResponse('Invalid video ID', { status: 400 });
+  const requestId = Math.random().toString(36).slice(2, 8);
 
   if (!DJ_WORKER_URL) return new NextResponse('Worker not configured', { status: 503 });
 
@@ -24,6 +25,12 @@ export async function GET(req: NextRequest) {
       `${DJ_WORKER_URL}/stream?videoId=${encodeURIComponent(videoId)}`,
       { headers }
     );
+    console.log('[AudioStream] worker response', {
+      requestId,
+      videoId,
+      status: workerRes.status,
+      ranged: !!rangeHeader,
+    });
 
     if (!workerRes.ok && workerRes.status !== 206) {
       return new NextResponse('Stream failed', { status: workerRes.status });
@@ -39,7 +46,7 @@ export async function GET(req: NextRequest) {
 
     return new NextResponse(workerRes.body, { status: workerRes.status, headers: h });
   } catch (err: any) {
-    console.error(`[stream] Worker proxy error for ${videoId}:`, err.message);
+    console.error(`[AudioStream] Worker proxy error`, { requestId, videoId, message: err.message });
     return new NextResponse('Stream error', { status: 500 });
   }
 }

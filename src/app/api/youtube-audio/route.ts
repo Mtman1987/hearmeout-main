@@ -9,11 +9,13 @@ export async function GET(req: NextRequest) {
   const url = new URL(req.url);
   const videoId = url.searchParams.get('videoId');
   const roomId = url.searchParams.get('roomId');
+  console.log('[AudioAPI] extract request', { roomId, videoId });
   if (!videoId) return NextResponse.json({ error: 'videoId required' }, { status: 400 });
   if (!isValidVideoId(videoId)) return NextResponse.json({ error: 'Invalid video ID' }, { status: 400 });
 
   const extracted = await extractAudioUrlWithReason(videoId);
   if (!extracted.audio) {
+    console.warn('[AudioAPI] extract failed', { roomId, videoId, reason: extracted.reason || 'unknown' });
     if (roomId) {
       await markTrackExtractFailure(roomId, videoId, extracted.reason || 'Extraction failed');
     }

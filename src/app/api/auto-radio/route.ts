@@ -12,9 +12,12 @@ export async function POST(req: NextRequest) {
   try {
     const { roomId } = await req.json();
     if (!roomId) return NextResponse.json({ error: 'roomId required' }, { status: 400 });
+    console.log('[AutoRadioAPI] request', { roomId, actor: session?.uid || 'dj-worker' });
     const result = await autoRadioNext(roomId);
+    console.log('[AutoRadioAPI] result', { roomId, success: result.success, message: result.message });
     return NextResponse.json(result);
   } catch {
+    console.error('[AutoRadioAPI] Internal error');
     return NextResponse.json({ success: false, message: 'Internal error' }, { status: 500 });
   }
 }

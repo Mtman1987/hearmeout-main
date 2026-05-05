@@ -7,6 +7,7 @@ const DJ_WORKER_SECRET = getDjWorkerSecret();
 
 export async function GET(req: NextRequest, { params }: { params: Promise<{ videoId: string }> }) {
   const { videoId } = await params;
+  const requestId = Math.random().toString(36).slice(2, 8);
   if (!isValidVideoId(videoId)) {
     return NextResponse.json({ error: 'Invalid video ID' }, { status: 400 });
   }
@@ -17,6 +18,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ vide
     const workerRes = await fetch(`${DJ_WORKER_URL}/music/${videoId}`, {
       headers: { Authorization: `Bearer ${DJ_WORKER_SECRET}` },
     });
+    console.log('[MusicProxy] worker response', { requestId, videoId, status: workerRes.status });
 
     if (!workerRes.ok) {
       return NextResponse.json({ error: 'Not found' }, { status: 404 });
@@ -32,7 +34,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ vide
 
     return new NextResponse(workerRes.body, { headers: h });
   } catch (err: any) {
-    console.error(`[Music] Worker proxy error for ${videoId}:`, err.message);
+    console.error('[MusicProxy] worker proxy error', { requestId, videoId, message: err.message });
     return NextResponse.json({ error: 'Stream error' }, { status: 500 });
   }
 }

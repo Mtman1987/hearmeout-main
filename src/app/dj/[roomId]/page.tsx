@@ -291,6 +291,42 @@ export default function DJPage() {
       const message = body?.error || `Audio extraction failed (${infoRes.status})`;
       setStatus(`ERROR: ${message}`);
       patchRoomState({ djStatus: message, isPlaying: false });
+      console.error('[DJ] loadAndPlay failed', { roomId, videoId, status: infoRes.status, message });
+      // Avoid getting stuck on an unplayable track.
+      setTimeout(() => {
+        const r = roomDataRef.current;
+        if (!r?.playlist?.length) {
+          if (r?.autoRadio) {
+            fetch('/api/auto-radio', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ roomId }),
+            }).catch(() => {});
+          }
+          return;
+        }
+        const i = r.playlist.findIndex((t) => t.id === r.currentTrackId);
+        const isLastTrack = i === r.playlist.length - 1;
+        if (isLastTrack && r.autoRadio) {
+          fetch('/api/auto-radio', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ roomId }),
+          }).catch(() => {});
+          return;
+        }
+        const next = r.playlist[(i + 1) % r.playlist.length];
+        if (!next || next.id === r.currentTrackId) return;
+        const updates: Record<string, unknown> = { currentTrackId: next.id, isPlaying: true };
+        if (r.currentTrackId) {
+          updates.playHistory = [...(r.playHistory || []), r.currentTrackId].slice(-50);
+        }
+        fetch('/api/db', {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ collection: 'rooms', id: roomId, data: updates }),
+        }).catch(() => {});
+      }, 250);
       return;
     }
 
@@ -310,7 +346,7 @@ export default function DJPage() {
       setStatus(`ERROR: ${message}`);
       patchRoomState({ djStatus: message });
     }
-  }, [patchRoomState]);
+  }, [patchRoomState, roomId]);
 
   // Fire a single /api/auto-radio request, deduped by autoRadioRequestedRef.
   // The ref stays true until either a new currentTrackId is observed (cleared
