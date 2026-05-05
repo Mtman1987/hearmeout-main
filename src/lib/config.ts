@@ -23,11 +23,11 @@ function optional(name: string, fallback = ''): string {
 }
 
 export const config = {
-  baseUrl: required('NEXT_PUBLIC_BASE_URL', 'https://hearmeout-main.fly.dev'),
+  baseUrl: optional('NEXT_PUBLIC_BASE_URL', 'https://hearmeout-main.fly.dev'),
   dshUrl: optional('DSH_URL', optional('NEXT_PUBLIC_DSH_URL', 'https://discord-stream-hub-new.fly.dev')),
   hardcodedGuildId: optional('HARDCODED_GUILD_ID', optional('NEXT_PUBLIC_HARDCODED_GUILD_ID', '')),
-  discordClientId: required('NEXT_PUBLIC_DISCORD_CLIENT_ID', '1279582181768957963'),
-  twitchClientId: required('NEXT_PUBLIC_TWITCH_CLIENT_ID', 'rxmohc28tthq0nudfd6iwx0sgy88dp'),
+  discordClientId: optional('NEXT_PUBLIC_DISCORD_CLIENT_ID', '1279582181768957963'),
+  twitchClientId: optional('NEXT_PUBLIC_TWITCH_CLIENT_ID', 'rxmohc28tthq0nudfd6iwx0sgy88dp'),
 
   // Secrets — never have a public fallback. Empty string in dev = feature disabled.
   jwtSecret: optional('JWT_SECRET') || optional('DISCORD_CLIENT_SECRET') || optional('NEXTAUTH_SECRET') || 'hearmeout-internal-session-key',
