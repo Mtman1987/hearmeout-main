@@ -15,6 +15,7 @@ import { useSession } from '@/hooks/use-session';
 import { useCollection } from '@/hooks/use-db';
 import { Skeleton } from '@/components/ui/skeleton';
 import { CreateRoomDialog } from '@/app/rooms/_components/CreateRoomDialog';
+import { useEffect } from 'react';
 
 interface Room {
     id: string;
@@ -57,6 +58,15 @@ export default function LeftSidebar({ roomId }: { roomId?: string }) {
   const { data: publicRooms, isLoading: roomsLoading } = useCollection<Room>('rooms', {
     filters: [{ field: 'isPrivate', op: '==', value: false }],
   });
+
+  useEffect(() => {
+    const prune = () => {
+      fetch('/api/presence/prune', { method: 'POST' }).catch(() => {});
+    };
+    prune();
+    const iv = setInterval(prune, 60_000);
+    return () => clearInterval(iv);
+  }, []);
 
   return (
     <Sidebar>

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { extractAudioUrl } from '@/lib/yt-extract';
+import { extractAudioUrlWithReason } from '@/lib/yt-extract';
 import { isValidVideoId } from '@/lib/validate-video-id';
 import { markTrackExtractFailure } from '@/lib/bot-actions';
 
@@ -12,12 +12,12 @@ export async function GET(req: NextRequest) {
   if (!videoId) return NextResponse.json({ error: 'videoId required' }, { status: 400 });
   if (!isValidVideoId(videoId)) return NextResponse.json({ error: 'Invalid video ID' }, { status: 400 });
 
-  const extracted = await extractAudioUrl(videoId);
-  if (!extracted) {
+  const extracted = await extractAudioUrlWithReason(videoId);
+  if (!extracted.audio) {
     if (roomId) {
-      await markTrackExtractFailure(roomId, videoId, 'Extraction failed');
+      await markTrackExtractFailure(roomId, videoId, extracted.reason || 'Extraction failed');
     }
-    return NextResponse.json({ videoId, cached: false, audioUrl: null, error: 'Extraction failed' }, { status: 404 });
+    return NextResponse.json({ videoId, cached: false, audioUrl: null, error: extracted.reason || 'Extraction failed' }, { status: 404 });
   }
 
   return NextResponse.json({

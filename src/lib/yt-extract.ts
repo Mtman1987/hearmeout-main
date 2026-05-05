@@ -12,15 +12,30 @@ export interface ExtractedAudio {
   contentLength: number;
 }
 
-export async function extractAudioUrl(videoId: string): Promise<ExtractedAudio | null> {
+export interface ExtractAudioResult {
+  audio: ExtractedAudio | null;
+  reason?: string;
+}
+
+function inferReason(raw: string): string {
+  const s = raw.toLowerCase();
+  if (s.includes('private')) return 'private';
+  if (s.includes('region')) return 'region';
+  if (s.includes('age')) return 'age-restricted';
+  if (s.includes('copyright')) return 'copyright';
+  if (s.includes('unavailable')) return 'unavailable';
+  return 'extraction failed';
+}
+
+export async function extractAudioUrlWithReason(videoId: string): Promise<ExtractAudioResult> {
   if (!isValidVideoId(videoId)) {
     console.error(`[YTExtract] Rejecting invalid videoId: ${JSON.stringify(videoId).slice(0, 64)}`);
-    return null;
+    return { audio: null, reason: 'invalid video id' };
   }
 
   if (!DJ_WORKER_URL) {
     console.error('[YTExtract] DJ_WORKER_URL not set');
-    return null;
+    return { audio: null, reason: 'worker unavailable' };
   }
 
   try {
@@ -33,20 +48,24 @@ export async function extractAudioUrl(videoId: string): Promise<ExtractedAudio |
     if (!res.ok) {
       const text = await res.text().catch(() => '');
       console.log(`[YTExtract] Worker returned ${res.status}: ${text.slice(0, 100)}`);
-      return null;
+      return { audio: null, reason: inferReason(text) };
     }
 
     const data = await res.json();
     if (data.cached) {
-      // mp3 is cached on worker, return a worker stream URL
-      return { url: `${DJ_WORKER_URL}/stream?videoId=${videoId}`, mimeType: 'audio/mpeg', bitrate: 128000, duration: 0, contentLength: 0 };
+      return { audio: { url: `${DJ_WORKER_URL}/stream?videoId=${videoId}`, mimeType: 'audio/mpeg', bitrate: 128000, duration: 0, contentLength: 0 } };
     }
     if (data.url) {
-      return { url: data.url, mimeType: 'audio/mp4', bitrate: 128000, duration: 0, contentLength: 0 };
+      return { audio: { url: data.url, mimeType: 'audio/mp4', bitrate: 128000, duration: 0, contentLength: 0 } };
     }
-    return null;
+    return { audio: null, reason: 'no url returned' };
   } catch (err: any) {
     console.error(`[YTExtract] Worker extract failed: ${err.message}`);
-    return null;
+    return { audio: null, reason: 'worker request failed' };
   }
+}
+
+export async function extractAudioUrl(videoId: string): Promise<ExtractedAudio | null> {
+  const result = await extractAudioUrlWithReason(videoId);
+  return result.audio;
 }

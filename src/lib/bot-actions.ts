@@ -28,11 +28,22 @@ type AutoRadioProfileTrack = {
 
 type AutoRadioProfiles = Record<string, { recent: AutoRadioProfileTrack[] }>;
 type AutoRadioFailures = Record<string, { count: number; lastFailedAt: number; reason?: string }>;
+type AutoRadioQueryStats = Record<string, { success: number; failure: number; lastTriedAt: number }>;
 
 const AUTO_RADIO_PROFILE_LIMIT = 12;
 const AUTO_RADIO_RECENT_NO_REPEAT = 20;
 const AUTO_RADIO_FAIL_BLOCK_COUNT = 2;
 const AUTO_RADIO_FAIL_BLOCK_MS = 1000 * 60 * 60 * 24 * 14; // 14 days
+const AUTO_RADIO_HARD_BLOCK_MS = 1000 * 60 * 60 * 24 * 30; // 30 days
+const AUTO_RADIO_HARD_BLOCK_REASONS = ['private', 'region', 'age-restricted', 'copyright'];
+const COLD_START_QUERIES = [
+  'indie pop essentials',
+  'alt rock essentials',
+  'lofi chill beats',
+  'synthwave essentials',
+  'dance pop hits',
+  'hip hop chill playlist',
+];
 
 function updateUserAutoRadioProfile(
   profiles: AutoRadioProfiles | undefined,
@@ -52,8 +63,64 @@ function updateUserAutoRadioProfile(
 function isFailureBlocked(videoId: string, failures: AutoRadioFailures | undefined): boolean {
   const fail = failures?.[videoId];
   if (!fail) return false;
+  const reason = (fail.reason || '').toLowerCase();
+  const hardReason = AUTO_RADIO_HARD_BLOCK_REASONS.some((r) => reason.includes(r));
+  if (hardReason) {
+    return Date.now() - fail.lastFailedAt < AUTO_RADIO_HARD_BLOCK_MS;
+  }
   const isFreshBlock = Date.now() - fail.lastFailedAt < AUTO_RADIO_FAIL_BLOCK_MS;
   return fail.count >= AUTO_RADIO_FAIL_BLOCK_COUNT && isFreshBlock;
+}
+
+function normalizeQuery(q: string): string {
+  return q.trim().toLowerCase().replace(/\s+/g, ' ');
+}
+
+function queryScore(query: string, stats: AutoRadioQueryStats): number {
+  const key = normalizeQuery(query);
+  const row = stats[key];
+  if (!row) return 0;
+  const total = row.success + row.failure;
+  const ratio = total > 0 ? row.success / total : 0;
+  return ratio * 10 - row.failure * 0.5;
+}
+
+function markQueryStat(stats: AutoRadioQueryStats, query: string, ok: boolean): AutoRadioQueryStats {
+  const key = normalizeQuery(query);
+  const prev = stats[key] || { success: 0, failure: 0, lastTriedAt: 0 };
+  return {
+    ...stats,
+    [key]: {
+      success: prev.success + (ok ? 1 : 0),
+      failure: prev.failure + (ok ? 0 : 1),
+      lastTriedAt: Date.now(),
+    },
+  };
+}
+
+function buildWeightedSeedTracks(profiles: AutoRadioProfiles): AutoRadioProfileTrack[] {
+  const all = Object.entries(profiles).flatMap(([uid, p]) =>
+    (p.recent || []).map((t, idx) => ({ ...t, uid, idx })),
+  );
+  all.sort((a, b) => a.playedAt - b.playedAt);
+  const now = Date.now();
+  const perUserCount: Record<string, number> = {};
+  const weighted: AutoRadioProfileTrack[] = [];
+
+  for (const t of all.slice(-80)) {
+    perUserCount[t.uid] = (perUserCount[t.uid] || 0) + 1;
+    const ageMs = Math.max(1, now - t.playedAt);
+    const recencyWeight = Math.max(1, Math.round(6 - Math.min(5, ageMs / (1000 * 60 * 30))));
+    const userFreqWeight = Math.min(3, perUserCount[t.uid]);
+    const copies = Math.max(1, recencyWeight + userFreqWeight - 1);
+    for (let i = 0; i < copies; i++) weighted.push({
+      videoId: t.videoId,
+      title: t.title,
+      artist: t.artist,
+      playedAt: t.playedAt,
+    });
+  }
+  return weighted.slice(-120);
 }
 
 async function suggestQueriesFromAI(seedTracks: AutoRadioProfileTrack[], bannedTitles: string[]): Promise<string[]> {
@@ -223,11 +290,9 @@ export async function autoRadioNext(roomId: string): Promise<{ success: boolean;
   const playlist: PlaylistItem[] = room.playlist || [];
   const autoRadioProfiles: AutoRadioProfiles = room.autoRadioProfiles || {};
   const autoRadioFailures: AutoRadioFailures = room.autoRadioFailures || {};
+  const autoRadioQueryStats: AutoRadioQueryStats = room.autoRadioQueryStats || {};
 
-  const seedFromProfiles: AutoRadioProfileTrack[] = Object.values(autoRadioProfiles)
-    .flatMap((p) => p.recent || [])
-    .sort((a, b) => a.playedAt - b.playedAt)
-    .slice(-40);
+  const seedFromProfiles: AutoRadioProfileTrack[] = buildWeightedSeedTracks(autoRadioProfiles).slice(-60);
 
   const fallbackSeedTracks: AutoRadioProfileTrack[] = [...playlist]
     .slice(-10)
@@ -248,13 +313,19 @@ export async function autoRadioNext(roomId: string): Promise<{ success: boolean;
   if (recentArtists.length) {
     fallbackQueries.push(...recentArtists.slice(-6).map((a) => `${a} top songs`));
   }
-  fallbackQueries.push('indie pop mix', 'alt rock hits', 'chill electronic tracks');
+  fallbackQueries.push(...COLD_START_QUERIES);
 
   const aiQueries = await suggestQueriesFromAI(seedTracks, bannedTitles);
-  const allQueries = [...aiQueries, ...fallbackQueries];
+  const allQueries = [...aiQueries, ...fallbackQueries]
+    .map((q) => q.trim())
+    .filter(Boolean)
+    .filter((q, i, arr) => arr.indexOf(q) === i)
+    .sort((a, b) => queryScore(b, autoRadioQueryStats) - queryScore(a, autoRadioQueryStats));
 
   try {
     let picked: any | null = null;
+    let winningQuery = '';
+    let nextStats = { ...autoRadioQueryStats };
     for (const query of allQueries) {
       const results = await YouTube.search(query, { limit: 5, type: 'video' });
       const candidates = results.filter((v) => {
@@ -266,10 +337,16 @@ export async function autoRadioNext(roomId: string): Promise<{ success: boolean;
       });
       if (candidates.length) {
         picked = candidates[0];
+        winningQuery = query;
+        nextStats = markQueryStat(nextStats, query, true);
         break;
       }
+      nextStats = markQueryStat(nextStats, query, false);
     }
-    if (!picked?.id) return { success: false, message: 'No new songs found for auto-radio.' };
+    if (!picked?.id) {
+      db.update('rooms', roomId, { autoRadioQueryStats: nextStats });
+      return { success: false, message: 'No new songs found for auto-radio.' };
+    }
 
     const videoId = picked.id!;
     const newTrack: PlaylistItem = {
@@ -301,6 +378,8 @@ export async function autoRadioNext(roomId: string): Promise<{ success: boolean;
         title: newTrack.title,
         artist: newTrack.artist || 'Unknown Artist',
       }),
+      autoRadioQueryStats: nextStats,
+      autoRadioLastWinningQuery: winningQuery,
     });
 
     return { success: true, message: `Auto-radio queued: "${newTrack.title}"` };
