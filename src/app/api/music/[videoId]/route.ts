@@ -25,10 +25,11 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ vide
     }
 
     const h: Record<string, string> = {
-      'Content-Type': 'audio/mpeg',
       'Cache-Control': 'public, max-age=604800',
       'Accept-Ranges': 'bytes',
     };
+    const ct = workerRes.headers.get('content-type');
+    if (ct) h['Content-Type'] = ct;
     const cl = workerRes.headers.get('content-length');
     if (cl) h['Content-Length'] = cl;
 

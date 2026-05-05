@@ -50,36 +50,29 @@ const authorizeWorker = (req, res, next) => {
 const inProgress = new Map();
 
 function isCached(videoId) {
-  return existsSync(join(CACHE_DIR, `${videoId}.mp3`));
+  return existsSync(join(CACHE_DIR, `${videoId}.m4a`)) || existsSync(join(CACHE_DIR, `${videoId}.mp3`));
 }
 
 async function doRip(videoId) {
   const url = `https://www.youtube.com/watch?v=${videoId}`;
-  const tempM4a = join(CACHE_DIR, `${videoId}.m4a`);
-  const finalMp3 = join(CACHE_DIR, `${videoId}.mp3`);
+  const finalM4a = join(CACHE_DIR, `${videoId}.m4a`);
 
   try {
     console.log(`[Ripper] Downloading ${videoId}...`);
     await execFileAsync(YT_DLP, [
       ...ytdlpExtraArgs(),
       '-f', 'bestaudio[ext=m4a]/bestaudio/best',
-      '--no-playlist', '-o', tempM4a, url,
+      '--no-playlist', '-o', finalM4a, url,
     ], { timeout: 60000 });
 
-    if (!existsSync(tempM4a)) throw new Error('Download produced no file');
-
-    console.log(`[Ripper] Converting ${videoId} to mp3...`);
-    await execFileAsync(FFMPEG, ['-y', '-i', tempM4a, '-vn', '-ab', '128k', finalMp3], { timeout: 60000 });
-    try { unlinkSync(tempM4a); } catch {}
-
-    if (!existsSync(finalMp3)) throw new Error('Conversion produced no file');
-    const size = statSync(finalMp3).size;
-    console.log(`[Ripper] Cached ${videoId} (${Math.round(size / 1024)}KB)`);
+    if (!existsSync(finalM4a)) throw new Error('Download produced no file');
+    const size = statSync(finalM4a).size;
+    console.log(`[Ripper] Cached ${videoId} as m4a (${Math.round(size / 1024)}KB)`);
     return true;
   } catch (e) {
     console.error(`[Ripper] Failed for ${videoId}:`, e.message);
-    try { unlinkSync(tempM4a); } catch {}
-    try { unlinkSync(finalMp3); } catch {}
+    try { unlinkSync(finalM4a); } catch {}
+    try { unlinkSync(join(CACHE_DIR, `${videoId}.mp3`)); } catch {}
     return false;
   }
 }
@@ -131,7 +124,7 @@ function setCachedExtractedUrl(videoId, url) {
 // ── Audio Routes ───────────────────────────────────────────────────────
 
 /**
- * POST /rip — Download + convert a video to mp3
+ * POST /rip — Download + cache m4a (fast path)
  * Body: { videoId }
  */
 app.post('/rip', authorizeWorker, async (req, res) => {
@@ -147,18 +140,23 @@ app.post('/rip', authorizeWorker, async (req, res) => {
 });
 
 /**
- * GET /music/:videoId — Serve cached mp3
+ * GET /music/:videoId — Serve cached m4a first, mp3 fallback
  */
 app.get('/music/:videoId', authorizeWorker, (req, res) => {
   const { videoId } = req.params;
   if (!isValidVideoId(videoId)) return res.status(400).send('Invalid videoId');
 
-  const filePath = join(CACHE_DIR, `${videoId}.mp3`);
+  let filePath = join(CACHE_DIR, `${videoId}.m4a`);
+  let contentType = 'audio/mp4';
+  if (!existsSync(filePath)) {
+    filePath = join(CACHE_DIR, `${videoId}.mp3`);
+    contentType = 'audio/mpeg';
+  }
   if (!existsSync(filePath)) return res.status(404).send('Not found');
 
   const stat = statSync(filePath);
   res.set({
-    'Content-Type': 'audio/mpeg',
+    'Content-Type': contentType,
     'Content-Length': stat.size,
     'Cache-Control': 'public, max-age=604800',
     'Accept-Ranges': 'bytes',
@@ -173,8 +171,11 @@ app.get('/extract', authorizeWorker, async (req, res) => {
   const { videoId } = req.query;
   if (!isValidVideoId(videoId)) return res.status(400).json({ error: 'Invalid videoId' });
 
-  // Check mp3 cache first
-  if (isCached(videoId)) {
+  // Check local cache first
+  if (existsSync(join(CACHE_DIR, `${videoId}.m4a`))) {
+    return res.json({ videoId, cached: true, source: 'm4a' });
+  }
+  if (existsSync(join(CACHE_DIR, `${videoId}.mp3`))) {
     return res.json({ videoId, cached: true, source: 'mp3' });
   }
 
@@ -193,13 +194,25 @@ app.get('/extract', authorizeWorker, async (req, res) => {
 });
 
 /**
- * GET /stream?videoId=xxx — Stream/proxy audio (serves mp3 if cached, else proxies CDN)
+ * GET /stream?videoId=xxx — Stream/proxy audio (serves local cache first)
  */
 app.get('/stream', authorizeWorker, async (req, res) => {
   const { videoId } = req.query;
   if (!isValidVideoId(videoId)) return res.status(400).send('Invalid videoId');
 
-  // Serve cached mp3
+  // Serve cached m4a first
+  const m4aPath = join(CACHE_DIR, `${videoId}.m4a`);
+  if (existsSync(m4aPath)) {
+    const stat = statSync(m4aPath);
+    res.set({
+      'Content-Type': 'audio/mp4',
+      'Content-Length': stat.size,
+      'Cache-Control': 'public, max-age=86400',
+    });
+    return createReadStream(m4aPath).pipe(res);
+  }
+
+  // Serve cached mp3 fallback
   const mp3Path = join(CACHE_DIR, `${videoId}.mp3`);
   if (existsSync(mp3Path)) {
     const stat = statSync(mp3Path);
@@ -275,7 +288,7 @@ function pipeResponse(cdnRes, res) {
  */
 app.get('/cache-stats', authorizeWorker, (req, res) => {
   try {
-    const files = readdirSync(CACHE_DIR).filter(f => f.endsWith('.mp3'));
+    const files = readdirSync(CACHE_DIR).filter(f => f.endsWith('.mp3') || f.endsWith('.m4a'));
     const totalBytes = files.reduce((sum, f) => sum + statSync(join(CACHE_DIR, f)).size, 0);
     res.json({ files: files.length, totalBytes });
   } catch {
