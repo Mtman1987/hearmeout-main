@@ -10,6 +10,7 @@ export async function enrichUserFromDSH(discordId: string): Promise<Record<strin
   await ensureDb();
   const uid = discordId.startsWith('discord_') ? discordId : `discord_${discordId}`;
   const rawId = uid.replace('discord_', '');
+  if (!SERVER_ID) return null;
 
   try {
     const res = await fetch(`${DSH_URL}/api/db?path=servers/${SERVER_ID}/users/${rawId}`);

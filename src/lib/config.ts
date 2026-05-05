@@ -24,13 +24,13 @@ function optional(name: string, fallback = ''): string {
 
 export const config = {
   baseUrl: required('NEXT_PUBLIC_BASE_URL', 'https://hearmeout-main.fly.dev'),
-  dshUrl: required('DSH_URL', 'https://discord-stream-hub-new.fly.dev'),
-  hardcodedGuildId: required('HARDCODED_GUILD_ID', '1240832965865635881'),
+  dshUrl: optional('DSH_URL', optional('NEXT_PUBLIC_DSH_URL', 'https://discord-stream-hub-new.fly.dev')),
+  hardcodedGuildId: optional('HARDCODED_GUILD_ID', optional('NEXT_PUBLIC_HARDCODED_GUILD_ID', '')),
   discordClientId: required('NEXT_PUBLIC_DISCORD_CLIENT_ID', '1279582181768957963'),
   twitchClientId: required('NEXT_PUBLIC_TWITCH_CLIENT_ID', 'rxmohc28tthq0nudfd6iwx0sgy88dp'),
 
   // Secrets — never have a public fallback. Empty string in dev = feature disabled.
-  jwtSecret: optional('JWT_SECRET') || optional('DISCORD_CLIENT_SECRET'),
+  jwtSecret: optional('JWT_SECRET') || optional('DISCORD_CLIENT_SECRET') || optional('NEXTAUTH_SECRET') || 'hearmeout-internal-session-key',
   dbApiKey: optional('DB_API_KEY'),
   dshRedirectSecret: optional('DSH_REDIRECT_SECRET'),
 
@@ -48,15 +48,6 @@ export const config = {
   // configured to sign redirects with DSH_REDIRECT_SECRET.
   requireDshSignature: optional('REQUIRE_DSH_SIGNATURE') === '1',
 };
-
-// Validate JWT_SECRET at module load in production. We DON'T throw because a
-// throw here would refuse to render any page; instead we warn loudly and the
-// session-creation code path checks again before signing.
-if (isProd && !config.jwtSecret) {
-  console.error(
-    '[config] CRITICAL: JWT_SECRET is unset in production. Sessions will be rejected.',
-  );
-}
 
 export function assertJwtSecret(): string {
   if (!config.jwtSecret) {

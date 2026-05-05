@@ -3,12 +3,18 @@ import { getSession } from '@/lib/auth';
 import { DSH_URL, HARDCODED_GUILD_ID } from '@/lib/constants';
 
 const DB_API_KEY = process.env.DB_API_KEY || '';
-const SERVER_ID = process.env.HARDCODED_GUILD_ID || HARDCODED_GUILD_ID;
-const CHAT_PATH = `servers/${SERVER_ID}/config/adminChat`;
 
-export async function GET() {
+function getChatPath(serverId?: string | null) {
+  const resolved = serverId || process.env.HARDCODED_GUILD_ID || HARDCODED_GUILD_ID;
+  if (!resolved) return null;
+  return `servers/${resolved}/config/adminChat`;
+}
+
+export async function GET(req: NextRequest) {
+  const chatPath = getChatPath(new URL(req.url).searchParams.get('serverId'));
+  if (!chatPath) return NextResponse.json({ messages: [] });
   try {
-    const res = await fetch(`${DSH_URL}/api/db?path=${CHAT_PATH}`);
+    const res = await fetch(`${DSH_URL}/api/db?path=${chatPath}`);
     if (!res.ok) return NextResponse.json({ messages: [] });
     const data = await res.json();
     return NextResponse.json({ messages: data.data?.messages || [] });
@@ -20,13 +26,15 @@ export async function GET() {
 export async function POST(req: NextRequest) {
   const session = await getSession();
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  const chatPath = getChatPath(new URL(req.url).searchParams.get('serverId'));
+  if (!chatPath) return NextResponse.json({ error: 'Missing serverId' }, { status: 400 });
 
   try {
     const { message } = await req.json();
     if (!message?.text) return NextResponse.json({ error: 'Missing message' }, { status: 400 });
 
     // Fetch current messages
-    const getRes = await fetch(`${DSH_URL}/api/db?path=${CHAT_PATH}`);
+    const getRes = await fetch(`${DSH_URL}/api/db?path=${chatPath}`);
     const existing = getRes.ok ? await getRes.json() : { data: { messages: [] } };
     const messages = [...(existing.data?.messages || []), message].slice(-50);
 
@@ -37,7 +45,7 @@ export async function POST(req: NextRequest) {
     const writeRes = await fetch(`${DSH_URL}/api/db`, {
       method: 'POST',
       headers,
-      body: JSON.stringify({ path: CHAT_PATH, data: { messages }, merge: true }),
+      body: JSON.stringify({ path: chatPath, data: { messages }, merge: true }),
     });
 
     if (!writeRes.ok) {

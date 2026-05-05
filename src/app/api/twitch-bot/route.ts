@@ -367,11 +367,31 @@ async function startBotForServer(serverId: string): Promise<boolean> {
 async function initializeAllBots() {
   if (isInitialized) return;
   await ensureDb();
+  const serverIds = new Set<string>();
+  const envServer = process.env.HARDCODED_GUILD_ID || process.env.NEXT_PUBLIC_HARDCODED_GUILD_ID || '';
+  if (envServer) serverIds.add(envServer);
 
-  // For now, start bot for the configured server
-  // Multi-tenant: iterate all servers that have tokens
-  const serverId = process.env.HARDCODED_GUILD_ID || '1240832965865635881';
-  await startBotForServer(serverId);
+  const configDocs = db.list('config');
+  for (const doc of configDocs) {
+    if (doc.id.startsWith('twitch_bot_')) {
+      serverIds.add(doc.id.replace('twitch_bot_', ''));
+    }
+  }
+
+  // Also discover from room user settings
+  const rooms = db.list('rooms');
+  for (const room of rooms) {
+    const users = db.list(`rooms/${room.id}/users`);
+    for (const user of users) {
+      const gid = String(user.data?.discordGuildId || '').trim();
+      if (gid) serverIds.add(gid);
+    }
+  }
+
+  for (const sid of serverIds) {
+    if (!sid) continue;
+    await startBotForServer(sid);
+  }
 
   isInitialized = true;
 }
@@ -414,7 +434,9 @@ export async function GET() {
 export async function POST(req: NextRequest) {
   const { searchParams } = new URL(req.url);
   const action = searchParams.get('action');
-  const serverId = searchParams.get('serverId') || process.env.HARDCODED_GUILD_ID || '1240832965865635881';
+  const defaultServerId = [...botInstances.keys()][0] || process.env.HARDCODED_GUILD_ID || process.env.NEXT_PUBLIC_HARDCODED_GUILD_ID || '';
+  const serverId = searchParams.get('serverId') || defaultServerId;
+  if (!serverId) return NextResponse.json({ error: 'Missing serverId' }, { status: 400 });
 
   if (action === 'test') {
     if (!isInitialized) await initializeAllBots();

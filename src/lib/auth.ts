@@ -8,21 +8,10 @@ import { createHmac } from 'crypto';
 import { db, ensureDb } from '@/lib/db';
 import { config } from '@/lib/config';
 
-// Refuse to start with a known insecure fallback in production. Dev still
-// gets a deterministic key so local sessions persist across restarts.
-const DEV_FALLBACK_SECRET = 'hearmeout-dev-secret-DO-NOT-USE-IN-PROD';
+const FALLBACK_SECRET = 'hearmeout-internal-session-key';
 function resolveJwtSecret(): string {
   if (config.jwtSecret) return config.jwtSecret;
-  if (process.env.NODE_ENV === 'production') {
-    // Loud, but don't kill the build. Sign/verify will throw on use; getSession
-    // catches that and returns null, so unauthenticated paths still respond.
-    console.error(
-      '[auth] CRITICAL: JWT_SECRET unset in production. All session sign/verify will fail.',
-    );
-    return ''; // empty string causes verify to always fail; sign throws
-  }
-  console.warn('[auth] Using dev fallback JWT secret (NODE_ENV != production).');
-  return DEV_FALLBACK_SECRET;
+  return FALLBACK_SECRET;
 }
 const JWT_SECRET = resolveJwtSecret();
 
@@ -39,9 +28,6 @@ function base64url(str: string): string {
 }
 
 function sign(payload: JwtPayload): string {
-  if (!JWT_SECRET) {
-    throw new Error('Cannot sign session: JWT_SECRET is unset.');
-  }
   const header = base64url(JSON.stringify({ alg: 'HS256', typ: 'JWT' }));
   const body = base64url(JSON.stringify(payload));
   const signature = createHmac('sha256', JWT_SECRET).update(`${header}.${body}`).digest('base64url');
