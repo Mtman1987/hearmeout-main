@@ -191,6 +191,12 @@ export default function UserCard({ participant, isLocal, isHost, roomId }: { par
     }
   };
 
+  const openDialogSafely = (open: () => void) => {
+    const active = document.activeElement as HTMLElement | null;
+    active?.blur?.();
+    open();
+  };
+
   const handleBan = () => doAdminAction('ban');
   const handleServerMute = () => {
     const isMutedByServer = firestoreUser?.serverMuted;
@@ -251,11 +257,11 @@ export default function UserCard({ participant, isLocal, isHost, roomId }: { par
                                 <DropdownMenuContent align="start">
                                     <DropdownMenuItem onClick={handleToggleStreamMode}><Radio className="mr-2 h-4 w-4" /><span>{streamMode ? '✓ Stream Mode' : 'Stream Mode'}</span></DropdownMenuItem>
                                     <DropdownMenuSeparator />
-                                    <DropdownMenuItem onClick={() => setTwitchDialogOpen(true)}><Radio className="mr-2 h-4 w-4" /><span>Twitch Bot</span></DropdownMenuItem>
-                                    <DropdownMenuItem onClick={() => setDiscordDialogOpen(true)}><MessageSquare className="mr-2 h-4 w-4" /><span>Discord Bot</span></DropdownMenuItem>
+                                    <DropdownMenuItem onSelect={() => openDialogSafely(() => setTwitchDialogOpen(true))}><Radio className="mr-2 h-4 w-4" /><span>Twitch Bot</span></DropdownMenuItem>
+                                    <DropdownMenuItem onSelect={() => openDialogSafely(() => setDiscordDialogOpen(true))}><MessageSquare className="mr-2 h-4 w-4" /><span>Discord Bot</span></DropdownMenuItem>
                                     <DropdownMenuSeparator />
                                     <DropdownMenuItem onClick={handleLeaveRoom}><LogOut className="mr-2 h-4 w-4" /><span>Leave Room</span></DropdownMenuItem>
-                                    {isHost && (<><DropdownMenuSeparator /><DropdownMenuItem onClick={() => setIsDeleteDialogOpen(true)} className="text-destructive focus:text-destructive"><Trash2 className="mr-2 h-4 w-4" /><span>Delete Room</span></DropdownMenuItem></>)}
+                                    {isHost && (<><DropdownMenuSeparator /><DropdownMenuItem onSelect={() => openDialogSafely(() => setIsDeleteDialogOpen(true))} className="text-destructive focus:text-destructive"><Trash2 className="mr-2 h-4 w-4" /><span>Delete Room</span></DropdownMenuItem></>)}
                                 </DropdownMenuContent>
                             </DropdownMenu>
                         </div>
@@ -270,7 +276,7 @@ export default function UserCard({ participant, isLocal, isHost, roomId }: { par
                         <div className='flex items-center gap-1'>
                             <Tooltip><TooltipTrigger asChild><Button variant="ghost" size="icon" className="h-7 w-7" onClick={handleBan} disabled={adminActionPending}><ShieldOff className="h-4 w-4" /></Button></TooltipTrigger><TooltipContent><p>Ban</p></TooltipContent></Tooltip>
                             <Tooltip><TooltipTrigger asChild><Button variant={firestoreUser?.serverMuted ? 'destructive' : 'ghost'} size="icon" className="h-7 w-7" onClick={handleServerMute} disabled={adminActionPending}><MicOff className="h-4 w-4" /></Button></TooltipTrigger><TooltipContent><p>{firestoreUser?.serverMuted ? 'Unmute' : 'Server Mute'}</p></TooltipContent></Tooltip>
-                            <Tooltip><TooltipTrigger asChild><Button variant="ghost" size="icon" className="h-7 w-7" onClick={handleOpenMove} disabled={adminActionPending}><Move className="h-4 w-4" /></Button></TooltipTrigger><TooltipContent><p>Move to Room</p></TooltipContent></Tooltip>
+                            <Tooltip><TooltipTrigger asChild><Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => openDialogSafely(handleOpenMove)} disabled={adminActionPending}><Move className="h-4 w-4" /></Button></TooltipTrigger><TooltipContent><p>Move to Room</p></TooltipContent></Tooltip>
                             <Tooltip><TooltipTrigger asChild><Button variant="ghost" size="icon" className="h-7 w-7" onClick={handleKick} disabled={adminActionPending}><UserX className="h-4 w-4" /></Button></TooltipTrigger><TooltipContent><p>Kick</p></TooltipContent></Tooltip>
                         </div>
                     ) : null}
