@@ -1,16 +1,17 @@
 {
   "name": "hmo-dj-worker",
-  "version": "1.0.0",
-  "description": "DJ Worker for HearMeOut — handles music lookup, download, scraping, conversion, and streaming",
+  "version": "2.0.0",
+  "description": "DJ Worker for HearMeOut — server-side music streaming via LiveKit + yt-dlp + ffmpeg",
   "main": "src/server.js",
   "scripts": {
     "start": "node src/server.js",
     "dev": "nodemon src/server.js"
   },
   "dependencies": {
-    "express": "^4.18.2",
+    "@livekit/rtc-node": "^0.12.2",
     "cors": "^2.8.5",
-    "dotenv": "^16.0.3"
+    "dotenv": "^16.0.3",
+    "express": "^4.18.2"
   },
   "devDependencies": {
     "nodemon": "^3.0.1"

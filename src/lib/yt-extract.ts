@@ -1,6 +1,9 @@
 import { isValidVideoId } from './validate-video-id';
 import { getDjWorkerSecret, getDjWorkerUrl } from './dj-worker-config';
+import { execFile } from 'child_process';
+import { promisify } from 'util';
 
+const execFileAsync = promisify(execFile);
 const DJ_WORKER_URL = getDjWorkerUrl();
 const DJ_WORKER_SECRET = getDjWorkerSecret();
 
@@ -17,14 +20,26 @@ export interface ExtractAudioResult {
   reason?: string;
 }
 
-function inferReason(raw: string): string {
-  const s = raw.toLowerCase();
-  if (s.includes('private')) return 'private';
-  if (s.includes('region')) return 'region';
-  if (s.includes('age')) return 'age-restricted';
-  if (s.includes('copyright')) return 'copyright';
-  if (s.includes('unavailable')) return 'unavailable';
-  return 'extraction failed';
+// Local extraction using yt-dlp CLI (youtubei.js decipher is broken)
+async function extractLocal(videoId: string): Promise<ExtractAudioResult> {
+  try {
+    console.log(`[YTExtract] yt-dlp local extraction for ${videoId}...`);
+    const { stdout } = await execFileAsync('yt-dlp', [
+      '--no-warnings',
+      '-f', 'bestaudio[ext=m4a]/bestaudio',
+      '--get-url',
+      `https://www.youtube.com/watch?v=${videoId}`,
+    ], { timeout: 30000 });
+    const url = stdout.trim();
+    if (url && url.startsWith('http')) {
+      console.log(`[YTExtract] ✅ yt-dlp got URL for ${videoId}`);
+      return { audio: { url, mimeType: 'audio/mp4', bitrate: 128000, duration: 0, contentLength: 0 } };
+    }
+    return { audio: null, reason: 'yt-dlp returned no URL' };
+  } catch (err: any) {
+    console.error(`[YTExtract] yt-dlp extraction failed: ${err.message}`);
+    return { audio: null, reason: `yt-dlp: ${err.message?.slice(0, 200)}` };
+  }
 }
 
 export async function extractAudioUrlWithReason(videoId: string): Promise<ExtractAudioResult> {
@@ -33,36 +48,37 @@ export async function extractAudioUrlWithReason(videoId: string): Promise<Extrac
     return { audio: null, reason: 'invalid video id' };
   }
 
-  if (!DJ_WORKER_URL) {
-    console.error('[YTExtract] DJ_WORKER_URL not set');
-    return { audio: null, reason: 'worker unavailable' };
+  // Try local yt-dlp first (fastest, most reliable)
+  const local = await extractLocal(videoId);
+  if (local.audio) return local;
+
+  // Fallback: try worker if configured
+  if (DJ_WORKER_URL) {
+    try {
+      console.log(`[YTExtract] Trying worker for ${videoId}...`);
+      const res = await fetch(`${DJ_WORKER_URL}/extract?videoId=${encodeURIComponent(videoId)}`, {
+        headers: { Authorization: `Bearer ${DJ_WORKER_SECRET}` },
+        signal: AbortSignal.timeout(10000),
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        if (data.cached) {
+          return { audio: { url: `${DJ_WORKER_URL}/stream?videoId=${videoId}`, mimeType: 'audio/mpeg', bitrate: 128000, duration: 0, contentLength: 0 } };
+        }
+        if (data.url) {
+          return { audio: { url: data.url, mimeType: 'audio/mp4', bitrate: 128000, duration: 0, contentLength: 0 } };
+        }
+      } else {
+        const text = await res.text().catch(() => '');
+        console.log(`[YTExtract] Worker returned ${res.status}: ${text.slice(0, 100)}`);
+      }
+    } catch (err: any) {
+      console.warn(`[YTExtract] Worker unreachable: ${err.message}`);
+    }
   }
 
-  try {
-    console.log(`[YTExtract] Delegating to worker for ${videoId}...`);
-    const res = await fetch(`${DJ_WORKER_URL}/extract?videoId=${encodeURIComponent(videoId)}`, {
-      headers: { Authorization: `Bearer ${DJ_WORKER_SECRET}` },
-      signal: AbortSignal.timeout(35000),
-    });
-
-    if (!res.ok) {
-      const text = await res.text().catch(() => '');
-      console.log(`[YTExtract] Worker returned ${res.status}: ${text.slice(0, 100)}`);
-      return { audio: null, reason: inferReason(text) };
-    }
-
-    const data = await res.json();
-    if (data.cached) {
-      return { audio: { url: `${DJ_WORKER_URL}/stream?videoId=${videoId}`, mimeType: 'audio/mpeg', bitrate: 128000, duration: 0, contentLength: 0 } };
-    }
-    if (data.url) {
-      return { audio: { url: data.url, mimeType: 'audio/mp4', bitrate: 128000, duration: 0, contentLength: 0 } };
-    }
-    return { audio: null, reason: 'no url returned' };
-  } catch (err: any) {
-    console.error(`[YTExtract] Worker extract failed: ${err.message}`);
-    return { audio: null, reason: 'worker request failed' };
-  }
+  return { audio: null, reason: local.reason || 'all extraction methods failed' };
 }
 
 export async function extractAudioUrl(videoId: string): Promise<ExtractedAudio | null> {

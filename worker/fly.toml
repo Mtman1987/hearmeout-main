@@ -8,6 +8,7 @@ primary_region = "iad"
   NODE_ENV = "production"
   PORT = "3002"
   MUSIC_CACHE_DIR = "/data/music"
+  APP_URL = "https://hearmeout-main.fly.dev"
 
 [mounts]
   source = "dj_data"

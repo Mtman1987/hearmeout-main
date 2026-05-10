@@ -1,0 +1,1121 @@
+# SPDX-License-Identifier: MIT OR GPL-3.0-or-later
+import base64
+import json
+import math
+import struct
+from dataclasses import dataclass
+from io import BytesIO
+from typing import Final, Optional, Union
+from urllib.parse import unquote, urlsplit
+
+from mathutils import Matrix, Quaternion, Vector
+
+from . import convert
+from .convert import Json
+from .deep import make_json
+from .gl import (
+    GL_BYTE,
+    GL_FLOAT,
+    GL_INT,
+    GL_SHORT,
+    GL_UNSIGNED_BYTE,
+    GL_UNSIGNED_INT,
+    GL_UNSIGNED_SHORT,
+)
+
+# https://www.khronos.org/opengl/wiki/Small_Float_Formats#Numeric_limits_and_precision
+FLOAT_POSITIVE_MAX: Final = 3.4028237e38
+FLOAT_NEGATIVE_MAX: Final = -FLOAT_POSITIVE_MAX
+
+
+def parse_glb(data: bytes) -> tuple[dict[str, Json], bytes]:
+    with BytesIO(data) as glb:
+        header_struct = struct.Struct("<4sII")
+        header_bytes = glb.read(header_struct.size)
+        header_dump = "[" + ", ".join(f"0x{b:02x}" for b in header_bytes) + "]"
+        if len(header_bytes) != header_struct.size:
+            message = f"Failed to read VRM glTF header: {header_dump}"
+            raise ValueError(message)
+
+        header: tuple[bytes, int, int] = header_struct.unpack(header_bytes)
+        magic, version, length = header
+        if magic != b"glTF":
+            message = f"Invalid VRM glTF magic bytes: {header_dump}"
+            raise ValueError(message)
+
+        if version != 2:
+            message = f"Unsupported VRM glTF Version: {version}"
+            raise ValueError(message)
+
+        chunks_bytes_length = length - header_struct.size
+        if chunks_bytes_length < 0:
+            message = f"Invalid VRM glTF length: {length}"
+            raise ValueError(message)
+
+        chunks_bytes = glb.read(chunks_bytes_length)
+        if len(chunks_bytes) != chunks_bytes_length:
+            message = "Failed to read VRM chunks bytes"
+            raise ValueError(message)
+
+    with BytesIO(chunks_bytes) as chunks:
+        json_chunk_length_bytes = chunks.read(4)
+        if len(json_chunk_length_bytes) != 4:
+            message = "Failed to read VRM json chunk length bytes"
+            raise ValueError(message)
+
+        json_chunk_type_bytes = chunks.read(4)
+        if len(json_chunk_type_bytes) != 4:
+            message = "Failed to read VRM json chunk type bytes"
+            raise ValueError(message)
+
+        if json_chunk_type_bytes != b"JSON":
+            message = "Invalid VRM json chunk type bytes: " + ",".join(
+                chr(b) for b in json_chunk_type_bytes
+            )
+            raise ValueError(message)
+
+        json_chunk_data_length: int = struct.unpack("<I", json_chunk_length_bytes)[0]
+        json_chunk_data_bytes = chunks.read(json_chunk_data_length)
+        if len(json_chunk_data_bytes) != json_chunk_data_length:
+            message = "Failed to read VRM json chunk"
+            raise ValueError(message)
+
+        raw_json = json.loads(json_chunk_data_bytes)  # raises json.JSONDecodeError
+        json_obj = make_json(raw_json)
+        if not isinstance(json_obj, dict):
+            message = f"Unexpected VRM json format: {type(json_obj)}"
+            raise TypeError(message)
+
+        bin_chunk_length_bytes = chunks.read(4)
+        if not bin_chunk_length_bytes:
+            return json_obj, b""
+        if len(bin_chunk_length_bytes) != 4:
+            message = "Failed to read VRM bin chunk length bytes"
+            raise ValueError(message)
+
+        bin_chunk_type_bytes = chunks.read(4)
+        if len(bin_chunk_type_bytes) != 4:
+            message = "Failed to read VRM bin chunk type bytes"
+            raise ValueError(message)
+
+        if bin_chunk_type_bytes != b"BIN\x00":
+            message = "Invalid VRM bin chunk type bytes: " + ",".join(
+                chr(b) for b in bin_chunk_type_bytes
+            )
+            raise ValueError(message)
+
+        bin_chunk_data_length: int = struct.unpack("<I", bin_chunk_length_bytes)[0]
+        bin_chunk_data_bytes = chunks.read(bin_chunk_data_length)
+        if len(bin_chunk_data_bytes) != bin_chunk_data_length:
+            message = "Failed to read VRM bin chunk"
+            raise ValueError(message)
+
+    return json_obj, bin_chunk_data_bytes
+
+
+def pack_glb(
+    json_dict: dict[str, Json], bin_chunk_bytes: Union[bytes, bytearray]
+) -> bytes:
+    # https://registry.khronos.org/glTF/specs/2.0/glTF-2.0.html#binary-gltf-layout
+    json_chunk_bytes = json.dumps(
+        json_dict,
+        separators=(",", ":"),
+        sort_keys=True,
+        # UniVRM 0.56.3 cannot import a json containing unicode escape chars into
+        # Unity Editor.
+        ensure_ascii=False,
+    ).encode()
+
+    while len(json_chunk_bytes) % 4:
+        json_chunk_bytes += b"\x20"
+
+    while len(bin_chunk_bytes) % 4:
+        bin_chunk_bytes += b"\x00"
+
+    glb = bytearray()
+
+    glb.extend(b"glTF")  # magic
+    glb.extend(struct.pack("<I", 2))  # version
+    glb.extend(  # length
+        struct.pack(
+            "<I",
+            # header
+            12
+            # json chunk
+            + 8
+            + len(json_chunk_bytes)
+            # binary chunk
+            + 8
+            + len(bin_chunk_bytes),
+        )
+    )
+
+    glb.extend(struct.pack("<I", len(json_chunk_bytes)))
+    glb.extend(b"JSON")
+    glb.extend(json_chunk_bytes)
+
+    glb.extend(struct.pack("<I", len(bin_chunk_bytes)))
+    glb.extend(b"BIN\x00")
+    glb.extend(bin_chunk_bytes)
+
+    return bytes(glb)
+
+
+@dataclass(frozen=True)
+class Component:
+    component_type: int
+    unpack_symbol: str
+    byte_length: int
+
+    @staticmethod
+    def from_component_type(component_type: int) -> Optional["Component"]:
+        for component in (
+            BYTE_COMPONENT,
+            UNSIGNED_BYTE_COMPONENT,
+            SHORT_COMPONENT,
+            UNSIGNED_SHORT_COMPONENT,
+            INT_COMPONENT,
+            UNSIGNED_INT_COMPONENT,
+            FLOAT_COMPONENT,
+        ):
+            if component.component_type == component_type:
+                return component
+        return None
+
+
+BYTE_COMPONENT: Final = Component(GL_BYTE, "b", 1)
+UNSIGNED_BYTE_COMPONENT: Final = Component(GL_UNSIGNED_BYTE, "B", 1)
+SHORT_COMPONENT: Final = Component(GL_SHORT, "h", 2)
+UNSIGNED_SHORT_COMPONENT: Final = Component(GL_UNSIGNED_SHORT, "H", 2)
+INT_COMPONENT: Final = Component(GL_INT, "i", 4)
+UNSIGNED_INT_COMPONENT: Final = Component(GL_UNSIGNED_INT, "I", 4)
+FLOAT_COMPONENT: Final = Component(GL_FLOAT, "f", 4)
+
+
+def _accessor_type_component_count(accessor_type: str) -> Optional[int]:
+    if accessor_type == "SCALAR":
+        return 1
+    if accessor_type == "VEC2":
+        return 2
+    if accessor_type == "VEC3":
+        return 3
+    if accessor_type == "VEC4":
+        return 4
+    if accessor_type == "MAT4":
+        return 16
+    return None
+
+
+def read_buffer_view_as_bytes(
+    buffer_view_dict: Json,
+    buffer_dicts: list[Json],
+    bin_chunk_bytes: Optional[bytes],
+) -> Optional[bytes]:
+    if not isinstance(buffer_view_dict, dict):
+        return None
+
+    buffer_index = buffer_view_dict.get("buffer")
+    if not isinstance(buffer_index, int):
+        return None
+    if not 0 <= buffer_index < len(buffer_dicts):
+        return None
+
+    if buffer_index == 0 and bin_chunk_bytes is not None:
+        buffer_bytes = bin_chunk_bytes
+    else:
+        buffer_dict = buffer_dicts[buffer_index]
+        if not isinstance(buffer_dict, dict):
+            return None
+        uri = buffer_dict.get("uri")
+
+        if not isinstance(uri, str):
+            return None
+        try:
+            parsed_uri = urlsplit(uri)
+        except ValueError:
+            return None
+        if parsed_uri.scheme != "data":
+            return None
+
+        path_components = parsed_uri.path.split(",", 1)
+        if len(path_components) != 2:
+            return None
+
+        header, data = path_components
+        if not header.endswith(";base64"):
+            return None
+        unquoted_data = unquote(data)
+        try:
+            buffer_bytes = base64.b64decode(unquoted_data)
+        except ValueError:
+            return None
+
+    byte_offset = buffer_view_dict.get("byteOffset", 0)
+    if not isinstance(byte_offset, int):
+        return None
+    if not 0 <= byte_offset < len(buffer_bytes):
+        return None
+    byte_length = buffer_view_dict.get("byteLength")
+    if not isinstance(byte_length, int):
+        return None
+    if not 0 <= byte_offset + byte_length <= len(buffer_bytes):
+        return None
+    return buffer_bytes[byte_offset : byte_offset + byte_length]
+
+
+def _remove_byte_stride_padding(
+    buffer_view_dict: Json,
+    buffer_view_bytes: bytes,
+    accessor_byte_offset: int,
+    accessor_count: int,
+    accessor_element_byte_length: int,
+) -> Optional[bytes]:
+    if not isinstance(buffer_view_dict, dict):
+        return None
+    if not 0 <= accessor_byte_offset <= len(buffer_view_bytes):
+        return None
+
+    byte_stride = buffer_view_dict.get("byteStride")
+    if byte_stride is None:
+        return buffer_view_bytes[accessor_byte_offset:]
+
+    if not isinstance(byte_stride, int):
+        return None
+    if byte_stride < accessor_element_byte_length:
+        return None
+    if accessor_count == 0:
+        return b""
+
+    accessor_byte_end = (
+        accessor_byte_offset
+        + byte_stride * (accessor_count - 1)
+        + accessor_element_byte_length
+    )
+    if not 0 <= accessor_byte_end <= len(buffer_view_bytes):
+        return None
+
+    accessor_bytes = bytearray(accessor_count * accessor_element_byte_length)
+    for accessor_index in range(accessor_count):
+        src_start = accessor_byte_offset + byte_stride * accessor_index
+        src_end = src_start + accessor_element_byte_length
+        dest_start = accessor_index * accessor_element_byte_length
+        dest_end = dest_start + accessor_element_byte_length
+        accessor_bytes[dest_start:dest_end] = buffer_view_bytes[src_start:src_end]
+    return bytes(accessor_bytes)
+
+
+def _read_accessor_as_bytes(
+    accessor_dict: dict[str, Json],
+    buffer_view_dicts: list[Json],
+    buffer_dicts: list[Json],
+    bin_chunk_bytes: Optional[bytes],
+) -> Optional[bytes]:
+    if not isinstance(accessor_type := accessor_dict.get("type"), str):
+        return None
+    if not isinstance(component_type := accessor_dict.get("componentType"), int):
+        return None
+    if (
+        not isinstance(accessor_count := accessor_dict.get("count"), int)
+        or accessor_count < 0
+    ):
+        return None
+    if (
+        not isinstance(accessor_byte_offset := accessor_dict.get("byteOffset", 0), int)
+        or accessor_byte_offset < 0
+    ):
+        return None
+    accessor_component_count = _accessor_type_component_count(accessor_type)
+    if accessor_component_count is None:
+        return None
+    component = Component.from_component_type(component_type)
+    if component is None:
+        return None
+
+    element_byte_length = accessor_component_count * component.byte_length
+    required_byte_length = accessor_count * element_byte_length
+
+    base_bytes: Optional[bytes] = None
+    key_not_found = object()
+    buffer_view_index = accessor_dict.get("bufferView", key_not_found)
+    if buffer_view_index == key_not_found:
+        base_bytes = b"\x00" * required_byte_length
+    elif isinstance(buffer_view_index, int) and 0 <= buffer_view_index < len(
+        buffer_view_dicts
+    ):
+        buffer_view_dict = buffer_view_dicts[buffer_view_index]
+        base_buffer_view_bytes = read_buffer_view_as_bytes(
+            buffer_view_dict, buffer_dicts, bin_chunk_bytes
+        )
+        if base_buffer_view_bytes is None:
+            return None
+        base_bytes = _remove_byte_stride_padding(
+            buffer_view_dict,
+            base_buffer_view_bytes,
+            accessor_byte_offset,
+            accessor_count,
+            element_byte_length,
+        )
+
+    if base_bytes is None:
+        return None
+
+    sparse_dict = accessor_dict.get("sparse")
+    if sparse_dict is None:
+        return base_bytes
+
+    if not isinstance(sparse_dict, dict):
+        return None
+
+    sparse_count = sparse_dict.get("count")
+    if not isinstance(sparse_count, int):
+        return None
+    if sparse_count < 1:
+        return None
+
+    if len(base_bytes) < required_byte_length:
+        return None
+
+    if not isinstance(indices_dict := sparse_dict.get("indices"), dict):
+        return None
+
+    if not isinstance(values_dict := sparse_dict.get("values"), dict):
+        return None
+
+    indices_buffer_view_index = indices_dict.get("bufferView")
+    if not isinstance(indices_buffer_view_index, int):
+        return None
+    if not 0 <= indices_buffer_view_index < len(buffer_view_dicts):
+        return None
+    indices_raw_bytes = read_buffer_view_as_bytes(
+        buffer_view_dicts[indices_buffer_view_index], buffer_dicts, bin_chunk_bytes
+    )
+    if indices_raw_bytes is None:
+        return None
+    indices_byte_offset = indices_dict.get("byteOffset")
+    if isinstance(indices_byte_offset, int):
+        if not (0 <= indices_byte_offset < len(indices_raw_bytes)):
+            return None
+        indices_bytes = indices_raw_bytes[indices_byte_offset:]
+    else:
+        indices_bytes = indices_raw_bytes
+
+    if not isinstance(indices_component_type := indices_dict.get("componentType"), int):
+        return None
+    indices = _unpack_component(indices_component_type, sparse_count, indices_bytes)
+    if indices is None:
+        return None
+    previous_index = -1
+    for index in indices:
+        if not isinstance(index, int):
+            return None
+        if not (previous_index < index < accessor_count):
+            return None
+        previous_index = index
+
+    values_buffer_view_index = values_dict.get("bufferView")
+    if not isinstance(values_buffer_view_index, int):
+        return None
+    if not 0 <= values_buffer_view_index < len(buffer_view_dicts):
+        return None
+    values_raw_bytes = read_buffer_view_as_bytes(
+        buffer_view_dicts[values_buffer_view_index], buffer_dicts, bin_chunk_bytes
+    )
+    if values_raw_bytes is None:
+        return None
+    values_byte_offset = values_dict.get("byteOffset")
+    if isinstance(values_byte_offset, int):
+        if not (0 <= values_byte_offset < len(values_raw_bytes)):
+            return None
+        values_bytes = values_raw_bytes[values_byte_offset:]
+    else:
+        values_bytes = values_raw_bytes
+
+    values_byte_length = sparse_count * element_byte_length
+    if len(values_bytes) < values_byte_length:
+        return None
+
+    updated_bytes = bytearray(base_bytes[:required_byte_length])
+    for sparse_index, index in enumerate(indices):
+        index_int = int(index)
+        start = index_int * element_byte_length
+        end = start + element_byte_length
+        if end > len(updated_bytes):
+            return None
+        value_start = sparse_index * element_byte_length
+        value_end = value_start + element_byte_length
+        updated_bytes[start:end] = values_bytes[value_start:value_end]
+
+    return bytes(updated_bytes)
+
+
+def _unpack_component(
+    component_type: int, unpack_count: int, buffer_bytes: bytes
+) -> Optional[Union[tuple[int, ...], tuple[float, ...]]]:
+    component = Component.from_component_type(component_type)
+    if component is None:
+        return None
+    if unpack_count == 0:
+        return ()
+    unpack_byte_length = unpack_count * component.byte_length
+    if not 1 <= unpack_byte_length <= len(buffer_bytes):
+        return None
+    return struct.unpack(
+        f"<{unpack_count}{component.unpack_symbol}",
+        buffer_bytes[:unpack_byte_length],
+    )
+
+
+def _merge_duplicate_primitive_vertex_skinning_weights(
+    accessor_dicts: list[Json],
+    buffer_view_dicts: list[Json],
+    buffer_dicts: list[Json],
+    buffer0_bytes: bytes,
+    primitive_dict: dict[str, Json],
+) -> None:
+    attributes_dict = primitive_dict.get("attributes")
+    if not isinstance(attributes_dict, dict):
+        return
+
+    joints_and_weights: list[
+        tuple[
+            list[tuple[int, int, int, int]],
+            list[tuple[float, float, float, float]],
+        ]
+    ] = []
+
+    joints_weights_index = 0
+    while True:
+        joints_index = attributes_dict.get(f"JOINTS_{joints_weights_index}")
+        if joints_index is None:
+            break
+        if not isinstance(joints_index, int):
+            return
+        if not (0 <= joints_index < len(accessor_dicts)):
+            return
+        joints_accessor_dict = accessor_dicts[joints_index]
+        if not isinstance(joints_accessor_dict, dict):
+            return
+        if not isinstance(
+            joints_component_type := joints_accessor_dict.get("componentType"), int
+        ):
+            return
+        if joints_component_type not in (GL_UNSIGNED_BYTE, GL_UNSIGNED_SHORT):
+            return
+        joints_n = _read_vec4_accessor(
+            joints_accessor_dict,
+            buffer_view_dicts,
+            buffer_dicts,
+            buffer0_bytes,
+        )
+        if joints_n is None:
+            return
+        joints_n = [(int(j0), int(j1), int(j2), int(j3)) for j0, j1, j2, j3 in joints_n]
+
+        weights_index = attributes_dict.get(f"WEIGHTS_{joints_weights_index}")
+        if not isinstance(weights_index, int):
+            return
+        if not (0 <= weights_index < len(accessor_dicts)):
+            return
+        weights_accessor_dict = accessor_dicts[weights_index]
+        if not isinstance(weights_accessor_dict, dict):
+            return
+        if not isinstance(
+            weights_component_type := weights_accessor_dict.get("componentType"), int
+        ):
+            return
+        weights_n = _read_vec4_accessor(
+            weights_accessor_dict,
+            buffer_view_dicts,
+            buffer_dicts,
+            buffer0_bytes,
+        )
+        if weights_n is None:
+            return
+        if len(joints_n) != len(weights_n):
+            return
+        if weights_component_type == GL_FLOAT:
+            denominator = 1.0
+        elif weights_component_type == GL_UNSIGNED_BYTE:
+            denominator = 255.0
+        elif weights_component_type == GL_UNSIGNED_SHORT:
+            denominator = 65535.0
+        else:
+            return
+        weights_n = [
+            (
+                max(0.0, min((0.0 if math.isnan(w0) else w0) / denominator, 1.0)),
+                max(0.0, min((0.0 if math.isnan(w1) else w1) / denominator, 1.0)),
+                max(0.0, min((0.0 if math.isnan(w2) else w2) / denominator, 1.0)),
+                max(0.0, min((0.0 if math.isnan(w3) else w3) / denominator, 1.0)),
+            )
+            for w0, w1, w2, w3 in weights_n
+        ]
+
+        joints_and_weights.append((joints_n, weights_n))
+        joints_weights_index += 1
+
+    if not joints_and_weights:
+        return
+
+    have_joint_duplication = False
+    vertex_index = 0
+    all_vertices_processed = False
+    while not all_vertices_processed:
+        joint_to_weight_by_vertex_dict: dict[int, float] = {}
+        need_writeback_in_this_loop = False
+        for joints_n, weights_n in joints_and_weights:
+            if vertex_index >= len(joints_n) or vertex_index >= len(weights_n):
+                all_vertices_processed = True
+                break
+            joint_n = joints_n[vertex_index]
+            weight_n = weights_n[vertex_index]
+            for joint, weight in zip(joint_n, weight_n):
+                if joint == 0 and not (weight > 0):
+                    continue
+                if joint in joint_to_weight_by_vertex_dict:
+                    joint_to_weight_by_vertex_dict[joint] += weight
+                    have_joint_duplication = True
+                    need_writeback_in_this_loop = True
+                else:
+                    joint_to_weight_by_vertex_dict[joint] = weight
+
+        if need_writeback_in_this_loop:
+            joint_to_weight_by_vertex: list[tuple[int, float]] = sorted(
+                joint_to_weight_by_vertex_dict.items(),
+                key=lambda item: (item[1], item[0]),
+                reverse=True,
+            )
+            denominator = sum(weight for _joint, weight in joint_to_weight_by_vertex)
+            if not (denominator > 0):
+                denominator = 1
+                joint_to_weight_by_vertex = []
+            for joints_n, weights_n in joints_and_weights:
+                (j0, w0), (j1, w1), (j2, w2), (j3, w3) = (
+                    joint_to_weight_by_vertex.pop(0)
+                    if joint_to_weight_by_vertex
+                    else (0, 0.0),
+                    joint_to_weight_by_vertex.pop(0)
+                    if joint_to_weight_by_vertex
+                    else (0, 0.0),
+                    joint_to_weight_by_vertex.pop(0)
+                    if joint_to_weight_by_vertex
+                    else (0, 0.0),
+                    joint_to_weight_by_vertex.pop(0)
+                    if joint_to_weight_by_vertex
+                    else (0, 0.0),
+                )
+                joints_n[vertex_index] = (j0, j1, j2, j3)
+                weights_n[vertex_index] = (
+                    w0 / denominator,
+                    w1 / denominator,
+                    w2 / denominator,
+                    w3 / denominator,
+                )
+
+        vertex_index += 1
+
+    if not have_joint_duplication:
+        return
+
+    for index, (joints_n, weights_n) in enumerate(joints_and_weights):
+        joints_n_bytearray = bytearray()
+        for j in joints_n:
+            joints_n_bytearray.extend(struct.pack("<4H", *j))
+
+        joints_buffer_index = len(buffer_dicts)
+        buffer_dicts.append(
+            {
+                "uri": "data:application/gltf-buffer;base64,"
+                + base64.b64encode(joints_n_bytearray).decode("ascii"),
+                "byteLength": len(joints_n_bytearray),
+            }
+        )
+
+        joints_buffer_view_dict: Json = {
+            "buffer": joints_buffer_index,
+            "byteLength": len(joints_n_bytearray),
+        }
+        joints_buffer_view_index = len(buffer_view_dicts)
+        buffer_view_dicts.append(joints_buffer_view_dict)
+        joints_accessor_dict: Json = {
+            "bufferView": joints_buffer_view_index,
+            "byteOffset": 0,
+            "componentType": GL_UNSIGNED_SHORT,
+            "count": len(joints_n),
+            "type": "VEC4",
+        }
+        joints_accessor_index = len(accessor_dicts)
+        accessor_dicts.append(joints_accessor_dict)
+        attributes_dict[f"JOINTS_{index}"] = joints_accessor_index
+
+        weights_n_bytearray = bytearray()
+        for w in weights_n:
+            weights_n_bytearray.extend(struct.pack("<4f", *w))
+
+        weights_buffer_index = len(buffer_dicts)
+        buffer_dicts.append(
+            {
+                "uri": "data:application/gltf-buffer;base64,"
+                + base64.b64encode(weights_n_bytearray).decode("ascii"),
+                "byteLength": len(weights_n_bytearray),
+            }
+        )
+
+        weights_buffer_view_dict: Json = {
+            "buffer": weights_buffer_index,
+            "byteLength": len(weights_n_bytearray),
+        }
+        weights_buffer_view_index = len(buffer_view_dicts)
+        buffer_view_dicts.append(weights_buffer_view_dict)
+        weights_accessor_dict: Json = {
+            "bufferView": weights_buffer_view_index,
+            "byteOffset": 0,
+            "componentType": GL_FLOAT,
+            "count": len(weights_n),
+            "type": "VEC4",
+        }
+
+        weights_accessor_index = len(accessor_dicts)
+        accessor_dicts.append(weights_accessor_dict)
+        attributes_dict[f"WEIGHTS_{index}"] = weights_accessor_index
+
+
+def merge_duplicate_vertex_skinning_weights(
+    json_dict: dict[str, Json],
+    buffer0_bytes: bytes,
+) -> None:
+    """Merge duplicated vertex skinning weights in the glTF.
+
+    Some VRM models may contain multiple skinning weights for a single joint
+    on a single vertex. Since this violates the glTF specification, we merge
+    and fix these duplicates before passing them to the official glTF importer.
+    """
+    if not isinstance(accessor_dicts := json_dict.get("accessors"), list):
+        return
+    if not isinstance(buffer_view_dicts := json_dict.get("bufferViews"), list):
+        return
+    if not isinstance(buffer_dicts := json_dict.get("buffers"), list):
+        return
+    if not isinstance(mesh_dicts := json_dict.get("meshes"), list):
+        return
+
+    for mesh_dict in mesh_dicts:
+        if not isinstance(mesh_dict, dict):
+            continue
+        if not isinstance(primitive_dicts := mesh_dict.get("primitives"), list):
+            continue
+
+        for primitive_dict in primitive_dicts:
+            if not isinstance(primitive_dict, dict):
+                continue
+            _merge_duplicate_primitive_vertex_skinning_weights(
+                accessor_dicts,
+                buffer_view_dicts,
+                buffer_dicts,
+                buffer0_bytes,
+                primitive_dict,
+            )
+
+
+def _unpack_accessor_as_scalar_components(
+    accessor_dict: dict[str, Json],
+    buffer_view_dicts: list[Json],
+    buffer_dicts: list[Json],
+    buffer0_bytes: bytes,
+    unpack_count: int,
+) -> Union[tuple[int, ...], tuple[float, ...], None]:
+    component_type = accessor_dict.get("componentType")
+    if not isinstance(component_type, int):
+        return None
+
+    raw_bytes = _read_accessor_as_bytes(
+        accessor_dict,
+        buffer_view_dicts,
+        buffer_dicts,
+        buffer0_bytes,
+    )
+    if not raw_bytes:
+        return None
+
+    return _unpack_component(component_type, unpack_count, raw_bytes)
+
+
+def _read_scalar_accessor(
+    accessor_dict: dict[str, Json],
+    buffer_view_dicts: list[Json],
+    buffer_dicts: list[Json],
+    buffer0_bytes: bytes,
+) -> Union[tuple[int, ...], tuple[float, ...], None]:
+    accessor_type = accessor_dict.get("type")
+    if accessor_type != "SCALAR":
+        return None
+    count = accessor_dict.get("count")
+    if not isinstance(count, int):
+        return None
+    return _unpack_accessor_as_scalar_components(
+        accessor_dict,
+        buffer_view_dicts,
+        buffer_dicts,
+        buffer0_bytes,
+        count,
+    )
+
+
+def _read_vec2_accessor(
+    accessor_dict: dict[str, Json],
+    buffer_view_dicts: list[Json],
+    buffer_dicts: list[Json],
+    buffer0_bytes: bytes,
+) -> Union[tuple[tuple[int, int], ...], tuple[tuple[float, float], ...], None]:
+    accessor_type = accessor_dict.get("type")
+    if accessor_type != "VEC2":
+        return None
+    count = accessor_dict.get("count")
+    if not isinstance(count, int):
+        return None
+    components = _unpack_accessor_as_scalar_components(
+        accessor_dict,
+        buffer_view_dicts,
+        buffer_dicts,
+        buffer0_bytes,
+        count * 2,
+    )
+    if components is None:
+        return None
+    return tuple(
+        (
+            components[i],
+            components[i + 1],
+        )
+        for i in range(0, count * 2, 2)
+    )
+
+
+def _read_vec3_accessor(
+    accessor_dict: dict[str, Json],
+    buffer_view_dicts: list[Json],
+    buffer_dicts: list[Json],
+    buffer0_bytes: bytes,
+) -> Union[
+    tuple[tuple[int, int, int], ...], tuple[tuple[float, float, float], ...], None
+]:
+    accessor_type = accessor_dict.get("type")
+    if accessor_type != "VEC3":
+        return None
+    count = accessor_dict.get("count")
+    if not isinstance(count, int):
+        return None
+    components = _unpack_accessor_as_scalar_components(
+        accessor_dict,
+        buffer_view_dicts,
+        buffer_dicts,
+        buffer0_bytes,
+        count * 3,
+    )
+    if components is None:
+        return None
+    return tuple(
+        (
+            components[i],
+            components[i + 1],
+            components[i + 2],
+        )
+        for i in range(0, count * 3, 3)
+    )
+
+
+def _read_vec4_accessor(
+    accessor_dict: dict[str, Json],
+    buffer_view_dicts: list[Json],
+    buffer_dicts: list[Json],
+    buffer0_bytes: bytes,
+) -> Union[
+    tuple[tuple[int, int, int, int], ...],
+    tuple[tuple[float, float, float, float], ...],
+    None,
+]:
+    accessor_type = accessor_dict.get("type")
+    if accessor_type != "VEC4":
+        return None
+    count = accessor_dict.get("count")
+    if not isinstance(count, int):
+        return None
+    components = _unpack_accessor_as_scalar_components(
+        accessor_dict,
+        buffer_view_dicts,
+        buffer_dicts,
+        buffer0_bytes,
+        count * 4,
+    )
+    if components is None:
+        return None
+    return tuple(
+        (
+            components[i],
+            components[i + 1],
+            components[i + 2],
+            components[i + 3],
+        )
+        for i in range(0, count * 4, 4)
+    )
+
+
+def _read_mat4_accessor(
+    accessor_dict: dict[str, Json],
+    buffer_view_dicts: list[Json],
+    buffer_dicts: list[Json],
+    buffer0_bytes: bytes,
+) -> Union[
+    tuple[
+        tuple[
+            tuple[int, int, int, int],
+            tuple[int, int, int, int],
+            tuple[int, int, int, int],
+            tuple[int, int, int, int],
+        ],
+        ...,
+    ],
+    tuple[
+        tuple[
+            tuple[float, float, float, float],
+            tuple[float, float, float, float],
+            tuple[float, float, float, float],
+            tuple[float, float, float, float],
+        ],
+        ...,
+    ],
+    None,
+]:
+    accessor_type = accessor_dict.get("type")
+    if accessor_type != "MAT4":
+        return None
+    count = accessor_dict.get("count")
+    if not isinstance(count, int):
+        return None
+    components = _unpack_accessor_as_scalar_components(
+        accessor_dict,
+        buffer_view_dicts,
+        buffer_dicts,
+        buffer0_bytes,
+        count * 16,
+    )
+    if components is None:
+        return None
+    return tuple(
+        (
+            (
+                components[i],
+                components[i + 1],
+                components[i + 2],
+                components[i + 3],
+            ),
+            (
+                components[i + 4],
+                components[i + 5],
+                components[i + 6],
+                components[i + 7],
+            ),
+            (
+                components[i + 8],
+                components[i + 9],
+                components[i + 10],
+                components[i + 11],
+            ),
+            (
+                components[i + 12],
+                components[i + 13],
+                components[i + 14],
+                components[i + 15],
+            ),
+        )
+        for i in range(0, count * 16, 16)
+    )
+
+
+def _read_accessor(
+    accessor_dict: dict[str, Json],
+    buffer_view_dicts: list[Json],
+    buffer_dicts: list[Json],
+    buffer0_bytes: bytes,
+) -> Union[
+    tuple[int, ...],
+    tuple[float, ...],
+    tuple[tuple[int, int], ...],
+    tuple[tuple[float, float], ...],
+    tuple[tuple[int, int, int], ...],
+    tuple[tuple[float, float, float], ...],
+    tuple[tuple[int, int, int, int], ...],
+    tuple[tuple[float, float, float, float], ...],
+    tuple[
+        tuple[
+            tuple[int, int, int, int],
+            tuple[int, int, int, int],
+            tuple[int, int, int, int],
+            tuple[int, int, int, int],
+        ],
+        ...,
+    ],
+    tuple[
+        tuple[
+            tuple[float, float, float, float],
+            tuple[float, float, float, float],
+            tuple[float, float, float, float],
+            tuple[float, float, float, float],
+        ],
+        ...,
+    ],
+    None,
+]:
+    accessor_type = accessor_dict.get("type")
+    if accessor_type == "SCALAR":
+        return _read_scalar_accessor(
+            accessor_dict, buffer_view_dicts, buffer_dicts, buffer0_bytes
+        )
+    if accessor_type == "VEC2":
+        return _read_vec2_accessor(
+            accessor_dict, buffer_view_dicts, buffer_dicts, buffer0_bytes
+        )
+    if accessor_type == "VEC3":
+        return _read_vec3_accessor(
+            accessor_dict, buffer_view_dicts, buffer_dicts, buffer0_bytes
+        )
+    if accessor_type == "VEC4":
+        return _read_vec4_accessor(
+            accessor_dict, buffer_view_dicts, buffer_dicts, buffer0_bytes
+        )
+    if accessor_type == "MAT4":
+        return _read_mat4_accessor(
+            accessor_dict, buffer_view_dicts, buffer_dicts, buffer0_bytes
+        )
+    return None
+
+
+def read_accessors(
+    json_dict: dict[str, Json],
+    buffer0_bytes: bytes,
+) -> tuple[
+    Union[
+        tuple[int, ...],
+        tuple[float, ...],
+        tuple[tuple[int, int], ...],
+        tuple[tuple[float, float], ...],
+        tuple[tuple[int, int, int], ...],
+        tuple[tuple[float, float, float], ...],
+        tuple[tuple[int, int, int, int], ...],
+        tuple[tuple[float, float, float, float], ...],
+        tuple[
+            tuple[
+                tuple[int, int, int, int],
+                tuple[int, int, int, int],
+                tuple[int, int, int, int],
+                tuple[int, int, int, int],
+            ],
+            ...,
+        ],
+        tuple[
+            tuple[
+                tuple[float, float, float, float],
+                tuple[float, float, float, float],
+                tuple[float, float, float, float],
+                tuple[float, float, float, float],
+            ],
+            ...,
+        ],
+        None,
+    ],
+    ...,
+]:
+    accessor_dicts = json_dict.get("accessors")
+    if not isinstance(accessor_dicts, list):
+        accessor_dicts = []
+
+    buffer_view_dicts = json_dict.get("bufferViews")
+    if not isinstance(buffer_view_dicts, list):
+        buffer_view_dicts = []
+
+    buffer_dicts = json_dict.get("buffers")
+    if not isinstance(buffer_dicts, list):
+        buffer_dicts = []
+
+    return tuple(
+        _read_accessor(accessor_dict, buffer_view_dicts, buffer_dicts, buffer0_bytes)
+        for accessor_dict in accessor_dicts
+        if isinstance(accessor_dict, dict)
+    )
+
+
+def read_accessor_as_animation_sampler_input(
+    accessor_dict: dict[str, Json],
+    buffer_view_dicts: list[Json],
+    buffer_dicts: list[Json],
+    buffer0_bytes: bytes,
+) -> Optional[list[float]]:
+    scalar_accessor = _read_scalar_accessor(
+        accessor_dict, buffer_view_dicts, buffer_dicts, buffer0_bytes
+    )
+    if scalar_accessor is None:
+        return None
+    return [float(v) for v in scalar_accessor]
+
+
+def read_accessor_as_animation_sampler_translation_output(
+    accessor_dict: dict[str, Json],
+    buffer_view_dicts: list[Json],
+    buffer_dicts: list[Json],
+    buffer0_bytes: bytes,
+) -> Optional[list[Vector]]:
+    vec3_accessor = _read_vec3_accessor(
+        accessor_dict, buffer_view_dicts, buffer_dicts, buffer0_bytes
+    )
+    if vec3_accessor is None:
+        return None
+    return [Vector((x, -z, y)) for x, y, z in vec3_accessor]
+
+
+def read_accessor_as_animation_sampler_rotation_output(
+    accessor_dict: dict[str, Json],
+    buffer_view_dicts: list[Json],
+    buffer_dicts: list[Json],
+    buffer0_bytes: bytes,
+) -> Optional[list[Quaternion]]:
+    vec4_accessor = _read_vec4_accessor(
+        accessor_dict, buffer_view_dicts, buffer_dicts, buffer0_bytes
+    )
+    if vec4_accessor is None:
+        return None
+    return [Quaternion((w, x, -z, y)).normalized() for x, y, z, w in vec4_accessor]
+
+
+def parse_gltf_node_matrix(node_dict: dict[str, Json]) -> Matrix:
+    matrix = node_dict.get("matrix")
+    if isinstance(matrix, list):
+        if len(matrix) != 16:
+            return Matrix()
+
+        row0 = convert.float4_or_none((matrix[0], matrix[4], matrix[8], matrix[12]))
+        row1 = convert.float4_or_none((matrix[1], matrix[5], matrix[9], matrix[13]))
+        row2 = convert.float4_or_none((matrix[2], matrix[6], matrix[10], matrix[14]))
+        row3 = convert.float4_or_none((matrix[3], matrix[7], matrix[11], matrix[15]))
+        if not (row0 and row1 and row2 and row3):
+            return Matrix()
+
+        return Matrix((row0, row1, row2, row3))
+
+    location_matrix = Matrix()
+    location = convert.float3_or_none(node_dict.get("translation"))
+    if location:
+        location_matrix = Matrix.Translation(location)
+
+    rotation_matrix = Matrix()
+    rotation = convert.float4_or_none(node_dict.get("rotation"))
+    if rotation:
+        x, y, z, w = rotation
+        quaternion = Quaternion((w, x, y, z))
+        rotation_matrix = quaternion.to_matrix().to_4x4()
+
+    scale_matrix = Matrix()
+    scale = convert.float3_or_none(node_dict.get("scale"))
+    if scale:
+        scale_matrix = Matrix.Diagonal(scale).to_4x4()
+
+    return location_matrix @ rotation_matrix @ scale_matrix

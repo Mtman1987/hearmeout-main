@@ -28,10 +28,13 @@ export async function POST(request: NextRequest) {
     }
 
     if (session && !(await canControlRoom(session.uid, roomId))) {
-      return NextResponse.json(
-        { error: 'Forbidden', message: 'Only the room owner, an admin, or an approved DJ can control this room DJ.' },
-        { status: 403 },
-      );
+      // In dev, allow any authenticated user to control DJ
+      if (process.env.NODE_ENV !== 'development') {
+        return NextResponse.json(
+          { error: 'Forbidden', message: 'Only the room owner, an admin, or an approved DJ can control this room DJ.' },
+          { status: 403 },
+        );
+      }
     }
 
     if (action === 'start') {

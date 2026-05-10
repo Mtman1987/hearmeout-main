@@ -1,0 +1,82 @@
+# SPDX-License-Identifier: MIT OR GPL-3.0-or-later
+import re
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Optional
+
+
+@dataclass(frozen=True)
+class BlenderManifest:
+    id: str
+    version: tuple[int, int, int]
+    blender_version_min: tuple[int, int, int]
+    blender_version_max: Optional[tuple[int, int, int]]
+
+    @classmethod
+    def default_blender_manifest_path(cls) -> Path:
+        return Path(__file__).parent.parent / "blender_manifest.toml"
+
+    @classmethod
+    def _read_str(cls, blender_manifest: str, key: str) -> Optional[str]:
+        # When the version of Python used by the minimum supported version of Blender
+        # exceeds 3.11, it is rewritten in the tomli library.
+        lines = [line.strip() for line in blender_manifest.splitlines()]
+
+        pattern = key + r' = "([^"]+)"'
+        for line in lines:
+            match = re.fullmatch(pattern, line)
+            if not match:
+                continue
+            return match[1]
+
+        return None
+
+    @classmethod
+    def _read_3_tuple_version(
+        cls, blender_manifest: str, key: str
+    ) -> Optional[tuple[int, int, int]]:
+        # When the version of Python used by the minimum supported version of Blender
+        # exceeds 3.11, it is rewritten in the tomli library.
+        lines = [line.strip() for line in blender_manifest.splitlines()]
+
+        pattern = key + r' = "(\d+)\.(\d+)\.(\d+)"'
+        for line in lines:
+            match = re.fullmatch(pattern, line)
+            if not match:
+                continue
+            return (int(match[1]), int(match[2]), int(match[3]))
+
+        return None
+
+    @classmethod
+    def read(cls, blender_manifest: Optional[str] = None) -> "BlenderManifest":
+        if blender_manifest is None:
+            blender_manifest = cls.default_blender_manifest_path().read_text(
+                encoding="UTF-8"
+            )
+
+        addon_id = cls._read_str(blender_manifest, "id")
+        if addon_id is None:
+            message = "'id' was not found in blender manifest"
+            raise ValueError(message)
+
+        version = cls._read_3_tuple_version(blender_manifest, "version")
+        if version is None:
+            message = "'version' was not found in blender manifest"
+            raise ValueError(message)
+
+        blender_version_min = cls._read_3_tuple_version(
+            blender_manifest, "blender_version_min"
+        )
+        if blender_version_min is None:
+            message = "'blender_version_min' was not found in blender manifest"
+            raise ValueError(message)
+
+        return BlenderManifest(
+            id=addon_id,
+            version=version,
+            blender_version_min=blender_version_min,
+            blender_version_max=cls._read_3_tuple_version(
+                blender_manifest, "blender_version_max"
+            ),
+        )

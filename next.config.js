@@ -4,6 +4,9 @@ const nextConfig = {
     ignoreBuildErrors: false,
   },
 
+  // Disable turbopack — crashes on Windows with "Cannot read properties of undefined (reading 'replace')"
+  turbopack: false,
+
   serverExternalPackages: ['sql.js', 'puppeteer'],
   images: {
     remotePatterns: [

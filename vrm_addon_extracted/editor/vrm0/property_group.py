@@ -1,0 +1,1369 @@
+# SPDX-License-Identifier: MIT OR GPL-3.0-or-later
+import uuid
+from collections.abc import Sequence
+from sys import float_info
+from typing import TYPE_CHECKING, ClassVar, Optional
+
+import bpy
+from bpy.app.translations import pgettext
+from bpy.props import (
+    BoolProperty,
+    CollectionProperty,
+    EnumProperty,
+    FloatProperty,
+    FloatVectorProperty,
+    IntProperty,
+    PointerProperty,
+    StringProperty,
+)
+from bpy.types import (
+    Action,
+    Armature,
+    Context,
+    Image,
+    Material,
+    Mesh,
+    Object,
+    PropertyGroup,
+)
+from mathutils import Vector
+
+from ...common import convert
+from ...common.animation import defer_shape_key_update
+from ...common.logger import get_logger
+from ...common.vrm0.human_bone import (
+    HumanBoneName,
+    HumanBoneSpecification,
+    HumanBoneSpecifications,
+)
+from ...common.vrm1.expression_preset import (
+    VRM0_PRESET_UNKNOWN,
+    ExpressionPresets,
+)
+from ..extension_accessor import get_armature_extension
+from ..property_group import (
+    BonePropertyGroup,
+    FloatPropertyGroup,
+    HumanoidStructureBonePropertyGroup,
+    MeshObjectPropertyGroup,
+    property_group_enum,
+)
+from ..vrm1.property_group import Vrm1HumanoidPropertyGroup
+
+if TYPE_CHECKING:
+    from ..property_group import CollectionPropertyProtocol
+
+
+_logger = get_logger(__name__)
+
+
+class Vrm0HumanoidBoneNodePropertyGroup(HumanoidStructureBonePropertyGroup):
+    def update_bone_name_candidates(
+        self,
+        armature_data: Armature,
+        target: HumanBoneSpecification,
+        bpy_bone_name_to_human_bone_specification: dict[str, HumanBoneSpecification],
+        error_bpy_bone_names: Sequence[str],
+    ) -> bool:
+        new_candidates = HumanoidStructureBonePropertyGroup.find_bone_candidates(
+            armature_data,
+            target,
+            bpy_bone_name_to_human_bone_specification,
+            error_bpy_bone_names,
+        )
+
+        bone_name_candidates = self.bone_name_candidates
+        if bone_name_candidates == new_candidates:
+            return False
+
+        bone_name_candidates.clear()
+        bone_name_candidates.update(new_candidates)
+        return True
+
+
+# https://github.com/vrm-c/UniVRM/blob/v0.91.1/Assets/VRM/Runtime/Format/glTF_VRM_Humanoid.cs#L70-L164
+class Vrm0HumanoidBonePropertyGroup(PropertyGroup):
+    bone: StringProperty(  # type: ignore[valid-type]
+        name="VRM Humanoid Bone Name"
+    )
+    node: PointerProperty(  # type: ignore[valid-type]
+        name="Bone Name",
+        type=Vrm0HumanoidBoneNodePropertyGroup,
+    )
+    use_default_values: BoolProperty(  # type: ignore[valid-type]
+        name="Unity's HumanLimit.useDefaultValues",
+        default=True,
+    )
+    min: FloatVectorProperty(  # type: ignore[valid-type]
+        size=3,
+        name="Unity's HumanLimit.min",
+    )
+    max: FloatVectorProperty(  # type: ignore[valid-type]
+        size=3,
+        name="Unity's HumanLimit.max",
+    )
+    center: FloatVectorProperty(  # type: ignore[valid-type]
+        size=3,
+        name="Unity's HumanLimit.center",
+    )
+    axis_length: FloatProperty(  # type: ignore[valid-type]
+        name="Unity's HumanLimit.axisLength"
+    )
+
+    def specification(self) -> HumanBoneSpecification:
+        name = HumanBoneName.from_str(self.bone)
+        if name is None:
+            message = f'HumanBone "{self.bone}" is invalid'
+            raise ValueError(message)
+        return HumanBoneSpecifications.get(name)
+
+    if TYPE_CHECKING:
+        # This code is auto generated.
+        # To regenerate, run the `uv run tools/property_typing.py` command.
+        bone: str  # type: ignore[no-redef]
+        node: Vrm0HumanoidBoneNodePropertyGroup  # type: ignore[no-redef]
+        use_default_values: bool  # type: ignore[no-redef]
+        min: Sequence[float]  # type: ignore[no-redef]
+        max: Sequence[float]  # type: ignore[no-redef]
+        center: Sequence[float]  # type: ignore[no-redef]
+        axis_length: float  # type: ignore[no-redef]
+
+
+# https://github.com/vrm-c/UniVRM/blob/v0.91.1/Assets/VRM/Runtime/Format/glTF_VRM_Humanoid.cs#L166-L195
+class Vrm0HumanoidPropertyGroup(PropertyGroup):
+    human_bones: CollectionProperty(  # type: ignore[valid-type]
+        name="Human Bones",
+        type=Vrm0HumanoidBonePropertyGroup,
+    )
+    arm_stretch: FloatProperty(  # type: ignore[valid-type]
+        name="Arm Stretch",
+        default=0.05,
+    )
+    leg_stretch: FloatProperty(  # type: ignore[valid-type]
+        name="Leg Stretch",
+        default=0.05,
+    )
+    upper_arm_twist: FloatProperty(  # type: ignore[valid-type]
+        name="Upper Arm Twist",
+        default=0.5,
+    )
+    lower_arm_twist: FloatProperty(  # type: ignore[valid-type]
+        name="Lower Arm Twist",
+        default=0.5,
+    )
+    upper_leg_twist: FloatProperty(  # type: ignore[valid-type]
+        name="Upper Leg Twist",
+        default=0.5,
+    )
+    lower_leg_twist: FloatProperty(  # type: ignore[valid-type]
+        name="Lower Leg Twist",
+        default=0.5,
+    )
+    feet_spacing: FloatProperty(  # type: ignore[valid-type]
+        name="Feet Spacing",
+        default=0,
+    )
+    has_translation_dof: BoolProperty(  # type: ignore[valid-type]
+        name="Has Translation DoF",
+        default=False,
+    )
+
+    POSE_AUTO_POSE = Vrm1HumanoidPropertyGroup.POSE_AUTO_POSE
+    POSE_REST_POSITION_POSE = Vrm1HumanoidPropertyGroup.POSE_REST_POSITION_POSE
+    POSE_CURRENT_POSE = Vrm1HumanoidPropertyGroup.POSE_CURRENT_POSE
+    POSE_CUSTOM_POSE = Vrm1HumanoidPropertyGroup.POSE_CUSTOM_POSE
+
+    pose: bpy.props.EnumProperty(  # type: ignore[valid-type]
+        items=Vrm1HumanoidPropertyGroup.pose_enum.items(),
+        name="T-Pose",
+        description="T-Pose",
+        default=POSE_AUTO_POSE.identifier,
+    )
+
+    # for T-Pose
+    def _update_pose_library(self, _context: Context) -> None:
+        self.pose_marker_name = ""
+
+    pose_library: PointerProperty(  # type: ignore[valid-type]
+        type=Action,
+        name="Pose Library",
+        description="Pose library for T Pose",
+        update=_update_pose_library,
+    )
+    pose_marker_name: StringProperty()  # type: ignore[valid-type]
+
+    # for UI
+    pointer_to_last_bone_names_str: ClassVar[dict[int, str]] = {}
+    initial_automatic_bone_assignment: BoolProperty(  # type: ignore[valid-type]
+        default=True
+    )
+
+    def _update_filter_by_human_bone_hierarchy(self, _context: Context) -> None:
+        if not isinstance(armature_data := self.id_data, Armature):
+            return
+        HumanoidStructureBonePropertyGroup.clear_bone_name_candidates_cache(
+            human_bone.node for human_bone in self.human_bones
+        )
+        HumanoidStructureBonePropertyGroup.update_all_vrm0_bone_name_candidates(
+            armature_data
+        )
+
+    filter_by_human_bone_hierarchy: BoolProperty(  # type: ignore[valid-type]
+        name="Filter by VRM Human Bone Hierarchy",
+        description="Restrict selectable bones by VRM humanoid hierarchy",
+        default=True,
+        update=_update_filter_by_human_bone_hierarchy,
+    )
+
+    def human_bone_duplication_error_messages(self) -> list[tuple[str, str]]:
+        messages: list[tuple[str, str]] = []
+        bone_name_to_human_bone_names: dict[str, list[str]] = {}
+        for human_bone in self.human_bones:
+            bone_name = human_bone.node.bone_name
+            if not bone_name:
+                continue
+
+            human_bone_names = bone_name_to_human_bone_names.get(bone_name)
+            if human_bone_names is None:
+                human_bone_names = []
+                bone_name_to_human_bone_names[bone_name] = human_bone_names
+
+            human_bone_name = HumanBoneName.from_str(human_bone.bone)
+            if human_bone_name is None:
+                human_bone_names.append(human_bone.bone)
+                continue
+            human_bone_names.append(HumanBoneSpecifications.get(human_bone_name).title)
+
+        for bone_name, human_bone_names in bone_name_to_human_bone_names.items():
+            if len(human_bone_names) < 2:
+                continue
+            messages.append(
+                (
+                    bone_name,
+                    pgettext(
+                        'Bone "{bone_name}" is assigned to multiple VRM Human Bones:'
+                        + " {human_bone_names}."
+                    ).format(
+                        bone_name=bone_name,
+                        human_bone_names=", ".join(human_bone_names),
+                    ),
+                )
+            )
+        return messages
+
+    def error_messages(self) -> Sequence[str]:
+        messages = [
+            message for _, message in self.human_bone_duplication_error_messages()
+        ]
+
+        for human_bone_name, human_bone in (
+            (human_bone_name, human_bone)
+            for human_bone in self.human_bones
+            for name in HumanBoneSpecifications.required_names
+            if human_bone.bone == name
+            and (human_bone_name := HumanBoneName.from_str(name))
+        ):
+            specification = HumanBoneSpecifications.get(human_bone_name)
+            bone_name = human_bone.node.bone_name
+            if not bone_name:
+                if specification.requirement:
+                    messages.append(
+                        pgettext(
+                            'Please assign Required VRM Human Bone "{human_bone_name}".'
+                        ).format(human_bone_name=specification.title)
+                    )
+                continue
+            if (
+                self.filter_by_human_bone_hierarchy
+                and bone_name not in human_bone.node.bone_name_candidates
+            ):
+                messages.append(
+                    pgettext(
+                        'Couldn\'t assign "{bone_name}" bone'
+                        + ' to VRM Human Bone "{human_bone_name}". '
+                    ).format(bone_name=bone_name, human_bone_name=specification.title)
+                )
+
+        return messages
+
+    def bones_are_correctly_assigned(self) -> bool:
+        return len(self.error_messages()) == 0
+
+    @staticmethod
+    def update_all_bone_name_candidates(
+        context: Context,
+        armature_data_name: str,
+        *,
+        force: bool = False,
+    ) -> None:
+        armature_data = context.blend_data.armatures.get(armature_data_name)
+        if not armature_data:
+            return
+
+        ext = get_armature_extension(armature_data)
+        if not ext.is_vrm0():
+            return
+
+        bone_names_str = "\n".join(
+            sorted(
+                bone.name + "\n" + (parent.name if (parent := bone.parent) else "")
+                for bone in armature_data.bones.values()
+            )
+        )
+        humanoid = ext.vrm0.humanoid
+        pointer_key = humanoid.as_pointer()
+        pointer_to_last_bone_names_str = humanoid.pointer_to_last_bone_names_str
+        last_bone_names_str = pointer_to_last_bone_names_str.get(pointer_key)
+        if not force and last_bone_names_str == bone_names_str:
+            return
+        pointer_to_last_bone_names_str[pointer_key] = bone_names_str
+
+        HumanoidStructureBonePropertyGroup.update_all_vrm0_bone_name_candidates(
+            armature_data
+        )
+
+    @staticmethod
+    def fixup_human_bones(obj: Object) -> None:
+        armature_data = obj.data
+        if not isinstance(armature_data, Armature):
+            return
+
+        humanoid = get_armature_extension(armature_data).vrm0.humanoid
+
+        # Add bone maps that don't exist
+        refresh = False
+        for human_bone_name in HumanBoneSpecifications.all_names:
+            if any(
+                human_bone.bone == human_bone_name
+                for human_bone in humanoid.human_bones
+            ):
+                continue
+            human_bone = humanoid.human_bones.add()
+            human_bone.bone = human_bone_name
+            refresh = True
+
+        # Remove duplicate bone maps
+        fixup = True
+        while fixup:
+            fixup = False
+            found_bones: list[str] = []
+            for i, human_bone in enumerate(list(humanoid.human_bones)):
+                if (
+                    human_bone.bone in HumanBoneSpecifications.all_names
+                    and human_bone.bone not in found_bones
+                ):
+                    found_bones.append(human_bone.bone)
+                    continue
+                humanoid.human_bones.remove(i)
+                refresh = True
+                fixup = True
+                break
+
+        # If multiple bone maps have the same Blender bone assigned, remove one of them
+        fixup = True
+        while fixup:
+            fixup = False
+            found_node_bone_names: list[str] = []
+            for human_bone in humanoid.human_bones:
+                if not human_bone.node.bone_name:
+                    continue
+                if human_bone.node.bone_name not in found_node_bone_names:
+                    found_node_bone_names.append(human_bone.node.bone_name)
+                    continue
+                human_bone.node.bone_name = ""
+                refresh = True
+                fixup = True
+                break
+
+        if not refresh:
+            return
+
+        secondary_animation = get_armature_extension(
+            armature_data
+        ).vrm0.secondary_animation
+        secondary_animation.fixup(obj)
+
+    if TYPE_CHECKING:
+        # This code is auto generated.
+        # To regenerate, run the `uv run tools/property_typing.py` command.
+        human_bones: CollectionPropertyProtocol[  # type: ignore[no-redef]
+            Vrm0HumanoidBonePropertyGroup
+        ]
+        arm_stretch: float  # type: ignore[no-redef]
+        leg_stretch: float  # type: ignore[no-redef]
+        upper_arm_twist: float  # type: ignore[no-redef]
+        lower_arm_twist: float  # type: ignore[no-redef]
+        upper_leg_twist: float  # type: ignore[no-redef]
+        lower_leg_twist: float  # type: ignore[no-redef]
+        feet_spacing: float  # type: ignore[no-redef]
+        has_translation_dof: bool  # type: ignore[no-redef]
+        pose: str  # type: ignore[no-redef]
+        pose_library: Optional[Action]  # type: ignore[no-redef]
+        pose_marker_name: str  # type: ignore[no-redef]
+        initial_automatic_bone_assignment: bool  # type: ignore[no-redef]
+        filter_by_human_bone_hierarchy: bool  # type: ignore[no-redef]
+
+
+# https://github.com/vrm-c/UniVRM/blob/v0.91.1/Assets/VRM/Runtime/Format/glTF_VRM_FirstPerson.cs#L10-L22
+class Vrm0DegreeMapPropertyGroup(PropertyGroup):
+    curve: FloatVectorProperty(  # type: ignore[valid-type]
+        size=8,
+        name="Curve",
+        default=(0, 0, 0, 1, 1, 1, 1, 0),
+    )
+    x_range: FloatProperty(  # type: ignore[valid-type]
+        name="X Range",
+        default=90,
+    )
+    y_range: FloatProperty(  # type: ignore[valid-type]
+        name="Y Range",
+        default=10,
+    )
+
+    if TYPE_CHECKING:
+        # This code is auto generated.
+        # To regenerate, run the `uv run tools/property_typing.py` command.
+        curve: Sequence[float]  # type: ignore[no-redef]
+        x_range: float  # type: ignore[no-redef]
+        y_range: float  # type: ignore[no-redef]
+
+
+# https://github.com/vrm-c/UniVRM/blob/v0.91.1/Assets/VRM/Runtime/Format/glTF_VRM_FirstPerson.cs#L32-L41
+class Vrm0MeshAnnotationPropertyGroup(PropertyGroup):
+    mesh: PointerProperty(  # type: ignore[valid-type]
+        name="Mesh",
+        type=MeshObjectPropertyGroup,
+        description="Mesh on restrict render in the first person camera",
+    )
+
+    first_person_flag_enum, *__first_person_flags = property_group_enum(
+        ("Auto", "Auto", "Auto restrict render", "NONE", 0),
+        (
+            "FirstPersonOnly",
+            "First-Person Only",
+            "(Maybe needless) Restrict render in the third person camera",
+            "NONE",
+            1,
+        ),
+        (
+            "ThirdPersonOnly",
+            "Third-Person Only",
+            "Restrict render in the first person camera for face, hairs or hat",
+            "NONE",
+            2,
+        ),
+        ("Both", "Both", "No restrict render for body, arms or legs", "NONE", 3),
+    )
+
+    first_person_flag: EnumProperty(  # type: ignore[valid-type]
+        items=first_person_flag_enum.items(),
+        name="First Person Flag",
+        description="Restrict render in the first person camera",
+    )
+
+    if TYPE_CHECKING:
+        # This code is auto generated.
+        # To regenerate, run the `uv run tools/property_typing.py` command.
+        mesh: MeshObjectPropertyGroup  # type: ignore[no-redef]
+        first_person_flag: str  # type: ignore[no-redef]
+
+
+# https://github.com/vrm-c/UniVRM/blob/v0.91.1/Assets/VRM/Runtime/Format/glTF_VRM_FirstPerson.cs#L50-L91
+class Vrm0FirstPersonPropertyGroup(PropertyGroup):
+    first_person_bone: PointerProperty(  # type: ignore[valid-type]
+        name="Bone",
+        type=BonePropertyGroup,
+        description="Bone to follow the first person camera",
+    )
+    first_person_bone_offset: FloatVectorProperty(  # type: ignore[valid-type]
+        size=3,
+        name="Bone Offset",
+        description=(
+            "Offset from the first person bone to follow the first person camera"
+        ),
+        subtype="TRANSLATION",
+        unit="LENGTH",
+        default=(0, 0, 0),
+    )
+    mesh_annotations: CollectionProperty(  # type: ignore[valid-type]
+        name="Mesh Annotations",
+        type=Vrm0MeshAnnotationPropertyGroup,
+    )
+    look_at_type_name_enum, *__look_at_types = property_group_enum(
+        ("Bone", "Bone", "Use bones to eye movement", "BONE_DATA", 0),
+        (
+            "BlendShape",
+            "Blend Shape",
+            "Use blend Shapes of VRM Blend Shape Proxy to eye movement.",
+            "SHAPEKEY_DATA",
+            1,
+        ),
+    )
+    look_at_type_name: EnumProperty(  # type: ignore[valid-type]
+        items=look_at_type_name_enum.items(),
+        name="Look At Type",
+        description="How to eye movement",
+    )
+    look_at_horizontal_inner: PointerProperty(  # type: ignore[valid-type]
+        type=Vrm0DegreeMapPropertyGroup,
+        name="Look At Horizontal Inner",
+    )
+    look_at_horizontal_outer: PointerProperty(  # type: ignore[valid-type]
+        type=Vrm0DegreeMapPropertyGroup,
+        name="Look At Horizontal Outer",
+    )
+    look_at_vertical_down: PointerProperty(  # type: ignore[valid-type]
+        type=Vrm0DegreeMapPropertyGroup,
+        name="Look At Vertical Down",
+    )
+    look_at_vertical_up: PointerProperty(  # type: ignore[valid-type]
+        type=Vrm0DegreeMapPropertyGroup,
+        name="lookAt Vertical Up",
+    )
+
+    # for UI
+    active_mesh_annotation_index: IntProperty(min=0)  # type: ignore[valid-type]
+
+    if TYPE_CHECKING:
+        # This code is auto generated.
+        # To regenerate, run the `uv run tools/property_typing.py` command.
+        first_person_bone: BonePropertyGroup  # type: ignore[no-redef]
+        first_person_bone_offset: Sequence[float]  # type: ignore[no-redef]
+        mesh_annotations: CollectionPropertyProtocol[  # type: ignore[no-redef]
+            Vrm0MeshAnnotationPropertyGroup
+        ]
+        look_at_type_name: str  # type: ignore[no-redef]
+        look_at_horizontal_inner: Vrm0DegreeMapPropertyGroup  # type: ignore[no-redef]
+        look_at_horizontal_outer: Vrm0DegreeMapPropertyGroup  # type: ignore[no-redef]
+        look_at_vertical_down: Vrm0DegreeMapPropertyGroup  # type: ignore[no-redef]
+        look_at_vertical_up: Vrm0DegreeMapPropertyGroup  # type: ignore[no-redef]
+        active_mesh_annotation_index: int  # type: ignore[no-redef]
+
+
+# https://github.com/vrm-c/UniVRM/blob/v0.91.1/Assets/VRM/Runtime/Format/glTF_VRM_BlendShape.cs#L18-L30
+class Vrm0BlendShapeBindPropertyGroup(PropertyGroup):
+    def _update_preview(self, context: Context) -> None:
+        if not isinstance(armature_data := self.id_data, Armature):
+            return
+        Vrm0BlendShapeGroupPropertyGroup.apply_previews(context, armature_data)
+
+    mesh: PointerProperty(  # type: ignore[valid-type]
+        name="Mesh",
+        type=MeshObjectPropertyGroup,
+        update=_update_preview,
+    )
+    index: StringProperty(  # type: ignore[valid-type]
+        name="Index",
+        update=_update_preview,
+    )
+    weight: FloatProperty(  # type: ignore[valid-type]
+        name="Weight",
+        min=0,
+        default=1,
+        max=1,
+        subtype="FACTOR",
+        update=_update_preview,
+    )
+
+    if TYPE_CHECKING:
+        # This code is auto generated.
+        # To regenerate, run the `uv run tools/property_typing.py` command.
+        mesh: MeshObjectPropertyGroup  # type: ignore[no-redef]
+        index: str  # type: ignore[no-redef]
+        weight: float  # type: ignore[no-redef]
+
+
+# https://github.com/vrm-c/UniVRM/blob/v0.91.1/Assets/VRM/Runtime/Format/glTF_VRM_BlendShape.cs#L9-L16
+class Vrm0MaterialValueBindPropertyGroup(PropertyGroup):
+    material: PointerProperty(  # type: ignore[valid-type]
+        name="Material",
+        type=Material,
+    )
+
+    # Use StringProperty instead of EnumProperty for property_name.
+    # This is necessary to allow arbitrary values to be entered.
+    property_name: StringProperty(  # type: ignore[valid-type]
+        name="Property Name"
+    )
+
+    target_value: CollectionProperty(  # type: ignore[valid-type]
+        name="Target Value",
+        type=FloatPropertyGroup,
+    )
+
+    if TYPE_CHECKING:
+        # This code is auto generated.
+        # To regenerate, run the `uv run tools/property_typing.py` command.
+        material: Optional[Material]  # type: ignore[no-redef]
+        property_name: str  # type: ignore[no-redef]
+        target_value: CollectionPropertyProtocol[  # type: ignore[no-redef]
+            FloatPropertyGroup
+        ]
+
+
+# https://github.com/vrm-c/UniVRM/blob/v0.91.1/Assets/VRM/Runtime/Format/glTF_VRM_BlendShape.cs#L62-L99
+class Vrm0BlendShapeGroupPropertyGroup(PropertyGroup):
+    name: StringProperty(  # type: ignore[valid-type]
+        name="Name",
+        description="Name of the blendshape group",
+    )
+
+    preset_name_enum, (PRESET_NAME_UNKNOWN, *__preset_names) = property_group_enum(
+        (VRM0_PRESET_UNKNOWN, "Unknown", "", "SHAPEKEY_DATA", 0),
+        (ExpressionPresets.NEUTRAL.vrm0_preset, "Neutral", "", "VIEW_ORTHO", 1),
+        (ExpressionPresets.AA.vrm0_preset, "A", "", "EVENT_A", 2),
+        (ExpressionPresets.IH.vrm0_preset, "I", "", "EVENT_I", 3),
+        (ExpressionPresets.OU.vrm0_preset, "U", "", "EVENT_U", 4),
+        (ExpressionPresets.EE.vrm0_preset, "E", "", "EVENT_E", 5),
+        (ExpressionPresets.OH.vrm0_preset, "O", "", "EVENT_O", 6),
+        (ExpressionPresets.BLINK.vrm0_preset, "Blink", "", "HIDE_ON", 7),
+        (ExpressionPresets.HAPPY.vrm0_preset, "Joy", "", "HEART", 8),
+        (ExpressionPresets.ANGRY.vrm0_preset, "Angry", "", "ORPHAN_DATA", 9),
+        (ExpressionPresets.SAD.vrm0_preset, "Sorrow", "", "MOD_FLUIDSIM", 10),
+        (ExpressionPresets.RELAXED.vrm0_preset, "Fun", "", "LIGHT_SUN", 11),
+        (ExpressionPresets.LOOK_UP.vrm0_preset, "Look Up", "", "ANCHOR_TOP", 12),
+        (ExpressionPresets.LOOK_DOWN.vrm0_preset, "Look Down", "", "ANCHOR_BOTTOM", 13),
+        (ExpressionPresets.LOOK_LEFT.vrm0_preset, "Look Left", "", "ANCHOR_RIGHT", 14),
+        (ExpressionPresets.LOOK_RIGHT.vrm0_preset, "Look Right", "", "ANCHOR_LEFT", 15),
+        (ExpressionPresets.BLINK_LEFT.vrm0_preset, "Blink_L", "", "HIDE_ON", 16),
+        (ExpressionPresets.BLINK_RIGHT.vrm0_preset, "Blink_R", "", "HIDE_ON", 17),
+    )
+
+    preset_name: EnumProperty(  # type: ignore[valid-type]
+        items=preset_name_enum.items(),
+        name="Preset",
+        description="Preset name in VRM avatar",
+    )
+    binds: CollectionProperty(  # type: ignore[valid-type]
+        type=Vrm0BlendShapeBindPropertyGroup,
+        name="Binds",
+    )
+    material_values: CollectionProperty(  # type: ignore[valid-type]
+        type=Vrm0MaterialValueBindPropertyGroup,
+        name="Material Values",
+    )
+
+    # for UI
+    active_bind_index: IntProperty(min=0)  # type: ignore[valid-type]
+    active_material_value_index: IntProperty(min=0)  # type: ignore[valid-type]
+
+    def _get_preview(self) -> float:
+        value = self.get("preview")
+        if isinstance(value, (float, int)):
+            return float(value)
+        return 0.0
+
+    def _set_preview(self, value_obj: object) -> None:
+        context = bpy.context
+
+        value = convert.float_or_none(value_obj)
+        if value is None:
+            return
+
+        current_value = convert.float_or_none(self.get("preview"))
+        if (
+            current_value is not None
+            and abs(current_value - value) < float_info.epsilon
+        ):
+            return
+
+        self["preview"] = value
+
+        self._update_preview(context)
+
+    pending_preview_update_armature_data_names: ClassVar[list[str]] = []
+
+    def _update_preview(self, context: Context) -> None:
+        armature_data = self.id_data
+        if not isinstance(armature_data, Armature):
+            return
+
+        if defer_shape_key_update(context):
+            if (
+                armature_data.name
+                not in self.pending_preview_update_armature_data_names
+            ):
+                self.pending_preview_update_armature_data_names.append(
+                    armature_data.name
+                )
+            return
+
+        self.apply_previews(context, armature_data)
+
+    @classmethod
+    def apply_pending_preview_update_to_armatures(cls, context: Context) -> None:
+        for armature_data_name in cls.pending_preview_update_armature_data_names:
+            armature_data = context.blend_data.armatures.get(armature_data_name)
+            if not armature_data:
+                continue
+            cls.apply_previews(context, armature_data)
+        cls.pending_preview_update_armature_data_names.clear()
+
+    @classmethod
+    def apply_previews(cls, context: Context, armature_data: Armature) -> None:
+        mesh_object_name_to_key_block_name_to_value: dict[str, dict[str, float]] = {}
+        blend_shape_groups = get_armature_extension(
+            armature_data
+        ).vrm0.blend_shape_master.blend_shape_groups
+        for blend_shape_group in blend_shape_groups:
+            if blend_shape_group.is_binary:
+                # https://github.com/vrm-c/UniVRM/blob/38ccb92300c9ab41c72eb3d5b8dc8ce664a659d5/Assets/VRM/Runtime/BlendShape/BlendShapeMerger.cs#L89-L92
+                preview = 0.0 if blend_shape_group.preview < 0.5 else 1.0
+            else:
+                preview = blend_shape_group.preview
+
+            for bind in blend_shape_group.binds:
+                mesh_object_name = bind.mesh.mesh_object_name
+                key_block_name = bind.index
+                value = bind.weight * preview  # Lerp 0.0 * (1 - a) + weight * a
+                key_block_name_to_value = (
+                    mesh_object_name_to_key_block_name_to_value.get(mesh_object_name)
+                )
+                if not key_block_name_to_value:
+                    mesh_object_name_to_key_block_name_to_value[mesh_object_name] = {
+                        key_block_name: value
+                    }
+                    continue
+                key_block_name_to_value[key_block_name] = (
+                    key_block_name_to_value.get(key_block_name, 0) + value
+                )
+
+        mesh_data_name_to_key_block_name_to_total_value: dict[
+            str, dict[str, float]
+        ] = {}
+        for (
+            mesh_object_name,
+            key_block_name_to_value,
+        ) in mesh_object_name_to_key_block_name_to_value.items():
+            mesh_object = context.blend_data.objects.get(mesh_object_name)
+            if not mesh_object:
+                continue
+            mesh_data = mesh_object.data
+            if not isinstance(mesh_data, Mesh):
+                continue
+            key_block_name_to_total_value = (
+                mesh_data_name_to_key_block_name_to_total_value.get(mesh_data.name)
+            )
+            if not key_block_name_to_total_value:
+                mesh_data_name_to_key_block_name_to_total_value[mesh_data.name] = (
+                    key_block_name_to_value
+                )
+                continue
+            for key_block_name, value in key_block_name_to_value.items():
+                key_block_name_to_total_value[key_block_name] = (
+                    key_block_name_to_total_value.get(key_block_name, 0) + value
+                )
+
+        for (
+            mesh_data_name,
+            key_block_name_to_value,
+        ) in mesh_data_name_to_key_block_name_to_total_value.items():
+            mesh_data = context.blend_data.meshes.get(mesh_data_name)
+            if not mesh_data:
+                continue
+            shape_keys = mesh_data.shape_keys
+            if not shape_keys:
+                continue
+            key_blocks = shape_keys.key_blocks
+            if not key_blocks:
+                continue
+            for key_block_name, value in key_block_name_to_value.items():
+                key_block = key_blocks.get(key_block_name)
+                if not key_block:
+                    continue
+                if abs(key_block.value - value) < float_info.epsilon:
+                    continue
+                key_block.value = value
+
+    preview: FloatProperty(  # type: ignore[valid-type]
+        name="Blend Shape Proxy",
+        min=0,
+        max=1,
+        subtype="FACTOR",
+        get=_get_preview,
+        set=_set_preview,
+    )
+
+    is_binary: BoolProperty(  # type: ignore[valid-type]
+        name="Is Binary",
+        description="Use binary change in the blendshape group",
+        update=_update_preview,
+    )
+
+    if TYPE_CHECKING:
+        # This code is auto generated.
+        # To regenerate, run the `uv run tools/property_typing.py` command.
+        name: str  # type: ignore[no-redef]
+        preset_name: str  # type: ignore[no-redef]
+        binds: CollectionPropertyProtocol[  # type: ignore[no-redef]
+            Vrm0BlendShapeBindPropertyGroup
+        ]
+        material_values: CollectionPropertyProtocol[  # type: ignore[no-redef]
+            Vrm0MaterialValueBindPropertyGroup
+        ]
+        active_bind_index: int  # type: ignore[no-redef]
+        active_material_value_index: int  # type: ignore[no-redef]
+        preview: float  # type: ignore[no-redef]
+        is_binary: bool  # type: ignore[no-redef]
+
+
+# https://github.com/vrm-c/UniVRM/blob/v0.91.1/Assets/VRM/Runtime/Format/glTF_VRM_SecondaryAnimation.cs#L10-L18
+class Vrm0SecondaryAnimationColliderPropertyGroup(PropertyGroup):
+    bpy_object: PointerProperty(  # type: ignore[valid-type]
+        type=Object
+    )
+
+    def fixup(self, armature: Optional[Object], bone_name: str) -> None:
+        bpy_object = self.bpy_object
+        if not bpy_object or not bpy_object.name:
+            return
+
+        if armature and bpy_object.parent != armature:
+            _logger.warning(
+                "Collider %s is not parented to the armature."
+                " Parenting to the armature %s.",
+                self.path_from_id(),
+                armature.name,
+            )
+            bpy_object.parent = armature
+
+        if bpy_object.empty_display_type != "SPHERE":
+            _logger.warning(
+                "Collider %s has empty display type %s. Setting to SPHERE.",
+                self.path_from_id(),
+                bpy_object.empty_display_type,
+            )
+            bpy_object.empty_display_type = "SPHERE"
+
+        parent_obj = bpy_object.parent
+        if not parent_obj:
+            return
+
+        if parent_obj.type != "ARMATURE" or not bone_name:
+            if bpy_object.parent_type != "OBJECT":
+                _logger.warning(
+                    "Collider %s is parented to a bone but no bone is assigned."
+                    " Changing to object parenting.",
+                    self.path_from_id(),
+                )
+                bpy_object.parent_type = "OBJECT"
+                if bpy_object.parent_bone:
+                    _logger.warning(
+                        "Collider %s has a stale parent bone %s while using object"
+                        " parenting. Clearing the parent bone.",
+                        self.path_from_id(),
+                        bpy_object.parent_bone,
+                    )
+                    bpy_object.parent_bone = ""
+            return
+
+        if bpy_object.parent_type != "BONE":
+            _logger.warning(
+                "Collider %s is not parented to a bone. Parenting to the bone %s.",
+                self.path_from_id(),
+                bone_name,
+            )
+            bpy_object.parent_type = "BONE"
+
+        if bpy_object.parent_bone != bone_name:
+            _logger.warning(
+                "Collider %s is parented to a different bone %s."
+                " Changing to the bone %s.",
+                self.path_from_id(),
+                bpy_object.parent_bone,
+                bone_name,
+            )
+            bpy_object.parent_bone = bone_name
+
+    if TYPE_CHECKING:
+        # This code is auto generated.
+        # To regenerate, run the `uv run tools/property_typing.py` command.
+        bpy_object: Optional[Object]  # type: ignore[no-redef]
+
+
+# https://github.com/vrm-c/vrm-specification/blob/f2d8f158297fc883aef9c3071ca68fbe46b03f45/specification/0.0/schema/vrm.secondaryanimation.collidergroup.schema.json
+# https://github.com/vrm-c/UniVRM/blob/v0.91.1/Assets/VRM/Runtime/Format/glTF_VRM_SecondaryAnimation.cs#L21-L29
+class Vrm0SecondaryAnimationColliderGroupPropertyGroup(PropertyGroup):
+    node: PointerProperty(  # type: ignore[valid-type]
+        name="Bone",
+        type=BonePropertyGroup,
+    )
+    # Use the collider's own data for offset and radius
+    colliders: CollectionProperty(  # type: ignore[valid-type]
+        name="Colliders",
+        type=Vrm0SecondaryAnimationColliderPropertyGroup,
+    )
+
+    @property
+    def display_name(self) -> str:
+        if not self.uuid:
+            return ""
+        return f"{self.node.bone_name}#{self.uuid}"
+
+    def fixup(self, armature: Optional[Object]) -> None:
+        if not self.uuid:
+            new_uuid = uuid.uuid4().hex
+            _logger.error(
+                "Collider group %s has no UUID. Assigning a new UUID %s.",
+                self.path_from_id(),
+                new_uuid,
+            )
+            self.uuid = new_uuid
+
+        for index, collider in reversed(
+            tuple((index, collider) for index, collider in enumerate(self.colliders))
+        ):
+            if not collider.bpy_object or not collider.bpy_object.name:
+                _logger.warning(
+                    "Collider %s in group %s has no valid object. Removing.",
+                    collider.path_from_id(),
+                    self.display_name,
+                )
+                self.colliders.remove(index)
+            else:
+                collider.fixup(armature, self.node.bone_name)
+
+        armature_data = self.id_data
+        if not isinstance(armature_data, Armature):
+            return
+
+        vrm0 = get_armature_extension(armature_data).vrm0
+        for bone_group in vrm0.secondary_animation.bone_groups:
+            bone_group.fixup()
+
+    # for UI
+    show_expanded: BoolProperty()  # type: ignore[valid-type]
+
+    active_collider_index: IntProperty(min=0)  # type: ignore[valid-type]
+
+    # for reference from Vrm0SecondaryAnimationGroupPropertyGroup
+    uuid: StringProperty()  # type: ignore[valid-type]
+
+    if TYPE_CHECKING:
+        # This code is auto generated.
+        # To regenerate, run the `uv run tools/property_typing.py` command.
+        node: BonePropertyGroup  # type: ignore[no-redef]
+        colliders: CollectionPropertyProtocol[  # type: ignore[no-redef]
+            Vrm0SecondaryAnimationColliderPropertyGroup
+        ]
+        show_expanded: bool  # type: ignore[no-redef]
+        active_collider_index: int  # type: ignore[no-redef]
+        uuid: str  # type: ignore[no-redef]
+
+
+class Vrm0SecondaryAnimationColliderGroupReferencePropertyGroup(PropertyGroup):
+    @property
+    def collider_group_display_name(self) -> str:
+        armature_data = self.id_data
+        if not isinstance(armature_data, Armature):
+            return ""
+        if not self.collider_group_uuid:
+            return ""
+
+        secondary_animation = get_armature_extension(
+            armature_data
+        ).vrm0.secondary_animation
+        for collider_group in secondary_animation.collider_groups:
+            if collider_group.uuid == self.collider_group_uuid:
+                return collider_group.display_name
+        return ""
+
+    def _update_collider_group_uuid(self, _context: Context) -> None:
+        if not self.collider_group_uuid:
+            return
+
+        armature_data = self.id_data
+        if not isinstance(armature_data, Armature):
+            return
+
+        vrm0 = get_armature_extension(armature_data).vrm0
+        secondary_animation = vrm0.secondary_animation
+        for collider_group in secondary_animation.collider_groups:
+            if self.collider_group_uuid == collider_group.uuid:
+                return
+
+        self.collider_group_uuid = ""
+
+    collider_group_uuid: StringProperty(update=_update_collider_group_uuid)  # type: ignore[valid-type]
+
+    if TYPE_CHECKING:
+        # This code is auto generated.
+        # To regenerate, run the `uv run tools/property_typing.py` command.
+        collider_group_uuid: str  # type: ignore[no-redef]
+
+
+# https://github.com/vrm-c/UniVRM/blob/v0.91.1/Assets/VRM/Runtime/Format/glTF_VRM_SecondaryAnimation.cs#L32-L67
+class Vrm0SecondaryAnimationGroupPropertyGroup(PropertyGroup):
+    comment: StringProperty(  # type: ignore[valid-type]
+        name="Comment",
+        description="Comment about the purpose of springs",
+    )
+
+    # typo in VRM 0.0 specification
+    # https://github.com/vrm-c/vrm-specification/blob/1723a45abfb4f12ac5d3635a3f66dc45e2f93c83/specification/0.0/schema/vrm.secondaryanimation.spring.schema.json#L9-L12
+    stiffiness: FloatProperty(  # type: ignore[valid-type]
+        name="Stiffness",
+        min=0.0,
+        soft_max=4.0,
+        subtype="FACTOR",
+        description="Stiffness of springs",
+    )
+
+    gravity_power: FloatProperty(  # type: ignore[valid-type]
+        name="Gravity Power",
+        min=0.0,
+        soft_max=2.0,
+        subtype="FACTOR",
+        description="Gravity power of springs",
+    )
+
+    def _update_gravity_dir(self, _context: Context) -> None:
+        gravity_dir = Vector(self.gravity_dir)
+        normalized_gravity_dir = gravity_dir.normalized()
+        if (gravity_dir - normalized_gravity_dir).length > 0.0001:
+            self.gravity_dir = normalized_gravity_dir
+
+    gravity_dir: FloatVectorProperty(  # type: ignore[valid-type]
+        size=3,
+        min=-1,
+        max=1,
+        subtype="XYZ",
+        name="Gravity Direction",
+        description="Gravity direction of springs",
+        update=_update_gravity_dir,
+    )
+    drag_force: FloatProperty(  # type: ignore[valid-type]
+        name="Drag Force",
+        min=0.0,
+        max=1.0,
+        subtype="FACTOR",
+        description="Drag Force of springs",
+    )
+    center: PointerProperty(  # type: ignore[valid-type]
+        name="Center",
+        type=BonePropertyGroup,
+        description="Origin of Physics simulation to stop springs on moving",
+    )
+    hit_radius: FloatProperty(  # type: ignore[valid-type]
+        name="Hit Radius",
+        min=0.0,
+        soft_max=0.5,
+        subtype="DISTANCE",
+        description="Hit Radius of springs",
+    )
+    bones: CollectionProperty(  # type: ignore[valid-type]
+        name="Bones",
+        type=BonePropertyGroup,
+        description="Bones of the spring roots",
+    )
+    collider_groups: CollectionProperty(  # type: ignore[valid-type]
+        name="Collider Group",
+        type=Vrm0SecondaryAnimationColliderGroupReferencePropertyGroup,
+        description="Enabled collider Groups of springs",
+    )
+
+    # for UI
+    show_expanded: BoolProperty()  # type: ignore[valid-type]
+    show_expanded_bones: BoolProperty(  # type: ignore[valid-type]
+        name="Bones"
+    )
+    show_expanded_collider_groups: BoolProperty(  # type: ignore[valid-type]
+        name="Collider Groups"
+    )
+
+    active_bone_index: IntProperty(min=0)  # type: ignore[valid-type]
+    active_collider_group_index: IntProperty(min=0)  # type: ignore[valid-type]
+
+    def fixup(self) -> None:
+        armature_data = self.id_data
+        if not isinstance(armature_data, Armature):
+            return
+        ext = get_armature_extension(armature_data)
+        collider_group_uuids = {
+            collider_group.uuid
+            for collider_group in ext.vrm0.secondary_animation.collider_groups
+        }
+        for collider_group_reference in self.collider_groups:
+            collider_group_uuid = collider_group_reference.collider_group_uuid
+            if not collider_group_uuid:
+                continue
+            if collider_group_uuid in collider_group_uuids:
+                collider_group_uuids.remove(collider_group_uuid)
+                continue
+            _logger.error(
+                'Collider group with uuid "%s" not found or duplicated for'
+                ' "%s". Clearing UUID.',
+                collider_group_uuid,
+                collider_group_reference.path_from_id(),
+            )
+            collider_group_reference.collider_group_uuid = ""
+
+    if TYPE_CHECKING:
+        # This code is auto generated.
+        # To regenerate, run the `uv run tools/property_typing.py` command.
+        comment: str  # type: ignore[no-redef]
+        stiffiness: float  # type: ignore[no-redef]
+        gravity_power: float  # type: ignore[no-redef]
+        gravity_dir: Sequence[float]  # type: ignore[no-redef]
+        drag_force: float  # type: ignore[no-redef]
+        center: BonePropertyGroup  # type: ignore[no-redef]
+        hit_radius: float  # type: ignore[no-redef]
+        bones: CollectionPropertyProtocol[  # type: ignore[no-redef]
+            BonePropertyGroup
+        ]
+        collider_groups: CollectionPropertyProtocol[  # type: ignore[no-redef]
+            Vrm0SecondaryAnimationColliderGroupReferencePropertyGroup
+        ]
+        show_expanded: bool  # type: ignore[no-redef]
+        show_expanded_bones: bool  # type: ignore[no-redef]
+        show_expanded_collider_groups: bool  # type: ignore[no-redef]
+        active_bone_index: int  # type: ignore[no-redef]
+        active_collider_group_index: int  # type: ignore[no-redef]
+
+
+# https://github.com/vrm-c/UniVRM/blob/v0.91.1/Assets/VRM/Runtime/Format/glTF_VRM_Meta.cs#L33-L149
+class Vrm0MetaPropertyGroup(PropertyGroup):
+    allowed_user_name_enum, __allowed_user_names = property_group_enum(
+        ("OnlyAuthor", "Only Author", "", "NONE", 0),
+        ("ExplicitlyLicensedPerson", "Explicitly Licensed Person", "", "NONE", 1),
+        ("Everyone", "Everyone", "", "NONE", 2),
+    )
+
+    violent_ussage_name_enum, __violent_ussage_names = property_group_enum(
+        ("Disallow", "Disallow", "", "NONE", 0),
+        ("Allow", "Allow", "", "NONE", 1),
+    )
+
+    sexual_ussage_name_enum, __sexual_ussage_names = property_group_enum(
+        ("Disallow", "Disallow", "", "NONE", 0),
+        ("Allow", "Allow", "", "NONE", 1),
+    )
+
+    commercial_ussage_name_enum, __commercial_ussage_names = property_group_enum(
+        ("Disallow", "Disallow", "", "NONE", 0),
+        ("Allow", "Allow", "", "NONE", 1),
+    )
+
+    (
+        license_name_enum,
+        (
+            LICENSE_NAME_REDISTRIBUTION_PROHIBITED,
+            LICENSE_NAME_CC0,
+            LICENSE_NAME_CC_BY,
+            LICENSE_NAME_CC_BY_NC,
+            LICENSE_NAME_CC_BY_SA,
+            LICENSE_NAME_CC_BY_NC_SA,
+            LICENSE_NAME_CC_BY_ND,
+            LICENSE_NAME_CC_BY_NC_ND,
+            LICENSE_NAME_OTHER,
+        ),
+    ) = property_group_enum(
+        ("Redistribution_Prohibited", "Redistribution Prohibited", "", "NONE", 0),
+        ("CC0", "CC0", "", "NONE", 1),
+        ("CC_BY", "CC BY", "", "NONE", 2),
+        ("CC_BY_NC", "CC BY NC", "", "NONE", 3),
+        ("CC_BY_SA", "CC BY SA", "", "NONE", 4),
+        ("CC_BY_NC_SA", "CC BY NC SA", "", "NONE", 5),
+        ("CC_BY_ND", "CC BY ND", "", "NONE", 6),  # codespell:ignore nd
+        ("CC_BY_NC_ND", "CC BY NC ND", "", "NONE", 7),  # codespell:ignore nd
+        ("Other", "Other", "", "NONE", 8),
+    )
+
+    title: StringProperty(  # type: ignore[valid-type]
+        name="Title",
+        description="Title of the avatar",
+    )
+    version: StringProperty(  # type: ignore[valid-type]
+        name="Version",
+        description="Version of the avatar",
+    )
+    author: StringProperty(  # type: ignore[valid-type]
+        name="Author",
+        description="Author of the avatar",
+    )
+    contact_information: StringProperty(  # type: ignore[valid-type]
+        name="Contact Information",
+        description="Contact Information about the avatar",
+    )
+    reference: StringProperty(  # type: ignore[valid-type]
+        name="Reference",
+        description="Referenced works about the avatar",
+    )
+    allowed_user_name: EnumProperty(  # type: ignore[valid-type]
+        items=allowed_user_name_enum.items(),
+        name="Allowed User",
+        description="Allowed user of the avatar",
+    )
+    violent_ussage_name: EnumProperty(  # type: ignore[valid-type]
+        items=violent_ussage_name_enum.items(),
+        name="Violent Usage",
+        description="Violent usage of the avatar",
+    )
+    sexual_ussage_name: EnumProperty(  # type: ignore[valid-type]
+        items=sexual_ussage_name_enum.items(),
+        name="Sexual Usage",
+        description="Sexual Usage of the avatar",
+    )
+    commercial_ussage_name: EnumProperty(  # type: ignore[valid-type]
+        items=commercial_ussage_name_enum.items(),
+        name="Commercial Usage",
+        description="Commercial Usage of the avatar",
+    )
+    other_permission_url: StringProperty(  # type: ignore[valid-type]
+        name="Other Permission URL",
+        description="URL about other permissions of the avatar",
+    )
+    license_name: EnumProperty(  # type: ignore[valid-type]
+        items=license_name_enum.items(),
+        name="License",
+        description="License of the avatar",
+    )
+    other_license_url: StringProperty(  # type: ignore[valid-type]
+        name="Other License URL",
+        description="URL about other License of the avatar",
+    )
+    texture: PointerProperty(  # type: ignore[valid-type]
+        name="Thumbnail",
+        type=Image,
+        description="Thumbnail of the avatar",
+    )
+
+    if TYPE_CHECKING:
+        # This code is auto generated.
+        # To regenerate, run the `uv run tools/property_typing.py` command.
+        title: str  # type: ignore[no-redef]
+        version: str  # type: ignore[no-redef]
+        author: str  # type: ignore[no-redef]
+        contact_information: str  # type: ignore[no-redef]
+        reference: str  # type: ignore[no-redef]
+        allowed_user_name: str  # type: ignore[no-redef]
+        violent_ussage_name: str  # type: ignore[no-redef]
+        sexual_ussage_name: str  # type: ignore[no-redef]
+        commercial_ussage_name: str  # type: ignore[no-redef]
+        other_permission_url: str  # type: ignore[no-redef]
+        license_name: str  # type: ignore[no-redef]
+        other_license_url: str  # type: ignore[no-redef]
+        texture: Optional[Image]  # type: ignore[no-redef]
+
+
+# https://github.com/vrm-c/UniVRM/blob/v0.91.1/Assets/VRM/Runtime/Format/glTF_VRM_BlendShape.cs#L101-L106
+class Vrm0BlendShapeMasterPropertyGroup(PropertyGroup):
+    blend_shape_groups: CollectionProperty(  # type: ignore[valid-type]
+        name="Blend Shape Group",
+        type=Vrm0BlendShapeGroupPropertyGroup,
+    )
+
+    def restore_blend_shape_group_bind_object_assignments(
+        self, context: Context
+    ) -> None:
+        for blend_shape_group in self.blend_shape_groups:
+            for bind in blend_shape_group.binds:
+                bind.mesh.restore_object_assignment(context)
+
+    # for UI
+    active_blend_shape_group_index: IntProperty(min=0)  # type: ignore[valid-type]
+
+    if TYPE_CHECKING:
+        # This code is auto generated.
+        # To regenerate, run the `uv run tools/property_typing.py` command.
+        blend_shape_groups: CollectionPropertyProtocol[  # type: ignore[no-redef]
+            Vrm0BlendShapeGroupPropertyGroup
+        ]
+        active_blend_shape_group_index: int  # type: ignore[no-redef]
+
+
+# https://github.com/vrm-c/UniVRM/blob/v0.91.1/Assets/VRM/Runtime/Format/glTF_VRM_SecondaryAnimation.cs#L69-L78
+class Vrm0SecondaryAnimationPropertyGroup(PropertyGroup):
+    bone_groups: CollectionProperty(  # type: ignore[valid-type]
+        name="Secondary Animation Groups",
+        type=Vrm0SecondaryAnimationGroupPropertyGroup,
+    )
+    collider_groups: CollectionProperty(  # type: ignore[valid-type]
+        name="Collider Groups",
+        type=Vrm0SecondaryAnimationColliderGroupPropertyGroup,
+    )
+
+    # for UI
+    show_expanded_bone_groups: BoolProperty(  # type: ignore[valid-type]
+        name="Spring Bone Groups",
+    )
+    show_expanded_collider_groups: BoolProperty(  # type: ignore[valid-type]
+        name="Collider Groups",
+    )
+
+    active_bone_group_index: IntProperty(min=0)  # type: ignore[valid-type]
+    active_collider_group_index: IntProperty(min=0)  # type: ignore[valid-type]
+
+    def fixup(self, armature_object: Optional[Object]) -> None:
+        found_uuids = set[str]()
+        for collider_group in self.collider_groups:
+            if collider_group.uuid and collider_group.uuid not in found_uuids:
+                found_uuids.add(collider_group.uuid)
+                continue
+            new_uuid = uuid.uuid4().hex
+            _logger.error(
+                "Collider group %s in secondary animation has no UUID or duplicated"
+                " UUID. Assigning a new UUID %s.",
+                collider_group.path_from_id(),
+                new_uuid,
+            )
+            collider_group.uuid = new_uuid
+
+        for collider_group in self.collider_groups:
+            collider_group.fixup(armature_object)
+
+        for bone_group in self.bone_groups:
+            bone_group.fixup()
+
+    if TYPE_CHECKING:
+        # This code is auto generated.
+        # To regenerate, run the `uv run tools/property_typing.py` command.
+        bone_groups: CollectionPropertyProtocol[  # type: ignore[no-redef]
+            Vrm0SecondaryAnimationGroupPropertyGroup
+        ]
+        collider_groups: CollectionPropertyProtocol[  # type: ignore[no-redef]
+            Vrm0SecondaryAnimationColliderGroupPropertyGroup
+        ]
+        show_expanded_bone_groups: bool  # type: ignore[no-redef]
+        show_expanded_collider_groups: bool  # type: ignore[no-redef]
+        active_bone_group_index: int  # type: ignore[no-redef]
+        active_collider_group_index: int  # type: ignore[no-redef]
+
+
+# https://github.com/vrm-c/UniVRM/blob/v0.91.1/Assets/VRM/Runtime/Format/glTF_VRM_extensions.cs#L8-L48
+class Vrm0PropertyGroup(PropertyGroup):
+    meta: PointerProperty(  # type: ignore[valid-type]
+        name="VRM Meta",
+        type=Vrm0MetaPropertyGroup,
+    )
+    humanoid: PointerProperty(  # type: ignore[valid-type]
+        name="VRM Humanoid",
+        type=Vrm0HumanoidPropertyGroup,
+    )
+    first_person: PointerProperty(  # type: ignore[valid-type]
+        name="VRM First Person",
+        type=Vrm0FirstPersonPropertyGroup,
+    )
+    blend_shape_master: PointerProperty(  # type: ignore[valid-type]
+        name="VRM Blend Shape Master",
+        type=Vrm0BlendShapeMasterPropertyGroup,
+    )
+    secondary_animation: PointerProperty(  # type: ignore[valid-type]
+        name="VRM Secondary Animation",
+        type=Vrm0SecondaryAnimationPropertyGroup,
+    )
+    if TYPE_CHECKING:
+        # This code is auto generated.
+        # To regenerate, run the `uv run tools/property_typing.py` command.
+        meta: Vrm0MetaPropertyGroup  # type: ignore[no-redef]
+        humanoid: Vrm0HumanoidPropertyGroup  # type: ignore[no-redef]
+        first_person: Vrm0FirstPersonPropertyGroup  # type: ignore[no-redef]
+        blend_shape_master: Vrm0BlendShapeMasterPropertyGroup  # type: ignore[no-redef]
+        secondary_animation: (  # type: ignore[no-redef]
+            Vrm0SecondaryAnimationPropertyGroup
+        )
+
+
+def clear_global_variables() -> None:
+    Vrm0HumanoidPropertyGroup.pointer_to_last_bone_names_str.clear()
+    Vrm0BlendShapeGroupPropertyGroup.pending_preview_update_armature_data_names.clear()

@@ -8,16 +8,16 @@ RUN apt-get update && apt-get install -y \
     && chmod a+rx /usr/local/bin/yt-dlp \
     && rm -rf /var/lib/apt/lists/*
 
-# Puppeteer is no longer used for DJ streaming. These variables are left unset.
-
 RUN yt-dlp --version
 
 WORKDIR /app
 
-COPY worker/package*.json ./
+COPY package*.json ./
 RUN npm ci --omit=dev
 
-COPY worker/src ./src
+COPY src ./src
+COPY youtube-cookies.txt ./youtube-cookies.txt
+COPY youtube-cookies.txt /data/youtube-cookies.txt
 
 EXPOSE 3002
 
