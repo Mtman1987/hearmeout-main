@@ -9,6 +9,9 @@ primary_region = "iad"
   PORT = "3002"
   MUSIC_CACHE_DIR = "/data/music"
   APP_URL = "https://hearmeout-main.fly.dev"
+  DJ_WORKER_SECRET = "hmo-prod-secret-2024"
+  LIVEKIT_URL = "wss://hearmeout-6ntnbsdm.livekit.cloud"
+  NEXT_PUBLIC_LIVEKIT_URL = "wss://hearmeout-6ntnbsdm.livekit.cloud"
 
 [mounts]
   source = "dj_data"

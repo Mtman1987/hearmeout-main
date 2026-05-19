@@ -6,7 +6,7 @@ import { LiveKitRoom, useConnectionState, useRoomContext } from '@livekit/compon
 import { ConnectionState } from 'livekit-client';
 import { SidebarProvider, SidebarInset, SidebarTrigger, useSidebar } from '@/components/ui/sidebar';
 import { Button } from "@/components/ui/button";
-import { Copy, MessageSquare, X, LoaderCircle, FrameIcon, Music } from 'lucide-react';
+import { Copy, X, LoaderCircle, FrameIcon, Music } from 'lucide-react';
 import LeftSidebar from '@/app/components/LeftSidebar';
 import UserList from './_components/UserList';
 import ChatBox from './_components/ChatBox';
@@ -17,11 +17,11 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { useSession } from '@/hooks/use-session';
 import { useDoc } from '@/hooks/use-db';
 import { dbUpdate, dbSet } from '@/lib/db-helpers';
-import { generateLiveKitToken, generateMusicRoomToken } from '@/app/actions';
-import { PlaylistItem } from "@/types/playlist";
 import { usePopout } from '@/components/PopoutWidgets/PopoutProvider';
 import { dbGet } from '@/lib/db-helpers';
 import { Room as LKRoom, RoomEvent, Track, RemoteTrack } from 'livekit-client';
+import { generateLiveKitToken, generateMusicRoomToken } from '@/app/actions';
+import { PlaylistItem } from "@/types/playlist";
 
 interface RoomData {
   id: string;
@@ -96,8 +96,6 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
     const [localVolume, setLocalVolume] = useState(0.5);
     const [musicStatus, setMusicStatus] = useState<string | null>(null);
     const [showDJ, setShowDJ] = useState(false);
-    const [mountDjEngine, setMountDjEngine] = useState(false);
-    const djEngineRef = useRef<HTMLIFrameElement | null>(null);
 
     const { data: userSettings } = useDoc<{ streamMode?: boolean; twitchChannel?: string }>(
       user ? `rooms/${roomId}/users` : null,
@@ -143,13 +141,6 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
     const handleStartDJ = useCallback(async () => {
         setDjStarting(true);
         try {
-            setMountDjEngine(true);
-            const startInFrame = () => {
-                const win = djEngineRef.current?.contentWindow as (Window & { __HEARMEOUT_DJ__?: { startSession?: () => void } }) | null;
-                win?.__HEARMEOUT_DJ__?.startSession?.();
-            };
-            startInFrame();
-            await handleStartMusicAudio().catch(() => {});
             const res = await fetch('/api/dj', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -159,16 +150,14 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
             if (!data.success) {
                 toast({ variant: 'destructive', title: 'DJ Error', description: data.message });
             } else {
-                toast({ title: 'DJ Connected', description: data.message || 'HearMeOut DJ is starting.' });
-                window.setTimeout(startInFrame, 250);
-                window.setTimeout(startInFrame, 1000);
+                toast({ title: 'DJ Connected', description: data.message || 'Server DJ is starting.' });
             }
         } catch (err) {
             toast({ variant: 'destructive', title: 'DJ Error', description: 'Failed to start DJ' });
         } finally {
             setDjStarting(false);
         }
-    }, [handleStartMusicAudio, roomId, toast]);
+    }, [roomId, toast]);
 
     const handleStopDJ = useCallback(async () => {
         try {
@@ -395,34 +384,30 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
       );
     }
 
-    if (!livekitUrl || !voiceToken) {
-        return (
-            <div className="flex-1 flex flex-col items-center justify-center text-center p-4">
-                <h3 className="text-2xl font-bold font-headline mb-4">Voice Chat Unavailable</h3>
-                <p className="text-muted-foreground mb-8 max-w-sm">Voice features are temporarily disabled. You can still use text chat and music features.</p>
-            </div>
-        );
-    }
+    const voiceReady = !!livekitUrl && !!voiceToken;
 
     return (
+      voiceReady ? (
       <LiveKitRoom serverUrl={livekitUrl} token={voiceToken} connect={true} audio={!userSettings?.streamMode} video={false}
           options={{ dynacast: true, adaptiveStream: true }}
           onError={(err) => { toast({ variant: 'destructive', title: 'Connection Error', description: err.message }); }}>
+        {renderRoomUI()}
+      </LiveKitRoom>
+      ) : renderRoomUI()
+    );
+
+    function renderRoomUI() {
+      return (
+        <>
         <div className={cn("bg-secondary/30 md:peer-data-[state=collapsed]:peer-data-[variant=inset]:ml-[calc(var(--sidebar-width-icon)_+_1rem)] md:peer-data-[variant=inset]:ml-[calc(var(--sidebar-width)_+_1rem)] duration-200 transition-[margin-left,margin-right]", chatOpen && "md:mr-[28rem]")}>
             <SidebarInset>
                 <div className="flex flex-col h-screen relative">
-                    {mountDjEngine && (
-                        <iframe
-                            ref={djEngineRef}
-                            src={`/dj/${roomId}`}
-                            title={`DJ Engine ${roomId}`}
-                            className="hidden"
-                            allow="autoplay"
-                        />
-                    )}
                     <RoomHeader roomName={room.name} onToggleChat={() => setChatOpen(!chatOpen)} showDJ={showDJ} onToggleDJ={() => setShowDJ(v => !v)} />
 
                     <main className="flex-1 p-4 md:p-6 overflow-y-auto space-y-6">
+                        {/* Hidden audio element for LiveKit music track attachment */}
+                        <audio ref={musicAudioRef} className="sr-only" />
+
                         <UserList
                           roomId={roomId}
                           musicStatus={musicStatus}
@@ -455,8 +440,9 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
                 />
             </div>
         </div>
-      </LiveKitRoom>
-    );
+        </>
+      );
+    }
 }
 
 function RoomPageContent() {

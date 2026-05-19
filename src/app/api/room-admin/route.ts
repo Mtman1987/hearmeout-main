@@ -47,8 +47,9 @@ export async function POST(req: NextRequest) {
         });
         // Remove from room users
         db.delete(`rooms/${roomId}/users`, targetUserId);
-        // Kick from LiveKit
-        if (lk) await lk.removeParticipant(roomId, targetUserId).catch(() => {});
+        // Kick from LiveKit (if configured)
+        if (!lk) return NextResponse.json({ success: true, action: 'banned', livekit: 'not-configured' });
+        await lk.removeParticipant(roomId, targetUserId).catch(() => {});
         return NextResponse.json({ success: true, action: 'banned' });
       }
 
@@ -58,7 +59,7 @@ export async function POST(req: NextRequest) {
       }
 
       case 'mute': {
-        // Server-side mute via LiveKit — revoke publish permission
+        // Server-side mute via LiveKit — revoke publish permission (if configured)
         if (lk) {
           await lk.updateParticipant(roomId, targetUserId, undefined, {
             canPublish: false,

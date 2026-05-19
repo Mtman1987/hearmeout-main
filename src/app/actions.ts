@@ -38,7 +38,7 @@ export async function generateLiveKitToken(roomName: string, participantIdentity
     // Check environment variables
     const apiKey = process.env.LIVEKIT_API_KEY;
     const apiSecret = process.env.LIVEKIT_API_SECRET;
-    const livekitUrl = process.env.NEXT_PUBLIC_LIVEKIT_URL;
+    const livekitUrl = process.env.NEXT_PUBLIC_LIVEKIT_URL || process.env.LIVEKIT_URL;
 
     console.log('[generateLiveKitToken] Checking environment variables...');
     console.log('[generateLiveKitToken] LIVEKIT_API_KEY exists:', !!apiKey);
@@ -54,8 +54,8 @@ export async function generateLiveKitToken(roomName: string, participantIdentity
       throw new Error('LIVEKIT_API_SECRET is not configured in environment variables.');
     }
     if (!livekitUrl) {
-      console.error('[generateLiveKitToken] NEXT_PUBLIC_LIVEKIT_URL missing');
-      throw new Error('NEXT_PUBLIC_LIVEKIT_URL is not configured in environment variables.');
+      console.error('[generateLiveKitToken] LiveKit URL missing');
+      throw new Error('LiveKit not configured. Required: NEXT_PUBLIC_LIVEKIT_URL (or LIVEKIT_URL).');
     }
 
     console.log('[generateLiveKitToken] Creating token for room:', roomName, 'participant:', participantIdentity);
@@ -82,7 +82,13 @@ export async function generateLiveKitToken(roomName: string, participantIdentity
 export async function generateMusicRoomToken(roomName: string, participantIdentity: string, participantName: string, isDJ: boolean) {
   const apiKey = process.env.LIVEKIT_API_KEY;
   const apiSecret = process.env.LIVEKIT_API_SECRET;
-  if (!apiKey || !apiSecret) throw new Error('LiveKit credentials not configured.');
+  const livekitUrl = process.env.NEXT_PUBLIC_LIVEKIT_URL || process.env.LIVEKIT_URL;
+
+  if (!apiKey || !apiSecret || !livekitUrl) {
+    throw new Error(
+      'LiveKit not configured. Required: LIVEKIT_API_KEY, LIVEKIT_API_SECRET, and NEXT_PUBLIC_LIVEKIT_URL (or LIVEKIT_URL).',
+    );
+  }
 
   // DJ bot gets a fixed identity, listeners get prefixed identity to avoid collision
   const identity = isDJ ? 'HearMeOutDJ' : `listener-${participantIdentity}`;

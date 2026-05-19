@@ -11,7 +11,8 @@
     "@livekit/rtc-node": "^0.12.2",
     "cors": "^2.8.5",
     "dotenv": "^16.0.3",
-    "express": "^4.18.2"
+    "express": "^4.18.2",
+    "youtubei.js": "^17.0.1"
   },
   "devDependencies": {
     "nodemon": "^3.0.1"

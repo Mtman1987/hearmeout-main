@@ -12,12 +12,12 @@ RUN yt-dlp --version
 
 WORKDIR /app
 
-COPY package*.json ./
+COPY worker/package*.json ./
 RUN npm ci --omit=dev
 
-COPY src ./src
-COPY youtube-cookies.txt ./youtube-cookies.txt
-COPY youtube-cookies.txt /data/youtube-cookies.txt
+COPY worker/src ./src
+COPY worker/youtube-cookies.txt ./youtube-cookies.txt
+COPY worker/youtube-cookies.txt /data/youtube-cookies.txt
 
 EXPOSE 3002
 

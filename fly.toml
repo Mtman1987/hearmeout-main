@@ -12,6 +12,8 @@ primary_region = "iad"
 
 [env]
   DJ_WORKER_URL = "https://hmo-dj-worker.fly.dev"
+  DJ_WORKER_SECRET = "hmo-prod-secret-2024"
+  LIVEKIT_URL = "wss://hearmeout-6ntnbsdm.livekit.cloud"
   NODE_ENV = "production"
 
 [mounts]

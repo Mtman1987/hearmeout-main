@@ -1,74 +1,22 @@
-// DJ Service — forwards to the hmo-dj-worker
-
+// DJ Service — thin wrapper for any server-side code that needs to talk to the worker
 import { getDjWorkerSecret, getDjWorkerUrl } from './dj-worker-config';
 
-const DJ_WORKER_URL = getDjWorkerUrl();
-const DJ_WORKER_SECRET = getDjWorkerSecret();
-
-async function workerFetch(path: string, options: RequestInit = {}): Promise<Response> {
-  return fetch(`${DJ_WORKER_URL}${path}`, {
-    ...options,
-    headers: {
-      ...((options.headers as Record<string, string>) || {}),
-      Authorization: `Bearer ${DJ_WORKER_SECRET}`,
-    },
-  });
-}
-
 export async function startDJ(roomId: string): Promise<{ success: boolean; message: string }> {
-  if (!DJ_WORKER_URL) return { success: false, message: 'DJ_WORKER_URL not configured' };
-  try {
-    const res = await workerFetch('/dj', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action: 'start', roomId }),
-    });
-    const data = await res.json().catch(() => null);
-    if (!res.ok) {
-      if (res.status === 401) {
-        return {
-          success: false,
-          message: 'DJ worker rejected the app secret. Set the same DJ_WORKER_SECRET on hearmeout-main and hmo-dj-worker.',
-        };
-      }
-      return { success: false, message: data?.message || data?.error || `Worker returned ${res.status}` };
-    }
-    return data;
-  } catch (err: any) {
-    console.error('[DJ] Worker request failed:', err.message);
-    return { success: false, message: `Worker error: ${err.message}` };
-  }
+  return workerAction({ action: 'start', roomId });
 }
 
 export async function stopDJ(roomId: string): Promise<{ success: boolean; message: string }> {
-  if (!DJ_WORKER_URL) return { success: false, message: 'DJ_WORKER_URL not configured' };
-  try {
-    const res = await workerFetch('/dj', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action: 'stop', roomId }),
-    });
-    const data = await res.json().catch(() => null);
-    if (!res.ok) {
-      if (res.status === 401) {
-        return {
-          success: false,
-          message: 'DJ worker rejected the app secret. Set the same DJ_WORKER_SECRET on hearmeout-main and hmo-dj-worker.',
-        };
-      }
-      return { success: false, message: data?.message || data?.error || `Worker returned ${res.status}` };
-    }
-    return data;
-  } catch (err: any) {
-    console.error('[DJ] Worker stop failed:', err.message);
-    return { success: false, message: `Worker error: ${err.message}` };
-  }
+  return workerAction({ action: 'stop', roomId });
 }
 
 export async function isDJRunning(roomId: string): Promise<boolean> {
-  if (!DJ_WORKER_URL) return false;
+  const url = getDjWorkerUrl();
+  const secret = getDjWorkerSecret();
+  if (!url || !secret) return false;
   try {
-    const res = await workerFetch(`/dj?roomId=${encodeURIComponent(roomId)}`);
+    const res = await fetch(`${url}/dj?roomId=${encodeURIComponent(roomId)}`, {
+      headers: { Authorization: `Bearer ${secret}` },
+    });
     const data = await res.json();
     return !!data.running;
   } catch {
@@ -77,15 +25,30 @@ export async function isDJRunning(roomId: string): Promise<boolean> {
 }
 
 export async function getActiveInstances(): Promise<Array<{ roomId: string; startedAt: Date }>> {
-  if (!DJ_WORKER_URL) return [];
+  const url = getDjWorkerUrl();
+  const secret = getDjWorkerSecret();
+  if (!url || !secret) return [];
   try {
-    const res = await workerFetch('/dj');
+    const res = await fetch(`${url}/dj`, { headers: { Authorization: `Bearer ${secret}` } });
     const data = await res.json();
-    return (data.instances || []).map((i: any) => ({
-      roomId: i.roomId,
-      startedAt: new Date(i.startedAt),
-    }));
+    return (data.instances || []).map((i: any) => ({ roomId: i.roomId, startedAt: new Date(i.startedAt) }));
   } catch {
     return [];
+  }
+}
+
+async function workerAction(body: Record<string, unknown>): Promise<{ success: boolean; message: string }> {
+  const url = getDjWorkerUrl();
+  const secret = getDjWorkerSecret();
+  if (!url || !secret) return { success: false, message: 'DJ worker not configured' };
+  try {
+    const res = await fetch(`${url}/dj`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${secret}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    return await res.json().catch(() => ({ success: false, message: `Worker returned ${res.status}` }));
+  } catch (err: any) {
+    return { success: false, message: `Worker unreachable: ${err.message}` };
   }
 }

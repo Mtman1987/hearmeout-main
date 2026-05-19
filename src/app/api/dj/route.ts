@@ -1,69 +1,63 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { startDJ, stopDJ, isDJRunning, getActiveInstances } from '@/lib/dj-service';
-import { getSession } from '@/lib/auth';
-import { db, ensureDb } from '@/lib/db';
+import { getDjWorkerUrl, getDjWorkerSecret } from '@/lib/dj-worker-config';
 
-async function canControlRoom(uid: string, roomId: string): Promise<boolean> {
-  await ensureDb();
-  const room = db.get('rooms', roomId);
-  if (!room) return false;
+async function forwardToWorker(body: Record<string, unknown>): Promise<NextResponse> {
+  const url = getDjWorkerUrl();
+  const secret = getDjWorkerSecret();
+  if (!url || !secret) {
+    return NextResponse.json({ success: false, message: 'DJ worker not configured (DJ_WORKER_URL or DJ_WORKER_SECRET missing)' }, { status: 500 });
+  }
 
-  const ownerId = room.ownerId || room.createdBy || room.hostId;
-  if (ownerId === uid) return true;
-  if (Array.isArray(room.djWhitelist) && room.djWhitelist.includes(uid)) return true;
-  if (Array.isArray(room.admins) && room.admins.includes(uid)) return true;
-
-  const appUser = db.get('users', uid);
-  return !!appUser?.isAdmin;
+  try {
+    const res = await fetch(`${url}/dj`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${secret}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const data = await res.json().catch(() => ({ success: false, message: `Worker returned ${res.status}` }));
+    return NextResponse.json(data, { status: res.ok ? 200 : res.status });
+  } catch (err: any) {
+    return NextResponse.json({ success: false, message: `Worker unreachable: ${err.message}` }, { status: 503 });
+  }
 }
 
 export async function POST(request: NextRequest) {
-  const session = await getSession();
-
   try {
-    const { action, roomId } = await request.json();
+    const body = await request.json();
+    const { action, roomId } = body;
 
     if (!roomId) {
-      return NextResponse.json({ error: 'roomId required', message: 'Room ID is required.' }, { status: 400 });
+      return NextResponse.json({ success: false, message: 'roomId required' }, { status: 400 });
+    }
+    if (!action) {
+      return NextResponse.json({ success: false, message: 'action required' }, { status: 400 });
     }
 
-    if (session && !(await canControlRoom(session.uid, roomId))) {
-      // In dev, allow any authenticated user to control DJ
-      if (process.env.NODE_ENV !== 'development') {
-        return NextResponse.json(
-          { error: 'Forbidden', message: 'Only the room owner, an admin, or an approved DJ can control this room DJ.' },
-          { status: 403 },
-        );
-      }
-    }
-
-    if (action === 'start') {
-      const result = await startDJ(roomId);
-      return NextResponse.json(result, { status: result.success ? 200 : 503 });
-    }
-
-    if (action === 'stop') {
-      const result = await stopDJ(roomId);
-      return NextResponse.json(result, { status: result.success ? 200 : 503 });
-    }
-
-    return NextResponse.json({ error: 'Invalid action', message: 'Use "start" or "stop".' }, { status: 400 });
+    // Forward all actions (start, stop, play-url, debug-play-url) to the worker
+    return forwardToWorker(body);
   } catch (err: any) {
-    return NextResponse.json({ error: err.message, message: 'DJ request failed.' }, { status: 500 });
+    return NextResponse.json({ success: false, message: err.message }, { status: 500 });
   }
 }
 
 export async function GET(request: NextRequest) {
-  const session = await getSession();
+  const url = getDjWorkerUrl();
+  const secret = getDjWorkerSecret();
+  if (!url || !secret) {
+    return NextResponse.json({ instances: [] });
+  }
 
   const { searchParams } = new URL(request.url);
   const roomId = searchParams.get('roomId');
 
-  if (roomId) {
-    const running = await isDJRunning(roomId);
-    return NextResponse.json({ running });
+  try {
+    const endpoint = roomId ? `/dj?roomId=${encodeURIComponent(roomId)}` : '/dj';
+    const res = await fetch(`${url}${endpoint}`, {
+      headers: { Authorization: `Bearer ${secret}` },
+    });
+    const data = await res.json();
+    return NextResponse.json(data);
+  } catch {
+    return NextResponse.json(roomId ? { running: false } : { instances: [] });
   }
-
-  const instances = await getActiveInstances();
-  return NextResponse.json({ instances });
 }

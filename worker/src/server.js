@@ -1,23 +1,31 @@
+const { resolve, join } = require('path');
+const rootDir = resolve(__dirname, '..', '..');
+
+// In Docker/production, env vars are injected directly.
+// In local dev, load from root .env.local and .env files.
+if (process.env.NODE_ENV !== 'production') {
+  require('dotenv').config({ path: resolve(rootDir, '.env.local') });
+  require('dotenv').config({ path: resolve(rootDir, '.env') });
+}
+
 const express = require('express');
 const cors = require('cors');
 const { execFile, spawn } = require('child_process');
 const { promisify } = require('util');
 const { existsSync, mkdirSync, unlinkSync, statSync, readdirSync, createReadStream } = require('fs');
-const { join } = require('path');
 const { AudioSource, AudioFrame, LocalAudioTrack, Room, RoomEvent, TrackPublishOptions, TrackSource } = require('@livekit/rtc-node');
-require('dotenv').config();
 
 const execFileAsync = promisify(execFile);
 
 const app = express();
 const PORT = process.env.PORT || 3002;
-const WORKER_SECRET = process.env.DJ_WORKER_SECRET || 'change-me-in-production';
+const WORKER_SECRET = process.env.DJ_WORKER_SECRET || '';
 const APP_URL = process.env.APP_URL || 'https://hearmeout-main.fly.dev';
 
 // ── Config ─────────────────────────────────────────────────────────────
 const YT_DLP = process.env.YT_DLP_PATH || 'yt-dlp';
-const CACHE_DIR = process.env.MUSIC_CACHE_DIR || '/data/music';
-const COOKIES_FILE = ['/data/youtube-cookies.txt', join(process.cwd(), 'youtube-cookies.txt')]
+const CACHE_DIR = process.env.MUSIC_CACHE_DIR || (process.env.NODE_ENV === 'production' ? '/data/music' : join(__dirname, '..', '.cache', 'music'));
+const COOKIES_FILE = ['/data/youtube-cookies.txt', join(__dirname, '..', 'youtube-cookies.txt')]
   .find(p => existsSync(p)) || '';
 
 if (!existsSync(CACHE_DIR)) mkdirSync(CACHE_DIR, { recursive: true });
@@ -101,25 +109,65 @@ async function ripAndCache(videoId) {
   } finally { inProgress.delete(videoId); }
 }
 
-// ── Audio URL Extraction ───────────────────────────────────────────────
-async function extractWithYtDlp(videoId) {
+// ── Audio URL Extraction via youtubei.js ───────────────────────────────
+let innertubeInstance = null;
+async function getInnertube() {
+  if (!innertubeInstance) {
+    const { Innertube } = await import('youtubei.js');
+    innertubeInstance = await Innertube.create();
+  }
+  return innertubeInstance;
+}
+
+async function extractWithYoutubei(videoId) {
   try {
-    console.log(`[Extract] yt-dlp for ${videoId}...`);
+    console.log(`[Extract] youtubei.js for ${videoId}...`);
+    const yt = await getInnertube();
+    const info = await yt.getBasicInfo(videoId);
+    if (!info.streaming_data) {
+      console.log(`[Extract] No streaming data for ${videoId}`);
+      return null;
+    }
+    const formats = info.streaming_data.adaptive_formats
+      .filter(f => f.has_audio && !f.has_video)
+      .sort((a, b) => (b.bitrate || 0) - (a.bitrate || 0));
+    if (!formats.length) {
+      console.log(`[Extract] No audio formats for ${videoId}`);
+      return null;
+    }
+    const best = formats[0];
+    const url = best.decipher(yt.session.player);
+    if (url) {
+      console.log(`[Extract] ✅ Got URL for ${videoId} (${best.bitrate}bps)`);
+      return url;
+    }
+    return null;
+  } catch (e) {
+    console.log(`[Extract] youtubei.js failed: ${e.message?.slice(0, 200)}`);
+    // Reset instance on failure in case session expired
+    innertubeInstance = null;
+    return null;
+  }
+}
+
+// Fallback to yt-dlp if youtubei.js fails
+async function extractAudioUrl(videoId) {
+  const url = await extractWithYoutubei(videoId);
+  if (url) return url;
+  // yt-dlp fallback
+  try {
+    console.log(`[Extract] Falling back to yt-dlp for ${videoId}...`);
     const { stdout } = await execFileAsync(YT_DLP, [
       ...ytdlpExtraArgs(),
       '--no-warnings', '-f', 'bestaudio[ext=m4a]/bestaudio',
       '--get-url', `https://www.youtube.com/watch?v=${videoId}`,
     ], { timeout: 30000 });
-    const url = stdout.trim();
-    if (url && url.startsWith('http')) {
-      console.log(`[Extract] ✅ Got URL for ${videoId}`);
-      return url;
-    }
-    return null;
+    const result = stdout.trim();
+    if (result && result.startsWith('http')) return result;
   } catch (e) {
-    console.log(`[Extract] yt-dlp failed: ${e.message?.slice(0, 200)}`);
-    return null;
+    console.log(`[Extract] yt-dlp fallback also failed: ${e.message?.slice(0, 100)}`);
   }
+  return null;
 }
 
 const urlCache = new Map();
@@ -164,10 +212,10 @@ app.get('/extract', authorizeWorker, async (req, res) => {
   if (existsSync(join(CACHE_DIR, `${videoId}.mp3`))) return res.json({ videoId, cached: true, source: 'mp3' });
   let url = getCachedExtractedUrl(videoId);
   if (url) return res.json({ videoId, cached: false, url, source: 'url-cache' });
-  url = await extractWithYtDlp(videoId);
+  url = await extractAudioUrl(videoId);
   if (!url) return res.status(404).json({ error: 'Extraction failed' });
   setCachedExtractedUrl(videoId, url);
-  return res.json({ videoId, cached: false, url, source: 'yt-dlp' });
+  return res.json({ videoId, cached: false, url, source: 'youtubei' });
 });
 
 app.get('/stream', authorizeWorker, async (req, res) => {
@@ -259,6 +307,7 @@ class DJSession {
     this.currentVideoId = null;
     this.stopped = false;
     this.playing = false;
+    this.ready = false; // true once track is published and source can accept frames
   }
 
   async start() {
@@ -268,7 +317,7 @@ class DJSession {
     const token = await this.getLiveKitToken();
     if (!token) throw new Error('Failed to get LiveKit token');
 
-    const livekitUrl = process.env.LIVEKIT_URL || process.env.NEXT_PUBLIC_LIVEKIT_URL;
+    const livekitUrl = process.env.LIVEKIT_URL || process.env.NEXT_PUBLIC_LIVEKIT_URL || 'wss://hearmeout-6ntnbsdm.livekit.cloud';
     if (!livekitUrl) throw new Error('LIVEKIT_URL not configured. Set LIVEKIT_URL or NEXT_PUBLIC_LIVEKIT_URL');
 
     // Connect to LiveKit
@@ -283,6 +332,11 @@ class DJSession {
       source: TrackSource.MICROPHONE,
     }));
     console.log(`[DJ:${this.roomId}] Audio track published`);
+
+    // Wait for the track to be fully negotiated before sending frames
+    await new Promise(r => setTimeout(r, 500));
+    this.ready = true;
+    console.log(`[DJ:${this.roomId}] Audio source ready for frames`);
 
     // Start polling room state for track changes
     this.startPolling();
@@ -372,32 +426,41 @@ class DJSession {
 
   async playTrack(videoId, roomData) {
     this.stopPlayback();
-    if (this.stopped) return;
+    if (this.stopped || !this.ready) return;
 
-    // Ensure audio is cached
-    const cached = await ripAndCache(videoId);
-    if (!cached) {
-      console.error(`[DJ:${this.roomId}] Failed to cache ${videoId}, skipping`);
+    // Try cached file first
+    let filePath = join(CACHE_DIR, `${videoId}.m4a`);
+    if (!existsSync(filePath)) filePath = join(CACHE_DIR, `${videoId}.mp3`);
+
+    if (existsSync(filePath)) {
+      console.log(`[DJ:${this.roomId}] Playing cached ${filePath}`);
+      return this._playFile(filePath, roomData);
+    }
+
+    // Extract URL and stream directly (no download required)
+    let audioUrl = getCachedExtractedUrl(videoId);
+    if (!audioUrl) audioUrl = await extractAudioUrl(videoId);
+    if (!audioUrl) {
+      console.error(`[DJ:${this.roomId}] Failed to extract URL for ${videoId}, skipping`);
       await this.patchRoom({ djStatus: `Failed: ${videoId}` });
       setTimeout(() => this.advanceTrack(roomData), 500);
       return;
     }
+    setCachedExtractedUrl(videoId, audioUrl);
 
-    // Find cached file
-    let filePath = join(CACHE_DIR, `${videoId}.m4a`);
-    if (!existsSync(filePath)) filePath = join(CACHE_DIR, `${videoId}.mp3`);
-    if (!existsSync(filePath)) {
-      console.error(`[DJ:${this.roomId}] Cache file missing for ${videoId}`);
-      setTimeout(() => this.advanceTrack(roomData), 500);
-      return;
-    }
-
-    console.log(`[DJ:${this.roomId}] Playing ${filePath}`);
+    console.log(`[DJ:${this.roomId}] Streaming ${videoId} from URL`);
     this.playing = true;
+    this._spawnFfmpeg(audioUrl, roomData);
+  }
 
-    // Spawn ffmpeg to decode to raw PCM s16le stereo 48kHz
+  _playFile(filePath, roomData) {
+    this.playing = true;
+    this._spawnFfmpeg(filePath, roomData);
+  }
+
+  _spawnFfmpeg(input, roomData) {
     this.ffmpegProcess = spawn('ffmpeg', [
-      '-i', filePath,
+      '-i', input,
       '-f', 's16le',
       '-acodec', 'pcm_s16le',
       '-ar', String(SAMPLE_RATE),
@@ -407,25 +470,37 @@ class DJSession {
     ]);
 
     let buffer = Buffer.alloc(0);
+    let frameQueue = [];
+    let draining = false;
+
+    const drainQueue = async () => {
+      if (draining) return;
+      draining = true;
+      while (frameQueue.length > 0 && !this.stopped && this.ready) {
+        const audioFrame = frameQueue.shift();
+        try {
+          await this.audioSource.captureFrame(audioFrame);
+        } catch (err) {
+          console.warn(`[DJ:${this.roomId}] captureFrame error (non-fatal):`, err.message);
+          break;
+        }
+      }
+      draining = false;
+    };
 
     this.ffmpegProcess.stdout.on('data', (chunk) => {
-      if (this.stopped) return;
+      if (this.stopped || !this.ready) return;
       buffer = Buffer.concat([buffer, chunk]);
 
-      // Feed frames to LiveKit audio source
       while (buffer.length >= BYTES_PER_FRAME) {
         const frameData = buffer.subarray(0, BYTES_PER_FRAME);
         buffer = buffer.subarray(BYTES_PER_FRAME);
-
-        // Convert to Int16Array — use subarray to avoid buffer.slice instability
-        const samples = new Int16Array(frameData.buffer, frameData.byteOffset, frameData.length / 2);
+        const copied = Buffer.from(frameData);
+        const samples = new Int16Array(copied.buffer, copied.byteOffset, copied.length / 2);
         const audioFrame = new AudioFrame(samples, SAMPLE_RATE, CHANNELS, SAMPLES_PER_FRAME);
-        try {
-          this.audioSource.captureFrame(audioFrame);
-        } catch (err) {
-          // Audio source may be closed
-        }
+        frameQueue.push(audioFrame);
       }
+      drainQueue();
     });
 
     this.ffmpegProcess.stderr.on('data', (data) => {
@@ -455,6 +530,14 @@ class DJSession {
       this.ffmpegProcess = null;
     }
     this.playing = false;
+  }
+
+  async waitReady() {
+    // Wait up to 5s for the session to be ready
+    for (let i = 0; i < 50 && !this.ready; i++) {
+      await new Promise(r => setTimeout(r, 100));
+    }
+    if (!this.ready) throw new Error('DJ session did not become ready in time');
   }
 
   async advanceTrack(roomData) {
@@ -519,13 +602,85 @@ class DJSession {
     await this.patchRoom({ djActive: false, isPlaying: false, djStatus: 'DJ stopped' });
     console.log(`[DJ:${this.roomId}] Session stopped`);
   }
+
+  async playFromUrl(audioUrl, title) {
+    this.stopPlayback();
+    if (this.stopped) return;
+
+    console.log(`[DJ:${this.roomId}] Playing from URL: ${title}`);
+    this.playing = true;
+    await this.patchRoom({ djStatus: `Playing: ${title}` });
+
+    // Use ffmpeg to fetch the URL and decode to raw PCM
+    this.ffmpegProcess = spawn('ffmpeg', [
+      '-i', audioUrl,
+      '-f', 's16le',
+      '-acodec', 'pcm_s16le',
+      '-ar', String(SAMPLE_RATE),
+      '-ac', String(CHANNELS),
+      '-loglevel', 'error',
+      'pipe:1',
+    ]);
+
+    let buffer = Buffer.alloc(0);
+    let frameQueue = [];
+    let draining = false;
+
+    const drainQueue = async () => {
+      if (draining) return;
+      draining = true;
+      while (frameQueue.length > 0 && !this.stopped && this.ready) {
+        const audioFrame = frameQueue.shift();
+        try {
+          await this.audioSource.captureFrame(audioFrame);
+        } catch (err) {
+          console.warn(`[DJ:${this.roomId}] captureFrame error (non-fatal):`, err.message);
+          break;
+        }
+      }
+      draining = false;
+    };
+
+    this.ffmpegProcess.stdout.on('data', (chunk) => {
+      if (this.stopped || !this.ready) return;
+      buffer = Buffer.concat([buffer, chunk]);
+
+      while (buffer.length >= BYTES_PER_FRAME) {
+        const frameData = buffer.subarray(0, BYTES_PER_FRAME);
+        buffer = buffer.subarray(BYTES_PER_FRAME);
+        const copied = Buffer.from(frameData);
+        const samples = new Int16Array(copied.buffer, copied.byteOffset, copied.length / 2);
+        const audioFrame = new AudioFrame(samples, SAMPLE_RATE, CHANNELS, SAMPLES_PER_FRAME);
+        frameQueue.push(audioFrame);
+      }
+      drainQueue();
+    });
+
+    this.ffmpegProcess.stderr.on('data', (data) => {
+      const msg = data.toString().trim();
+      if (msg) console.warn(`[DJ:${this.roomId}] ffmpeg: ${msg}`);
+    });
+
+    this.ffmpegProcess.on('close', (code) => {
+      if (this.stopped) return;
+      console.log(`[DJ:${this.roomId}] ffmpeg exited (code ${code}), track ended`);
+      this.playing = false;
+      this.ffmpegProcess = null;
+    });
+
+    this.ffmpegProcess.on('error', (err) => {
+      console.error(`[DJ:${this.roomId}] ffmpeg error:`, err.message);
+      this.playing = false;
+      this.ffmpegProcess = null;
+    });
+  }
 }
 
 // ── DJ API ──────────────────────────────────────────────────────────────
 const djInstances = new Map();
 
 app.post('/dj', async (req, res) => {
-  const { action, roomId } = req.body;
+  const { action, roomId, audioUrl, trackTitle } = req.body;
   if (!roomId) return res.status(400).json({ success: false, message: 'Missing roomId' });
 
   try {
@@ -535,13 +690,41 @@ app.post('/dj', async (req, res) => {
 
       const session = new DJSession(roomId);
       djInstances.set(roomId, session);
-      // Start async — don't block the response
       session.start().catch(err => {
         console.error(`[DJ:${roomId}] Start failed:`, err.message);
         djInstances.delete(roomId);
       });
       return res.json({ success: true, message: 'DJ starting...' });
     }
+
+    if (action === 'play-url') {
+      if (!audioUrl) return res.status(400).json({ success: false, message: 'Missing audioUrl' });
+      let session = djInstances.get(roomId);
+      if (!session) {
+        session = new DJSession(roomId);
+        djInstances.set(roomId, session);
+        await session.start();
+      }
+      await session.waitReady();
+      console.log(`[DJ:${roomId}] Playing URL directly: ${audioUrl.slice(0, 80)}...`);
+      await session.playFromUrl(audioUrl, trackTitle || 'Unknown');
+      return res.json({ success: true, message: 'Playing from URL' });
+    }
+
+    if (action === 'debug-play-url') {
+      const debugUrl = audioUrl || 'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3';
+      let session = djInstances.get(roomId);
+      if (!session) {
+        session = new DJSession(roomId);
+        djInstances.set(roomId, session);
+        await session.start();
+      }
+      await session.waitReady();
+      console.log(`[DJ:${roomId}] Debug playing URL: ${debugUrl}`);
+      await session.playFromUrl(debugUrl, trackTitle || 'Debug Song');
+      return res.json({ success: true, message: 'Debug playing from URL' });
+    }
+
 
     if (action === 'stop') {
       const session = djInstances.get(roomId);
@@ -570,8 +753,16 @@ app.get('/health', (req, res) => {
   res.json({ status: 'ok', uptime: process.uptime(), activeDJs: djInstances.size });
 });
 
+// ── Prevent uncaught errors from crashing the process ───────────────────
+process.on('uncaughtException', (err) => {
+  console.error('[Worker] Uncaught exception (non-fatal):', err.message);
+});
+process.on('unhandledRejection', (reason) => {
+  console.error('[Worker] Unhandled rejection (non-fatal):', reason);
+});
+
 // ── Start ───────────────────────────────────────────────────────────────
-app.listen(PORT, () => {
+app.listen(PORT, '0.0.0.0', () => {
   console.log(`[DJ Worker] Server running on port ${PORT}`);
   console.log(`[DJ Worker] App URL: ${APP_URL}`);
   console.log(`[DJ Worker] Cache dir: ${CACHE_DIR}`);
