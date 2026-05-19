@@ -69,6 +69,18 @@ export async function GET(req: NextRequest) {
         access_token: tokens.access_token,
         refresh_token: tokens.refresh_token,
         username: twitchUser.login,
+        user_id: twitchUser.id,
+        updated_at: new Date().toISOString(),
+      });
+
+      // Also save with serverId key for cross-app compatibility
+      const serverId = process.env.HARDCODED_GUILD_ID || process.env.NEXT_PUBLIC_HARDCODED_GUILD_ID || '1240832965865635881';
+      db.set('config', `twitch_bot_${serverId}`, {
+        access_token: tokens.access_token,
+        refresh_token: tokens.refresh_token,
+        username: twitchUser.login,
+        botUsername: twitchUser.login,
+        user_id: twitchUser.id,
         updated_at: new Date().toISOString(),
       });
 

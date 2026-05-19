@@ -71,10 +71,21 @@ export default function SettingsPage() {
   const [botData, setBotData] = useState<any>(null);
 
   useEffect(() => {
-    const serverId = process.env.NEXT_PUBLIC_HARDCODED_GUILD_ID || '1240832965865635881';
-    fetch(`/api/db?collection=config&id=twitch_bot_${serverId}`)
+    // Check local bot config first, then try DSH
+    fetch(`/api/db?collection=config&id=twitch_bot`)
       .then(res => res.json())
-      .then(result => { if (result.exists) setBotData(result.data); })
+      .then(result => {
+        if (result.exists && result.data) {
+          setBotData(result.data);
+        } else {
+          // Fallback: check DSH for cross-app token
+          const serverId = process.env.NEXT_PUBLIC_HARDCODED_GUILD_ID || '1240832965865635881';
+          fetch(`https://discord-stream-hub-new.fly.dev/api/db?path=users/twitch_${serverId}`)
+            .then(r => r.json())
+            .then(d => { if (d.exists && d.data) setBotData(d.data); })
+            .catch(() => {});
+        }
+      })
       .catch(console.error);
   }, []);
 
@@ -137,9 +148,9 @@ export default function SettingsPage() {
                                         <Bot className="h-5 w-5" />
                                         Twitch Bot Status
                                     </CardTitle>
-                                    <CardDescription>Bot tokens are managed through Discord Stream Hub</CardDescription>
+                                    <CardDescription>Authorize a Twitch bot account for chat commands (!sr, !np, !status)</CardDescription>
                                 </CardHeader>
-                                <CardContent>
+                                <CardContent className="space-y-4">
                                     {botData ? (
                                         <div className="flex items-center gap-3 p-3 bg-green-50 dark:bg-green-950/30 rounded-lg">
                                             <div className="w-2 h-2 bg-green-500 rounded-full" />
@@ -149,9 +160,25 @@ export default function SettingsPage() {
                                             </div>
                                         </div>
                                     ) : (
-                                        <p className="text-sm text-muted-foreground">
-                                            Not connected. <a href="https://discord-stream-hub-new.fly.dev/settings" target="_blank" className="underline font-medium">Authorize in DSH Settings</a>
-                                        </p>
+                                        <div className="space-y-3">
+                                            <p className="text-sm text-muted-foreground">
+                                                No bot account connected. Authorize a Twitch account to use as the bot.
+                                            </p>
+                                            <Button
+                                                onClick={() => {
+                                                    const clientId = process.env.NEXT_PUBLIC_TWITCH_CLIENT_ID || 'rxmohc28tthq0nudfd6iwx0sgy88dp';
+                                                    const baseUrl = window.location.origin;
+                                                    const redirectUri = `${baseUrl}/api/auth/twitch/callback`;
+                                                    const scopes = 'chat:read+chat:edit+channel:moderate';
+                                                    const url = `https://id.twitch.tv/oauth2/authorize?client_id=${clientId}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=code&scope=${scopes}&state=twitch_bot`;
+                                                    window.location.href = url;
+                                                }}
+                                                variant="outline"
+                                            >
+                                                <Bot className="mr-2 h-4 w-4" />
+                                                Authorize Twitch Bot Account
+                                            </Button>
+                                        </div>
                                     )}
                                 </CardContent>
                             </Card>

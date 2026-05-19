@@ -12,6 +12,14 @@ export async function register() {
       } catch (e) {
         console.log('[Auto-Init] Twitch bot init will happen on first page load');
       }
+
+      try {
+        const res = await fetch(`${baseUrl}/api/discord-bot`);
+        const data = await res.json();
+        console.log('[Auto-Init] Discord bot status:', data.status, '| Listeners:', data.listenerCount);
+      } catch (e) {
+        console.log('[Auto-Init] Discord bot init will happen on first page load');
+      }
     }, 5000);
   }
 }

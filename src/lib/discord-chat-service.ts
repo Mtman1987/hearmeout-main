@@ -195,7 +195,7 @@ export class DiscordChatService {
         if (messages.length > 0) {
           // Process messages in chronological order
           for (const m of messages.reverse()) {
-            if (m.author.id !== this.botToken) {
+            if (!m.author.bot) {
               onMessage({
                 id: m.id,
                 author: m.author.username,

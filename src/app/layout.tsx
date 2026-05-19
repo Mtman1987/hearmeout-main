@@ -46,6 +46,7 @@ export default function RootLayout({
             __html: `
               if (typeof window !== 'undefined') {
                 fetch('/api/twitch-bot').catch(console.error);
+                fetch('/api/discord-bot').catch(console.error);
               }
             `,
           }}
