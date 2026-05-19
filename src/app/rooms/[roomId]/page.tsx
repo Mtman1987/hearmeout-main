@@ -6,7 +6,7 @@ import { LiveKitRoom, useConnectionState, useRoomContext } from '@livekit/compon
 import { ConnectionState } from 'livekit-client';
 import { SidebarProvider, SidebarInset, SidebarTrigger, useSidebar } from '@/components/ui/sidebar';
 import { Button } from "@/components/ui/button";
-import { Copy, X, LoaderCircle, FrameIcon, Music } from 'lucide-react';
+import { Copy, X, LoaderCircle, FrameIcon, Music, Monitor } from 'lucide-react';
 import LeftSidebar from '@/app/components/LeftSidebar';
 import UserList from './_components/UserList';
 import ChatBox from './_components/ChatBox';
@@ -22,6 +22,7 @@ import { dbGet } from '@/lib/db-helpers';
 import { Room as LKRoom, RoomEvent, Track, RemoteTrack } from 'livekit-client';
 import { generateLiveKitToken, generateMusicRoomToken } from '@/app/actions';
 import { PlaylistItem } from "@/types/playlist";
+import { PeerAudioListener, PeerVoiceMesh } from '@/lib/peer-audio-service';
 
 interface RoomData {
   id: string;
@@ -34,10 +35,13 @@ interface RoomData {
   djStatus?: string;
   autoRadio?: boolean;
   playHistory?: string[];
+  isPrivate?: boolean;
+  password?: string;
+  expiresAt?: string;
 }
 
-function RoomHeader({ roomName, onToggleChat, showDJ, onToggleDJ }: {
-    roomName: string; onToggleChat: () => void; showDJ: boolean; onToggleDJ: () => void;
+function RoomHeader({ roomName, onToggleChat, showDJ, onToggleDJ, peerFallback, onScreenShare }: {
+    roomName: string; onToggleChat: () => void; showDJ: boolean; onToggleDJ: () => void; peerFallback?: boolean; onScreenShare?: () => void;
 }) {
     const { isMobile } = useSidebar();
     const params = useParams();
@@ -53,12 +57,17 @@ function RoomHeader({ roomName, onToggleChat, showDJ, onToggleDJ }: {
             <SidebarTrigger className={isMobile ? "" : "hidden md:flex"} />
             <div className="flex-1 flex items-center gap-4 truncate">
                 <h2 className="text-xl font-bold font-headline truncate">{roomName}</h2>
-                <ConnectionStatusIndicator />
+                <ConnectionStatusIndicator peerFallback={peerFallback} />
             </div>
             <div className="flex flex-initial items-center justify-end space-x-2">
                 <Tooltip><TooltipTrigger asChild>
                     <Button variant={showDJ ? "secondary" : "outline"} size="icon" onClick={onToggleDJ}><Music className="h-4 w-4" /></Button>
                 </TooltipTrigger><TooltipContent><p>{showDJ ? 'Hide DJ' : 'Show DJ'}</p></TooltipContent></Tooltip>
+                {onScreenShare && (
+                    <Tooltip><TooltipTrigger asChild>
+                        <Button variant="outline" size="icon" onClick={onScreenShare}><Monitor className="h-4 w-4" /></Button>
+                    </TooltipTrigger><TooltipContent><p>Screen Share</p></TooltipContent></Tooltip>
+                )}
                 <Tooltip><TooltipTrigger asChild>
                     <Button variant="outline" size="icon" onClick={copyOverlayUrl}><Copy className="h-4 w-4" /></Button>
                 </TooltipTrigger><TooltipContent><p>Copy Overlay URL for OBS</p></TooltipContent></Tooltip>
@@ -70,15 +79,27 @@ function RoomHeader({ roomName, onToggleChat, showDJ, onToggleDJ }: {
     );
 }
 
-function ConnectionStatusIndicator() {
-    const connectionState = useConnectionState();
+function ConnectionStatusIndicator({ peerFallback }: { peerFallback?: boolean }) {
     let indicatorClass = 'bg-gray-500';
     let statusText = 'Unknown';
-    switch (connectionState) {
-        case ConnectionState.Connected: indicatorClass = 'bg-green-500'; statusText = 'Connected'; break;
-        case ConnectionState.Connecting: indicatorClass = 'bg-yellow-500 animate-pulse'; statusText = 'Connecting'; break;
-        case ConnectionState.Disconnected: indicatorClass = 'bg-red-500'; statusText = 'Disconnected'; break;
-        case ConnectionState.Reconnecting: indicatorClass = 'bg-yellow-500 animate-pulse'; statusText = 'Reconnecting'; break;
+
+    if (peerFallback) {
+        indicatorClass = 'bg-blue-500';
+        statusText = 'P2P Voice';
+    } else {
+        try {
+            // eslint-disable-next-line react-hooks/rules-of-hooks
+            const connectionState = useConnectionState();
+            switch (connectionState) {
+                case ConnectionState.Connected: indicatorClass = 'bg-green-500'; statusText = 'Connected'; break;
+                case ConnectionState.Connecting: indicatorClass = 'bg-yellow-500 animate-pulse'; statusText = 'Connecting'; break;
+                case ConnectionState.Disconnected: indicatorClass = 'bg-red-500'; statusText = 'Disconnected'; break;
+                case ConnectionState.Reconnecting: indicatorClass = 'bg-yellow-500 animate-pulse'; statusText = 'Reconnecting'; break;
+            }
+        } catch {
+            indicatorClass = 'bg-gray-500';
+            statusText = 'No voice';
+        }
     }
     return (
         <Tooltip><TooltipTrigger><div className={cn("h-2.5 w-2.5 rounded-full", indicatorClass)} /></TooltipTrigger>
@@ -93,6 +114,10 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
     const router = useRouter();
     const [chatOpen, setChatOpen] = useState(false);
     const [voiceToken, setVoiceToken] = useState<string | undefined>(undefined);
+    const [voiceFallbackActive, setVoiceFallbackActive] = useState(false);
+    const peerVoiceRef = useRef<PeerVoiceMesh | null>(null);
+    const [peerVoiceStreams, setPeerVoiceStreams] = useState<Map<string, MediaStream>>(new Map());
+    const peerVoiceAudioRefs = useRef<Map<string, HTMLAudioElement>>(new Map());
     const [localVolume, setLocalVolume] = useState(0.5);
     const [musicStatus, setMusicStatus] = useState<string | null>(null);
     const [showDJ, setShowDJ] = useState(false);
@@ -111,6 +136,7 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
     const musicIdentityRef = useRef<string>('');
     const localVolumeRef = useRef(localVolume);
     const userGestureUnlockedRef = useRef(false);
+    const peerListenerRef = useRef<PeerAudioListener | null>(null);
     useEffect(() => { localVolumeRef.current = localVolume; }, [localVolume]);
 
     const isStreamMode = !!userSettings?.streamMode;
@@ -179,6 +205,7 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
 
     // Connect to LiveKit Music Room as subscriber.
     // Stream-mode users skip this — they hear music from the OBS overlay.
+    // Falls back to PeerJS if LiveKit fails (e.g. tokens exhausted).
     useEffect(() => {
         if (isUserLoading || !user || !roomId) return;
         if (isStreamMode) {
@@ -263,8 +290,33 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
                     console.log('[MusicRoom] Reconnected');
                 });
             } catch (err) {
-                console.error('[MusicRoom] Connection error:', err);
-                setMusicStatus('error');
+                console.warn('[MusicRoom] LiveKit failed, trying PeerJS fallback:', err);
+                if (cancelled) return;
+                // PeerJS fallback
+                try {
+                    const listener = new PeerAudioListener();
+                    await listener.connect(
+                        roomId,
+                        (stream) => {
+                            if (!musicAudioRef.current) musicAudioRef.current = new Audio();
+                            musicAudioRef.current.srcObject = stream;
+                            musicAudioRef.current.volume = localVolumeRef.current;
+                            if (userGestureUnlockedRef.current) {
+                                musicAudioRef.current.play().catch(() => {});
+                            }
+                            setMusicStatus('🎵 streaming (P2P)');
+                        },
+                        () => {
+                            setMusicStatus('P2P disconnected');
+                        },
+                    );
+                    if (cancelled) { listener.disconnect(); return; }
+                    peerListenerRef.current = listener;
+                    setMusicStatus('connected (P2P)');
+                } catch (peerErr) {
+                    console.error('[MusicRoom] PeerJS fallback also failed:', peerErr);
+                    setMusicStatus('error');
+                }
             }
         };
 
@@ -273,6 +325,8 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
             cancelled = true;
             musicRoomRef.current?.disconnect();
             musicRoomRef.current = null;
+            peerListenerRef.current?.disconnect();
+            peerListenerRef.current = null;
             if (musicAudioRef.current) { musicAudioRef.current.srcObject = null; }
         };
     }, [user, isUserLoading, roomId, isStreamMode]);
@@ -326,7 +380,7 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
 
     useEffect(() => {
         if (isUserLoading || !user || !roomId) return;
-        if (voiceToken) return;
+        if (voiceToken || voiceFallbackActive) return;
         let isCancelled = false;
         const setup = async () => {
             const userPresence = {
@@ -336,17 +390,68 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
                 lastSeen: Date.now(),
             };
             dbSet(`rooms/${roomId}/users`, user.uid, userPresence, true);
+            // Update occupant count
+            fetch(`/api/db?collection=rooms/${roomId}/users`).then(r => r.json()).then(users => {
+                if (Array.isArray(users)) dbUpdate('rooms', roomId, { occupantCount: users.length });
+            }).catch(() => {});
             try {
                 const token = await generateLiveKitToken(roomId, user.uid, user.displayName!, JSON.stringify({ photoURL: user.photoURL || `https://picsum.photos/seed/${user.uid}/100/100` }));
                 if (!isCancelled) setVoiceToken(token);
             } catch (e) {
-                if (!isCancelled) toast({ variant: 'destructive', title: 'Connection Failed', description: `Could not get voice connection: ${e instanceof Error ? e.message : String(e)}` });
+                console.warn('[Voice] LiveKit token failed, trying PeerJS voice fallback:', e);
+                if (isCancelled) return;
+                // PeerJS voice mesh fallback
+                try {
+                    const mesh = new PeerVoiceMesh();
+                    await mesh.join(
+                        roomId,
+                        user.uid,
+                        (peerId, stream) => {
+                            setPeerVoiceStreams(prev => new Map(prev).set(peerId, stream));
+                            // Auto-play remote audio
+                            let audioEl = peerVoiceAudioRefs.current.get(peerId);
+                            if (!audioEl) {
+                                audioEl = new Audio();
+                                audioEl.autoplay = true;
+                                peerVoiceAudioRefs.current.set(peerId, audioEl);
+                            }
+                            audioEl.srcObject = stream;
+                            audioEl.play().catch(() => {});
+                        },
+                        (peerId) => {
+                            setPeerVoiceStreams(prev => {
+                                const next = new Map(prev);
+                                next.delete(peerId);
+                                return next;
+                            });
+                            const audioEl = peerVoiceAudioRefs.current.get(peerId);
+                            if (audioEl) {
+                                audioEl.srcObject = null;
+                                peerVoiceAudioRefs.current.delete(peerId);
+                            }
+                        },
+                    );
+                    if (isCancelled) { mesh.leave(); return; }
+                    peerVoiceRef.current = mesh;
+                    setVoiceFallbackActive(true);
+                    toast({ title: 'Voice Connected (P2P)', description: 'Using peer-to-peer voice since LiveKit is unavailable.' });
+                } catch (peerErr) {
+                    if (!isCancelled) toast({ variant: 'destructive', title: 'Voice Failed', description: `Could not connect voice: ${peerErr instanceof Error ? peerErr.message : String(peerErr)}` });
+                }
             }
         };
         setup();
         const heartbeat = setInterval(() => {
             dbSet(`rooms/${roomId}/users`, user.uid, { lastSeen: Date.now() }, true);
-        }, 15000);
+            // Re-register peer presence for discovery
+            if (peerVoiceRef.current?.active) {
+                fetch('/api/peer-voice/register', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ roomId, peerId: peerVoiceRef.current.peerId }),
+                }).catch(() => {});
+            }
+        }, 5000);
 
         const clearPresence = () => {
             fetch('/api/db', {
@@ -354,7 +459,16 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
                 keepalive: true,
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ collection: `rooms/${roomId}/users`, id: user.uid }),
+            }).then(() => {
+                // Update occupant count on leave
+                fetch(`/api/db?collection=rooms/${roomId}/users`).then(r => r.json()).then(users => {
+                    if (Array.isArray(users)) {
+                        fetch('/api/db', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ collection: 'rooms', id: roomId, data: { occupantCount: users.length } }) }).catch(() => {});
+                    }
+                }).catch(() => {});
             }).catch(() => {});
+            peerVoiceRef.current?.leave();
+            peerVoiceRef.current = null;
         };
 
         const onPageHide = () => clearPresence();
@@ -365,8 +479,13 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
             clearInterval(heartbeat);
             window.removeEventListener('pagehide', onPageHide);
             clearPresence();
+            // Clean up audio elements
+            for (const [, audioEl] of peerVoiceAudioRefs.current) {
+                audioEl.srcObject = null;
+            }
+            peerVoiceAudioRefs.current.clear();
         };
-    }, [user, isUserLoading, roomId, toast]);
+    }, [user, isUserLoading, roomId, toast, voiceToken, voiceFallbackActive]);
 
     const handleToggleAutoRadio = useCallback(() => {
         dbUpdate('rooms', roomId, { autoRadio: !room.autoRadio });
@@ -379,6 +498,22 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
         <div className="flex-1 flex flex-col items-center justify-center text-center p-4">
           <h3 className="text-2xl font-bold font-headline mb-4">You are banned from this room</h3>
           <p className="text-muted-foreground mb-8">Contact the room owner if you think this is a mistake.</p>
+          <Button onClick={() => router.push('/')}>Go Home</Button>
+        </div>
+      );
+    }
+
+    // Room expiry check
+    const expiresAt = room.expiresAt ? new Date(room.expiresAt).getTime() : null;
+    const isExpired = expiresAt ? Date.now() > expiresAt : false;
+    const expiresInMs = expiresAt ? expiresAt - Date.now() : null;
+    const expiringSoon = expiresInMs !== null && expiresInMs > 0 && expiresInMs < 30 * 60 * 1000;
+
+    if (isExpired) {
+      return (
+        <div className="flex-1 flex flex-col items-center justify-center text-center p-4">
+          <h3 className="text-2xl font-bold font-headline mb-4">Room Expired</h3>
+          <p className="text-muted-foreground mb-8">This room has reached its 12-hour shelf life. Create a new one!</p>
           <Button onClick={() => router.push('/')}>Go Home</Button>
         </div>
       );
@@ -402,7 +537,7 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
         <div className={cn("bg-secondary/30 md:peer-data-[state=collapsed]:peer-data-[variant=inset]:ml-[calc(var(--sidebar-width-icon)_+_1rem)] md:peer-data-[variant=inset]:ml-[calc(var(--sidebar-width)_+_1rem)] duration-200 transition-[margin-left,margin-right]", chatOpen && "md:mr-[28rem]")}>
             <SidebarInset>
                 <div className="flex flex-col h-screen relative">
-                    <RoomHeader roomName={room.name} onToggleChat={() => setChatOpen(!chatOpen)} showDJ={showDJ} onToggleDJ={() => setShowDJ(v => !v)} />
+                    <RoomHeader roomName={room.name} onToggleChat={() => setChatOpen(!chatOpen)} showDJ={showDJ} onToggleDJ={() => setShowDJ(v => !v)} peerFallback={voiceFallbackActive} onScreenShare={() => openPopout('screenShare', { width: 720, height: 520 }, { source: 'screenShare' })} />
 
                     <main className="flex-1 p-4 md:p-6 overflow-y-auto space-y-6">
                         {/* Hidden audio element for LiveKit music track attachment */}
@@ -424,6 +559,7 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
                           onStartAudio={handleStartMusicAudio}
                           onOpenQueue={() => openPopout('queue', { width: 760, height: 720 }, { source: 'queue' })}
                           onOpenAddSong={() => openPopout('addSong', { width: 460, height: 560 }, { source: 'addSong' })}
+                          onOpenWatch={() => openPopout('watch', { width: 640, height: 700 }, { source: 'watch' })}
                         />
                         {isOwner && <VoiceQueue roomId={roomId} />}
                     </main>
@@ -449,6 +585,9 @@ function RoomPageContent() {
     const params = useParams<{ roomId: string }>();
     const { user, isLoading: isUserLoading } = useSession();
     const { data: room, isLoading: isRoomLoading, error: roomError } = useDoc<RoomData>('rooms', params.roomId, 2000);
+    const [passwordInput, setPasswordInput] = React.useState('');
+    const [passwordUnlocked, setPasswordUnlocked] = React.useState(false);
+    const [passwordError, setPasswordError] = React.useState(false);
 
     if (isRoomLoading) {
         return (
@@ -472,6 +611,33 @@ function RoomPageContent() {
                     <h2 className="text-2xl font-bold">Room not found</h2>
                     <p className="text-muted-foreground">{roomError?.message || "This room may have been deleted."}</p>
                     <Button asChild><a href="/">Go to Dashboard</a></Button>
+                </div>
+            </div>
+        );
+    }
+
+    // Password gate for private rooms
+    const isOwner = !!user && (user.uid === room.ownerId || !!(user as any).isAdmin);
+    if (room.isPrivate && room.password && !passwordUnlocked && !isOwner) {
+        return (
+            <div className="flex flex-col h-screen">
+                <LeftSidebar roomId={params.roomId} />
+                <div className="bg-secondary/30 md:peer-data-[state=collapsed]:peer-data-[variant=inset]:ml-[calc(var(--sidebar-width-icon)_+_1rem)] md:peer-data-[variant=inset]:ml-[calc(var(--sidebar-width)_+_1rem)] duration-200 transition-[margin-left,margin-right] flex-1 flex flex-col items-center justify-center gap-4 text-center p-4">
+                    <h2 className="text-2xl font-bold">🔒 {room.name}</h2>
+                    <p className="text-muted-foreground">This room requires a password to join.</p>
+                    <div className="flex gap-2 w-full max-w-xs">
+                        <input
+                            type="password"
+                            className="flex-1 rounded-md border border-input bg-background px-3 py-2 text-sm"
+                            placeholder="Enter password"
+                            value={passwordInput}
+                            onChange={(e) => { setPasswordInput(e.target.value); setPasswordError(false); }}
+                            onKeyDown={(e) => { if (e.key === 'Enter') { if (passwordInput === room.password) setPasswordUnlocked(true); else setPasswordError(true); } }}
+                        />
+                        <Button onClick={() => { if (passwordInput === room.password) setPasswordUnlocked(true); else setPasswordError(true); }}>Join</Button>
+                    </div>
+                    {passwordError && <p className="text-sm text-destructive">Incorrect password</p>}
+                    <Button variant="ghost" asChild><a href="/">Back to Dashboard</a></Button>
                 </div>
             </div>
         );

@@ -18,6 +18,7 @@ import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMe
 import { Room as LKRoom, RoomEvent, Track, RemoteTrack } from 'livekit-client';
 import { generateMusicRoomToken } from '@/app/actions';
 import { usePopout } from '@/components/PopoutWidgets/PopoutProvider';
+import { PeerAudioListener } from '@/lib/peer-audio-service';
 
 interface RoomData {
   name: string;
@@ -40,6 +41,7 @@ export default function OverlayPage() {
   const volumeRef = useRef(volume);
   const mutedRef = useRef(isMuted);
   const overlayIdentityRef = useRef<string>('');
+  const peerListenerRef = useRef<PeerAudioListener | null>(null);
 
   useEffect(() => { volumeRef.current = volume; }, [volume]);
   useEffect(() => { mutedRef.current = isMuted; }, [isMuted]);
@@ -76,8 +78,7 @@ export default function OverlayPage() {
   }, []);
 
   // Connect to LiveKit Music Room and play audio through this overlay.
-  // When used as an OBS browser source, this makes the music audio
-  // capturable on a separate channel from speakers.
+  // Falls back to PeerJS if LiveKit fails.
   const connectToMusicRoom = useCallback(async () => {
     if (musicRoomRef.current || !roomId) return;
 
@@ -99,7 +100,7 @@ export default function OverlayPage() {
       }
       const token = await generateMusicRoomToken(roomId, overlayIdentityRef.current, 'Overlay', false);
       const livekitUrl = process.env.NEXT_PUBLIC_LIVEKIT_URL;
-      if (!livekitUrl || !token) return;
+      if (!livekitUrl || !token) throw new Error('LiveKit config missing');
 
       const lkRoom = new LKRoom();
       await lkRoom.connect(livekitUrl, token);
@@ -138,7 +139,26 @@ export default function OverlayPage() {
         console.log('[Overlay] Music room reconnected');
       });
     } catch (err) {
-      console.error('[Overlay] Music room error:', err);
+      console.warn('[Overlay] LiveKit failed, trying PeerJS fallback:', err);
+      try {
+        const listener = new PeerAudioListener();
+        await listener.connect(
+          roomId,
+          (stream) => {
+            if (!audioRef.current) audioRef.current = new Audio();
+            audioRef.current.srcObject = stream;
+            audioRef.current.volume = mutedRef.current ? 0 : volumeRef.current;
+            audioRef.current.play()
+              .then(() => setAudioReady(true))
+              .catch(e => console.warn('[Overlay] P2P autoplay blocked:', e));
+          },
+          () => console.warn('[Overlay] P2P disconnected'),
+        );
+        peerListenerRef.current = listener;
+        console.log('[Overlay] PeerJS fallback connected');
+      } catch (peerErr) {
+        console.error('[Overlay] PeerJS fallback also failed:', peerErr);
+      }
     }
   }, [roomId]);
 
@@ -147,6 +167,8 @@ export default function OverlayPage() {
     return () => {
       musicRoomRef.current?.disconnect();
       musicRoomRef.current = null;
+      peerListenerRef.current?.disconnect();
+      peerListenerRef.current = null;
       if (audioRef.current) {
         audioRef.current.pause();
         audioRef.current.srcObject = null;
@@ -164,7 +186,9 @@ export default function OverlayPage() {
   const hasPopout = (source: string) => popouts.some((p) => p.type === 'chat' && p.customSettings?.source === source);
   const hasQueue = popouts.some((p) => p.type === 'queue');
   const hasAddSong = popouts.some((p) => p.type === 'addSong');
-  const togglePopout = (kind: 'chat' | 'queue' | 'addSong', source: string, size: { width: number; height: number }) => {
+  const hasWatch = popouts.some((p) => p.type === 'watch');
+  const hasScreenShare = popouts.some((p) => p.type === 'screenShare');
+  const togglePopout = (kind: 'chat' | 'queue' | 'addSong' | 'watch' | 'screenShare', source: string, size: { width: number; height: number }) => {
     const existing = popouts.find((p) => p.type === kind && (kind !== 'chat' || p.customSettings?.source === source));
     if (existing) closePopout(existing.id);
     else openPopout(kind, size, { source });
@@ -245,6 +269,18 @@ export default function OverlayPage() {
                 onCheckedChange={() => togglePopout('addSong', 'addSong', { width: 460, height: 560 })}
               >
                 Add Song
+              </DropdownMenuCheckboxItem>
+              <DropdownMenuCheckboxItem
+                checked={hasWatch}
+                onCheckedChange={() => togglePopout('watch', 'watch', { width: 640, height: 480 })}
+              >
+                Watch Party
+              </DropdownMenuCheckboxItem>
+              <DropdownMenuCheckboxItem
+                checked={hasScreenShare}
+                onCheckedChange={() => togglePopout('screenShare', 'screenShare', { width: 720, height: 520 })}
+              >
+                Screen Share
               </DropdownMenuCheckboxItem>
             </DropdownMenuContent>
           </DropdownMenu>

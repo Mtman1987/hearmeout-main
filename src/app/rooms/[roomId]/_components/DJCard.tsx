@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useCallback, useState } from 'react';
-import { Music, Play, Pause, SkipForward, SkipBack, Volume2, VolumeX, Power, PowerOff, Radio, LoaderCircle, SlidersHorizontal, ListMusic } from 'lucide-react';
+import { Music, Play, Pause, SkipForward, SkipBack, Volume2, VolumeX, Power, PowerOff, Radio, LoaderCircle, SlidersHorizontal, ListMusic, Film } from 'lucide-react';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -32,6 +32,7 @@ interface DJCardProps {
   onStartAudio: () => void;
   onOpenQueue: () => void;
   onOpenAddSong: () => void;
+  onOpenWatch?: () => void;
 }
 
 export default function DJCard({
@@ -39,7 +40,7 @@ export default function DJCard({
   djStatus, musicStatus, localVolume, onVolumeChange, canControl,
   autoRadio, onToggleAutoRadio,
   djIsLive, djStarting, onStartDJ, onStopDJ,
-  onStartAudio, onOpenQueue, onOpenAddSong,
+  onStartAudio, onOpenQueue, onOpenAddSong, onOpenWatch,
 }: DJCardProps) {
   const currentTrack = playlist?.find(t => t.id === currentTrackId);
   const isStreaming = musicStatus === '🎵 streaming';
@@ -153,6 +154,13 @@ export default function DJCard({
                   <Music className="h-4 w-4" />
                 </Button>
               </TooltipTrigger><TooltipContent><p>Add songs</p></TooltipContent></Tooltip>
+              {onOpenWatch && (
+                <Tooltip><TooltipTrigger asChild>
+                  <Button variant="ghost" size="icon" className="h-8 w-8" onClick={onOpenWatch}>
+                    <Film className="h-4 w-4" />
+                  </Button>
+                </TooltipTrigger><TooltipContent><p>Watch Party</p></TooltipContent></Tooltip>
+              )}
               <Tooltip><TooltipTrigger asChild>
                 <Button variant="ghost" size="icon" className="h-8 w-8 ml-auto" onClick={onStartAudio}>
                   <Play className="h-4 w-4" />

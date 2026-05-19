@@ -5,7 +5,7 @@ import { usePathname } from 'next/navigation';
 
 export interface PopoutState {
   id: string;
-  type: 'voice' | 'chat' | 'queue' | 'addSong';
+  type: 'voice' | 'chat' | 'queue' | 'addSong' | 'watch' | 'screenShare';
   isOpen: boolean;
   position: { x: number; y: number };
   size: { width: number; height: number };

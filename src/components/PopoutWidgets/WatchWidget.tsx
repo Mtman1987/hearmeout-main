@@ -1,0 +1,204 @@
+'use client';
+
+import React, { useState, useEffect, useCallback } from 'react';
+import { DraggableContainer } from './DraggableContainer';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Film, Play, SkipForward, Trash2, Search, ExternalLink, LoaderCircle } from 'lucide-react';
+
+interface WatchWidgetProps {
+  id: string;
+  position: { x: number; y: number };
+  size: { width: number; height: number };
+  opacity?: number;
+  onPositionChange: (pos: { x: number; y: number }) => void;
+  onSizeChange: (size: { width: number; height: number }) => void;
+  onOpacityChange?: (opacity: number) => void;
+  onClose: () => void;
+  roomId: string;
+}
+
+type WatchState = {
+  id: string;
+  roomUrl: string;
+  queue: Array<{
+    requestId: string;
+    requestedBy: { userId: string; username: string };
+    addedAt: string;
+    item: { id: string; type: string; title: string; year: number; runtime: string; source: string; poster: string; playbackUrl: string; overview: string };
+  }>;
+  current: {
+    requestId: string;
+    requestedBy: { userId: string; username: string };
+    addedAt: string;
+    item: { id: string; type: string; title: string; year: number; runtime: string; source: string; poster: string; playbackUrl: string; overview: string };
+  } | null;
+  playback: { status: 'idle' | 'paused' | 'playing'; position: number; updatedAt: number };
+  events: Array<{ id: string; at: string; message: string }>;
+};
+
+export function WatchWidget({
+  id, position, size, opacity,
+  onPositionChange, onSizeChange, onOpacityChange, onClose, roomId,
+}: WatchWidgetProps) {
+  const [state, setState] = useState<WatchState | null>(null);
+  const [query, setQuery] = useState('');
+  const [searching, setSearching] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const sessionId = `room-${roomId}`;
+
+  const refresh = useCallback(async () => {
+    try {
+      const res = await fetch(`/api/watch/sessions/${sessionId}/state`, { cache: 'no-store' });
+      if (res.ok) setState(await res.json());
+    } catch {}
+  }, [sessionId]);
+
+  useEffect(() => {
+    refresh();
+    const interval = setInterval(refresh, 3000);
+    return () => clearInterval(interval);
+  }, [refresh]);
+
+  const handleSearch = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!query.trim()) return;
+    setSearching(true);
+    setError(null);
+    try {
+      const res = await fetch(`/api/watch/sessions/${sessionId}/request`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ query: query.trim(), username: 'DJ' }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setError(data.error || 'No match found');
+      } else {
+        setState(data.session);
+        setQuery('');
+      }
+    } catch {
+      setError('Request failed');
+    } finally {
+      setSearching(false);
+    }
+  };
+
+  const handleControl = async (action: string) => {
+    try {
+      const res = await fetch(`/api/watch/sessions/${sessionId}/control`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action, position: 0 }),
+      });
+      if (res.ok) setState(await res.json());
+    } catch {}
+  };
+
+  const discordActivityUrl = state?.roomUrl
+    ? `https://discord.com/activities?url=${encodeURIComponent(state.roomUrl)}`
+    : null;
+
+  return (
+    <DraggableContainer
+      id={id}
+      position={position}
+      size={size}
+      opacity={opacity}
+      onPositionChange={onPositionChange}
+      onSizeChange={onSizeChange}
+      onOpacityChange={onOpacityChange}
+      onClose={onClose}
+      title="Watch Party"
+      minimalChrome
+    >
+      <div className="flex-1 overflow-y-auto p-3 space-y-3">
+        {/* Now Playing / iframe */}
+        {state?.current ? (
+          <div className="space-y-2">
+            <div className="aspect-video w-full rounded-md overflow-hidden border border-border bg-black">
+              <iframe
+                src={state.current.item.playbackUrl.startsWith('/') ? state.current.item.playbackUrl : `/api/watch/proxy?url=${encodeURIComponent(state.current.item.playbackUrl)}`}
+                className="w-full h-full"
+                allow="autoplay; fullscreen"
+                sandbox="allow-scripts allow-same-origin"
+              />
+            </div>
+            <div className="flex items-center justify-between gap-2">
+              <div className="min-w-0 flex-1">
+                <p className="text-sm font-medium truncate">{state.current.item.title} ({state.current.item.year})</p>
+                <p className="text-xs text-muted-foreground truncate">
+                  {state.current.item.source} · by {state.current.requestedBy.username}
+                </p>
+              </div>
+              <div className="flex gap-1">
+                <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => handleControl('play')}>
+                  <Play className="h-3.5 w-3.5" />
+                </Button>
+                <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => handleControl('next')}>
+                  <SkipForward className="h-3.5 w-3.5" />
+                </Button>
+                <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => handleControl('clear')}>
+                  <Trash2 className="h-3.5 w-3.5" />
+                </Button>
+              </div>
+            </div>
+          </div>
+        ) : (
+          <div className="aspect-video w-full rounded-md border border-dashed border-border flex items-center justify-center text-muted-foreground text-sm">
+            <Film className="h-5 w-5 mr-2" /> No video loaded — search below
+          </div>
+        )}
+
+        {/* Discord Activity Link */}
+        {state?.roomUrl && (
+          <div className="flex gap-2">
+            <Button variant="outline" size="sm" className="flex-1 text-xs" asChild>
+              <a href={state.roomUrl} target="_blank" rel="noreferrer">
+                <ExternalLink className="h-3.5 w-3.5 mr-1" /> Open Watch Room
+              </a>
+            </Button>
+            {discordActivityUrl && (
+              <Button variant="outline" size="sm" className="flex-1 text-xs" onClick={() => navigator.clipboard.writeText(state.roomUrl)}>
+                Copy Link for Discord
+              </Button>
+            )}
+          </div>
+        )}
+
+        {/* Search / Add */}
+        <form onSubmit={handleSearch} className="flex gap-2">
+          <Input
+            placeholder="Search movie or TV show..."
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            disabled={searching}
+            className="h-8 text-sm"
+          />
+          <Button type="submit" size="sm" variant="outline" disabled={searching || !query.trim()}>
+            {searching ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : <Search className="h-3.5 w-3.5" />}
+          </Button>
+        </form>
+        {error && <p className="text-xs text-red-400">{error}</p>}
+
+        {/* Queue */}
+        {state?.queue && state.queue.length > 0 && (
+          <div className="space-y-1">
+            <p className="text-xs font-medium text-muted-foreground uppercase">Up Next</p>
+            {state.queue.map((entry, i) => (
+              <div key={entry.requestId} className="flex items-center gap-2 rounded-md border border-border bg-muted/20 p-2">
+                <span className="text-xs text-muted-foreground w-4">{i + 1}</span>
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm truncate">{entry.item.title}</p>
+                  <p className="text-xs text-muted-foreground">{entry.requestedBy.username}</p>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </DraggableContainer>
+  );
+}

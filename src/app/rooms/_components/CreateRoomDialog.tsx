@@ -20,6 +20,7 @@ export function CreateRoomDialog() {
   const [roomName, setRoomName] = useState('');
   const [description, setDescription] = useState('');
   const [isPrivate, setIsPrivate] = useState(false);
+  const [password, setPassword] = useState('');
   const [isCreating, setIsCreating] = useState(false);
   const { toast } = useToast();
   const router = useRouter();
@@ -41,12 +42,14 @@ export function CreateRoomDialog() {
         description,
         ownerId: user.uid,
         isPrivate,
+        password: isPrivate ? password : null,
         createdAt: new Date().toISOString(),
+        expiresAt: new Date(Date.now() + 12 * 60 * 60 * 1000).toISOString(),
         playlist: [],
         isPlaying: false,
       });
 
-      setRoomName(''); setDescription(''); setIsPrivate(false);
+      setRoomName(''); setDescription(''); setIsPrivate(false); setPassword('');
       setOpen(false);
       toast({ title: 'Room Created!', description: `"${roomName}" has been successfully created.` });
       router.push(`/rooms/${newId}`);
@@ -81,6 +84,12 @@ export function CreateRoomDialog() {
             <Label htmlFor="is-private" className="text-right">Private</Label>
             <div className="col-span-3"><Switch id="is-private" checked={isPrivate} onCheckedChange={setIsPrivate} /></div>
           </div>
+          {isPrivate && (
+            <div className="grid grid-cols-4 items-center gap-4">
+              <Label htmlFor="password" className="text-right">Password</Label>
+              <Input id="password" type="password" value={password} onChange={(e) => setPassword(e.target.value)} className="col-span-3" placeholder="Room password" />
+            </div>
+          )}
         </div>
         <DialogFooter>
           <Button onClick={handleCreateRoom} disabled={isCreating}>

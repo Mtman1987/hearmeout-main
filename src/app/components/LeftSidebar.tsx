@@ -15,12 +15,58 @@ import { useSession } from '@/hooks/use-session';
 import { useCollection } from '@/hooks/use-db';
 import { Skeleton } from '@/components/ui/skeleton';
 import { CreateRoomDialog } from '@/app/rooms/_components/CreateRoomDialog';
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 
 interface Room {
     id: string;
     name: string;
     isPrivate: boolean;
+}
+
+function DSHLiveUsers() {
+  const [liveUsers, setLiveUsers] = useState<Array<{ id: string; username: string; twitchLogin: string; avatarUrl: string | null; group: string }>>([]);
+
+  useEffect(() => {
+    const fetchLive = async () => {
+      try {
+        const dshUrl = process.env.NEXT_PUBLIC_DSH_URL || 'https://discord-stream-hub-new.fly.dev';
+        const res = await fetch(`${dshUrl}/api/community-online`, { cache: 'no-store' });
+        if (res.ok) {
+          const data = await res.json();
+          setLiveUsers(data.users || []);
+        }
+      } catch {}
+    };
+    fetchLive();
+    const iv = setInterval(fetchLive, 30_000);
+    return () => clearInterval(iv);
+  }, []);
+
+  if (!liveUsers.length) return null;
+
+  return (
+    <SidebarGroup>
+      <SidebarGroupLabel className="text-red-400"><span className="inline-block h-2 w-2 rounded-full bg-red-500 animate-pulse mr-1" />Live on Twitch</SidebarGroupLabel>
+      <div className="px-2">
+        <div className="flex flex-wrap gap-1">
+          {liveUsers.slice(0, 12).map(u => (
+            <Tooltip key={u.id}>
+              <TooltipTrigger asChild>
+                <a href={`https://twitch.tv/${u.twitchLogin}`} target="_blank" rel="noreferrer">
+                  <Avatar className="h-6 w-6 border-2 border-red-500/60">
+                    {u.avatarUrl ? <AvatarImage src={u.avatarUrl} /> : null}
+                    <AvatarFallback className="text-[9px]">{(u.username || '?').charAt(0)}</AvatarFallback>
+                  </Avatar>
+                </a>
+              </TooltipTrigger>
+              <TooltipContent side="right"><p>{u.username} • {u.group}</p></TooltipContent>
+            </Tooltip>
+          ))}
+          {liveUsers.length > 12 && <span className="text-[10px] text-muted-foreground self-center">+{liveUsers.length - 12}</span>}
+        </div>
+      </div>
+    </SidebarGroup>
+  );
 }
 
 function RoomOnlineUsers({ roomId, roomName }: { roomId: string; roomName: string }) {
@@ -111,10 +157,13 @@ export default function LeftSidebar({ roomId }: { roomId?: string }) {
           </SidebarMenu>
         </SidebarGroup>
 
+        {/* Live on Twitch (from DiscordStreamHub) */}
+        <DSHLiveUsers />
+
         {/* Active users across rooms */}
         {publicRooms && publicRooms.length > 0 && (
           <SidebarGroup>
-            <SidebarGroupLabel><Users className="h-3 w-3 mr-1" />Online Now</SidebarGroupLabel>
+            <SidebarGroupLabel><Users className="h-3 w-3 mr-1" />In Rooms</SidebarGroupLabel>
             <div className="px-2">
               {publicRooms.map(room => (
                 <RoomOnlineUsers key={room.id} roomId={room.id} roomName={room.name} />

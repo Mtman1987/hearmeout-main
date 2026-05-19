@@ -5,6 +5,8 @@ import { usePopout } from '@/components/PopoutWidgets/PopoutProvider';
 import { ChatWidget } from '@/components/PopoutWidgets/ChatWidget';
 import { QueueWidget } from '@/components/PopoutWidgets/QueueWidget';
 import { AddSongWidget } from '@/components/PopoutWidgets/AddSongWidget';
+import { WatchWidget } from '@/components/PopoutWidgets/WatchWidget';
+import { ScreenShareWidget } from '@/components/PopoutWidgets/ScreenShareWidget';
 
 export function PopoutRenderer() {
   const { popouts, closePopout, updatePopout, openPopout } = usePopout();
@@ -58,6 +60,38 @@ export function PopoutRenderer() {
         if (popout.type === 'addSong') {
           return (
             <AddSongWidget
+              key={popout.id}
+              id={popout.id}
+              position={popout.position}
+              size={popout.size}
+              onPositionChange={(pos) => updatePopout(popout.id, { position: pos })}
+              onSizeChange={(size) => updatePopout(popout.id, { size })}
+              opacity={popout.opacity}
+              onOpacityChange={(opacity) => updatePopout(popout.id, { opacity })}
+              onClose={() => closePopout(popout.id)}
+              roomId={roomId}
+            />
+          );
+        }
+        if (popout.type === 'watch') {
+          return (
+            <WatchWidget
+              key={popout.id}
+              id={popout.id}
+              position={popout.position}
+              size={popout.size}
+              onPositionChange={(pos) => updatePopout(popout.id, { position: pos })}
+              onSizeChange={(size) => updatePopout(popout.id, { size })}
+              opacity={popout.opacity}
+              onOpacityChange={(opacity) => updatePopout(popout.id, { opacity })}
+              onClose={() => closePopout(popout.id)}
+              roomId={roomId}
+            />
+          );
+        }
+        if (popout.type === 'screenShare') {
+          return (
+            <ScreenShareWidget
               key={popout.id}
               id={popout.id}
               position={popout.position}

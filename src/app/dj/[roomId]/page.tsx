@@ -13,6 +13,7 @@
 import { useParams, useSearchParams } from 'next/navigation';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { LocalAudioTrack, Room, Track } from 'livekit-client';
+import { PeerDJBroadcaster } from '@/lib/peer-audio-service';
 
 interface RoomData {
   playlist: Array<{ id: string; url: string; title: string; artist: string }>;
@@ -49,6 +50,10 @@ export default function DJPage() {
   // LiveKit refs
   const livekitRoomRef = useRef<Room | null>(null);
   const publishedTrackRef = useRef<LocalAudioTrack | null>(null);
+
+  // PeerJS fallback refs
+  const peerBroadcasterRef = useRef<PeerDJBroadcaster | null>(null);
+  const usingPeerFallbackRef = useRef(false);
 
   // Room-state refs
   const roomDataRef = useRef<RoomData | null>(null);
@@ -167,8 +172,7 @@ export default function DJPage() {
     const { token } = await tokenRes.json();
     const livekitUrl = process.env.NEXT_PUBLIC_LIVEKIT_URL;
     if (!livekitUrl || !token) {
-      setStatus('ERROR: LiveKit config missing');
-      return;
+      throw new Error('LiveKit config missing or token unavailable');
     }
 
     const lkRoom = new Room();
@@ -177,8 +181,18 @@ export default function DJPage() {
     console.log('[DJ] LiveKit connected as', lkRoom.localParticipant.identity);
   }, [roomId]);
 
+  const connectPeerFallback = useCallback(async (audioTrack: MediaStreamTrack): Promise<void> => {
+    if (peerBroadcasterRef.current?.ready) return;
+    setStatus('LiveKit unavailable — starting PeerJS fallback...');
+    const broadcaster = new PeerDJBroadcaster();
+    await broadcaster.start(roomId, audioTrack);
+    peerBroadcasterRef.current = broadcaster;
+    usingPeerFallbackRef.current = true;
+    console.log('[DJ] PeerJS fallback active');
+  }, [roomId]);
+
   const publishTrackIfNeeded = useCallback(async (): Promise<void> => {
-    if (publishedTrackRef.current) return;
+    if (publishedTrackRef.current || usingPeerFallbackRef.current) return;
     const lkRoom = livekitRoomRef.current;
     if (!lkRoom) return;
 
@@ -191,8 +205,6 @@ export default function DJPage() {
     const localTrack = new LocalAudioTrack(mediaTrack, undefined, false);
     await lkRoom.localParticipant.publishTrack(localTrack, {
       name: 'music',
-      // Use Microphone source so existing listener code (which is keyed on
-      // Microphone/Unknown) picks it up exactly like a voice track.
       source: Track.Source.Microphone,
     });
     publishedTrackRef.current = localTrack;
@@ -205,17 +217,31 @@ export default function DJPage() {
   const startSession = useCallback(async () => {
     try {
       // Prime AudioContext on this user gesture (required by autoplay rules)
-      await ensureAudioGraph();
-      await connectLiveKit();
-      await publishTrackIfNeeded();
+      const mediaTrack = await ensureAudioGraph();
 
-      patchRoomState({ djActive: true, djStatus: 'DJ connected. Waiting for a playable track.' });
+      // Try LiveKit first, fall back to PeerJS if it fails
+      try {
+        await connectLiveKit();
+        await publishTrackIfNeeded();
+      } catch (lkErr) {
+        console.warn('[DJ] LiveKit failed, falling back to PeerJS:', lkErr);
+        if (!mediaTrack) {
+          setStatus('ERROR: could not build audio graph');
+          return;
+        }
+        await connectPeerFallback(mediaTrack);
+        liveRef.current = true;
+        setIsLive(true);
+        setStatus('🔴 LIVE — broadcasting via PeerJS (free fallback)');
+      }
+
+      patchRoomState({ djActive: true, djStatus: 'DJ connected. Waiting for a playable track.', peerFallback: usingPeerFallbackRef.current });
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
       console.error('[DJ] startSession error:', err);
       setStatus(`ERROR: ${message}`);
     }
-  }, [connectLiveKit, ensureAudioGraph, patchRoomState, publishTrackIfNeeded]);
+  }, [connectLiveKit, connectPeerFallback, ensureAudioGraph, patchRoomState, publishTrackIfNeeded]);
 
   useEffect(() => {
     if (autoStartedRef.current || isLive || searchParams.get('autostart') !== '1') return;
@@ -236,6 +262,13 @@ export default function DJPage() {
       livekitRoomRef.current?.disconnect();
     } catch {}
     livekitRoomRef.current = null;
+
+    // Stop PeerJS fallback
+    try {
+      peerBroadcasterRef.current?.stop();
+    } catch {}
+    peerBroadcasterRef.current = null;
+    usingPeerFallbackRef.current = false;
 
     const audioEl = audioRef.current;
     if (audioEl) {
@@ -547,6 +580,9 @@ export default function DJPage() {
       } catch {}
       try {
         livekitRoomRef.current?.disconnect();
+      } catch {}
+      try {
+        peerBroadcasterRef.current?.stop();
       } catch {}
       try {
         audioContextRef.current?.close();

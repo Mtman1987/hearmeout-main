@@ -4,7 +4,7 @@ import React from 'react';
 import Link from "next/link";
 import { Card, CardContent, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Trash2 } from "lucide-react";
+import { Trash2, Lock, Users, Clock } from "lucide-react";
 import { SidebarProvider, SidebarInset, SidebarTrigger, useSidebar } from '@/components/ui/sidebar';
 import LeftSidebar from '@/app/components/LeftSidebar';
 import { useSession } from '@/hooks/use-session';
@@ -27,16 +27,31 @@ interface Room {
     id: string;
     name: string;
     ownerId: string;
+    isPrivate?: boolean;
+    password?: string;
+    occupantCount?: number;
+    expiresAt?: string;
+    createdAt?: string;
+}
+
+function timeRemaining(expiresAt?: string) {
+  if (!expiresAt) return null;
+  const ms = new Date(expiresAt).getTime() - Date.now();
+  if (ms <= 0) return 'Expired';
+  const h = Math.floor(ms / 3600000);
+  const m = Math.floor((ms % 3600000) / 60000);
+  return `${h}h ${m}m left`;
 }
 
 export default function Home() {
   const { user } = useSession();
   const { toast } = useToast();
-  const { data: publicRooms, isLoading: roomsLoading } = useCollection<Room>('rooms', {
-    filters: [{ field: 'isPrivate', op: '==', value: false }],
-  });
+  // Show ALL rooms — both public and private are visible
+  const { data: allRooms, isLoading: roomsLoading } = useCollection<Room>('rooms');
 
 
+
+  const isAdmin = !!user && ((user as any).isAdmin || user.discordId === '767875979561009173');
 
   const handleDeleteRoom = (roomId: string, roomName: string) => {
     if (!user) return;
@@ -54,7 +69,7 @@ export default function Home() {
                     <DashboardHeader />
                     <main className="flex-1 container mx-auto py-8 px-4">
                         
-                        <h2 className="text-3xl font-bold font-headline mb-6 text-foreground">Public Rooms</h2>
+                        <h2 className="text-3xl font-bold font-headline mb-6 text-foreground">Rooms</h2>
                         {roomsLoading && (
                              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                                 <Card><CardHeader><Skeleton className="h-5 w-3/4" /></CardHeader><CardContent><div className='h-4'></div></CardContent><CardFooter><Skeleton className="h-10 w-full" /></CardFooter></Card>
@@ -62,33 +77,47 @@ export default function Home() {
                                 <Card><CardHeader><Skeleton className="h-5 w-3/4" /></CardHeader><CardContent><div className='h-4'></div></CardContent><CardFooter><Skeleton className="h-10 w-full" /></CardFooter></Card>
                              </div>
                         )}
-                        {!roomsLoading && publicRooms && publicRooms.length > 0 && (
+                        {!roomsLoading && allRooms && allRooms.length > 0 && (
                             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                            {publicRooms.map((room) => (
+                            {allRooms.map((room) => (
                                 <Card key={room.id} className="flex flex-col hover:shadow-lg transition-shadow duration-300">
                                 <CardHeader>
                                     <CardTitle className="font-headline flex items-center justify-between">
-                                        {room.name}
-                                        {user && (room.ownerId === user.uid || user.discordId === '767875979561009173') && (
+                                        <span className="flex items-center gap-2 truncate">
+                                            {room.isPrivate && <Lock className="h-4 w-4 text-muted-foreground shrink-0" />}
+                                            {room.name}
+                                        </span>
+                                        {user && (room.ownerId === user.uid || isAdmin) && (
                                             <Button variant="ghost" size="icon" onClick={() => handleDeleteRoom(room.id, room.name)}>
                                                 <Trash2 className="h-4 w-4 text-destructive" />
                                             </Button>
                                         )}
                                     </CardTitle>
                                 </CardHeader>
-                                <CardContent className="flex-grow" />
+                                <CardContent className="flex-grow space-y-1">
+                                    <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                                        <Users className="h-3.5 w-3.5" />
+                                        <span>{room.occupantCount || 0} in room</span>
+                                    </div>
+                                    {room.expiresAt && (
+                                        <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                                            <Clock className="h-3 w-3" />
+                                            <span>{timeRemaining(room.expiresAt)}</span>
+                                        </div>
+                                    )}
+                                </CardContent>
                                 <CardFooter>
                                     <Button asChild className="w-full">
-                                    <Link href={`/rooms/${room.id}`}>Join Room</Link>
+                                    <Link href={`/rooms/${room.id}`}>{room.isPrivate ? 'Join (Password Required)' : 'Join Room'}</Link>
                                     </Button>
                                 </CardFooter>
                                 </Card>
                             ))}
                             </div>
                         )}
-                        {!roomsLoading && (!publicRooms || publicRooms.length === 0) && (
+                        {!roomsLoading && (!allRooms || allRooms.length === 0) && (
                             <div className="text-center text-muted-foreground py-16">
-                                <h3 className="text-xl font-semibold">No public rooms yet</h3>
+                                <h3 className="text-xl font-semibold">No rooms yet</h3>
                                 <p className="mt-2">Be the first to create one!</p>
                             </div>
                         )}
