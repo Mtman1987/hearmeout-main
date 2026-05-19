@@ -12,7 +12,7 @@ import { useSession } from '@/hooks/use-session';
 import { useDoc } from '@/hooks/use-db';
 import { dbUpdate } from '@/lib/db-helpers';
 import { useToast } from '@/hooks/use-toast';
-import { Bot, MessageCircle, ShieldAlert } from 'lucide-react';
+import { Bot, MessageCircle, Rocket, ShieldAlert, RefreshCw } from 'lucide-react';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 
 function AdminRolesWarning() {
@@ -58,6 +58,9 @@ export default function SettingsPage() {
   const { toast } = useToast();
   const [twitchChannel, setTwitchChannel] = useState('');
   const [saving, setSaving] = useState(false);
+  const [discordBotStatus, setDiscordBotStatus] = useState<'loading' | 'running' | 'not-initialized' | 'error'>('loading');
+  const [discordBotListeners, setDiscordBotListeners] = useState<number | null>(null);
+  const [discordBotRunning, setDiscordBotRunning] = useState(false);
 
   React.useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -67,6 +70,24 @@ export default function SettingsPage() {
       window.history.replaceState({}, '', '/settings');
     }
   }, [toast]);
+
+  const refreshDiscordBotStatus = React.useCallback(async () => {
+    try {
+      const res = await fetch('/api/discord-bot', { cache: 'no-store' });
+      if (!res.ok) throw new Error(`Status ${res.status}`);
+      const data = await res.json();
+      setDiscordBotStatus(data.status === 'running' ? 'running' : 'not-initialized');
+      setDiscordBotListeners(typeof data.listenerCount === 'number' ? data.listenerCount : null);
+    } catch (error) {
+      console.error('Failed to refresh Discord bot status:', error);
+      setDiscordBotStatus('error');
+      setDiscordBotListeners(null);
+    }
+  }, []);
+
+  React.useEffect(() => {
+    refreshDiscordBotStatus();
+  }, [refreshDiscordBotStatus]);
 
   const [botData, setBotData] = useState<any>(null);
 
@@ -107,6 +128,29 @@ export default function SettingsPage() {
       toast({ variant: 'destructive', title: 'Error', description: 'Failed to save Twitch channel.' });
     } finally {
       setSaving(false);
+    }
+  };
+
+  const handleRunDiscordBot = async () => {
+    setDiscordBotRunning(true);
+    try {
+      const res = await fetch('/api/discord-bot?action=restart', { method: 'POST' });
+      const data = await res.json().catch(() => null);
+      if (!res.ok || !data?.success) {
+        throw new Error(data?.error || `Bot restart failed (${res.status})`);
+      }
+      setDiscordBotStatus(data.status === 'restarted' ? 'running' : 'not-initialized');
+      setDiscordBotListeners(typeof data.listenerCount === 'number' ? data.listenerCount : null);
+      toast({
+        title: 'Bot started',
+        description: `Discord bot listeners running: ${data.listenerCount ?? 0}`,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to run Discord bot.';
+      setDiscordBotStatus('error');
+      toast({ variant: 'destructive', title: 'Bot error', description: message });
+    } finally {
+      setDiscordBotRunning(false);
     }
   };
 
@@ -192,19 +236,45 @@ export default function SettingsPage() {
                                     <CardDescription>Discord bot token is set via environment variable (DISCORD_BOT_TOKEN)</CardDescription>
                                 </CardHeader>
                                 <CardContent>
-                                    {process.env.NEXT_PUBLIC_DISCORD_CLIENT_ID ? (
+                                    <div className="space-y-4">
                                         <div className="flex items-center gap-3 p-3 bg-indigo-50 dark:bg-indigo-950/30 rounded-lg">
-                                            <div className="w-2 h-2 bg-indigo-500 rounded-full" />
-                                            <div>
-                                                <p className="font-semibold text-indigo-800 dark:text-indigo-300">Bot configured</p>
-                                                <p className="text-xs text-indigo-700 dark:text-indigo-400">App ID: {process.env.NEXT_PUBLIC_DISCORD_CLIENT_ID}</p>
+                                            <div className={`w-2 h-2 rounded-full ${discordBotStatus === 'running' ? 'bg-green-500' : discordBotStatus === 'error' ? 'bg-red-500' : 'bg-indigo-500'}`} />
+                                            <div className="min-w-0">
+                                                <p className="font-semibold text-indigo-800 dark:text-indigo-300">
+                                                    {discordBotStatus === 'running' ? 'Bot running' : discordBotStatus === 'error' ? 'Bot error' : 'Bot ready to run'}
+                                                </p>
+                                                <p className="text-xs text-indigo-700 dark:text-indigo-400">
+                                                    {discordBotListeners !== null ? `${discordBotListeners} listener${discordBotListeners === 1 ? '' : 's'} active` : 'Refresh to check current listener count'}
+                                                </p>
                                             </div>
                                         </div>
-                                    ) : (
-                                        <p className="text-sm text-muted-foreground">
-                                            Not configured. Set DISCORD_BOT_TOKEN in environment.
-                                        </p>
-                                    )}
+
+                                        <div className="flex flex-wrap gap-2">
+                                            <Button onClick={handleRunDiscordBot} disabled={discordBotRunning}>
+                                                {discordBotRunning ? (
+                                                    <>
+                                                        <RefreshCw className="mr-2 h-4 w-4 animate-spin" />
+                                                        Running...
+                                                    </>
+                                                ) : (
+                                                    <>
+                                                        <Rocket className="mr-2 h-4 w-4" />
+                                                        Run Bot
+                                                    </>
+                                                )}
+                                            </Button>
+                                            <Button type="button" variant="outline" onClick={refreshDiscordBotStatus}>
+                                                <RefreshCw className="mr-2 h-4 w-4" />
+                                                Refresh Status
+                                            </Button>
+                                        </div>
+
+                                        {process.env.NEXT_PUBLIC_DISCORD_CLIENT_ID ? (
+                                            <p className="text-xs text-muted-foreground">
+                                                App ID: {process.env.NEXT_PUBLIC_DISCORD_CLIENT_ID}
+                                            </p>
+                                        ) : null}
+                                    </div>
                                 </CardContent>
                             </Card>
 
