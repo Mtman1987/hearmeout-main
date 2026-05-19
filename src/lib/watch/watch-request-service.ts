@@ -1,0 +1,492 @@
+import { isXtreamMockEnabled, searchXtreamCatalog } from './xtream-provider';
+import { findInternetArchiveRecommendation } from './internet-archive-provider';
+import { findWatchmodeRecommendation } from './watchmode-provider';
+import { startXtreamVodCache } from './xtream-cache';
+
+type WatchCatalogItem = {
+  id: string;
+  type: 'movie' | 'live';
+  title: string;
+  year: number;
+  runtime: string;
+  source: string;
+  poster: string;
+  playbackUrl: string;
+  overview: string;
+};
+
+type WatchRequest = {
+  requestId: string;
+  requestedBy: {
+    userId: string;
+    username: string;
+  };
+  addedAt: string;
+  item: WatchCatalogItem;
+};
+
+type WatchSession = {
+  id: string;
+  guildId: string;
+  channelId: string;
+  queue: WatchRequest[];
+  current: WatchRequest | null;
+  playback: {
+    status: 'idle' | 'paused' | 'playing';
+    position: number;
+    updatedAt: number;
+  };
+  events: Array<{
+    id: string;
+    at: string;
+    message: string;
+  }>;
+};
+
+const TEST_CATALOG: WatchCatalogItem[] = [
+  {
+    id: 'bbb',
+    type: 'movie',
+    title: 'Big Buck Bunny',
+    year: 2008,
+    runtime: '10m',
+    source: 'Mux public HLS test stream',
+    poster: 'https://peach.blender.org/wp-content/uploads/title_anouncement.jpg',
+    playbackUrl: 'https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8',
+    overview: 'A short open movie HLS stream commonly used for playback testing.',
+  },
+  {
+    id: 'sintel',
+    type: 'movie',
+    title: 'Sintel',
+    year: 2010,
+    runtime: '15m',
+    source: 'Shaka public HLS test stream',
+    poster: 'https://durian.blender.org/wp-content/uploads/2010/05/sintel_poster.jpg',
+    playbackUrl: 'https://storage.googleapis.com/shaka-demo-assets/angel-one-hls/hls.m3u8',
+    overview: 'A public HLS test asset used to validate adaptive playback.',
+  },
+  {
+    id: 'tears-of-steel',
+    type: 'movie',
+    title: 'Tears of Steel',
+    year: 2012,
+    runtime: '12m',
+    source: 'Mux public HLS test stream',
+    poster: 'https://mango.blender.org/wp-content/uploads/2013/05/01_thom_celia_bridge.jpg',
+    playbackUrl: 'https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8',
+    overview: 'A public HLS test stream useful for validating playback and seeking.',
+  },
+  {
+    id: 'mux-hls-test',
+    type: 'live',
+    title: 'HLS Stream Test',
+    year: 2026,
+    runtime: 'live',
+    source: 'Mux public HLS test stream',
+    poster: '',
+    playbackUrl: 'https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8',
+    overview: 'Adaptive HLS sample for testing provider-style playback URLs.',
+  },
+];
+
+declare global {
+  // eslint-disable-next-line no-var
+  var __watchRequestSessions: Map<string, WatchSession> | undefined;
+}
+
+const sessions = globalThis.__watchRequestSessions || new Map<string, WatchSession>();
+globalThis.__watchRequestSessions = sessions;
+const pendingRecommendations = new Map<string, WatchCatalogItem>();
+
+function normalize(value: unknown) {
+  return String(value || '').trim().toLowerCase();
+}
+
+function safeId(value: string) {
+  return value.replace(/[^a-zA-Z0-9_-]/g, '-');
+}
+
+function getPublicBaseUrl(preferredBaseUrl?: string) {
+  if (preferredBaseUrl) return preferredBaseUrl.replace(/\/$/, '');
+  const configured = process.env.WATCHROOM_PUBLIC_BASE_URL || process.env.NEXT_PUBLIC_WATCHROOM_BASE_URL || process.env.NEXT_PUBLIC_APP_URL;
+  if (configured) return configured.replace(/\/$/, '');
+  if (process.env.VERCEL_URL) return `https://${process.env.VERCEL_URL}`;
+  return 'http://localhost:3000';
+}
+
+function getPublicPlaybackUrl(playbackUrl: string) {
+  if (playbackUrl.startsWith('/')) return playbackUrl;
+  return `/activity-proxy?url=${encodeURIComponent(playbackUrl)}`;
+}
+
+function getPublicWatchRequest(request: WatchRequest) {
+  return {
+    ...request,
+    item: {
+      ...request.item,
+      playbackUrl: getPublicPlaybackUrl(request.item.playbackUrl),
+    },
+  };
+}
+
+function sendDiscordReply(channelId: string, content: string, userMessageId?: string): void {
+  const botToken = process.env.DISCORD_BOT_TOKEN;
+  if (!botToken || !channelId) return;
+
+  fetch(`https://discord.com/api/v10/channels/${channelId}/messages`, {
+    method: 'POST',
+    headers: { Authorization: `Bot ${botToken}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      content,
+      message_reference: userMessageId ? { message_id: userMessageId, fail_if_not_exists: false } : undefined,
+    }),
+  }).catch((error) => console.error('[WatchRequest] Discord reply failed:', error));
+}
+
+function addEvent(session: WatchSession, message: string) {
+  session.events.unshift({
+    id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+    at: new Date().toISOString(),
+    message,
+  });
+  session.events = session.events.slice(0, 30);
+}
+
+function createSession(id: string, guildId = 'local', channelId = 'watch'): WatchSession {
+  const session: WatchSession = {
+    id,
+    guildId,
+    channelId,
+    queue: [],
+    current: null,
+    playback: {
+      status: 'idle',
+      position: 0,
+      updatedAt: Date.now(),
+    },
+    events: [],
+  };
+  sessions.set(id, session);
+  return session;
+}
+
+function enqueue(session: WatchSession, item: WatchCatalogItem, requestedBy: WatchRequest['requestedBy']) {
+  const request: WatchRequest = {
+    requestId: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+    requestedBy,
+    addedAt: new Date().toISOString(),
+    item,
+  };
+
+  if (!session.current) {
+    session.current = request;
+    session.playback = { status: 'paused', position: 0, updatedAt: Date.now() };
+    addEvent(session, `${requestedBy.username} loaded ${item.title}`);
+  } else {
+    session.queue.push(request);
+    addEvent(session, `${requestedBy.username} queued ${item.title}`);
+  }
+
+  return request;
+}
+
+export function parseWatchCommand(message: string) {
+  const trimmed = message.trim();
+  const match = trimmed.match(/^!(wr|watch)(?:\s+(.+))?$/i);
+  if (!match) return null;
+  return {
+    command: `!${match[1].toLowerCase()}`,
+    query: (match[2] || '').trim(),
+  };
+}
+
+export function parseWatchAcceptCommand(message: string) {
+  return /^!(add|accept)$/i.test(message.trim());
+}
+
+export function listWatchCatalog() {
+  return TEST_CATALOG;
+}
+
+export function searchWatchCatalog(query: string | null | undefined) {
+  const needle = normalize(query);
+  if (!needle) return [];
+  const queryWords = needle.split(/\s+/).filter((word) => word.length >= 3 && !['the', 'and'].includes(word));
+  if (queryWords.length === 0) return [];
+
+  return TEST_CATALOG.map((item) => {
+    const title = normalize(item.title);
+    const overview = normalize(item.overview);
+    const source = normalize(item.source);
+    let score = 0;
+    if (title === needle) score += 100;
+    if (title.includes(needle)) score += 50;
+    if (overview.includes(needle)) score += 10;
+    if (source.includes(needle)) score += 10;
+    for (const word of queryWords) {
+      if (title.includes(word)) score += 8;
+      if (overview.includes(word)) score += 2;
+      if (source.includes(word)) score += 2;
+    }
+    return { item, score };
+  })
+    .filter((entry) => entry.score >= 20)
+    .sort((a, b) => b.score - a.score)
+    .map((entry) => entry.item);
+}
+
+export async function searchWatchProviders(query: string | null | undefined) {
+  if (isXtreamMockEnabled()) {
+    const xtreamMockResults = await searchXtreamCatalog(query).catch((error) => {
+      console.error('[WatchRequest] Xtream mock search failed:', error);
+      return [];
+    });
+    if (xtreamMockResults.length) return xtreamMockResults;
+  }
+
+  const xtreamResults = await searchXtreamCatalog(query).catch((error) => {
+    console.error('[WatchRequest] Xtream search failed:', error);
+    return [];
+  });
+  if (xtreamResults.length) return xtreamResults;
+
+  return searchWatchCatalog(query);
+}
+
+export function getWatchCatalogItem(id: string | null | undefined) {
+  return TEST_CATALOG.find((item) => item.id === id) || null;
+}
+
+export function getWatchSession(sessionId: string, guildId?: string, channelId?: string) {
+  return sessions.get(sessionId) || createSession(sessionId, guildId, channelId);
+}
+
+export function getResolvedWatchSession(sessionId: string, guildId?: string, channelId?: string) {
+  const exact = getWatchSession(sessionId, guildId, channelId);
+  if (exact.current || exact.queue.length) return exact;
+
+  const guildPrefix = safeId(`${guildId || sessionId.split('-')[0] || 'local'}-`);
+  const activeSessions = Array.from(sessions.values())
+    .filter((session) => session.id !== exact.id)
+    .filter((session) => session.id.startsWith(guildPrefix))
+    .filter((session) => session.current || session.queue.length)
+    .sort((a, b) => {
+      const aTime = Date.parse(a.events[0]?.at || '') || a.playback.updatedAt || 0;
+      const bTime = Date.parse(b.events[0]?.at || '') || b.playback.updatedAt || 0;
+      return bTime - aTime;
+    });
+
+  return activeSessions[0] || exact;
+}
+
+export function getWatchSessionId(guildId: string, channelId: string) {
+  return safeId(`${guildId || 'local'}-${channelId || 'watch'}`);
+}
+
+export function getWatchRoomUrl(sessionId: string, preferredBaseUrl?: string) {
+  return `${getPublicBaseUrl(preferredBaseUrl)}/watch/${sessionId}`;
+}
+
+export function getPublicWatchSession(session: WatchSession, preferredBaseUrl?: string) {
+  return {
+    ...session,
+    queue: session.queue.map(getPublicWatchRequest),
+    current: session.current ? getPublicWatchRequest(session.current) : null,
+    roomUrl: getWatchRoomUrl(session.id, preferredBaseUrl),
+  };
+}
+
+export async function requestWatchItem(params: {
+  sessionId: string;
+  guildId?: string;
+  channelId?: string;
+  query?: string;
+  itemId?: string;
+  userId: string;
+  username: string;
+}) {
+  const item = getWatchCatalogItem(params.itemId) || (await searchWatchProviders(params.query))[0];
+  if (!item) {
+    const watchmodeRecommendation = await findWatchmodeRecommendation(params.query).catch((error) => {
+      console.error('[WatchRequest] Watchmode fallback failed:', error);
+      return null;
+    });
+    if (watchmodeRecommendation) {
+      return { error: 'No playable provider item' as const, discovery: watchmodeRecommendation };
+    }
+
+    const recommendation = await findInternetArchiveRecommendation(params.query).catch((error) => {
+      console.error('[WatchRequest] Internet Archive fallback failed:', error);
+      return null;
+    });
+    if (recommendation) {
+      pendingRecommendations.set(`${params.sessionId}:${params.userId}`, recommendation);
+      return { error: 'No matching provider item' as const, recommendation };
+    }
+    return { error: 'No matching catalog item' as const };
+  }
+
+  const session = getWatchSession(params.sessionId, params.guildId, params.channelId);
+  const request = enqueue(session, item, {
+    userId: params.userId,
+    username: params.username,
+  });
+  maybeStartVodCache(item);
+
+  return { request, session };
+}
+
+export function acceptWatchRecommendation(params: {
+  sessionId: string;
+  guildId?: string;
+  channelId?: string;
+  userId: string;
+  username: string;
+}) {
+  const key = `${params.sessionId}:${params.userId}`;
+  const item = pendingRecommendations.get(key);
+  if (!item) return { error: 'No pending recommendation' as const };
+
+  pendingRecommendations.delete(key);
+  const session = getWatchSession(params.sessionId, params.guildId, params.channelId);
+  const request = enqueue(session, item, {
+    userId: params.userId,
+    username: params.username,
+  });
+  maybeStartVodCache(item);
+
+  return { request, session };
+}
+
+function maybeStartVodCache(item: WatchCatalogItem) {
+  const match = item.playbackUrl.match(/^\/activity-provider\/xtream\/vod\/(\d+)$/);
+  if (!match) return;
+  startXtreamVodCache(match[1], item.title).catch(() => {});
+}
+
+export function controlWatchSession(sessionId: string, action: string, position = 0) {
+  const session = getWatchSession(sessionId);
+
+  if (action === 'play' || action === 'pause') {
+    session.playback.status = action === 'play' ? 'playing' : 'paused';
+    session.playback.position = Math.max(0, Number(position || session.playback.position || 0));
+    session.playback.updatedAt = Date.now();
+    addEvent(session, `${action === 'play' ? 'Played' : 'Paused'} ${session.current?.item.title || 'session'}`);
+    return session;
+  }
+
+  if (action === 'seek') {
+    session.playback.position = Math.max(0, Number(position || 0));
+    session.playback.updatedAt = Date.now();
+    addEvent(session, `Seeked to ${Math.round(session.playback.position)}s`);
+    return session;
+  }
+
+  if (action === 'next') {
+    session.current = session.queue.shift() || null;
+    session.playback = { status: session.current ? 'paused' : 'idle', position: 0, updatedAt: Date.now() };
+    addEvent(session, session.current ? `Loaded ${session.current.item.title}` : 'Queue ended');
+    return session;
+  }
+
+  if (action === 'clear') {
+    session.queue = [];
+    session.current = null;
+    session.playback = { status: 'idle', position: 0, updatedAt: Date.now() };
+    addEvent(session, 'Cleared queue');
+    return session;
+  }
+
+  throw new Error('Unsupported watch control action');
+}
+
+export async function handleWatchRequestCommand(params: {
+  message: string;
+  discordUserId: string;
+  discordUserName: string;
+  guildId: string;
+  channelId: string;
+  userMessageId?: string;
+  publicBaseUrl?: string;
+}) {
+  if (parseWatchAcceptCommand(params.message)) {
+    const sessionId = getWatchSessionId(params.guildId, params.channelId);
+    const accepted = acceptWatchRecommendation({
+      sessionId,
+      guildId: params.guildId,
+      channelId: params.channelId,
+      userId: params.discordUserId,
+      username: params.discordUserName,
+    });
+
+    if ('error' in accepted) {
+      sendDiscordReply(params.channelId, 'No pending Internet Archive recommendation. Search with !wr first.', params.userMessageId);
+      return true;
+    }
+
+    sendDiscordReply(
+      params.channelId,
+      `Added "${accepted.request.item.title}" from Internet Archive. Watch room: ${getWatchRoomUrl(sessionId, params.publicBaseUrl)}`,
+      params.userMessageId
+    );
+    return true;
+  }
+
+  const parsed = parseWatchCommand(params.message);
+  if (!parsed) return false;
+
+  if (!parsed.query) {
+    sendDiscordReply(params.channelId, `Usage: ${parsed.command} <movie, show, or test stream>`, params.userMessageId);
+    return true;
+  }
+
+  const sessionId = getWatchSessionId(params.guildId, params.channelId);
+  const result = await requestWatchItem({
+    sessionId,
+    guildId: params.guildId,
+    channelId: params.channelId,
+    query: parsed.query,
+    userId: params.discordUserId,
+    username: params.discordUserName,
+  });
+
+  if ('error' in result) {
+    if (result.discovery) {
+      sendDiscordReply(
+        params.channelId,
+        `No playable Xtream/VOD match found. Watchmode found "${result.discovery.title}" (${result.discovery.year}) as a likely title, but Watchmode only provides discovery links/metadata, not a stream. Try a provider title, or search again for a public-domain fallback.`,
+        params.userMessageId
+      );
+      return true;
+    }
+
+    if (result.recommendation) {
+      sendDiscordReply(
+        params.channelId,
+        `No playable Xtream VOD/live match found. Internet Archive returned best title comparison: "${result.recommendation.title}". Type !add to accept this recommendation.`,
+        params.userMessageId
+      );
+      return true;
+    }
+
+    sendDiscordReply(
+      params.channelId,
+      `No match found for "${parsed.query}". Try "big buck bunny", "sintel", "tears of steel", or "hls".`,
+      params.userMessageId
+    );
+    return true;
+  }
+
+  const position = result.session.current?.requestId === result.request.requestId
+    ? 'now playing'
+    : `queue position ${result.session.queue.length}`;
+
+  sendDiscordReply(
+    params.channelId,
+    `Added "${result.request.item.title}" (${position}). Watch room: ${getWatchRoomUrl(sessionId, params.publicBaseUrl)}`,
+    params.userMessageId
+  );
+
+  return true;
+}
