@@ -16,12 +16,12 @@ COPY worker/package*.json ./
 RUN npm ci --omit=dev
 
 COPY worker/src ./src
-RUN mkdir -p /data
+RUN mkdir -p /tmp/music
 
 EXPOSE 3002
 
 ENV NODE_ENV=production
 ENV PORT=3002
-ENV MUSIC_CACHE_DIR=/data/music
+ENV MUSIC_CACHE_DIR=/tmp/music
 
 CMD ["sh", "-c", "yt-dlp -U 2>/dev/null; exec node src/server.js"]
