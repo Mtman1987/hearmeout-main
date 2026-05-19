@@ -16,8 +16,7 @@ COPY worker/package*.json ./
 RUN npm ci --omit=dev
 
 COPY worker/src ./src
-COPY worker/youtube-cookies.txt ./youtube-cookies.txt
-COPY worker/youtube-cookies.txt /data/youtube-cookies.txt
+RUN mkdir -p /data
 
 EXPOSE 3002
 
