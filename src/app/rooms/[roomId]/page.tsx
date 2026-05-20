@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useParams, useRouter } from 'next/navigation';
-import { LiveKitRoom, useConnectionState, useRoomContext } from '@livekit/components-react';
+import { LiveKitRoom, useConnectionState } from '@livekit/components-react';
 import { ConnectionState } from 'livekit-client';
 import { SidebarProvider, SidebarInset, SidebarTrigger, useSidebar } from '@/components/ui/sidebar';
 import { Button } from "@/components/ui/button";
@@ -40,8 +40,8 @@ interface RoomData {
   expiresAt?: string;
 }
 
-function RoomHeader({ roomName, onToggleChat, showDJ, onToggleDJ, peerFallback, onScreenShare }: {
-    roomName: string; onToggleChat: () => void; showDJ: boolean; onToggleDJ: () => void; peerFallback?: boolean; onScreenShare?: () => void;
+function RoomHeader({ roomName, onToggleChat, showDJ, onToggleDJ, peerFallback, livekitReady, onScreenShare }: {
+    roomName: string; onToggleChat: () => void; showDJ: boolean; onToggleDJ: () => void; peerFallback?: boolean; livekitReady?: boolean; onScreenShare?: () => void;
 }) {
     const { isMobile } = useSidebar();
     const params = useParams();
@@ -57,7 +57,7 @@ function RoomHeader({ roomName, onToggleChat, showDJ, onToggleDJ, peerFallback, 
             <SidebarTrigger className={isMobile ? "" : "hidden md:flex"} />
             <div className="flex-1 flex items-center gap-4 truncate">
                 <h2 className="text-xl font-bold font-headline truncate">{roomName}</h2>
-                <ConnectionStatusIndicator peerFallback={peerFallback} />
+                <ConnectionStatusIndicator peerFallback={peerFallback} livekitReady={livekitReady} />
             </div>
             <div className="flex flex-initial items-center justify-end space-x-2">
                 <Tooltip><TooltipTrigger asChild>
@@ -79,32 +79,34 @@ function RoomHeader({ roomName, onToggleChat, showDJ, onToggleDJ, peerFallback, 
     );
 }
 
-function ConnectionStatusIndicator({ peerFallback }: { peerFallback?: boolean }) {
+function LiveKitConnectionStatus() {
+    const connectionState = useConnectionState();
     let indicatorClass = 'bg-gray-500';
     let statusText = 'Unknown';
 
-    if (peerFallback) {
-        indicatorClass = 'bg-blue-500';
-        statusText = 'P2P Voice';
-    } else {
-        try {
-            // eslint-disable-next-line react-hooks/rules-of-hooks
-            const connectionState = useConnectionState();
-            switch (connectionState) {
-                case ConnectionState.Connected: indicatorClass = 'bg-green-500'; statusText = 'Connected'; break;
-                case ConnectionState.Connecting: indicatorClass = 'bg-yellow-500 animate-pulse'; statusText = 'Connecting'; break;
-                case ConnectionState.Disconnected: indicatorClass = 'bg-red-500'; statusText = 'Disconnected'; break;
-                case ConnectionState.Reconnecting: indicatorClass = 'bg-yellow-500 animate-pulse'; statusText = 'Reconnecting'; break;
-            }
-        } catch {
-            indicatorClass = 'bg-gray-500';
-            statusText = 'No voice';
-        }
+    switch (connectionState) {
+        case ConnectionState.Connected: indicatorClass = 'bg-green-500'; statusText = 'Connected'; break;
+        case ConnectionState.Connecting: indicatorClass = 'bg-yellow-500 animate-pulse'; statusText = 'Connecting'; break;
+        case ConnectionState.Disconnected: indicatorClass = 'bg-red-500'; statusText = 'Disconnected'; break;
+        case ConnectionState.Reconnecting: indicatorClass = 'bg-yellow-500 animate-pulse'; statusText = 'Reconnecting'; break;
     }
+
+    return <StatusDot indicatorClass={indicatorClass} statusText={statusText} />;
+}
+
+function StatusDot({ indicatorClass, statusText }: { indicatorClass: string; statusText: string }) {
     return (
         <Tooltip><TooltipTrigger><div className={cn("h-2.5 w-2.5 rounded-full", indicatorClass)} /></TooltipTrigger>
         <TooltipContent><p>Voice: {statusText}</p></TooltipContent></Tooltip>
     );
+}
+
+function ConnectionStatusIndicator({ peerFallback, livekitReady }: { peerFallback?: boolean; livekitReady?: boolean }) {
+    if (peerFallback) {
+        return <StatusDot indicatorClass="bg-blue-500" statusText="P2P Voice" />;
+    }
+    if (livekitReady) return <LiveKitConnectionStatus />;
+    return <StatusDot indicatorClass="bg-gray-500" statusText="No voice" />;
 }
 
 function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
@@ -537,7 +539,7 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
         <div className={cn("bg-secondary/30 md:peer-data-[state=collapsed]:peer-data-[variant=inset]:ml-[calc(var(--sidebar-width-icon)_+_1rem)] md:peer-data-[variant=inset]:ml-[calc(var(--sidebar-width)_+_1rem)] duration-200 transition-[margin-left,margin-right]", chatOpen && "md:mr-[28rem]")}>
             <SidebarInset>
                 <div className="flex flex-col h-screen relative">
-                    <RoomHeader roomName={room.name} onToggleChat={() => setChatOpen(!chatOpen)} showDJ={showDJ} onToggleDJ={() => setShowDJ(v => !v)} peerFallback={voiceFallbackActive} onScreenShare={() => openPopout('screenShare', { width: 720, height: 520 }, { source: 'screenShare' })} />
+                    <RoomHeader roomName={room.name} onToggleChat={() => setChatOpen(!chatOpen)} showDJ={showDJ} onToggleDJ={() => setShowDJ(v => !v)} peerFallback={voiceFallbackActive} livekitReady={voiceReady} onScreenShare={() => openPopout('screenShare', { width: 720, height: 520 }, { source: 'screenShare' })} />
 
                     <main className="flex-1 p-4 md:p-6 overflow-y-auto space-y-6">
                         {/* Hidden audio element for LiveKit music track attachment */}
@@ -560,6 +562,7 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
                           onOpenQueue={() => openPopout('queue', { width: 760, height: 720 }, { source: 'queue' })}
                           onOpenAddSong={() => openPopout('addSong', { width: 460, height: 560 }, { source: 'addSong' })}
                           onOpenWatch={() => openPopout('watch', { width: 640, height: 700 }, { source: 'watch' })}
+                          voiceEnabled={voiceReady}
                         />
                         {isOwner && <VoiceQueue roomId={roomId} />}
                     </main>

@@ -39,10 +39,10 @@ interface UserListProps {
   onOpenQueue: () => void;
   onOpenAddSong: () => void;
   onOpenWatch?: () => void;
+  voiceEnabled?: boolean;
 }
 
-export default function UserList({ roomId, musicStatus, djStatus, localVolume, onVolumeChange, showDJ, autoRadio, onToggleAutoRadio, djIsLive, djStarting, onStartDJ, onStopDJ, onStartAudio, onOpenQueue, onOpenAddSong, onOpenWatch }: UserListProps) {
-  const { user } = useSession();
+function LiveKitParticipants({ isHost, roomId }: { isHost: boolean; roomId: string }) {
   const { localParticipant } = useLocalParticipant();
   const remoteParticipants = useRemoteParticipants();
   const allParticipants = [localParticipant, ...remoteParticipants];
@@ -52,6 +52,20 @@ export default function UserList({ roomId, musicStatus, djStatus, localVolume, o
     { onlySubscribed: true }
   ).filter(track => track.publication && !track.participant.isLocal);
 
+  return (
+    <>
+      {allAudioTracks.map((trackRef) => (
+        <AudioTrack key={trackRef.publication.trackSid} trackRef={trackRef} volume={1.0} muted={false} />
+      ))}
+      {allParticipants.map((participant) => (
+        <UserCard key={participant.sid} participant={participant} isLocal={participant.isLocal} isHost={isHost} roomId={roomId} />
+      ))}
+    </>
+  );
+}
+
+export default function UserList({ roomId, musicStatus, djStatus, localVolume, onVolumeChange, showDJ, autoRadio, onToggleAutoRadio, djIsLive, djStarting, onStartDJ, onStopDJ, onStartAudio, onOpenQueue, onOpenAddSong, onOpenWatch, voiceEnabled = true }: UserListProps) {
+  const { user } = useSession();
   const { data: room } = useDoc<RoomData>('rooms', roomId, 2000);
 
   const isAdmin = !!user && !!(user as any).isAdmin;
@@ -60,9 +74,6 @@ export default function UserList({ roomId, musicStatus, djStatus, localVolume, o
 
   return (
     <>
-      {allAudioTracks.map((trackRef) => (
-        <AudioTrack key={trackRef.publication.trackSid} trackRef={trackRef} volume={1.0} muted={false} />
-      ))}
       <div className="flex flex-col gap-6">
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
           {/* DJ Card — toggled via header music note */}
@@ -91,9 +102,7 @@ export default function UserList({ roomId, musicStatus, djStatus, localVolume, o
             />
           )}
           {/* Real users */}
-          {allParticipants.map((participant) => (
-            <UserCard key={participant.sid} participant={participant} isLocal={participant.isLocal} isHost={isHost} roomId={roomId} />
-          ))}
+          {voiceEnabled && <LiveKitParticipants isHost={isHost} roomId={roomId} />}
         </div>
       </div>
     </>
