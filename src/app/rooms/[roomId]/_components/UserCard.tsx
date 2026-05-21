@@ -174,8 +174,11 @@ export default function UserCard({ participant, isLocal, isHost, roomId }: { par
 
   const handleToggleMic = async () => { if (isLocal && room) await room.localParticipant.setMicrophoneEnabled(!participant.isMicrophoneEnabled); };
   const isMuted = !participant.isMicrophoneEnabled;
-  const displayName = name || participantMeta.displayName || firestoreUser?.displayName || 'User';
-  const photoURL = participantMeta.photoURL || firestoreUser?.photoURL || `https://picsum.photos/seed/${userRecordId}/100/100`;
+  const liveKitName = name && name !== 'User' ? name : null;
+  const sessionName = isLocal ? user?.displayName || (user as any)?.username : null;
+  const sessionPhoto = isLocal ? user?.photoURL : null;
+  const displayName = liveKitName || participantMeta.displayName || firestoreUser?.displayName || sessionName || 'User';
+  const photoURL = participantMeta.photoURL || firestoreUser?.photoURL || sessionPhoto || `https://picsum.photos/seed/${userRecordId}/100/100`;
   const handleLeaveRoom = () => { room.disconnect(); router.push('/'); };
 
   const [moveDialogOpen, setMoveDialogOpen] = React.useState(false);

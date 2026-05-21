@@ -540,7 +540,20 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
       voiceReady ? (
       <LiveKitRoom serverUrl={livekitUrl} token={voiceToken} connect={true} audio={!userSettings?.streamMode} video={false}
           options={{ dynacast: true, adaptiveStream: true }}
-          onError={(err) => { toast({ variant: 'destructive', title: 'Connection Error', description: err.message }); }}>
+          onError={(err) => {
+            fetch('/api/client-log', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                area: 'livekit-room',
+                message: err.message,
+                roomId,
+                identity: voiceIdentityRef.current || null,
+                userAgent: navigator.userAgent,
+              }),
+            }).catch(() => {});
+            toast({ variant: 'destructive', title: 'Connection Error', description: err.message });
+          }}>
         {renderRoomUI()}
       </LiveKitRoom>
       ) : renderRoomUI()
