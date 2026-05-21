@@ -109,8 +109,14 @@ function safeId(value: string) {
 
 function getPublicBaseUrl(preferredBaseUrl?: string) {
   if (preferredBaseUrl) return preferredBaseUrl.replace(/\/$/, '');
-  const configured = process.env.WATCHROOM_PUBLIC_BASE_URL || process.env.NEXT_PUBLIC_WATCHROOM_BASE_URL || process.env.NEXT_PUBLIC_APP_URL;
+  const configured =
+    process.env.WATCHROOM_PUBLIC_BASE_URL ||
+    process.env.NEXT_PUBLIC_WATCHROOM_BASE_URL ||
+    process.env.NEXT_PUBLIC_BASE_URL ||
+    process.env.NEXT_PUBLIC_APP_URL ||
+    process.env.APP_URL;
   if (configured) return configured.replace(/\/$/, '');
+  if (process.env.FLY_APP_NAME) return `https://${process.env.FLY_APP_NAME}.fly.dev`;
   if (process.env.VERCEL_URL) return `https://${process.env.VERCEL_URL}`;
   return 'http://localhost:3000';
 }

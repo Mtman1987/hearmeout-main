@@ -37,6 +37,21 @@ type WatchState = {
   events: Array<{ id: string; at: string; message: string }>;
 };
 
+function watchRequestErrorMessage(data: any) {
+  if (data?.discovery) {
+    const title = data.discovery.title || 'that title';
+    const year = data.discovery.year ? ` (${data.discovery.year})` : '';
+    return `Found "${title}"${year} in Watchmode, but it is metadata only. Add a provider stream for it or try a playable test title.`;
+  }
+
+  if (data?.recommendation) {
+    const title = data.recommendation.title || 'a possible Internet Archive match';
+    return `No provider stream matched. Internet Archive found "${title}"; type !add in Discord to accept it.`;
+  }
+
+  return data?.error || 'No match found';
+}
+
 export function WatchWidget({
   id, position, size, opacity,
   onPositionChange, onSizeChange, onOpacityChange, onClose, roomId,
@@ -79,7 +94,7 @@ export function WatchWidget({
       });
       const data = await res.json();
       if (!res.ok) {
-        setError(data.error || 'No match found');
+        setError(watchRequestErrorMessage(data));
       } else {
         setState(data.session);
         setQuery('');

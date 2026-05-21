@@ -21,6 +21,21 @@ type WatchState = {
   events: Array<{ id: string; at: string; message: string }>;
 };
 
+function watchRequestErrorMessage(payload: any, fallback: string) {
+  if (payload?.discovery) {
+    const title = payload.discovery.title || 'that title';
+    const year = payload.discovery.year ? ` (${payload.discovery.year})` : '';
+    return `Found "${title}"${year} in Watchmode, but Watchmode only provides metadata, not a playable stream. Add an Xtream/M3U provider source that has it, or try a public test title.`;
+  }
+
+  if (payload?.recommendation) {
+    const title = payload.recommendation.title || 'a possible Internet Archive match';
+    return `No provider stream matched. Internet Archive found "${title}"; type !add in Discord to accept it, or search a playable provider title.`;
+  }
+
+  return fallback;
+}
+
 async function api(path: string, options: RequestInit = {}) {
   const response = await fetch(path, {
     ...options,
@@ -29,7 +44,7 @@ async function api(path: string, options: RequestInit = {}) {
   });
   if (!response.ok) {
     const payload = await response.json().catch(() => null);
-    throw new Error(payload?.error || `Request failed: ${response.status}`);
+    throw new Error(watchRequestErrorMessage(payload, payload?.error || `Request failed: ${response.status}`));
   }
   return response.json();
 }
