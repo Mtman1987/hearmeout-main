@@ -1,6 +1,7 @@
 'use client';
 
 import React from 'react';
+import { usePathname } from 'next/navigation';
 import { usePopout } from '@/components/PopoutWidgets/PopoutProvider';
 import { ChatWidget } from '@/components/PopoutWidgets/ChatWidget';
 import { QueueWidget } from '@/components/PopoutWidgets/QueueWidget';
@@ -8,21 +9,24 @@ import { AddSongWidget } from '@/components/PopoutWidgets/AddSongWidget';
 import { WatchWidget } from '@/components/PopoutWidgets/WatchWidget';
 import { ScreenShareWidget } from '@/components/PopoutWidgets/ScreenShareWidget';
 
+function getRoomIdFromPath(pathname: string): string {
+  const pathParts = pathname.split('/').filter(Boolean);
+  const roomIndex = pathParts.indexOf('rooms');
+  const overlayIndex = pathParts.indexOf('overlay');
+  if (roomIndex !== -1 && pathParts[roomIndex + 1]) return pathParts[roomIndex + 1];
+  if (overlayIndex !== -1 && pathParts[overlayIndex + 1]) return pathParts[overlayIndex + 1];
+  return '';
+}
+
 export function PopoutRenderer() {
   const { popouts, closePopout, updatePopout, openPopout } = usePopout();
-  const [roomId, setRoomId] = React.useState<string>('');
-
-  React.useEffect(() => {
-    const pathParts = typeof window !== 'undefined' ? window.location.pathname.split('/') : [];
-    const roomIndex = pathParts.indexOf('rooms');
-    const overlayIndex = pathParts.indexOf('overlay');
-    if (roomIndex !== -1 && pathParts[roomIndex + 1]) setRoomId(pathParts[roomIndex + 1]);
-    else if (overlayIndex !== -1 && pathParts[overlayIndex + 1]) setRoomId(pathParts[overlayIndex + 1]);
-  }, []);
+  const pathname = usePathname() || '';
+  const roomId = getRoomIdFromPath(pathname);
 
   return (
     <>
       {popouts.map((popout) => {
+        const widgetRoomId = String(popout.customSettings?.roomId || roomId || '');
         if (popout.type === 'chat') {
           return (
             <ChatWidget
@@ -35,7 +39,7 @@ export function PopoutRenderer() {
               opacity={popout.opacity}
               onOpacityChange={(opacity) => updatePopout(popout.id, { opacity })}
               onClose={() => closePopout(popout.id)}
-              roomId={roomId}
+              roomId={widgetRoomId}
               source={popout.customSettings?.source}
             />
           );
@@ -52,8 +56,8 @@ export function PopoutRenderer() {
               opacity={popout.opacity}
               onOpacityChange={(opacity) => updatePopout(popout.id, { opacity })}
               onClose={() => closePopout(popout.id)}
-              roomId={roomId}
-              onOpenAddSong={() => openPopout('addSong', { width: 460, height: 560 }, { source: 'addSong' })}
+              roomId={widgetRoomId}
+              onOpenAddSong={() => openPopout('addSong', { width: 460, height: 560 }, { source: 'addSong', roomId: widgetRoomId })}
             />
           );
         }
@@ -69,7 +73,7 @@ export function PopoutRenderer() {
               opacity={popout.opacity}
               onOpacityChange={(opacity) => updatePopout(popout.id, { opacity })}
               onClose={() => closePopout(popout.id)}
-              roomId={roomId}
+              roomId={widgetRoomId}
             />
           );
         }
@@ -85,7 +89,7 @@ export function PopoutRenderer() {
               opacity={popout.opacity}
               onOpacityChange={(opacity) => updatePopout(popout.id, { opacity })}
               onClose={() => closePopout(popout.id)}
-              roomId={roomId}
+              roomId={widgetRoomId}
             />
           );
         }
@@ -101,7 +105,7 @@ export function PopoutRenderer() {
               opacity={popout.opacity}
               onOpacityChange={(opacity) => updatePopout(popout.id, { opacity })}
               onClose={() => closePopout(popout.id)}
-              roomId={roomId}
+              roomId={widgetRoomId}
             />
           );
         }
