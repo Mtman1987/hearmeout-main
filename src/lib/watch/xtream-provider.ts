@@ -39,6 +39,7 @@ type XtreamCatalogItem = {
 };
 
 let cachedStreams: { expiresAt: number; items: XtreamCatalogItem[] } | null = null;
+const vodExtensions = new Map<string, string>();
 
 const MOCK_CATALOG: XtreamCatalogItem[] = [
   {
@@ -163,6 +164,7 @@ function toCatalogItem(stream: XtreamStream, kind: XtreamKind): XtreamCatalogIte
 
   const extension = String(stream.container_extension || (kind === 'live' ? 'ts' : 'mp4')).toLowerCase();
   if (kind === 'vod' && !['mp4', 'm4v', 'mov', 'm3u8', 'ts', 'mkv'].includes(extension)) return null;
+  if (kind === 'vod') vodExtensions.set(String(streamId), extension);
 
   return {
     id: `xtream-${kind}-${streamId}`,
@@ -347,7 +349,7 @@ export function getXtreamStreamUrl(kind: XtreamKind, streamId: string) {
   if (!config) throw new Error('Xtream provider is not configured');
   const cleanId = String(streamId).replace(/[^0-9]/g, '');
   if (!cleanId) throw new Error('Invalid Xtream stream id');
-  const extension = kind === 'live' ? 'ts' : 'mp4';
+  const extension = kind === 'live' ? 'ts' : (vodExtensions.get(cleanId) || 'mp4');
   const pathKind = kind === 'live' ? 'live' : kind === 'series' ? 'series' : 'movie';
   return new URL(`/${pathKind}/${encodeURIComponent(config.username)}/${encodeURIComponent(config.password)}/${cleanId}.${extension}`, config.baseUrl);
 }

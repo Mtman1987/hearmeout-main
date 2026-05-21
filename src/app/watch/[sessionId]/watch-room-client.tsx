@@ -62,6 +62,19 @@ function downloadUrlFor(url: string) {
   return next.toString();
 }
 
+function isBrowserLimitedVideo(item: any) {
+  return String(item?.overview || '').toLowerCase().includes('(mkv)');
+}
+
+function mediaErrorMessage(error: MediaError | null | undefined) {
+  if (!error) return 'Unknown media error';
+  if (error.code === MediaError.MEDIA_ERR_ABORTED) return 'Media load was aborted';
+  if (error.code === MediaError.MEDIA_ERR_NETWORK) return 'Network error while loading media';
+  if (error.code === MediaError.MEDIA_ERR_DECODE) return 'Browser could not decode this video stream';
+  if (error.code === MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED) return 'Browser does not support this video format';
+  return `Media error ${error.code}`;
+}
+
 export default function WatchRoomClient({ sessionId }: { sessionId: string }) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const playerShellRef = useRef<HTMLDivElement | null>(null);
@@ -357,6 +370,9 @@ export default function WatchRoomClient({ sessionId }: { sessionId: string }) {
         });
     } else {
       video.src = item.playbackUrl;
+      if (isBrowserLimitedVideo(item)) {
+        setMediaStatus('MKV stream loaded. Browser playback may not be supported; use Download if video stays black.');
+      }
     }
 
     applyPlaybackState(state);
@@ -426,7 +442,7 @@ export default function WatchRoomClient({ sessionId }: { sessionId: string }) {
               }}
               onError={() => {
                 const mediaError = videoRef.current?.error;
-                const message = mediaError ? `Media error ${mediaError.code}` : 'Unknown media error';
+                const message = mediaErrorMessage(mediaError);
                 setMediaStatus(message);
                 console.error('[WatchRoom] Media error', mediaError);
               }}
@@ -438,6 +454,11 @@ export default function WatchRoomClient({ sessionId }: { sessionId: string }) {
               <div className="absolute inset-0 grid place-content-center gap-2 bg-black text-center text-slate-400">
                 <strong className="text-slate-100">No video loaded</strong>
                 <span>Use the request panel or type !wr in Discord.</span>
+              </div>
+            )}
+            {state?.current && isBrowserLimitedVideo(state.current.item) && (
+              <div className="absolute bottom-3 left-3 right-3 rounded-md border border-amber-400/40 bg-black/80 p-3 text-sm text-amber-100">
+                This provider returned an MKV stream. If the browser shows a black player, use Download or pick an MP4/HLS result.
               </div>
             )}
           </div>
