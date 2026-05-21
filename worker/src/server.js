@@ -571,9 +571,14 @@ class DJSession {
   requestAutoRadio() {
     fetch(`${APP_URL}/api/auto-radio`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        Authorization: `Bearer ${WORKER_SECRET}`,
+        'Content-Type': 'application/json',
+      },
       body: JSON.stringify({ roomId: this.roomId }),
-    }).catch(() => {});
+    }).catch((err) => {
+      console.warn(`[DJ:${this.roomId}] Auto-radio request failed:`, err.message);
+    });
   }
 
   async patchRoom(data) {
