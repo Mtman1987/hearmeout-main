@@ -35,6 +35,7 @@ interface RoomData {
   djStatus?: string;
   autoRadio?: boolean;
   playHistory?: string[];
+  djPeerId?: string | null;
   peerFallback?: boolean;
   isPrivate?: boolean;
   password?: string;
@@ -347,6 +348,7 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
                         () => {
                             setMusicStatus('P2P disconnected');
                         },
+                        room.djPeerId,
                     );
                     if (cancelled) { listener.disconnect(); return; }
                     peerListenerRef.current = listener;
@@ -451,6 +453,7 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
                         () => {
                             setMusicStatus('P2P disconnected');
                         },
+                        room.djPeerId,
                     );
                     if (cancelled) { listener.disconnect(); return; }
                     peerListenerRef.current = listener;
@@ -471,7 +474,7 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
             peerListenerRef.current = null;
             if (musicAudioRef.current) { musicAudioRef.current.srcObject = null; }
         };
-    }, [user, isUserLoading, roomId, isStreamMode]);
+    }, [user, isUserLoading, roomId, isStreamMode, room.peerFallback, room.djPeerId]);
 
     // Sync volume changes to the audio element
     useEffect(() => {

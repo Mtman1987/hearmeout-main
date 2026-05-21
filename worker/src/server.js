@@ -407,14 +407,18 @@ class DJSession {
     // Wait for the track to be fully negotiated before sending frames
     await new Promise(r => setTimeout(r, 500));
     this.ready = true;
+    await this.patchRoom({ djActive: true, peerFallback: false, djPeerId: null, djStatus: 'DJ connected (LiveKit)' });
     console.log(`[DJ:${this.roomId}] Audio source ready for frames`);
   }
 
   async startPeerFallback() {
-    const peerId = `hmo-dj-${this.roomId}`;
+    const basePeerId = `hmo-dj-${this.roomId}`;
     let lastError = null;
 
     for (let attempt = 1; attempt <= 4; attempt++) {
+      const peerId = attempt === 1
+        ? basePeerId
+        : `${basePeerId}-${Date.now().toString(36)}-${attempt}`;
       this.cleanupPeerFallback();
       this.peerAudioSource = new wrtc.nonstandard.RTCAudioSource();
       this.peerAudioTrack = this.peerAudioSource.createTrack();
@@ -430,6 +434,7 @@ class DJSession {
             this.peerFallback = true;
             this.ready = true;
             console.log(`[DJ:${this.roomId}] PeerJS fallback ready as ${peerId}`);
+            this.patchRoom({ djActive: true, peerFallback: true, djPeerId: peerId, djStatus: 'DJ connected (P2P)' }).catch(() => {});
             resolve();
           });
 
@@ -458,12 +463,12 @@ class DJSession {
         this.cleanupPeerFallback();
         if (!/taken|unavailable|already/i.test(message) || attempt === 4) break;
         const waitMs = attempt * 1500;
-        console.warn(`[DJ:${this.roomId}] PeerJS ID ${peerId} is taken; retrying in ${waitMs}ms`, { attempt, error: message });
+        console.warn(`[DJ:${this.roomId}] PeerJS ID ${peerId} is taken; retrying with a fresh ID in ${waitMs}ms`, { attempt, error: message });
         await delay(waitMs);
       }
     }
 
-    throw lastError || new Error(`Could not start PeerJS fallback as ${peerId}`);
+    throw lastError || new Error(`Could not start PeerJS fallback as ${basePeerId}`);
   }
 
   cleanupPeerFallback() {
@@ -764,7 +769,7 @@ class DJSession {
 
     this.cleanupPeerFallback();
 
-    await this.patchRoom({ djActive: false, isPlaying: false, djStatus: 'DJ stopped', peerFallback: false });
+    await this.patchRoom({ djActive: false, isPlaying: false, djStatus: 'DJ stopped', peerFallback: false, djPeerId: null });
     console.log(`[DJ:${this.roomId}] Session stopped`);
   }
 
@@ -851,10 +856,7 @@ app.post('/dj', async (req, res) => {
     if (action === 'start') {
       const existing = djInstances.get(roomId);
       if (existing) {
-        if (existing.ready && !existing.stopped) {
-          return res.json({ success: true, message: 'DJ already running.' });
-        }
-        console.warn(`[DJ:${roomId}] Cleaning up stale DJ session before start`, {
+        console.warn(`[DJ:${roomId}] Clearing existing DJ session before start`, {
           ready: existing.ready,
           stopped: existing.stopped,
           peerFallback: existing.peerFallback,

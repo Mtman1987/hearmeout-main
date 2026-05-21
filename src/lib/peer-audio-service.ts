@@ -270,8 +270,9 @@ export class PeerAudioListener {
     roomId: string,
     onTrack: (stream: MediaStream) => void,
     onDisconnect?: () => void,
+    preferredDjPeerId?: string | null,
   ): Promise<void> {
-    const djPeerId = getDJPeerId(roomId);
+    const djPeerId = preferredDjPeerId || getDJPeerId(roomId);
 
     return new Promise((resolve, reject) => {
       // Random listener ID
