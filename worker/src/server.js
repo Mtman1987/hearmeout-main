@@ -235,7 +235,7 @@ app.get('/stream', authorizeWorker, async (req, res) => {
   }
   let audioUrl = getCachedExtractedUrl(videoId);
   if (!audioUrl) {
-    audioUrl = await extractWithYtDlp(videoId);
+    audioUrl = await extractAudioUrl(videoId);
     if (!audioUrl) return res.status(404).send('Extraction failed');
     setCachedExtractedUrl(videoId, audioUrl);
   }
@@ -245,7 +245,7 @@ app.get('/stream', authorizeWorker, async (req, res) => {
     const cdnRes = await fetch(audioUrl, { headers });
     if (!cdnRes.ok && cdnRes.status !== 206) {
       urlCache.delete(videoId);
-      const freshUrl = await extractWithYtDlp(videoId);
+      const freshUrl = await extractAudioUrl(videoId);
       if (!freshUrl) return res.status(502).send('CDN fetch failed');
       setCachedExtractedUrl(videoId, freshUrl);
       const retryRes = await fetch(freshUrl, { headers });
