@@ -515,7 +515,9 @@ class DJSession {
   async pollRoom() {
     if (this.stopped) return;
     try {
-      const res = await fetch(`${APP_URL}/api/db?collection=rooms&id=${this.roomId}`);
+      const res = await fetch(`${APP_URL}/api/db?collection=rooms&id=${this.roomId}`, {
+        headers: { Authorization: `Bearer ${WORKER_SECRET}` },
+      });
       const result = await res.json();
       if (!result?.exists) return;
 
@@ -674,8 +676,8 @@ class DJSession {
         sampleRate: SAMPLE_RATE,
         bitsPerSample: 16,
         channelCount: CHANNELS,
-        // @roamhq/wrtc expects this value for the interleaved s16le buffer shape.
-        numberOfFrames: samples.length / CHANNELS / 2,
+        // samples is an Int16Array, so divide only by channels to get audio frames.
+        numberOfFrames: samples.length / CHANNELS,
       });
       return;
     }
@@ -738,7 +740,10 @@ class DJSession {
     try {
       await fetch(`${APP_URL}/api/db`, {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          Authorization: `Bearer ${WORKER_SECRET}`,
+          'Content-Type': 'application/json',
+        },
         body: JSON.stringify({ collection: 'rooms', id: this.roomId, data }),
       });
     } catch {}
