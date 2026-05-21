@@ -1,11 +1,14 @@
+const { resolve } = require('path');
+
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   typescript: {
     ignoreBuildErrors: false,
   },
 
-  // Disable turbopack — crashes on Windows with "Cannot read properties of undefined (reading 'replace')"
-  turbopack: false,
+  turbopack: {
+    root: resolve(__dirname),
+  },
 
   serverExternalPackages: ['sql.js', 'puppeteer'],
   images: {

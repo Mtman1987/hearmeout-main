@@ -6,7 +6,3 @@ export function getDjWorkerUrl(): string {
   if (configured) return configured.replace(/\/$/, '');
   return process.env.NODE_ENV === 'production' ? PROD_DJ_WORKER_URL : DEV_DJ_WORKER_URL;
 }
-
-export function getDjWorkerSecret(): string {
-  return process.env.DJ_WORKER_SECRET || '';
-}

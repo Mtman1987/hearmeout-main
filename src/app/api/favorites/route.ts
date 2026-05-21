@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db, ensureDb } from '@/lib/db';
-import { ripAndCache, isCached, getCachedUrl } from '@/lib/music-ripper';
 import { getSession } from '@/lib/auth';
 
 const MAX_FAVORITES = 10;
@@ -27,7 +26,7 @@ export async function GET(req: NextRequest) {
   await ensureDb();
   const data = db.get('favorites', userId);
   const favorites: Favorite[] = data?.songs || [];
-  const updated = favorites.map(f => ({ ...f, cached: isCached(f.videoId) }));
+  const updated = favorites.map(f => ({ ...f, cached: false }));
 
   return NextResponse.json({ favorites: updated, count: updated.length, max: MAX_FAVORITES });
 }
@@ -45,15 +44,10 @@ export async function POST(req: NextRequest) {
   const data = db.get('favorites', userId) || { songs: [] };
   let favorites: Favorite[] = data.songs || [];
 
-  // Already favorited? Still return the download URL
+  // Already favorited? Just return success. We do not trigger server-side ripping
+  // from the favorites path anymore.
   if (favorites.some(f => f.videoId === videoId)) {
-    const cached = getCachedUrl(videoId);
-    if (cached) {
-      return NextResponse.json({ success: true, message: 'Already in favorites', downloadUrl: cached, cached: true });
-    }
-    // Not cached yet — rip it now
-    const ripped = await ripAndCache(videoId);
-    return NextResponse.json({ success: true, message: 'Already in favorites', downloadUrl: ripped, cached: !!ripped });
+    return NextResponse.json({ success: true, message: 'Already in favorites', downloadUrl: null, cached: false });
   }
 
   // At cap? Evict oldest but still add the new one
@@ -75,26 +69,11 @@ export async function POST(req: NextRequest) {
 
   db.set('favorites', userId, { songs: favorites });
 
-  // Rip it — await so we can return the download URL
-  const downloadUrl = await ripAndCache(videoId);
-
-  // Update cached status
-  if (downloadUrl) {
-    const current = db.get('favorites', userId);
-    if (current?.songs) {
-      db.set('favorites', userId, {
-        songs: current.songs.map((f: Favorite) =>
-          f.videoId === videoId ? { ...f, cached: true } : f
-        ),
-      });
-    }
-  }
-
   return NextResponse.json({
     success: true,
     message: `Added "${title}" to favorites`,
-    downloadUrl,
-    cached: !!downloadUrl,
+    downloadUrl: null,
+    cached: false,
   });
 }
 

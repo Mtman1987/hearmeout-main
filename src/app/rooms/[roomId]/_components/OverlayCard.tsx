@@ -14,6 +14,7 @@ import { useDoc } from '@/hooks/use-db';
 import { useRoomContext } from '@livekit/components-react';
 import type { PlaylistItem } from '@/types/playlist';
 import { dbUpdate } from '@/lib/db-helpers';
+import { extractAudioUrl as extractBrowserAudioUrl } from '@/lib/yt-client-extract';
 
 interface OverlayProps { participant: LivekitClient.Participant; roomId: string; }
 
@@ -62,16 +63,20 @@ export default function OverlayCard({ participant, roomId }: OverlayProps) {
         if (!videoId) throw new Error('Invalid YouTube URL - missing video ID');
         
         console.log(`Loading music for videoId: ${videoId}`);
-        const res = await fetch(`/api/youtube-audio?videoId=${videoId}`);
-        if (!res.ok) throw new Error(`API error: ${res.status}`);
-        
-        const data = await res.json();
-        if (data.error || !data.audioUrl) {
-          throw new Error(`Invalid music source: ${data.error || 'No audio URL returned'}`);
-        }
-        
-        console.log(`Music source: ${data.audioUrl}`);
-        audioEl.src = data.audioUrl;
+        const extracted = await extractBrowserAudioUrl(videoId);
+        if (!extracted?.url) throw new Error('Browser extraction failed');
+
+        const proxyRes = await fetch('/api/youtube-audio/proxy', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ videoId, audioUrl: extracted.url, mimeType: extracted.mimeType }),
+        });
+        if (!proxyRes.ok) throw new Error(`Proxy registration failed (${proxyRes.status})`);
+
+        const proxyData = await proxyRes.json().catch(() => null);
+        const proxyUrl = proxyData?.proxyUrl || `/api/youtube-audio/proxy?videoId=${videoId}`;
+        console.log(`Music source: ${proxyUrl}`);
+        audioEl.src = proxyUrl;
         
         // Wait for load + play
         await new Promise<void>((resolve, reject) => {

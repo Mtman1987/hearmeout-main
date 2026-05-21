@@ -7,13 +7,13 @@ primary_region = "iad"
     NEXT_PUBLIC_APP_URL = "https://hearmeout-main.fly.dev"
     NEXT_PUBLIC_BASE_URL = "https://hearmeout-main.fly.dev"
     NEXT_PUBLIC_DISCORD_CLIENT_ID = "1279582181768957963"
-    NEXT_PUBLIC_LIVEKIT_URL = "wss://hearmeout-6ntnbsdm.livekit.cloud"
+    NEXT_PUBLIC_LIVEKIT_URL = "wss://streamweaver-7atx04ct.livekit.cloud"
     NEXT_PUBLIC_TWITCH_CLIENT_ID = "rxmohc28tthq0nudfd6iwx0sgy88dp"
 
 [env]
   DJ_WORKER_URL = "https://hmo-dj-worker.fly.dev"
   DJ_WORKER_SECRET = "hmo-prod-secret-2024"
-  LIVEKIT_URL = "wss://hearmeout-6ntnbsdm.livekit.cloud"
+  NEXT_PUBLIC_LIVEKIT_URL = "wss://streamweaver-7atx04ct.livekit.cloud"
   NODE_ENV = "production"
 
 [mounts]

@@ -54,7 +54,7 @@ export async function POST(request: NextRequest) {
     }
 
     // Bind user-browser tokens to the verified session uid. The headless DJ
-    // worker has no browser session, so it authenticates with DJ_WORKER_SECRET.
+    // worker has no browser session, so it sends the internal worker marker.
     const uid = session?.uid || 'dj-worker';
     const displayName =
       typeof userName === 'string' && userName.trim().length > 0

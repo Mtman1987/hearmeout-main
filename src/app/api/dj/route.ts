@@ -1,17 +1,16 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getDjWorkerUrl, getDjWorkerSecret } from '@/lib/dj-worker-config';
+import { getDjWorkerUrl } from '@/lib/dj-worker-config';
 
 async function forwardToWorker(body: Record<string, unknown>): Promise<NextResponse> {
   const url = getDjWorkerUrl();
-  const secret = getDjWorkerSecret();
-  if (!url || !secret) {
-    return NextResponse.json({ success: false, message: 'DJ worker not configured (DJ_WORKER_URL or DJ_WORKER_SECRET missing)' }, { status: 500 });
+  if (!url) {
+    return NextResponse.json({ success: false, message: 'DJ worker not configured (DJ_WORKER_URL missing)' }, { status: 500 });
   }
 
   try {
     const res = await fetch(`${url}/dj`, {
       method: 'POST',
-      headers: { Authorization: `Bearer ${secret}`, 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     });
     const data = await res.json().catch(() => ({ success: false, message: `Worker returned ${res.status}` }));
@@ -42,8 +41,7 @@ export async function POST(request: NextRequest) {
 
 export async function GET(request: NextRequest) {
   const url = getDjWorkerUrl();
-  const secret = getDjWorkerSecret();
-  if (!url || !secret) {
+  if (!url) {
     return NextResponse.json({ instances: [] });
   }
 
@@ -52,9 +50,7 @@ export async function GET(request: NextRequest) {
 
   try {
     const endpoint = roomId ? `/dj?roomId=${encodeURIComponent(roomId)}` : '/dj';
-    const res = await fetch(`${url}${endpoint}`, {
-      headers: { Authorization: `Bearer ${secret}` },
-    });
+    const res = await fetch(`${url}${endpoint}`);
     const data = await res.json();
     return NextResponse.json(data);
   } catch {

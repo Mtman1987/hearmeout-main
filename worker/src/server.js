@@ -15,6 +15,7 @@ const { promisify } = require('util');
 const { existsSync, mkdirSync, unlinkSync, statSync, readdirSync, createReadStream } = require('fs');
 const { AudioSource, AudioFrame, LocalAudioTrack, Room, RoomEvent, TrackPublishOptions, TrackSource } = require('@livekit/rtc-node');
 const wrtc = require('@roamhq/wrtc');
+const puppeteer = require('puppeteer');
 
 Object.assign(globalThis, {
   RTCPeerConnection: wrtc.RTCPeerConnection,
@@ -29,26 +30,22 @@ const execFileAsync = promisify(execFile);
 
 const app = express();
 const PORT = process.env.PORT || 3002;
-const WORKER_SECRET = process.env.DJ_WORKER_SECRET || '';
 const APP_URL = process.env.APP_URL || 'https://hearmeout-main.fly.dev';
-
-// ── Config ─────────────────────────────────────────────────────────────
-const YT_DLP = process.env.YT_DLP_PATH || 'yt-dlp';
-const CACHE_DIR = process.env.MUSIC_CACHE_DIR || (process.env.NODE_ENV === 'production' ? '/data/music' : join(__dirname, '..', '.cache', 'music'));
-const COOKIES_FILE = ['/data/youtube-cookies.txt', join(__dirname, '..', 'youtube-cookies.txt')]
-  .find(p => existsSync(p)) || '';
-
-if (!existsSync(CACHE_DIR)) mkdirSync(CACHE_DIR, { recursive: true });
+const WORKER_CALLBACK_HEADERS = { 'x-hmo-dj-worker': '1' };
+const DEFAULT_WINDOWS_CHROME = 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe';
+const CHROMIUM_PATH =
+  process.env.PUPPETEER_EXECUTABLE_PATH ||
+  (process.platform === 'win32' && existsSync(DEFAULT_WINDOWS_CHROME) ? DEFAULT_WINDOWS_CHROME : '/usr/bin/chromium');
+const EXTRACTOR_USER_DATA_DIR =
+  process.env.EXTRACTOR_USER_DATA_DIR ||
+  process.env.PUPPETEER_USER_DATA_DIR ||
+  join(rootDir, '.tmp-chrome-profile');
+const EXTRACTOR_PROFILE_DIR = process.env.EXTRACTOR_PROFILE_DIR || process.env.PUPPETEER_PROFILE_DIR || 'Default';
+const CACHE_DIR = process.env.MUSIC_CACHE_DIR || (process.env.NODE_ENV === 'production' ? '/tmp/music' : join(__dirname, '..', '.cache', 'music'));
 
 const VIDEO_ID_RE = /^[A-Za-z0-9_-]{11}$/;
 function isValidVideoId(id) {
   return typeof id === 'string' && VIDEO_ID_RE.test(id);
-}
-
-function ytdlpExtraArgs() {
-  const args = ['--js-runtimes', 'node'];
-  if (COOKIES_FILE && existsSync(COOKIES_FILE)) args.push('--cookies', COOKIES_FILE);
-  return args;
 }
 
 // ── Middleware ──────────────────────────────────────────────────────────
@@ -56,243 +53,231 @@ app.use(cors());
 app.use(express.json());
 
 const authorizeWorker = (req, res, next) => {
-  const token = req.headers.authorization?.replace('Bearer ', '');
-  if (token !== WORKER_SECRET) {
-    return res.status(401).json({ error: 'Unauthorized' });
-  }
   next();
 };
 
 // ── Music Ripper ───────────────────────────────────────────────────────
-const inProgress = new Map();
-const failedVideos = new Map(); // videoId -> { count, lastAttempt }
-const MAX_RETRIES = 3;
-const RETRY_COOLDOWN_MS = 5 * 60 * 1000; // 5 minutes before retrying a failed video
-
 function isCached(videoId) {
   return existsSync(join(CACHE_DIR, `${videoId}.m4a`)) || existsSync(join(CACHE_DIR, `${videoId}.mp3`));
 }
 
 async function doRip(videoId) {
-  const url = `https://www.youtube.com/watch?v=${videoId}`;
-  const finalM4a = join(CACHE_DIR, `${videoId}.m4a`);
-
-  try {
-    console.log(`[Ripper] Downloading ${videoId}...`);
-    await execFileAsync(YT_DLP, [
-      ...ytdlpExtraArgs(),
-      '-f', 'bestaudio[ext=m4a]/bestaudio/best',
-      '--no-playlist', '-o', finalM4a, url,
-    ], { timeout: 60000 });
-
-    if (!existsSync(finalM4a)) throw new Error('Download produced no file');
-    const size = statSync(finalM4a).size;
-    console.log(`[Ripper] Cached ${videoId} as m4a (${Math.round(size / 1024)}KB)`);
-    return true;
-  } catch (e) {
-    console.error(`[Ripper] Failed for ${videoId}:`, e.message);
-    try { unlinkSync(finalM4a); } catch {}
-    return false;
-  }
-}
-
-async function ripAndCache(videoId) {
-  if (isCached(videoId)) return true;
-  // Check if this video has failed too many times recently
-  const failed = failedVideos.get(videoId);
-  if (failed && failed.count >= MAX_RETRIES && (Date.now() - failed.lastAttempt) < RETRY_COOLDOWN_MS) {
-    console.log(`[Ripper] Skipping ${videoId} — failed ${failed.count} times, cooldown until ${new Date(failed.lastAttempt + RETRY_COOLDOWN_MS).toISOString()}`);
-    return false;
-  }
-  if (inProgress.has(videoId)) return inProgress.get(videoId);
-  const promise = doRip(videoId);
-  inProgress.set(videoId, promise);
-  try {
-    const result = await promise;
-    if (result) {
-      failedVideos.delete(videoId);
-    } else {
-      const prev = failedVideos.get(videoId) || { count: 0, lastAttempt: 0 };
-      failedVideos.set(videoId, { count: prev.count + 1, lastAttempt: Date.now() });
-    }
-    return result;
-  } finally { inProgress.delete(videoId); }
-}
-
-// ── Audio URL Extraction via youtubei.js ───────────────────────────────
-let innertubeInstance = null;
-async function getInnertube() {
-  if (!innertubeInstance) {
-    const { Innertube } = await import('youtubei.js');
-    innertubeInstance = await Innertube.create();
-  }
-  return innertubeInstance;
-}
-
-async function extractWithYoutubei(videoId) {
-  try {
-    console.log(`[Extract] youtubei.js for ${videoId}...`);
-    const yt = await getInnertube();
-    const info = await yt.getBasicInfo(videoId);
-    if (!info.streaming_data) {
-      console.log(`[Extract] No streaming data for ${videoId}`);
-      return null;
-    }
-    const formats = info.streaming_data.adaptive_formats
-      .filter(f => f.has_audio && !f.has_video)
-      .sort((a, b) => (b.bitrate || 0) - (a.bitrate || 0));
-    if (!formats.length) {
-      console.log(`[Extract] No audio formats for ${videoId}`);
-      return null;
-    }
-    const best = formats[0];
-    const url = best.decipher(yt.session.player);
-    if (url) {
-      console.log(`[Extract] ✅ Got URL for ${videoId} (${best.bitrate}bps)`);
-      return url;
-    }
-    return null;
-  } catch (e) {
-    console.log(`[Extract] youtubei.js failed: ${e.message?.slice(0, 200)}`);
-    // Reset instance on failure in case session expired
-    innertubeInstance = null;
-    return null;
-  }
-}
-
-// Fallback to yt-dlp if youtubei.js fails
-async function extractAudioUrl(videoId) {
-  const url = await extractWithYoutubei(videoId);
-  if (url) return url;
-  // yt-dlp fallback
-  try {
-    console.log(`[Extract] Falling back to yt-dlp for ${videoId}...`);
-    const { stdout } = await execFileAsync(YT_DLP, [
-      ...ytdlpExtraArgs(),
-      '--no-warnings', '-f', 'bestaudio[ext=m4a]/bestaudio',
-      '--get-url', `https://www.youtube.com/watch?v=${videoId}`,
-    ], { timeout: 30000 });
-    const result = stdout.trim();
-    if (result && result.startsWith('http')) return result;
-  } catch (e) {
-    console.log(`[Extract] yt-dlp fallback also failed: ${e.message?.slice(0, 100)}`);
-  }
-  return null;
+  console.warn(`[Ripper] Legacy extraction is disabled for ${videoId}`);
+  return false;
 }
 
 const urlCache = new Map();
-function getCachedExtractedUrl(videoId) {
+function getCachedExtractedInfo(videoId) {
   const c = urlCache.get(videoId);
-  if (c && c.expires > Date.now()) return c.url;
+  if (c && c.expires > Date.now()) return c.info;
   urlCache.delete(videoId);
   return null;
 }
-function setCachedExtractedUrl(videoId, url) {
-  urlCache.set(videoId, { url, expires: Date.now() + 5 * 60 * 60 * 1000 });
+function getCachedExtractedUrl(videoId) {
+  return getCachedExtractedInfo(videoId)?.url || null;
+}
+function setCachedExtractedInfo(videoId, info) {
+  urlCache.set(videoId, { info, expires: Date.now() + 5 * 60 * 60 * 1000 });
+}
+
+function getMimeFromUrl(rawUrl) {
+  try {
+    const parsed = new URL(rawUrl);
+    return parsed.searchParams.get('mime') || '';
+  } catch {
+    return '';
+  }
+}
+
+function normalizeContentType(value) {
+  return (value || '').split(';')[0].trim().toLowerCase();
+}
+
+function isAudioCandidate(rawUrl, contentType) {
+  const responseType = normalizeContentType(contentType);
+  const queryType = normalizeContentType(getMimeFromUrl(rawUrl));
+  return responseType.startsWith('audio/') || queryType.startsWith('audio/');
+}
+
+async function extractDirectAudioFormat(videoId) {
+  const { Innertube, ClientType } = await import('youtubei.js');
+  const clients = ['ANDROID_VR', 'IOS', 'MWEB', 'MUSIC'];
+
+  for (const client of clients) {
+    try {
+      const yt = await Innertube.create({ client_type: ClientType?.[client] || client });
+      const info = await yt.getBasicInfo(videoId);
+      const formats = info.streaming_data?.adaptive_formats || [];
+      const audioFormats = formats
+        .filter((format) => {
+          const mimeType = format.mime_type || format.mimeType || '';
+          return String(mimeType).startsWith('audio/') || (format.has_audio && !format.has_video);
+        })
+        .sort((a, b) => {
+          const aMime = String(a.mime_type || a.mimeType || '');
+          const bMime = String(b.mime_type || b.mimeType || '');
+          const aMp4 = aMime.includes('audio/mp4') ? 1 : 0;
+          const bMp4 = bMime.includes('audio/mp4') ? 1 : 0;
+          return (bMp4 - aMp4) || ((Number(b.bitrate) || 0) - (Number(a.bitrate) || 0));
+        });
+
+      for (const format of audioFormats) {
+        let url = format.url;
+        if (!url && typeof format.decipher === 'function') {
+          url = await format.decipher(yt.session.player).catch(() => null);
+        }
+        if (!url) continue;
+        return {
+          url,
+          mimeType: format.mime_type || format.mimeType || getMimeFromUrl(url) || 'audio/mp4',
+        };
+      }
+    } catch (err) {
+      console.warn(`[Extract] ${client} direct format lookup failed: ${err.message?.slice(0, 120)}`);
+    }
+  }
+
+  return null;
+}
+
+async function extractAudioInfo(videoId) {
+  const cached = getCachedExtractedInfo(videoId);
+  if (cached) return cached;
+
+  console.warn(`[Extract] Browser capture starting for ${videoId}`);
+  const browser = await puppeteer.launch({
+    executablePath: CHROMIUM_PATH,
+    headless: true,
+    userDataDir: EXTRACTOR_USER_DATA_DIR,
+    args: [
+      '--no-sandbox',
+      '--disable-setuid-sandbox',
+      '--disable-dev-shm-usage',
+      '--disable-gpu',
+      `--profile-directory=${EXTRACTOR_PROFILE_DIR}`,
+      '--autoplay-policy=no-user-gesture-required',
+    ],
+  });
+
+  const page = await browser.newPage();
+  let capturedUrl = null;
+  let capturedContentType = null;
+  let firstMediaUrl = null;
+  let firstMediaContentType = null;
+
+  page.on('response', async (resp) => {
+    if (capturedUrl) return;
+    const url = resp.url();
+    if (!/googlevideo\.com\/videoplayback/.test(url)) return;
+    const contentType = resp.headers()['content-type'] || getMimeFromUrl(url) || null;
+    if (!firstMediaUrl) {
+      firstMediaUrl = url;
+      firstMediaContentType = contentType;
+    }
+    if (!isAudioCandidate(url, contentType)) return;
+    capturedUrl = url;
+    capturedContentType = contentType;
+  });
+
+  try {
+    const ytUrl = `https://www.youtube.com/watch?v=${encodeURIComponent(videoId)}&autoplay=1&mute=1&playsinline=1`;
+    await page.goto(ytUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
+
+    const extracted = await page.evaluate(() => {
+      const yip = window.ytInitialPlayerResponse || JSON.parse(window.ytplayer?.config?.args?.player_response || 'null');
+      const details = yip?.videoDetails || {};
+      const audioFormats = (yip?.streamingData?.adaptiveFormats || [])
+        .filter((format) => typeof format.url === 'string' && /^audio\//i.test(format.mimeType || ''))
+        .sort((a, b) => (Number(b.bitrate) || 0) - (Number(a.bitrate) || 0));
+      return {
+        metadata: {
+          title: details.title || document.title || 'Unknown',
+          artist: details.author || 'Unknown',
+          duration: Number(details.lengthSeconds || 0),
+        },
+        audioFormat: audioFormats[0]
+          ? {
+              url: audioFormats[0].url,
+              mimeType: audioFormats[0].mimeType || null,
+            }
+          : null,
+      };
+    }).catch(() => ({
+      metadata: { title: 'Unknown', artist: 'Unknown', duration: 0 },
+      audioFormat: null,
+    }));
+
+    if (extracted.audioFormat?.url) {
+      capturedUrl = extracted.audioFormat.url;
+      capturedContentType = extracted.audioFormat.mimeType || getMimeFromUrl(capturedUrl) || null;
+    }
+
+    for (let i = 0; i < 40 && !capturedUrl; i++) {
+      await delay(500);
+    }
+
+    if (!capturedUrl) {
+      const directAudio = await extractDirectAudioFormat(videoId);
+      if (directAudio?.url) {
+        capturedUrl = directAudio.url;
+        capturedContentType = directAudio.mimeType;
+      } else {
+        const kind = firstMediaUrl
+          ? `only captured non-audio media (${firstMediaContentType || getMimeFromUrl(firstMediaUrl) || 'unknown type'})`
+          : 'no media request captured';
+        console.warn(`[Extract] ${kind} for ${videoId}`);
+        return null;
+      }
+    }
+
+    const info = {
+      url: capturedUrl,
+      mimeType: capturedContentType || 'application/octet-stream',
+      duration: extracted.metadata.duration,
+      title: extracted.metadata.title,
+      artist: extracted.metadata.artist,
+    };
+    setCachedExtractedInfo(videoId, info);
+    return info;
+  } finally {
+    await browser.close().catch(() => {});
+  }
 }
 
 // ── Audio Routes ───────────────────────────────────────────────────────
 app.post('/rip', authorizeWorker, async (req, res) => {
   const { videoId } = req.body;
   if (!isValidVideoId(videoId)) return res.status(400).json({ error: 'Invalid videoId' });
-  if (isCached(videoId)) return res.json({ success: true, cached: true });
-  const ok = await ripAndCache(videoId);
-  return res.json({ success: ok, cached: ok });
+  return res.status(410).json({ success: false, error: 'Legacy ripper disabled' });
 });
 
 app.get('/music/:videoId', authorizeWorker, (req, res) => {
   const { videoId } = req.params;
   if (!isValidVideoId(videoId)) return res.status(400).send('Invalid videoId');
-  let filePath = join(CACHE_DIR, `${videoId}.m4a`);
-  let contentType = 'audio/mp4';
-  if (!existsSync(filePath)) {
-    filePath = join(CACHE_DIR, `${videoId}.mp3`);
-    contentType = 'audio/mpeg';
-  }
-  if (!existsSync(filePath)) return res.status(404).send('Not found');
-  const stat = statSync(filePath);
-  res.set({ 'Content-Type': contentType, 'Content-Length': stat.size, 'Cache-Control': 'public, max-age=604800', 'Accept-Ranges': 'bytes' });
-  createReadStream(filePath).pipe(res);
+  return res.status(410).send('Legacy music endpoint disabled');
 });
 
 app.get('/extract', authorizeWorker, async (req, res) => {
   const { videoId } = req.query;
   if (!isValidVideoId(videoId)) return res.status(400).json({ error: 'Invalid videoId' });
-  if (existsSync(join(CACHE_DIR, `${videoId}.m4a`))) return res.json({ videoId, cached: true, source: 'm4a' });
-  if (existsSync(join(CACHE_DIR, `${videoId}.mp3`))) return res.json({ videoId, cached: true, source: 'mp3' });
-  let url = getCachedExtractedUrl(videoId);
-  if (url) return res.json({ videoId, cached: false, url, source: 'url-cache' });
-  url = await extractAudioUrl(videoId);
-  if (!url) return res.status(404).json({ error: 'Extraction failed' });
-  setCachedExtractedUrl(videoId, url);
-  return res.json({ videoId, cached: false, url, source: 'youtubei' });
+  try {
+    const info = await extractAudioInfo(videoId);
+    if (!info?.url) return res.status(503).json({ error: 'Browser extraction failed' });
+    return res.json(info);
+  } catch (err) {
+    console.error(`[Extract] Browser capture failed for ${videoId}`, describeError(err));
+    return res.status(503).json({ error: 'Browser extraction failed' });
+  }
 });
 
 app.get('/stream', authorizeWorker, async (req, res) => {
   const { videoId } = req.query;
   if (!isValidVideoId(videoId)) return res.status(400).send('Invalid videoId');
-  const m4aPath = join(CACHE_DIR, `${videoId}.m4a`);
-  if (existsSync(m4aPath)) {
-    const stat = statSync(m4aPath);
-    res.set({ 'Content-Type': 'audio/mp4', 'Content-Length': stat.size, 'Cache-Control': 'public, max-age=86400' });
-    return createReadStream(m4aPath).pipe(res);
-  }
-  const mp3Path = join(CACHE_DIR, `${videoId}.mp3`);
-  if (existsSync(mp3Path)) {
-    const stat = statSync(mp3Path);
-    res.set({ 'Content-Type': 'audio/mpeg', 'Content-Length': stat.size, 'Cache-Control': 'public, max-age=86400' });
-    return createReadStream(mp3Path).pipe(res);
-  }
-  let audioUrl = getCachedExtractedUrl(videoId);
-  if (!audioUrl) {
-    audioUrl = await extractAudioUrl(videoId);
-    if (!audioUrl) return res.status(404).send('Extraction failed');
-    setCachedExtractedUrl(videoId, audioUrl);
-  }
-  try {
-    const headers = { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36', 'Referer': 'https://www.youtube.com/' };
-    if (req.headers.range) headers['Range'] = req.headers.range;
-    const cdnRes = await fetch(audioUrl, { headers });
-    if (!cdnRes.ok && cdnRes.status !== 206) {
-      urlCache.delete(videoId);
-      const freshUrl = await extractAudioUrl(videoId);
-      if (!freshUrl) return res.status(502).send('CDN fetch failed');
-      setCachedExtractedUrl(videoId, freshUrl);
-      const retryRes = await fetch(freshUrl, { headers });
-      if (!retryRes.ok && retryRes.status !== 206) return res.status(502).send('CDN fetch failed after retry');
-      return pipeResponse(retryRes, res);
-    }
-    return pipeResponse(cdnRes, res);
-  } catch (err) {
-    return res.status(500).send('Stream error');
-  }
+  return res.status(503).send('Legacy stream endpoint disabled');
 });
 
-function pipeResponse(cdnRes, res) {
-  res.status(cdnRes.status);
-  const ct = cdnRes.headers.get('content-type');
-  if (ct) res.set('Content-Type', ct);
-  const cl = cdnRes.headers.get('content-length');
-  if (cl) res.set('Content-Length', cl);
-  const cr = cdnRes.headers.get('content-range');
-  if (cr) res.set('Content-Range', cr);
-  res.set('Accept-Ranges', 'bytes');
-  const reader = cdnRes.body.getReader();
-  (function pump() {
-    reader.read().then(({ done, value }) => {
-      if (done) { res.end(); return; }
-      res.write(value);
-      pump();
-    }).catch(() => res.end());
-  })();
-}
-
 app.get('/cache-stats', authorizeWorker, (req, res) => {
-  try {
-    const files = readdirSync(CACHE_DIR).filter(f => f.endsWith('.mp3') || f.endsWith('.m4a'));
-    const totalBytes = files.reduce((sum, f) => sum + statSync(join(CACHE_DIR, f)).size, 0);
-    res.json({ files: files.length, totalBytes });
-  } catch { res.json({ files: 0, totalBytes: 0 }); }
+  res.status(410).json({ error: 'Legacy cache stats disabled' });
 });
 
 // ══════════════════════════════════════════════════════════════════════════
@@ -490,7 +475,7 @@ class DJSession {
       const res = await fetch(`${APP_URL}/api/livekit-token`, {
         method: 'POST',
         headers: {
-          Authorization: `Bearer ${WORKER_SECRET}`,
+          ...WORKER_CALLBACK_HEADERS,
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
@@ -521,7 +506,7 @@ class DJSession {
     if (this.stopped) return;
     try {
       const res = await fetch(`${APP_URL}/api/db?collection=rooms&id=${this.roomId}`, {
-        headers: { Authorization: `Bearer ${WORKER_SECRET}` },
+        headers: WORKER_CALLBACK_HEADERS,
       });
       const result = await res.json();
       if (!result?.exists) return;
@@ -580,19 +565,19 @@ class DJSession {
     }
 
     // Extract URL and stream directly (no download required)
-    let audioUrl = getCachedExtractedUrl(videoId);
-    if (!audioUrl) audioUrl = await extractAudioUrl(videoId);
-    if (!audioUrl) {
+    let audioInfo = getCachedExtractedInfo(videoId);
+    if (!audioInfo) audioInfo = await extractAudioInfo(videoId);
+    if (!audioInfo?.url) {
       console.error(`[DJ:${this.roomId}] Failed to extract URL for ${videoId}, skipping`);
-      await this.patchRoom({ djStatus: `Failed: ${videoId}` });
+      await this.patchRoom({ djStatus: 'Legacy extractor disabled' });
       setTimeout(() => this.advanceTrack(roomData), 500);
       return;
     }
-    setCachedExtractedUrl(videoId, audioUrl);
+    setCachedExtractedInfo(videoId, audioInfo);
 
     console.log(`[DJ:${this.roomId}] Streaming ${videoId} from URL`);
     this.playing = true;
-    this._spawnFfmpeg(audioUrl, roomData);
+    this._spawnFfmpeg(audioInfo.url, roomData);
   }
 
   _playFile(filePath, roomData) {
@@ -732,7 +717,7 @@ class DJSession {
     fetch(`${APP_URL}/api/auto-radio`, {
       method: 'POST',
       headers: {
-        Authorization: `Bearer ${WORKER_SECRET}`,
+        ...WORKER_CALLBACK_HEADERS,
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({ roomId: this.roomId }),
@@ -746,7 +731,7 @@ class DJSession {
       await fetch(`${APP_URL}/api/db`, {
         method: 'PATCH',
         headers: {
-          Authorization: `Bearer ${WORKER_SECRET}`,
+          ...WORKER_CALLBACK_HEADERS,
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({ collection: 'rooms', id: this.roomId, data }),
@@ -845,6 +830,107 @@ class DJSession {
   }
 }
 
+// ── Browser DJ Publisher ────────────────────────────────────────────────
+const browserDjInstances = new Map();
+
+async function startBrowserDJ(roomId) {
+  const existing = browserDjInstances.get(roomId);
+  if (existing) {
+    try {
+      const status = await existing.page.evaluate(() => globalThis.__HEARMEOUT_DJ__?.getStatus?.() || null);
+      if (status?.isLive) {
+        return { success: true, message: 'DJ already broadcasting.', mode: 'browser' };
+      }
+    } catch {}
+    await stopBrowserDJ(roomId, 'Restarting stale browser DJ');
+  }
+
+  if (browserDjInstances.size >= 5) {
+    return { success: false, message: 'Max concurrent DJ instances reached (5).' };
+  }
+
+  console.log(`[BrowserDJ:${roomId}] Launching Chromium publisher...`);
+  const browser = await puppeteer.launch({
+    executablePath: CHROMIUM_PATH,
+    headless: true,
+    args: [
+      '--no-sandbox',
+      '--disable-setuid-sandbox',
+      '--disable-dev-shm-usage',
+      '--disable-gpu',
+      '--autoplay-policy=no-user-gesture-required',
+      '--use-fake-ui-for-media-stream',
+    ],
+  });
+
+  const page = await browser.newPage();
+  page.on('console', (msg) => {
+    const text = msg.text();
+    if (/\[DJ\]|\[PeerDJ\]|\[MusicRoom\]|LiveKit|ERROR|error/i.test(text)) {
+      console.log(`[BrowserDJ:${roomId}] ${msg.type()}: ${text}`);
+    }
+  });
+  page.on('pageerror', (err) => {
+    console.error(`[BrowserDJ:${roomId}] page error:`, err.message);
+  });
+  page.on('requestfailed', (req) => {
+    const url = req.url();
+    if (/livekit|peer|youtube-audio|\/api\/music|\/api\/db/.test(url)) {
+      console.warn(`[BrowserDJ:${roomId}] request failed: ${url} ${req.failure()?.errorText || ''}`);
+    }
+  });
+
+  const djUrl = `${APP_URL}/dj/${encodeURIComponent(roomId)}`;
+  await page.goto(djUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
+  await page.waitForFunction(() => !!globalThis.__HEARMEOUT_DJ__, { timeout: 30000 });
+
+  await page.evaluate(() => globalThis.__HEARMEOUT_DJ__.startSession());
+  await page.waitForFunction(() => {
+    const status = globalThis.__HEARMEOUT_DJ__?.getStatus?.();
+    return status?.isLive || /^ERROR:/i.test(status?.status || '');
+  }, { timeout: 60000 }).catch(() => {});
+
+  const started = await page.evaluate(() => globalThis.__HEARMEOUT_DJ__.getStatus());
+  if (!started?.isLive) {
+    await page.close().catch(() => {});
+    await browser.close().catch(() => {});
+    return {
+      success: false,
+      message: started?.status || 'DJ browser publisher did not become live.',
+      mode: 'browser',
+    };
+  }
+
+  browserDjInstances.set(roomId, { browser, page, roomId, startedAt: new Date() });
+  console.log(`[BrowserDJ:${roomId}] Started`, started);
+  return { success: true, message: started?.status || 'DJ browser publisher started.', mode: 'browser' };
+}
+
+async function stopBrowserDJ(roomId, reason = 'DJ stopped') {
+  const instance = browserDjInstances.get(roomId);
+  if (!instance) return { success: true, message: 'No DJ running.' };
+  console.log(`[BrowserDJ:${roomId}] Stopping: ${reason}`);
+  try {
+    await instance.page.evaluate(() => globalThis.__HEARMEOUT_DJ__?.stopSession?.()).catch(() => {});
+    await instance.page.close().catch(() => {});
+    await instance.browser.close().catch(() => {});
+  } finally {
+    browserDjInstances.delete(roomId);
+  }
+  return { success: true, message: 'DJ stopped.' };
+}
+
+async function getBrowserDJStatus(roomId) {
+  const instance = browserDjInstances.get(roomId);
+  if (!instance) return null;
+  try {
+    const status = await instance.page.evaluate(() => globalThis.__HEARMEOUT_DJ__?.getStatus?.() || null);
+    return { roomId, startedAt: instance.startedAt, mode: 'browser', status };
+  } catch {
+    return { roomId, startedAt: instance.startedAt, mode: 'browser', status: null };
+  }
+}
+
 // ── DJ API ──────────────────────────────────────────────────────────────
 const djInstances = new Map();
 
@@ -854,63 +940,26 @@ app.post('/dj', async (req, res) => {
 
   try {
     if (action === 'start') {
-      const existing = djInstances.get(roomId);
-      if (existing) {
-        console.warn(`[DJ:${roomId}] Clearing existing DJ session before start`, {
-          ready: existing.ready,
-          stopped: existing.stopped,
-          peerFallback: existing.peerFallback,
-        });
-        try { await existing.stop(); } catch (err) {
-          console.warn(`[DJ:${roomId}] Stale session stop failed:`, err.message);
-        }
-        djInstances.delete(roomId);
-      }
-      if (djInstances.size >= 5) return res.status(429).json({ success: false, message: 'Max concurrent DJ instances reached (5).' });
-
-      const session = new DJSession(roomId);
-      djInstances.set(roomId, session);
       try {
-        await session.start();
-        return res.json({ success: true, message: 'DJ connected.' });
+        const result = await startBrowserDJ(roomId);
+        return res.status(result.success ? 200 : 429).json(result);
       } catch (err) {
         console.error(`[DJ:${roomId}] Start failed:`, err.message);
-        try { await session.stop(); } catch {}
-        djInstances.delete(roomId);
         return res.status(500).json({ success: false, message: `DJ start failed: ${err.message}` });
       }
     }
 
     if (action === 'play-url') {
-      if (!audioUrl) return res.status(400).json({ success: false, message: 'Missing audioUrl' });
-      let session = djInstances.get(roomId);
-      if (!session) {
-        session = new DJSession(roomId);
-        djInstances.set(roomId, session);
-        await session.start();
-      }
-      await session.waitReady();
-      console.log(`[DJ:${roomId}] Playing URL directly: ${audioUrl.slice(0, 80)}...`);
-      await session.playFromUrl(audioUrl, trackTitle || 'Unknown');
-      return res.json({ success: true, message: 'Playing from URL' });
+      return res.status(410).json({ success: false, message: 'Legacy play-url action disabled' });
     }
 
     if (action === 'debug-play-url') {
-      const debugUrl = audioUrl || 'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3';
-      let session = djInstances.get(roomId);
-      if (!session) {
-        session = new DJSession(roomId);
-        djInstances.set(roomId, session);
-        await session.start();
-      }
-      await session.waitReady();
-      console.log(`[DJ:${roomId}] Debug playing URL: ${debugUrl}`);
-      await session.playFromUrl(debugUrl, trackTitle || 'Debug Song');
-      return res.json({ success: true, message: 'Debug playing from URL' });
+      return res.status(410).json({ success: false, message: 'Legacy debug-play-url action disabled' });
     }
 
 
     if (action === 'stop') {
+      await stopBrowserDJ(roomId);
       const session = djInstances.get(roomId);
       if (!session) return res.json({ success: true, message: 'No DJ running.' });
       await session.stop();
@@ -929,15 +978,21 @@ app.get('/dj', (req, res) => {
   const { roomId } = req.query;
   if (roomId) {
     const session = djInstances.get(roomId);
-    return res.json({ running: !!session, mode: session?.peerFallback ? 'peerjs' : session ? 'livekit' : null });
+    const browserSession = browserDjInstances.get(roomId);
+    return res.json({
+      running: !!browserSession || !!session,
+      mode: browserSession ? 'browser' : session?.peerFallback ? 'peerjs' : session ? 'livekit' : null,
+    });
   }
-  const instances = Array.from(djInstances.entries()).map(([id, s]) => ({ roomId: id, startedAt: s.startedAt, mode: s.peerFallback ? 'peerjs' : 'livekit' }));
+  const browserInstances = Array.from(browserDjInstances.values()).map((s) => ({ roomId: s.roomId, startedAt: s.startedAt, mode: 'browser' }));
+  const nodeInstances = Array.from(djInstances.entries()).map(([id, s]) => ({ roomId: id, startedAt: s.startedAt, mode: s.peerFallback ? 'peerjs' : 'livekit' }));
+  const instances = [...browserInstances, ...nodeInstances];
   return res.json({ instances });
 });
 
 // ── Health ──────────────────────────────────────────────────────────────
 app.get('/health', (req, res) => {
-  res.json({ status: 'ok', uptime: process.uptime(), activeDJs: djInstances.size });
+  res.json({ status: 'ok', uptime: process.uptime(), activeDJs: djInstances.size + browserDjInstances.size });
 });
 
 // ── Prevent uncaught errors from crashing the process ───────────────────
@@ -953,5 +1008,5 @@ app.listen(PORT, '0.0.0.0', () => {
   console.log(`[DJ Worker] Server running on port ${PORT}`);
   console.log(`[DJ Worker] App URL: ${APP_URL}`);
   console.log(`[DJ Worker] Cache dir: ${CACHE_DIR}`);
-  console.log(`[DJ Worker] yt-dlp: ${YT_DLP}`);
+  console.log('[DJ Worker] Legacy audio extraction: disabled');
 });

@@ -31,7 +31,6 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       const res = await fetch('/api/me');
       const data = await res.json();
       if (!data.user && process.env.NODE_ENV === 'development') {
-        // Auto-login as guest in dev mode
         const guestRes = await fetch('/api/auth/guest', { method: 'POST' });
         if (guestRes.ok) {
           const retry = await fetch('/api/me');

@@ -1,7 +1,7 @@
 'use client';
 
-// DJ Popup — plays audio server-side (yt-dlp/Piped → /api/youtube-audio/stream)
-// and publishes it to the LiveKit music room as a regular audio track (WebRTC).
+// DJ Popup — resolves audio with the browser's authenticated YouTube session,
+// registers the CDN URL with the server proxy, and publishes it to LiveKit.
 //
 // Listeners at /rooms/[roomId] already subscribe to this room's audio and render
 // it like any voice track, so audio is sample-accurate synchronised across every
@@ -13,7 +13,8 @@
 import { useParams, useSearchParams } from 'next/navigation';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { LocalAudioTrack, Room, Track } from 'livekit-client';
-import { PeerDJBroadcaster } from '@/lib/peer-audio-service';
+import { PeerDJBroadcaster, getDJPeerId } from '@/lib/peer-audio-service';
+import { extractAudioUrl as extractBrowserAudioUrl } from '@/lib/yt-client-extract';
 
 interface RoomData {
   playlist: Array<{ id: string; url: string; title: string; artist: string }>;
@@ -184,11 +185,30 @@ export default function DJPage() {
   const connectPeerFallback = useCallback(async (audioTrack: MediaStreamTrack): Promise<void> => {
     if (peerBroadcasterRef.current?.ready) return;
     setStatus('LiveKit unavailable — starting PeerJS fallback...');
-    const broadcaster = new PeerDJBroadcaster();
-    await broadcaster.start(roomId, audioTrack);
+
+    let broadcaster: PeerDJBroadcaster | null = null;
+    let lastError: unknown = null;
+    const basePeerId = getDJPeerId(roomId);
+    for (let attempt = 1; attempt <= 4; attempt++) {
+      try {
+        broadcaster = new PeerDJBroadcaster();
+        await broadcaster.start(roomId, audioTrack);
+        break;
+      } catch (err) {
+        lastError = err;
+        try { broadcaster?.stop(); } catch {}
+        broadcaster = null;
+        const message = err instanceof Error ? err.message : String(err);
+        if (!/taken|unavailable|already/i.test(message) || attempt === 4) throw err;
+        await new Promise(resolve => setTimeout(resolve, attempt * 750));
+      }
+    }
+
+    if (!broadcaster) throw lastError || new Error('Could not start PeerJS fallback');
     peerBroadcasterRef.current = broadcaster;
     usingPeerFallbackRef.current = true;
-    console.log('[DJ] PeerJS fallback active');
+    patchRoomState({ djActive: true, peerFallback: true, djPeerId: basePeerId, djStatus: 'DJ connected (P2P)' });
+    console.log('[DJ] PeerJS fallback active as', basePeerId);
   }, [roomId]);
 
   const publishTrackIfNeeded = useCallback(async (): Promise<void> => {
@@ -235,7 +255,7 @@ export default function DJPage() {
         setStatus('🔴 LIVE — broadcasting via PeerJS (free fallback)');
       }
 
-      patchRoomState({ djActive: true, djStatus: 'DJ connected. Waiting for a playable track.', peerFallback: usingPeerFallbackRef.current });
+      patchRoomState({ djActive: true, djStatus: 'DJ connected. Waiting for a playable track.', peerFallback: usingPeerFallbackRef.current, djPeerId: getDJPeerId(roomId) });
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
       console.error('[DJ] startSession error:', err);
@@ -318,53 +338,31 @@ export default function DJPage() {
     setStatus(`Preparing audio for ${videoId}...`);
     patchRoomState({ djStatus: 'Preparing audio...' });
 
-    const infoRes = await fetch(`/api/youtube-audio?videoId=${encodeURIComponent(videoId)}&roomId=${encodeURIComponent(roomId)}`, { cache: 'no-store' });
-    if (!infoRes.ok) {
-      const body = await infoRes.json().catch(() => null);
-      const message = body?.error || `Audio extraction failed (${infoRes.status})`;
+    const extracted = await extractBrowserAudioUrl(videoId);
+    if (!extracted?.url) {
+      const message = 'Browser extraction failed';
       setStatus(`ERROR: ${message}`);
       patchRoomState({ djStatus: message, isPlaying: false });
-      console.error('[DJ] loadAndPlay failed', { roomId, videoId, status: infoRes.status, message });
-      // Avoid getting stuck on an unplayable track.
-      setTimeout(() => {
-        const r = roomDataRef.current;
-        if (!r?.playlist?.length) {
-          if (r?.autoRadio) {
-            fetch('/api/auto-radio', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ roomId }),
-            }).catch(() => {});
-          }
-          return;
-        }
-        const i = r.playlist.findIndex((t) => t.id === r.currentTrackId);
-        const isLastTrack = i === r.playlist.length - 1;
-        if (isLastTrack && r.autoRadio) {
-          fetch('/api/auto-radio', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ roomId }),
-          }).catch(() => {});
-          return;
-        }
-        const next = r.playlist[(i + 1) % r.playlist.length];
-        if (!next || next.id === r.currentTrackId) return;
-        const updates: Record<string, unknown> = { currentTrackId: next.id, isPlaying: true };
-        if (r.currentTrackId) {
-          updates.playHistory = [...(r.playHistory || []), r.currentTrackId].slice(-50);
-        }
-        fetch('/api/db', {
-          method: 'PATCH',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ collection: 'rooms', id: roomId, data: updates }),
-        }).catch(() => {});
-      }, 250);
+      console.error('[DJ] loadAndPlay failed', { roomId, videoId, message });
       return;
     }
 
-    const info = await infoRes.json().catch(() => null);
-    const nextSrc = info?.audioUrl || `/api/youtube-audio/stream?videoId=${encodeURIComponent(videoId)}`;
+    const proxyRes = await fetch('/api/youtube-audio/proxy', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ videoId, audioUrl: extracted.url, mimeType: extracted.mimeType }),
+    });
+    if (!proxyRes.ok) {
+      const body = await proxyRes.json().catch(() => null);
+      const message = body?.error || `Proxy registration failed (${proxyRes.status})`;
+      setStatus(`ERROR: ${message}`);
+      patchRoomState({ djStatus: message, isPlaying: false });
+      console.error('[DJ] loadAndPlay failed', { roomId, videoId, status: proxyRes.status, message });
+      return;
+    }
+
+    const proxyData = await proxyRes.json().catch(() => null);
+    const nextSrc = proxyData?.proxyUrl || `/api/youtube-audio/proxy?videoId=${encodeURIComponent(videoId)}`;
     if (audioEl.src !== new URL(nextSrc, window.location.origin).toString()) {
       audioEl.src = nextSrc;
       audioEl.load();
@@ -380,6 +378,22 @@ export default function DJPage() {
       patchRoomState({ djStatus: message });
     }
   }, [patchRoomState, roomId]);
+
+  // If the room already has a selected track before the DJ session becomes
+  // live, load it once we are actually ready to publish. Without this, the
+  // initial poll can observe the track before LiveKit/PeerJS comes up, mark it
+  // as current, and then never re-enter the "new track" path after going live.
+  useEffect(() => {
+    if (!isLive) return;
+
+    const data = roomDataRef.current;
+    const audioEl = audioRef.current;
+    if (!data?.currentTrackId || !data.isPlaying || !audioEl || audioEl.src) return;
+
+    const track = data.playlist?.find((t) => t.id === data.currentTrackId);
+    const videoId = extractVideoId(data.currentTrackId, track?.url);
+    void loadAndPlay(videoId);
+  }, [isLive, loadAndPlay]);
 
   // Fire a single /api/auto-radio request, deduped by autoRadioRequestedRef.
   // The ref stays true until either a new currentTrackId is observed (cleared
@@ -771,8 +785,8 @@ export default function DJPage() {
         >
           <p style={{ color: '#fff', fontWeight: 'bold', margin: '0 0 6px' }}>How it works</p>
           <p style={{ margin: 0 }}>1️⃣ Click <strong style={{ color: '#4ade80' }}>Start DJ Session</strong> above.</p>
-          <p style={{ margin: 0 }}>2️⃣ Audio is fetched server-side (yt-dlp) and streamed to your browser.</p>
-          <p style={{ margin: 0 }}>3️⃣ Your browser re-publishes it to LiveKit over WebRTC.</p>
+          <p style={{ margin: 0 }}>2️⃣ Your browser resolves the audio URL with its YouTube session.</p>
+          <p style={{ margin: 0 }}>3️⃣ The server proxies that URL and your browser re-publishes it to LiveKit over WebRTC.</p>
           <p style={{ margin: 0 }}>4️⃣ Every listener hears the exact same live stream — in sync, like voice.</p>
           <p style={{ margin: '8px 0 0', color: '#666', fontSize: 11 }}>
             No tab sharing required. Keep this tab open while DJing.

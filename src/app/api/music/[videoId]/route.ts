@@ -1,9 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { isValidVideoId } from '@/lib/validate-video-id';
-import { getDjWorkerSecret, getDjWorkerUrl } from '@/lib/dj-worker-config';
+import { getDjWorkerUrl } from '@/lib/dj-worker-config';
 
 const DJ_WORKER_URL = getDjWorkerUrl();
-const DJ_WORKER_SECRET = getDjWorkerSecret();
 
 export async function GET(req: NextRequest, { params }: { params: Promise<{ videoId: string }> }) {
   const { videoId } = await params;
@@ -15,9 +14,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ vide
   if (!DJ_WORKER_URL) return new NextResponse('Worker not configured', { status: 503 });
 
   try {
-    const workerRes = await fetch(`${DJ_WORKER_URL}/music/${videoId}`, {
-      headers: { Authorization: `Bearer ${DJ_WORKER_SECRET}` },
-    });
+    const workerRes = await fetch(`${DJ_WORKER_URL}/music/${videoId}`);
     console.log('[MusicProxy] worker response', { requestId, videoId, status: workerRes.status });
 
     if (!workerRes.ok) {

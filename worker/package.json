@@ -1,7 +1,7 @@
 {
   "name": "hmo-dj-worker",
   "version": "2.0.0",
-  "description": "DJ Worker for HearMeOut — server-side music streaming via LiveKit + yt-dlp + ffmpeg",
+  "description": "DJ Worker for HearMeOut — browser DJ orchestration via LiveKit + ffmpeg",
   "main": "src/server.js",
   "scripts": {
     "start": "node src/server.js",
@@ -14,6 +14,7 @@
     "dotenv": "^16.0.3",
     "express": "^4.18.2",
     "peerjs": "^1.5.5",
+    "puppeteer": "^24.41.0",
     "youtubei.js": "^17.0.1"
   },
   "devDependencies": {

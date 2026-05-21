@@ -33,12 +33,14 @@ export class PeerDJBroadcaster {
   private stream: MediaStream | null = null;
   private connections: MediaConnection[] = [];
   private _ready = false;
+  private _peerId = '';
 
   get ready() { return this._ready; }
+  get peerId() { return this._peerId; }
 
-  async start(roomId: string, audioTrack: MediaStreamTrack): Promise<void> {
+  async start(roomId: string, audioTrack: MediaStreamTrack, peerId = getDJPeerId(roomId)): Promise<void> {
     this.stream = new MediaStream([audioTrack]);
-    const peerId = getDJPeerId(roomId);
+    this._peerId = peerId;
 
     return new Promise((resolve, reject) => {
       this.peer = new Peer(peerId, { debug: 1 });
@@ -60,7 +62,10 @@ export class PeerDJBroadcaster {
 
       this.peer.on('error', (err) => {
         console.error('[PeerDJ] Error:', err);
-        if (!this._ready) reject(err);
+        if (!this._ready) {
+          try { this.peer?.destroy(); } catch {}
+          reject(err);
+        }
       });
 
       this.peer.on('disconnected', () => {
@@ -94,6 +99,7 @@ export class PeerDJBroadcaster {
     this.peer = null;
     this.stream = null;
     this._ready = false;
+    this._peerId = '';
   }
 }
 
