@@ -344,11 +344,16 @@ export async function searchXtreamCatalog(query: string | null | undefined) {
   return playable;
 }
 
-export function getXtreamStreamUrl(kind: XtreamKind, streamId: string) {
+export async function getXtreamStreamUrl(kind: XtreamKind, streamId: string) {
   const config = getConfig();
   if (!config) throw new Error('Xtream provider is not configured');
   const cleanId = String(streamId).replace(/[^0-9]/g, '');
   if (!cleanId) throw new Error('Invalid Xtream stream id');
+
+  if (kind === 'vod' && !vodExtensions.has(cleanId)) {
+    await getXtreamCatalog().catch(() => []);
+  }
+
   const extension = kind === 'live' ? 'ts' : (vodExtensions.get(cleanId) || 'mp4');
   const pathKind = kind === 'live' ? 'live' : kind === 'series' ? 'series' : 'movie';
   return new URL(`/${pathKind}/${encodeURIComponent(config.username)}/${encodeURIComponent(config.password)}/${cleanId}.${extension}`, config.baseUrl);
@@ -414,7 +419,7 @@ function flattenSeriesEpisodes(episodes: unknown): Array<Record<string, unknown>
 }
 
 export async function fetchXtreamStream(kind: XtreamKind, streamId: string, range?: string | null, signal?: AbortSignal) {
-  const upstreamUrl = kind === 'series' ? await getFirstSeriesEpisodeUrl(streamId) : getXtreamStreamUrl(kind, streamId);
+  const upstreamUrl = kind === 'series' ? await getFirstSeriesEpisodeUrl(streamId) : await getXtreamStreamUrl(kind, streamId);
   const headers: Record<string, string> = { 'user-agent': 'DiscordStreamHub/1.0' };
   if (range) headers.range = range;
   const upstream = await fetch(upstreamUrl, {

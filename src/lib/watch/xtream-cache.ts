@@ -124,7 +124,7 @@ async function cacheXtreamVod(streamId: string, title: string) {
   await unlink(tmpPath).catch(() => {});
   await pruneCacheDir(dir);
 
-  const upstreamUrl = getXtreamStreamUrl('vod', streamId);
+  const upstreamUrl = await getXtreamStreamUrl('vod', streamId);
   console.log(`[XtreamCache] Starting cache for ${title} (${streamId})`);
   const response = await fetch(upstreamUrl, {
     cache: 'no-store',
