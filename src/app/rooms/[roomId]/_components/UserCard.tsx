@@ -50,6 +50,8 @@ export default function UserCard({ participant, isLocal, isHost, roomId }: { par
 
   const allAudioTracks = useTracks([LivekitClient.Track.Source.Microphone, LivekitClient.Track.Source.Unknown], { onlySubscribed: true }).filter(track => track.participant.identity === participant.identity && track.publication);
   const { name, identity } = participant;
+  const participantMeta = participant.metadata ? JSON.parse(participant.metadata) : {};
+  const userRecordId = participantMeta.uid || identity;
   const [trackAudioLevel, setTrackAudioLevel] = useState(0);
   const isSpeaking = participant.isSpeaking;
 
@@ -72,7 +74,7 @@ export default function UserCard({ participant, isLocal, isHost, roomId }: { par
   useEffect(() => { if (isLocal) return; if (volume > 0) { lastNonZeroVolume.current = volume; setIsMutedByMe(false); } else { setIsMutedByMe(true); } }, [volume, isLocal]);
   const toggleMuteByMe = () => { if (isLocal) return; setVolume(prev => (prev > 0 ? 0 : lastNonZeroVolume.current || 1)); };
 
-  const { data: firestoreUser } = useDoc<RoomParticipantData>(identity ? `rooms/${roomId}/users` : null, identity || null);
+  const { data: firestoreUser } = useDoc<RoomParticipantData>(userRecordId ? `rooms/${roomId}/users` : null, userRecordId || null);
 
   React.useEffect(() => {
     if (firestoreUser?.twitchChannel) setTwitchChannel(firestoreUser.twitchChannel);
@@ -82,29 +84,29 @@ export default function UserCard({ participant, isLocal, isHost, roomId }: { par
 
   // Auto-fill from session data (enriched from DSH) if room user doc is empty
   React.useEffect(() => {
-    if (!isLocal || !identity || !user) return;
+    if (!isLocal || !userRecordId || !user) return;
     const su = user as any;
     // Auto-fill twitch channel from DSH profile if not set in room
     if (!firestoreUser?.twitchChannel && su.twitchLogin) {
       setTwitchChannel(su.twitchLogin);
-      dbSet(`rooms/${roomId}/users`, identity, { twitchChannel: su.twitchLogin }, true);
+      dbSet(`rooms/${roomId}/users`, userRecordId, { twitchChannel: su.twitchLogin }, true);
     }
     // Auto-fill discord guild ID from DSH profile if not set in room
     if (!firestoreUser?.discordGuildId && su.discordGuildId) {
       setDiscordGuildId(su.discordGuildId);
-      dbSet(`rooms/${roomId}/users`, identity, { discordGuildId: su.discordGuildId }, true);
+      dbSet(`rooms/${roomId}/users`, userRecordId, { discordGuildId: su.discordGuildId }, true);
       // Also fetch channels
       fetch(`/api/discord/channels?guildId=${su.discordGuildId}`)
         .then(r => r.ok ? r.json() : [])
         .then(channels => {
           if (Array.isArray(channels) && channels.length > 0) {
             const defaultCh = channels.find((ch: any) => ch.type === 0)?.id || channels[0]?.id;
-            dbSet(`rooms/${roomId}/users`, identity, { discordChannels: channels, discordSelectedChannel: defaultCh }, true);
+            dbSet(`rooms/${roomId}/users`, userRecordId, { discordChannels: channels, discordSelectedChannel: defaultCh }, true);
           }
         })
         .catch(() => {});
     }
-  }, [isLocal, identity, user, firestoreUser, roomId]);
+  }, [isLocal, userRecordId, user, firestoreUser, roomId]);
 
   React.useEffect(() => {
     const checkOverlay = () => setShowOverlayControls(localStorage.getItem('overlay-open') === 'true');
@@ -133,25 +135,25 @@ export default function UserCard({ participant, isLocal, isHost, roomId }: { par
   };
 
   const handleToggleStreamMode = () => {
-    if (!identity) return;
+    if (!userRecordId) return;
     const newMode = !streamMode;
     setStreamMode(newMode);
-    dbSet(`rooms/${roomId}/users`, identity, { streamMode: newMode }, true);
+    dbSet(`rooms/${roomId}/users`, userRecordId, { streamMode: newMode }, true);
     toast({ title: newMode ? 'Stream Mode ON' : 'Stream Mode OFF', description: newMode ? 'Main page audio disabled. Use overlay in OBS for all audio.' : 'Main page audio enabled.' });
   };
 
   const handleSaveTwitch = () => {
-    if (!identity) return;
-    dbSet(`rooms/${roomId}/users`, identity, { twitchChannel: twitchChannel.trim().toLowerCase() || null }, true);
+    if (!userRecordId) return;
+    dbSet(`rooms/${roomId}/users`, userRecordId, { twitchChannel: twitchChannel.trim().toLowerCase() || null }, true);
     toast({ title: 'Saved', description: 'Twitch channel updated. Bot will join within 30 seconds.' });
     setTwitchDialogOpen(false);
   };
 
   const handleSaveDiscord = async () => {
-    if (!identity) return;
+    if (!userRecordId) return;
     const guildId = discordGuildId.trim();
     if (!guildId) {
-      dbSet(`rooms/${roomId}/users`, identity, { discordGuildId: null, discordChannels: null, discordSelectedChannel: null }, true);
+      dbSet(`rooms/${roomId}/users`, userRecordId, { discordGuildId: null, discordChannels: null, discordSelectedChannel: null }, true);
       toast({ title: 'Cleared', description: 'Discord configuration removed.' });
       setDiscordDialogOpen(false);
       return;
@@ -162,7 +164,7 @@ export default function UserCard({ participant, isLocal, isHost, roomId }: { par
       const channels = await res.json();
       if (!Array.isArray(channels) || channels.length === 0) throw new Error('No channels returned.');
       const defaultChannel = channels.find((ch: any) => ch.type === 0)?.id || channels[0]?.id;
-      dbSet(`rooms/${roomId}/users`, identity, { discordGuildId: guildId, discordChannels: channels, discordSelectedChannel: defaultChannel }, true);
+      dbSet(`rooms/${roomId}/users`, userRecordId, { discordGuildId: guildId, discordChannels: channels, discordSelectedChannel: defaultChannel }, true);
       toast({ title: 'Saved', description: `Discord configured with ${channels.length} channels.` });
       setDiscordDialogOpen(false);
     } catch (e: any) {
@@ -172,9 +174,8 @@ export default function UserCard({ participant, isLocal, isHost, roomId }: { par
 
   const handleToggleMic = async () => { if (isLocal && room) await room.localParticipant.setMicrophoneEnabled(!participant.isMicrophoneEnabled); };
   const isMuted = !participant.isMicrophoneEnabled;
-  const participantMeta = participant.metadata ? JSON.parse(participant.metadata) : {};
   const displayName = name || participantMeta.displayName || firestoreUser?.displayName || 'User';
-  const photoURL = participantMeta.photoURL || firestoreUser?.photoURL || `https://picsum.photos/seed/${identity}/100/100`;
+  const photoURL = participantMeta.photoURL || firestoreUser?.photoURL || `https://picsum.photos/seed/${userRecordId}/100/100`;
   const handleLeaveRoom = () => { room.disconnect(); router.push('/'); };
 
   const [moveDialogOpen, setMoveDialogOpen] = React.useState(false);
@@ -188,7 +189,7 @@ export default function UserCard({ participant, isLocal, isHost, roomId }: { par
       const res = await fetch('/api/room-admin', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action, roomId, targetUserId: identity, ...extra }),
+        body: JSON.stringify({ action, roomId, targetUserId: userRecordId, targetParticipantIdentity: identity, ...extra }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Failed');

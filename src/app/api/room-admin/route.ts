@@ -18,7 +18,7 @@ export async function POST(req: NextRequest) {
 
   await ensureDb();
 
-  const { action, roomId, targetUserId, targetRoomId } = await req.json();
+  const { action, roomId, targetUserId, targetParticipantIdentity, targetRoomId } = await req.json();
   if (!action || !roomId) return NextResponse.json({ error: 'Missing action or roomId' }, { status: 400 });
 
   // Verify caller is room owner or DSH admin (Crew/VIP)
@@ -34,6 +34,10 @@ export async function POST(req: NextRequest) {
   }
 
   if (!targetUserId) return NextResponse.json({ error: 'Missing targetUserId' }, { status: 400 });
+  const liveKitIdentity =
+    typeof targetParticipantIdentity === 'string' && targetParticipantIdentity.trim()
+      ? targetParticipantIdentity
+      : targetUserId;
 
   const lk = getLKClient();
 
@@ -49,7 +53,7 @@ export async function POST(req: NextRequest) {
         db.delete(`rooms/${roomId}/users`, targetUserId);
         // Kick from LiveKit (if configured)
         if (!lk) return NextResponse.json({ success: true, action: 'banned', livekit: 'not-configured' });
-        await lk.removeParticipant(roomId, targetUserId).catch(() => {});
+        await lk.removeParticipant(roomId, liveKitIdentity).catch(() => {});
         return NextResponse.json({ success: true, action: 'banned' });
       }
 
@@ -61,7 +65,7 @@ export async function POST(req: NextRequest) {
       case 'mute': {
         // Server-side mute via LiveKit — revoke publish permission (if configured)
         if (lk) {
-          await lk.updateParticipant(roomId, targetUserId, undefined, {
+          await lk.updateParticipant(roomId, liveKitIdentity, undefined, {
             canPublish: false,
             canSubscribe: true,
             canPublishData: true,
@@ -74,7 +78,7 @@ export async function POST(req: NextRequest) {
 
       case 'unmute': {
         if (lk) {
-          await lk.updateParticipant(roomId, targetUserId, undefined, {
+          await lk.updateParticipant(roomId, liveKitIdentity, undefined, {
             canPublish: true,
             canSubscribe: true,
             canPublishData: true,
@@ -86,7 +90,7 @@ export async function POST(req: NextRequest) {
 
       case 'kick': {
         db.delete(`rooms/${roomId}/users`, targetUserId);
-        if (lk) await lk.removeParticipant(roomId, targetUserId).catch(() => {});
+        if (lk) await lk.removeParticipant(roomId, liveKitIdentity).catch(() => {});
         return NextResponse.json({ success: true, action: 'kicked' });
       }
 
@@ -99,7 +103,7 @@ export async function POST(req: NextRequest) {
         const banned = db.get(`rooms/${targetRoomId}/banned`, targetUserId);
         if (banned) return NextResponse.json({ error: 'User is banned from target room' }, { status: 403 });
         // Remove from current room in LiveKit (they'll rejoin target via client redirect)
-        if (lk) await lk.removeParticipant(roomId, targetUserId).catch(() => {});
+        if (lk) await lk.removeParticipant(roomId, liveKitIdentity).catch(() => {});
         // Move user data
         const userData = db.get(`rooms/${roomId}/users`, targetUserId);
         if (userData) {

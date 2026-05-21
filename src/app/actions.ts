@@ -58,7 +58,7 @@ export async function generateLiveKitToken(roomName: string, participantIdentity
       throw new Error('LiveKit not configured. Required: NEXT_PUBLIC_LIVEKIT_URL (or LIVEKIT_URL).');
     }
 
-    console.log('[generateLiveKitToken] Creating token for room:', roomName, 'participant:', participantIdentity);
+    console.log('[generateLiveKitToken] Creating token for room:', roomName, 'participant:', participantIdentity, 'name:', participantName || 'User');
 
     const at = new AccessToken(apiKey, apiSecret, {
       identity: participantIdentity,

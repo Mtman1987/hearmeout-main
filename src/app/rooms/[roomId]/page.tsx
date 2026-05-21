@@ -109,6 +109,18 @@ function ConnectionStatusIndicator({ peerFallback, livekitReady }: { peerFallbac
     return <StatusDot indicatorClass="bg-gray-500" statusText="No voice" />;
 }
 
+function getOrCreateSessionId(key: string) {
+    try {
+        const existing = sessionStorage.getItem(key);
+        if (existing) return existing;
+        const generated = Math.random().toString(36).slice(2, 8);
+        sessionStorage.setItem(key, generated);
+        return generated;
+    } catch {
+        return Math.random().toString(36).slice(2, 8);
+    }
+}
+
 function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
     const { user, isLoading: isUserLoading } = useSession();
     const { toast } = useToast();
@@ -136,6 +148,7 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
     const musicRoomRef = useRef<LKRoom | null>(null);
     const musicAudioRef = useRef<HTMLAudioElement | null>(null);
     const musicIdentityRef = useRef<string>('');
+    const voiceIdentityRef = useRef<string>('');
     const localVolumeRef = useRef(localVolume);
     const userGestureUnlockedRef = useRef(false);
     const peerListenerRef = useRef<PeerAudioListener | null>(null);
@@ -220,18 +233,7 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
             try {
                 console.log('[MusicRoom] Connecting as listener...');
                 if (!musicIdentityRef.current) {
-                    const tabId = (() => {
-                        try {
-                            const key = 'hmo_music_tab_id';
-                            const existing = sessionStorage.getItem(key);
-                            if (existing) return existing;
-                            const generated = Math.random().toString(36).slice(2, 8);
-                            sessionStorage.setItem(key, generated);
-                            return generated;
-                        } catch {
-                            return Math.random().toString(36).slice(2, 8);
-                        }
-                    })();
+                    const tabId = getOrCreateSessionId('hmo_music_tab_id');
                     musicIdentityRef.current = `${user.uid}-${tabId}`;
                 }
                 const token = await generateMusicRoomToken(
@@ -397,7 +399,18 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
                 if (Array.isArray(users)) dbUpdate('rooms', roomId, { occupantCount: users.length });
             }).catch(() => {});
             try {
-                const token = await generateLiveKitToken(roomId, user.uid, user.displayName!, JSON.stringify({ photoURL: user.photoURL || `https://picsum.photos/seed/${user.uid}/100/100` }));
+                if (!voiceIdentityRef.current) {
+                    const tabId = getOrCreateSessionId('hmo_voice_tab_id');
+                    voiceIdentityRef.current = `${user.uid}-${tabId}`;
+                }
+                const displayName = user.displayName || (user as any).username || 'User';
+                const photoURL = user.photoURL || `https://picsum.photos/seed/${user.uid}/100/100`;
+                const token = await generateLiveKitToken(
+                    roomId,
+                    voiceIdentityRef.current,
+                    displayName,
+                    JSON.stringify({ uid: user.uid, displayName, photoURL }),
+                );
                 if (!isCancelled) setVoiceToken(token);
             } catch (e) {
                 console.warn('[Voice] LiveKit token failed, trying PeerJS voice fallback:', e);
