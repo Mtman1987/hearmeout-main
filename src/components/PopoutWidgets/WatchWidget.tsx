@@ -49,11 +49,12 @@ export function WatchWidget({
   const sessionId = `room-${roomId}`;
 
   const refresh = useCallback(async () => {
+    if (!roomId) return;
     try {
       const res = await fetch(`/api/watch/sessions/${sessionId}/state`, { cache: 'no-store' });
       if (res.ok) setState(await res.json());
     } catch {}
-  }, [sessionId]);
+  }, [roomId, sessionId]);
 
   useEffect(() => {
     refresh();
@@ -63,6 +64,10 @@ export function WatchWidget({
 
   const handleSearch = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!roomId) {
+      setError('Room is still loading. Close and reopen Watch Party if this persists.');
+      return;
+    }
     if (!query.trim()) return;
     setSearching(true);
     setError(null);
@@ -70,7 +75,7 @@ export function WatchWidget({
       const res = await fetch(`/api/watch/sessions/${sessionId}/request`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ query: query.trim(), username: 'DJ' }),
+        body: JSON.stringify({ query: query.trim(), username: 'local viewer' }),
       });
       const data = await res.json();
       if (!res.ok) {
@@ -97,6 +102,7 @@ export function WatchWidget({
     } catch {}
   };
 
+  const watchRoomUrl = state?.roomUrl || `/watch/${sessionId}`;
   const discordActivityUrl = state?.roomUrl
     ? `https://discord.com/activities?url=${encodeURIComponent(state.roomUrl)}`
     : null;
@@ -115,15 +121,14 @@ export function WatchWidget({
       minimalChrome
     >
       <div className="flex-1 overflow-y-auto p-3 space-y-3">
-        {/* Now Playing / iframe */}
         {state?.current ? (
           <div className="space-y-2">
             <div className="aspect-video w-full rounded-md overflow-hidden border border-border bg-black">
               <iframe
-                src={state.current.item.playbackUrl.startsWith('/') ? state.current.item.playbackUrl : `/api/watch/proxy?url=${encodeURIComponent(state.current.item.playbackUrl)}`}
+                src={watchRoomUrl}
                 className="w-full h-full"
-                allow="autoplay; fullscreen"
-                sandbox="allow-scripts allow-same-origin"
+                allow="autoplay; fullscreen; encrypted-media; picture-in-picture"
+                sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-presentation"
               />
             </div>
             <div className="flex items-center justify-between gap-2">
@@ -152,23 +157,19 @@ export function WatchWidget({
           </div>
         )}
 
-        {/* Discord Activity Link */}
-        {state?.roomUrl && (
-          <div className="flex gap-2">
-            <Button variant="outline" size="sm" className="flex-1 text-xs" asChild>
-              <a href={state.roomUrl} target="_blank" rel="noreferrer">
-                <ExternalLink className="h-3.5 w-3.5 mr-1" /> Open Watch Room
-              </a>
+        <div className="flex gap-2">
+          <Button variant="outline" size="sm" className="flex-1 text-xs" asChild>
+            <a href={watchRoomUrl} target="_blank" rel="noreferrer">
+              <ExternalLink className="h-3.5 w-3.5 mr-1" /> Open Watch Room
+            </a>
+          </Button>
+          {discordActivityUrl && (
+            <Button variant="outline" size="sm" className="flex-1 text-xs" onClick={() => navigator.clipboard.writeText(state!.roomUrl)}>
+              Copy Link for Discord
             </Button>
-            {discordActivityUrl && (
-              <Button variant="outline" size="sm" className="flex-1 text-xs" onClick={() => navigator.clipboard.writeText(state.roomUrl)}>
-                Copy Link for Discord
-              </Button>
-            )}
-          </div>
-        )}
+          )}
+        </div>
 
-        {/* Search / Add */}
         <form onSubmit={handleSearch} className="flex gap-2">
           <Input
             placeholder="Search movie or TV show..."
@@ -183,7 +184,6 @@ export function WatchWidget({
         </form>
         {error && <p className="text-xs text-red-400">{error}</p>}
 
-        {/* Queue */}
         {state?.queue && state.queue.length > 0 && (
           <div className="space-y-1">
             <p className="text-xs font-medium text-muted-foreground uppercase">Up Next</p>
