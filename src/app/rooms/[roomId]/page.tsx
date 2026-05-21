@@ -130,6 +130,7 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
     const [voiceToken, setVoiceToken] = useState<string | undefined>(undefined);
     const [voiceFallbackActive, setVoiceFallbackActive] = useState(false);
     const peerVoiceRef = useRef<PeerVoiceMesh | null>(null);
+    const peerVoiceStartingRef = useRef(false);
     const [peerVoiceStreams, setPeerVoiceStreams] = useState<Map<string, MediaStream>>(new Map());
     const peerVoiceAudioRefs = useRef<Map<string, HTMLAudioElement>>(new Map());
     const [localVolume, setLocalVolume] = useState(0.5);
@@ -155,6 +156,50 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
     useEffect(() => { localVolumeRef.current = localVolume; }, [localVolume]);
 
     const isStreamMode = !!userSettings?.streamMode;
+
+    const startPeerVoiceFallback = useCallback(async (reason: unknown) => {
+        if (!user || !roomId || peerVoiceRef.current?.active || peerVoiceStartingRef.current) return;
+        peerVoiceStartingRef.current = true;
+        console.warn('[Voice] LiveKit unavailable, trying PeerJS voice fallback:', reason);
+        try {
+            const mesh = new PeerVoiceMesh();
+            await mesh.join(
+                roomId,
+                user.uid,
+                (peerId, stream) => {
+                    setPeerVoiceStreams(prev => new Map(prev).set(peerId, stream));
+                    let audioEl = peerVoiceAudioRefs.current.get(peerId);
+                    if (!audioEl) {
+                        audioEl = new Audio();
+                        audioEl.autoplay = true;
+                        peerVoiceAudioRefs.current.set(peerId, audioEl);
+                    }
+                    audioEl.srcObject = stream;
+                    audioEl.play().catch(() => {});
+                },
+                (peerId) => {
+                    setPeerVoiceStreams(prev => {
+                        const next = new Map(prev);
+                        next.delete(peerId);
+                        return next;
+                    });
+                    const audioEl = peerVoiceAudioRefs.current.get(peerId);
+                    if (audioEl) {
+                        audioEl.srcObject = null;
+                        peerVoiceAudioRefs.current.delete(peerId);
+                    }
+                },
+            );
+            peerVoiceRef.current = mesh;
+            setVoiceToken(undefined);
+            setVoiceFallbackActive(true);
+            toast({ title: 'Voice Connected (P2P)', description: 'Using peer-to-peer voice since LiveKit is unavailable.' });
+        } catch (peerErr) {
+            toast({ variant: 'destructive', title: 'Voice Failed', description: `Could not connect voice: ${peerErr instanceof Error ? peerErr.message : String(peerErr)}` });
+        } finally {
+            peerVoiceStartingRef.current = false;
+        }
+    }, [roomId, toast, user]);
 
     // DJ start/stop via server-side API (Puppeteer on hmo-dj-worker)
     const [djStarting, setDjStarting] = useState(false);
@@ -413,46 +458,8 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
                 );
                 if (!isCancelled) setVoiceToken(token);
             } catch (e) {
-                console.warn('[Voice] LiveKit token failed, trying PeerJS voice fallback:', e);
                 if (isCancelled) return;
-                // PeerJS voice mesh fallback
-                try {
-                    const mesh = new PeerVoiceMesh();
-                    await mesh.join(
-                        roomId,
-                        user.uid,
-                        (peerId, stream) => {
-                            setPeerVoiceStreams(prev => new Map(prev).set(peerId, stream));
-                            // Auto-play remote audio
-                            let audioEl = peerVoiceAudioRefs.current.get(peerId);
-                            if (!audioEl) {
-                                audioEl = new Audio();
-                                audioEl.autoplay = true;
-                                peerVoiceAudioRefs.current.set(peerId, audioEl);
-                            }
-                            audioEl.srcObject = stream;
-                            audioEl.play().catch(() => {});
-                        },
-                        (peerId) => {
-                            setPeerVoiceStreams(prev => {
-                                const next = new Map(prev);
-                                next.delete(peerId);
-                                return next;
-                            });
-                            const audioEl = peerVoiceAudioRefs.current.get(peerId);
-                            if (audioEl) {
-                                audioEl.srcObject = null;
-                                peerVoiceAudioRefs.current.delete(peerId);
-                            }
-                        },
-                    );
-                    if (isCancelled) { mesh.leave(); return; }
-                    peerVoiceRef.current = mesh;
-                    setVoiceFallbackActive(true);
-                    toast({ title: 'Voice Connected (P2P)', description: 'Using peer-to-peer voice since LiveKit is unavailable.' });
-                } catch (peerErr) {
-                    if (!isCancelled) toast({ variant: 'destructive', title: 'Voice Failed', description: `Could not connect voice: ${peerErr instanceof Error ? peerErr.message : String(peerErr)}` });
-                }
+                await startPeerVoiceFallback(e);
             }
         };
         setup();
@@ -500,7 +507,7 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
             }
             peerVoiceAudioRefs.current.clear();
         };
-    }, [user, isUserLoading, roomId, toast, voiceToken, voiceFallbackActive]);
+    }, [user, isUserLoading, roomId, voiceToken, voiceFallbackActive, startPeerVoiceFallback]);
 
     const handleToggleAutoRadio = useCallback(() => {
         dbUpdate('rooms', roomId, { autoRadio: !room.autoRadio });
@@ -552,7 +559,7 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
                 userAgent: navigator.userAgent,
               }),
             }).catch(() => {});
-            toast({ variant: 'destructive', title: 'Connection Error', description: err.message });
+            void startPeerVoiceFallback(err);
           }}>
         {renderRoomUI()}
       </LiveKitRoom>
