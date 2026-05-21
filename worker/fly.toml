@@ -9,7 +9,6 @@ primary_region = "iad"
   PORT = "3002"
   MUSIC_CACHE_DIR = "/tmp/music"
   APP_URL = "https://hearmeout-main.fly.dev"
-  DJ_WORKER_SECRET = "hmo-prod-secret-2024"
   NEXT_PUBLIC_LIVEKIT_URL = "wss://streamweaver-7atx04ct.livekit.cloud"
 
 [http_service]

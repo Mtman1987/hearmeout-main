@@ -12,7 +12,6 @@ primary_region = "iad"
 
 [env]
   DJ_WORKER_URL = "https://hmo-dj-worker.fly.dev"
-  DJ_WORKER_SECRET = "hmo-prod-secret-2024"
   NEXT_PUBLIC_LIVEKIT_URL = "wss://streamweaver-7atx04ct.livekit.cloud"
   NODE_ENV = "production"
 

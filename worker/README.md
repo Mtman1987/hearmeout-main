@@ -1,14 +1,11 @@
 # HearMeOut DJ Worker
 
 This is the separate DJ worker service for HearMeOut. It handles:
-- Music lookup and scraping via yt‑dlp
-- Audio download and conversion via ffmpeg
-- Server‑side streaming to the main app using LiveKit
-- Token retrieval and publishing from a Node.js process (no Puppeteer or browser)
+- Browser-based YouTube audio extraction via Chromium
+- Browser DJ publishing through the main app's LiveKit/PeerJS path
+- Fallback metadata and audio URL lookup through youtubei.js
 
 ## API Endpoints
-
-All endpoints require Bearer token authentication via the `Authorization` header.
 
 ### `POST /dj`
 Start or stop a DJ instance.
@@ -64,7 +61,6 @@ Health check endpoint (no auth required).
 
 ## Environment Variables
 
-- `DJ_WORKER_SECRET` — Bearer token for API authentication
 - `APP_URL` — Main app URL (defaults to `https://hearmeout-main.fly.dev`)
 - `PORT` — Server port (defaults to 3002)
 - `NODE_ENV` — Environment (defaults to `development`)
