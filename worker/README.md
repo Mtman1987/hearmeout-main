@@ -64,6 +64,8 @@ Health check endpoint (no auth required).
 - `APP_URL` — Main app URL (defaults to `https://hearmeout-main.fly.dev`)
 - `PORT` — Server port (defaults to 3002)
 - `NODE_ENV` — Environment (defaults to `development`)
+- `UPSTREAM_EXTRACTOR_URL` — Optional public URL for `local-extractor.js`
+- `UPSTREAM_EXTRACTOR_SECRET` — Optional bearer token for the upstream extractor
 
 ## Deployment
 

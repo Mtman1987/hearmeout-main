@@ -41,6 +41,8 @@ const EXTRACTOR_USER_DATA_DIR =
   process.env.PUPPETEER_USER_DATA_DIR ||
   join(rootDir, '.tmp-chrome-profile');
 const EXTRACTOR_PROFILE_DIR = process.env.EXTRACTOR_PROFILE_DIR || process.env.PUPPETEER_PROFILE_DIR || 'Default';
+const UPSTREAM_EXTRACTOR_URL = (process.env.UPSTREAM_EXTRACTOR_URL || process.env.LOCAL_EXTRACTOR_URL || '').replace(/\/+$/, '');
+const UPSTREAM_EXTRACTOR_SECRET = process.env.UPSTREAM_EXTRACTOR_SECRET || process.env.LOCAL_EXTRACTOR_SECRET || '';
 const CACHE_DIR = process.env.MUSIC_CACHE_DIR || (process.env.NODE_ENV === 'production' ? '/tmp/music' : join(__dirname, '..', '.cache', 'music'));
 
 const VIDEO_ID_RE = /^[A-Za-z0-9_-]{11}$/;
@@ -101,7 +103,7 @@ function isAudioCandidate(rawUrl, contentType) {
 
 async function extractDirectAudioFormat(videoId) {
   const { Innertube, ClientType } = await import('youtubei.js');
-  const clients = ['ANDROID_VR', 'IOS', 'MWEB', 'MUSIC'];
+  const clients = ['ANDROID_VR', 'ANDROID', 'IOS', 'TV', 'MWEB', 'MUSIC', 'WEB'];
 
   for (const client of clients) {
     try {
@@ -120,6 +122,7 @@ async function extractDirectAudioFormat(videoId) {
           const bMp4 = bMime.includes('audio/mp4') ? 1 : 0;
           return (bMp4 - aMp4) || ((Number(b.bitrate) || 0) - (Number(a.bitrate) || 0));
         });
+      console.log(`[Extract] ${client} direct lookup returned ${audioFormats.length} audio formats for ${videoId}`);
 
       for (const format of audioFormats) {
         let url = format.url;
@@ -140,9 +143,57 @@ async function extractDirectAudioFormat(videoId) {
   return null;
 }
 
+async function extractFromUpstream(videoId) {
+  if (!UPSTREAM_EXTRACTOR_URL) return null;
+
+  const endpoint = `${UPSTREAM_EXTRACTOR_URL}/extract?videoId=${encodeURIComponent(videoId)}`;
+  const headers = UPSTREAM_EXTRACTOR_SECRET
+    ? { Authorization: `Bearer ${UPSTREAM_EXTRACTOR_SECRET}` }
+    : {};
+
+  try {
+    console.log(`[Extract] Asking upstream browser extractor for ${videoId}`);
+    const res = await fetch(endpoint, { headers });
+    const data = await res.json().catch(() => null);
+    if (!res.ok || !data?.url) {
+      console.warn(`[Extract] Upstream extractor failed for ${videoId}: ${res.status} ${data?.error || ''}`);
+      return null;
+    }
+    return {
+      url: data.url,
+      mimeType: data.mimeType || getMimeFromUrl(data.url) || 'application/octet-stream',
+      duration: Number(data.duration || 0),
+      title: data.title || 'Unknown',
+      artist: data.artist || 'Unknown',
+    };
+  } catch (err) {
+    console.warn(`[Extract] Upstream extractor error for ${videoId}: ${err.message?.slice(0, 160)}`);
+    return null;
+  }
+}
+
 async function extractAudioInfo(videoId) {
   const cached = getCachedExtractedInfo(videoId);
   if (cached) return cached;
+
+  const upstreamInfo = await extractFromUpstream(videoId);
+  if (upstreamInfo?.url) {
+    setCachedExtractedInfo(videoId, upstreamInfo);
+    return upstreamInfo;
+  }
+
+  const directAudio = await extractDirectAudioFormat(videoId);
+  if (directAudio?.url) {
+    const info = {
+      url: directAudio.url,
+      mimeType: directAudio.mimeType || 'application/octet-stream',
+      duration: 0,
+      title: 'Unknown',
+      artist: 'Unknown',
+    };
+    setCachedExtractedInfo(videoId, info);
+    return info;
+  }
 
   console.warn(`[Extract] Browser capture starting for ${videoId}`);
   const browser = await puppeteer.launch({
@@ -217,17 +268,11 @@ async function extractAudioInfo(videoId) {
     }
 
     if (!capturedUrl) {
-      const directAudio = await extractDirectAudioFormat(videoId);
-      if (directAudio?.url) {
-        capturedUrl = directAudio.url;
-        capturedContentType = directAudio.mimeType;
-      } else {
-        const kind = firstMediaUrl
-          ? `only captured non-audio media (${firstMediaContentType || getMimeFromUrl(firstMediaUrl) || 'unknown type'})`
-          : 'no media request captured';
-        console.warn(`[Extract] ${kind} for ${videoId}`);
-        return null;
-      }
+      const kind = firstMediaUrl
+        ? `only captured non-audio media (${firstMediaContentType || getMimeFromUrl(firstMediaUrl) || 'unknown type'})`
+        : 'no media request captured';
+      console.warn(`[Extract] ${kind} for ${videoId}`);
+      return null;
     }
 
     const info = {
