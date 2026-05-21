@@ -28,14 +28,19 @@ function DSHLiveUsers() {
 
   useEffect(() => {
     const fetchLive = async () => {
+      const controller = new AbortController();
+      const timeout = window.setTimeout(() => controller.abort(), 8000);
       try {
         const dshUrl = process.env.NEXT_PUBLIC_DSH_URL || 'https://discord-stream-hub-new.fly.dev';
-        const res = await fetch(`${dshUrl}/api/community-online`, { cache: 'no-store' });
+        const res = await fetch(`${dshUrl}/api/community-online`, { cache: 'no-store', signal: controller.signal });
         if (res.ok) {
           const data = await res.json();
           setLiveUsers(data.users || []);
         }
-      } catch {}
+      } catch {
+      } finally {
+        window.clearTimeout(timeout);
+      }
     };
     fetchLive();
     const iv = setInterval(fetchLive, 30_000);
@@ -69,31 +74,58 @@ function DSHLiveUsers() {
   );
 }
 
-function RoomOnlineUsers({ roomId, roomName }: { roomId: string; roomName: string }) {
-  const { data: users } = useCollection<{ displayName?: string; photoURL?: string; lastSeen?: number }>(`rooms/${roomId}/users`);
-  const activeUsers = (users || []).filter((u: any) => {
-    const lastSeen = Number(u?.lastSeen || 0);
-    return lastSeen > 0 && Date.now() - lastSeen < 45000;
-  });
-  if (!activeUsers.length) return null;
+function HMOOnlineUsers() {
+  const [onlineUsers, setOnlineUsers] = useState<Array<{ id: string; username: string; photoURL: string | null; roomName: string; roomId: string }>>([]);
+
+  useEffect(() => {
+    const fetchOnline = async () => {
+      try {
+        const res = await fetch('/api/community-online', { cache: 'no-store' });
+        if (res.ok) {
+          const data = await res.json();
+          setOnlineUsers(data.users || []);
+        }
+      } catch {}
+    };
+    fetchOnline();
+    const iv = setInterval(fetchOnline, 5000);
+    return () => clearInterval(iv);
+  }, []);
+
+  if (!onlineUsers.length) return null;
+
+  const usersByRoom = onlineUsers.reduce<Record<string, typeof onlineUsers>>((rooms, user) => {
+    const key = user.roomId || user.roomName || 'room';
+    rooms[key] = rooms[key] || [];
+    rooms[key].push(user);
+    return rooms;
+  }, {});
+
   return (
-    <div className="mb-2">
-      <p className="text-[10px] text-muted-foreground font-medium mb-1 truncate">{roomName}</p>
-      <div className="flex flex-wrap gap-1">
-        {activeUsers.slice(0, 8).map((u: any) => (
-          <Tooltip key={u.id}>
-            <TooltipTrigger asChild>
-              <Avatar className="h-6 w-6 border-2 border-green-500/60">
-                <AvatarImage src={u.photoURL} />
-                <AvatarFallback className="text-[9px]">{(u.displayName || '?').charAt(0)}</AvatarFallback>
-              </Avatar>
-            </TooltipTrigger>
-            <TooltipContent side="right"><p>{u.displayName || 'User'}</p></TooltipContent>
-          </Tooltip>
+    <SidebarGroup>
+      <SidebarGroupLabel><Users className="h-3 w-3 mr-1" />In Rooms</SidebarGroupLabel>
+      <div className="px-2">
+        {Object.entries(usersByRoom).map(([roomKey, users]) => (
+          <div key={roomKey} className="mb-2">
+            <p className="text-[10px] text-muted-foreground font-medium mb-1 truncate">{users[0]?.roomName || roomKey}</p>
+            <div className="flex flex-wrap gap-1">
+              {users.slice(0, 8).map((u) => (
+                <Tooltip key={`${u.roomId}-${u.id}`}>
+                  <TooltipTrigger asChild>
+                    <Avatar className="h-6 w-6 border-2 border-green-500/60">
+                      {u.photoURL ? <AvatarImage src={u.photoURL} /> : null}
+                      <AvatarFallback className="text-[9px]">{(u.username || '?').charAt(0)}</AvatarFallback>
+                    </Avatar>
+                  </TooltipTrigger>
+                  <TooltipContent side="right"><p>{u.username || 'User'}</p></TooltipContent>
+                </Tooltip>
+              ))}
+              {users.length > 8 && <span className="text-[10px] text-muted-foreground self-center">+{users.length - 8}</span>}
+            </div>
+          </div>
         ))}
-        {activeUsers.length > 8 && <span className="text-[10px] text-muted-foreground self-center">+{activeUsers.length - 8}</span>}
       </div>
-    </div>
+    </SidebarGroup>
   );
 }
 
@@ -161,16 +193,7 @@ export default function LeftSidebar({ roomId }: { roomId?: string }) {
         <DSHLiveUsers />
 
         {/* Active users across rooms */}
-        {publicRooms && publicRooms.length > 0 && (
-          <SidebarGroup>
-            <SidebarGroupLabel><Users className="h-3 w-3 mr-1" />In Rooms</SidebarGroupLabel>
-            <div className="px-2">
-              {publicRooms.map(room => (
-                <RoomOnlineUsers key={room.id} roomId={room.id} roomName={room.name} />
-              ))}
-            </div>
-          </SidebarGroup>
-        )}
+        <HMOOnlineUsers />
       </SidebarContent>
       <SidebarFooter className='gap-4'>
         <CreateRoomDialog />

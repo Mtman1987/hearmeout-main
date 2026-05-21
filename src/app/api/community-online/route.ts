@@ -1,17 +1,12 @@
 import { NextResponse } from 'next/server';
+import { db, ensureDb } from '@/lib/db';
 
 // Returns users currently online in HearMeOut rooms
 // Used by DiscordStreamHub to show "In HearMeOut" in its UI
-export async function GET(request: Request) {
-  const baseUrl = request.headers.get('x-forwarded-proto')
-    ? `${request.headers.get('x-forwarded-proto')}://${request.headers.get('host')}`
-    : process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3001';
-
+export async function GET() {
   try {
-    // Fetch all rooms
-    const roomsRes = await fetch(`${baseUrl}/api/db?collection=rooms`, { cache: 'no-store' });
-    const rooms = await roomsRes.json();
-    if (!Array.isArray(rooms)) return NextResponse.json({ source: 'hearmeout', count: 0, users: [] });
+    await ensureDb();
+    const rooms = db.list('rooms').filter((room) => room.data?.isPrivate === false);
 
     const onlineUsers: Array<{ id: string; username: string; photoURL: string | null; roomName: string; roomId: string }> = [];
     const now = Date.now();
@@ -19,9 +14,7 @@ export async function GET(request: Request) {
     for (const room of rooms) {
       const roomName = room.data?.name || room.id;
       try {
-        const usersRes = await fetch(`${baseUrl}/api/db?collection=rooms/${room.id}/users`, { cache: 'no-store' });
-        const users = await usersRes.json();
-        if (!Array.isArray(users)) continue;
+        const users = db.list(`rooms/${room.id}/users`);
 
         for (const u of users) {
           const lastSeen = Number(u.data?.lastSeen || 0);
@@ -49,6 +42,12 @@ export async function GET(request: Request) {
       },
     });
   } catch (error: any) {
-    return NextResponse.json({ error: error.message, users: [] }, { status: 500 });
+    return NextResponse.json({ error: error.message, users: [] }, {
+      status: 500,
+      headers: {
+        'Access-Control-Allow-Origin': '*',
+        'Cache-Control': 'no-store',
+      },
+    });
   }
 }
