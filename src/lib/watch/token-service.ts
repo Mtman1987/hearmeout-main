@@ -148,7 +148,7 @@ export async function getAllUsersWithTokens(serverId: string): Promise<Array<{di
     const usersWithTokens: Array<{discordUserId: string, twitchLogin: string, username: string}> = [];
 
     for (const userDoc of usersSnapshot.docs) {
-      const tokenDoc = await userDoc.ref.collection('tokens').doc('twitchBot').get();
+      const tokenDoc = await db.collection('servers').doc(serverId).collection('users').doc(userDoc.id).collection('tokens').doc('twitchBot').get();
       if (tokenDoc.exists) {
         const data = tokenDoc.data() as UserTokens;
         usersWithTokens.push({
