@@ -197,15 +197,28 @@ export default function DJCard({
                 </TooltipTrigger><TooltipContent><p>Next</p></TooltipContent></Tooltip>
                 <Tooltip><TooltipTrigger asChild>
                   <Button
-                    variant="outline"
-                    size="icon"
-                    className={cn('h-9 w-9 border-0 text-white', djIsLive ? 'bg-green-600 hover:bg-green-700' : 'bg-red-600 hover:bg-red-700')}
-                    onClick={djIsLive ? onStopDJ : onStartDJ}
+                    variant={djIsLive ? 'secondary' : 'outline'}
+                    size="sm"
+                    className="h-9 gap-1 px-2"
+                    onClick={onStartDJ}
                     disabled={djStarting}
                   >
-                    {djStarting ? <LoaderCircle className="h-4 w-4 animate-spin" /> : djIsLive ? <PowerOff className="h-4 w-4" /> : <Power className="h-4 w-4" />}
+                    {djStarting ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Power className="h-4 w-4" />}
+                    On
                   </Button>
-                </TooltipTrigger><TooltipContent><p>{djIsLive ? 'Stop DJ' : 'Start DJ'}</p></TooltipContent></Tooltip>
+                </TooltipTrigger><TooltipContent><p>Start DJ</p></TooltipContent></Tooltip>
+                <Tooltip><TooltipTrigger asChild>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-9 gap-1 px-2"
+                    onClick={onStopDJ}
+                    disabled={djStarting}
+                  >
+                    <PowerOff className="h-4 w-4" />
+                    Off
+                  </Button>
+                </TooltipTrigger><TooltipContent><p>Stop DJ</p></TooltipContent></Tooltip>
               </div>
             </div>
           )}
