@@ -103,6 +103,8 @@ export class PeerVoiceMesh {
   private peer: Peer | null = null;
   private connections: Map<string, MediaConnection> = new Map();
   private localStream: MediaStream | null = null;
+  private silentAudioContext: AudioContext | null = null;
+  private silentOscillator: OscillatorNode | null = null;
   private _peerId = '';
   private _roomId = '';
   private onRemoteStream: ((peerId: string, stream: MediaStream) => void) | null = null;
@@ -122,8 +124,12 @@ export class PeerVoiceMesh {
     this.onRemoteStream = onRemoteStream;
     this.onPeerLeft = onPeerLeft;
 
-    // Get mic
-    this.localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+    try {
+      this.localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+    } catch (err) {
+      console.warn('[PeerVoice] Microphone unavailable, joining with silent audio:', err);
+      this.localStream = this.createSilentAudioStream();
+    }
 
     const peerId = `hmo-voice-${roomId}-${userId}-${Math.random().toString(36).slice(2, 6)}`;
     this._peerId = peerId;
@@ -209,6 +215,21 @@ export class PeerVoiceMesh {
     }
   }
 
+  private createSilentAudioStream(): MediaStream {
+    const AudioContextCtor = window.AudioContext || (window as any).webkitAudioContext;
+    const ctx = new AudioContextCtor();
+    const oscillator = ctx.createOscillator();
+    const gain = ctx.createGain();
+    const destination = ctx.createMediaStreamDestination();
+    gain.gain.value = 0;
+    oscillator.connect(gain);
+    gain.connect(destination);
+    oscillator.start();
+    this.silentAudioContext = ctx;
+    this.silentOscillator = oscillator;
+    return destination.stream;
+  }
+
   leave() {
     if (this.pollInterval) clearInterval(this.pollInterval);
     this.pollInterval = null;
@@ -227,6 +248,10 @@ export class PeerVoiceMesh {
       for (const track of this.localStream.getTracks()) track.stop();
       this.localStream = null;
     }
+    try { this.silentOscillator?.stop(); } catch {}
+    this.silentOscillator = null;
+    try { this.silentAudioContext?.close(); } catch {}
+    this.silentAudioContext = null;
     try { this.peer?.destroy(); } catch {}
     this.peer = null;
   }

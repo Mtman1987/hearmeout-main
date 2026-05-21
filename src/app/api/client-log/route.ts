@@ -6,6 +6,10 @@ export async function POST(request: NextRequest) {
     console.warn('[client-log]', {
       area: body?.area || 'unknown',
       message: body?.message || 'no message',
+      name: body?.name || null,
+      code: body?.code || null,
+      status: body?.status || null,
+      stack: body?.stack || null,
       roomId: body?.roomId || null,
       identity: body?.identity || null,
       userAgent: body?.userAgent || null,

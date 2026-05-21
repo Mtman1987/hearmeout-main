@@ -95,9 +95,25 @@ export async function POST(request: NextRequest) {
     });
 
     const token = await at.toJwt();
+    console.warn('[livekit-token] minted', {
+      roomId,
+      actualRoom,
+      identity,
+      musicRoom: !!musicRoom,
+      isDJ: !!isDJ,
+      canPublish,
+      fromDjWorker,
+      hasSession: !!session,
+      timestamp: new Date().toISOString(),
+    });
     return NextResponse.json({ token });
   } catch (error) {
-    console.error('Error generating LiveKit token:', error);
+    console.error('[livekit-token] Error generating token:', {
+      message: error instanceof Error ? error.message : String(error),
+      name: error instanceof Error ? error.name : undefined,
+      stack: error instanceof Error ? error.stack : undefined,
+      timestamp: new Date().toISOString(),
+    });
     return NextResponse.json({ error: 'Failed to generate token' }, { status: 500 });
   }
 }

@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useParams, useRouter } from 'next/navigation';
-import { LiveKitRoom, useConnectionState } from '@livekit/components-react';
+import { LiveKitRoom, RoomContext, useConnectionState } from '@livekit/components-react';
 import { ConnectionState } from 'livekit-client';
 import { SidebarProvider, SidebarInset, SidebarTrigger, useSidebar } from '@/components/ui/sidebar';
 import { Button } from "@/components/ui/button";
@@ -35,6 +35,7 @@ interface RoomData {
   djStatus?: string;
   autoRadio?: boolean;
   playHistory?: string[];
+  peerFallback?: boolean;
   isPrivate?: boolean;
   password?: string;
   expiresAt?: string;
@@ -47,9 +48,13 @@ function RoomHeader({ roomName, onToggleChat, showDJ, onToggleDJ, peerFallback, 
     const params = useParams();
     const { toast } = useToast();
 
-    const copyOverlayUrl = () => {
-        navigator.clipboard.writeText(`${window.location.origin}/overlay/${params.roomId}`);
-        toast({ title: "Overlay URL Copied!", description: "Paste this into OBS as a browser source." });
+    const copyOverlayUrl = async () => {
+        const copied = await copyTextToClipboard(`${window.location.origin}/overlay/${params.roomId}`);
+        if (copied) {
+            toast({ title: "Overlay URL Copied!", description: "Paste this into OBS as a browser source." });
+        } else {
+            toast({ variant: 'destructive', title: "Copy Failed", description: "Clipboard permission was denied. Select and copy the URL from the address bar instead." });
+        }
     };
 
     return (
@@ -121,6 +126,43 @@ function getOrCreateSessionId(key: string) {
     }
 }
 
+async function copyTextToClipboard(text: string) {
+    try {
+        await navigator.clipboard.writeText(text);
+        return true;
+    } catch {}
+
+    try {
+        const textArea = document.createElement('textarea');
+        textArea.value = text;
+        textArea.setAttribute('readonly', '');
+        textArea.style.position = 'fixed';
+        textArea.style.left = '-9999px';
+        document.body.appendChild(textArea);
+        textArea.select();
+        const copied = document.execCommand('copy');
+        document.body.removeChild(textArea);
+        return copied;
+    } catch {
+        return false;
+    }
+}
+
+function liveKitErrorPayload(err: unknown, area: string, roomId: string, identity?: string | null) {
+    const error = err instanceof Error ? err : new Error(String(err));
+    return {
+        area,
+        message: error.message,
+        name: error.name,
+        stack: error.stack,
+        code: (err as any)?.code || null,
+        status: (err as any)?.status || null,
+        roomId,
+        identity: identity || null,
+        userAgent: navigator.userAgent,
+    };
+}
+
 function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
     const { user, isLoading: isUserLoading } = useSession();
     const { toast } = useToast();
@@ -129,6 +171,8 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
     const [chatOpen, setChatOpen] = useState(false);
     const [voiceToken, setVoiceToken] = useState<string | undefined>(undefined);
     const [voiceFallbackActive, setVoiceFallbackActive] = useState(false);
+    const [voiceFallbackFailed, setVoiceFallbackFailed] = useState(false);
+    const [peerMicEnabled, setPeerMicEnabled] = useState(true);
     const peerVoiceRef = useRef<PeerVoiceMesh | null>(null);
     const peerVoiceStartingRef = useRef(false);
     const [peerVoiceStreams, setPeerVoiceStreams] = useState<Map<string, MediaStream>>(new Map());
@@ -147,19 +191,29 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
     const canControl = !!user;
 
     const musicRoomRef = useRef<LKRoom | null>(null);
+    const fallbackRoomRef = useRef<LKRoom | null>(null);
     const musicAudioRef = useRef<HTMLAudioElement | null>(null);
     const musicIdentityRef = useRef<string>('');
     const voiceIdentityRef = useRef<string>('');
     const localVolumeRef = useRef(localVolume);
     const userGestureUnlockedRef = useRef(false);
     const peerListenerRef = useRef<PeerAudioListener | null>(null);
+    const voiceTokenRef = useRef<string | undefined>(undefined);
+    const voiceFallbackActiveRef = useRef(false);
     useEffect(() => { localVolumeRef.current = localVolume; }, [localVolume]);
+    useEffect(() => { voiceTokenRef.current = voiceToken; }, [voiceToken]);
+    useEffect(() => { voiceFallbackActiveRef.current = voiceFallbackActive; }, [voiceFallbackActive]);
 
     const isStreamMode = !!userSettings?.streamMode;
 
     const startPeerVoiceFallback = useCallback(async (reason: unknown) => {
         if (!user || !roomId || peerVoiceRef.current?.active || peerVoiceStartingRef.current) return;
         peerVoiceStartingRef.current = true;
+        voiceFallbackActiveRef.current = true;
+        voiceTokenRef.current = undefined;
+        setVoiceToken(undefined);
+        setVoiceFallbackActive(true);
+        setVoiceFallbackFailed(false);
         console.warn('[Voice] LiveKit unavailable, trying PeerJS voice fallback:', reason);
         try {
             const mesh = new PeerVoiceMesh();
@@ -191,10 +245,11 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
                 },
             );
             peerVoiceRef.current = mesh;
-            setVoiceToken(undefined);
-            setVoiceFallbackActive(true);
+            setPeerMicEnabled(true);
             toast({ title: 'Voice Connected (P2P)', description: 'Using peer-to-peer voice since LiveKit is unavailable.' });
         } catch (peerErr) {
+            setVoiceFallbackFailed(true);
+            console.error('[Voice] PeerJS fallback failed:', peerErr);
             toast({ variant: 'destructive', title: 'Voice Failed', description: `Could not connect voice: ${peerErr instanceof Error ? peerErr.message : String(peerErr)}` });
         } finally {
             peerVoiceStartingRef.current = false;
@@ -275,6 +330,34 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
         let cancelled = false;
 
         const connectMusicRoom = async () => {
+            if (room.peerFallback) {
+                try {
+                    const listener = new PeerAudioListener();
+                    await listener.connect(
+                        roomId,
+                        (stream) => {
+                            if (!musicAudioRef.current) musicAudioRef.current = new Audio();
+                            musicAudioRef.current.srcObject = stream;
+                            musicAudioRef.current.volume = localVolumeRef.current;
+                            if (userGestureUnlockedRef.current) {
+                                musicAudioRef.current.play().catch(() => {});
+                            }
+                            setMusicStatus('streaming (P2P)');
+                        },
+                        () => {
+                            setMusicStatus('P2P disconnected');
+                        },
+                    );
+                    if (cancelled) { listener.disconnect(); return; }
+                    peerListenerRef.current = listener;
+                    setMusicStatus('connected (P2P)');
+                } catch (peerErr) {
+                    console.error('[MusicRoom] PeerJS fallback failed:', peerErr);
+                    setMusicStatus('P2P unavailable');
+                }
+                return;
+            }
+
             try {
                 console.log('[MusicRoom] Connecting as listener...');
                 if (!musicIdentityRef.current) {
@@ -340,8 +423,18 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
                 });
             } catch (err) {
                 console.warn('[MusicRoom] LiveKit failed, trying PeerJS fallback:', err);
+                fetch('/api/client-log', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(liveKitErrorPayload(err, 'music-room-livekit', roomId, musicIdentityRef.current || null)),
+                }).catch(() => {});
                 if (cancelled) return;
-                // PeerJS fallback
+                if (!room.peerFallback) {
+                    setMusicStatus('LiveKit unavailable');
+                    return;
+                }
+
+                // PeerJS music fallback only works when a browser DJ broadcaster is active.
                 try {
                     const listener = new PeerAudioListener();
                     await listener.connect(
@@ -429,7 +522,7 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
 
     useEffect(() => {
         if (isUserLoading || !user || !roomId) return;
-        if (voiceToken || voiceFallbackActive) return;
+        if (voiceTokenRef.current || voiceFallbackActiveRef.current) return;
         let isCancelled = false;
         const setup = async () => {
             const userPresence = {
@@ -507,7 +600,7 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
             }
             peerVoiceAudioRefs.current.clear();
         };
-    }, [user, isUserLoading, roomId, voiceToken, voiceFallbackActive, startPeerVoiceFallback]);
+    }, [user, isUserLoading, roomId]);
 
     const handleToggleAutoRadio = useCallback(() => {
         dbUpdate('rooms', roomId, { autoRadio: !room.autoRadio });
@@ -542,29 +635,55 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
     }
 
     const voiceReady = !!livekitUrl && !!voiceToken;
+    const fallbackRoom = voiceFallbackActive ? getFallbackRoom() : null;
 
     return (
       voiceReady ? (
       <LiveKitRoom serverUrl={livekitUrl} token={voiceToken} connect={true} audio={!userSettings?.streamMode} video={false}
           options={{ dynacast: true, adaptiveStream: true }}
           onError={(err) => {
+            if (voiceFallbackActiveRef.current || peerVoiceStartingRef.current) return;
             fetch('/api/client-log', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                area: 'livekit-room',
-                message: err.message,
-                roomId,
-                identity: voiceIdentityRef.current || null,
-                userAgent: navigator.userAgent,
-              }),
+              body: JSON.stringify(liveKitErrorPayload(err, 'livekit-room', roomId, voiceIdentityRef.current || null)),
             }).catch(() => {});
             void startPeerVoiceFallback(err);
           }}>
         {renderRoomUI()}
       </LiveKitRoom>
+      ) : fallbackRoom ? (
+        <RoomContext.Provider value={fallbackRoom}>
+          {renderRoomUI()}
+        </RoomContext.Provider>
       ) : renderRoomUI()
     );
+
+    function getFallbackRoom() {
+      if (!fallbackRoomRef.current) {
+        fallbackRoomRef.current = new LKRoom();
+      }
+      const fallbackRoom = fallbackRoomRef.current;
+      const localParticipant = fallbackRoom.localParticipant as any;
+      const displayName = user?.displayName || (user as any)?.username || 'User';
+      const photoURL = user?.photoURL || `https://picsum.photos/seed/${user?.uid || 'user'}/100/100`;
+
+      localParticipant.sid = `p2p-${user?.uid || 'local'}`;
+      localParticipant.identity = voiceIdentityRef.current || user?.uid || 'local';
+      localParticipant.name = displayName;
+      localParticipant.metadata = JSON.stringify({ uid: user?.uid, displayName, photoURL });
+      Object.defineProperty(localParticipant, 'isMicrophoneEnabled', {
+        configurable: true,
+        get: () => peerMicEnabled,
+      });
+      localParticipant.setMicrophoneEnabled = async (enabled: boolean) => {
+        peerVoiceRef.current?.setMuted(!enabled);
+        setPeerMicEnabled(enabled);
+        return undefined;
+      };
+
+      return fallbackRoom;
+    }
 
     function renderRoomUI() {
       return (
@@ -595,7 +714,8 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
                           onOpenQueue={() => openPopout('queue', { width: 760, height: 720 }, { source: 'queue' })}
                           onOpenAddSong={() => openPopout('addSong', { width: 460, height: 560 }, { source: 'addSong' })}
                           onOpenWatch={() => openPopout('watch', { width: 640, height: 700 }, { source: 'watch' })}
-                          voiceEnabled={voiceReady}
+                          voiceEnabled={voiceReady || voiceFallbackActive}
+                          voiceFallbackFailed={voiceFallbackFailed}
                         />
                         {isOwner && <VoiceQueue roomId={roomId} />}
                     </main>

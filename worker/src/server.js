@@ -14,6 +14,16 @@ const { execFile, spawn } = require('child_process');
 const { promisify } = require('util');
 const { existsSync, mkdirSync, unlinkSync, statSync, readdirSync, createReadStream } = require('fs');
 const { AudioSource, AudioFrame, LocalAudioTrack, Room, RoomEvent, TrackPublishOptions, TrackSource } = require('@livekit/rtc-node');
+const wrtc = require('@roamhq/wrtc');
+
+Object.assign(globalThis, {
+  RTCPeerConnection: wrtc.RTCPeerConnection,
+  RTCSessionDescription: wrtc.RTCSessionDescription,
+  RTCIceCandidate: wrtc.RTCIceCandidate,
+  MediaStream: wrtc.MediaStream,
+  MediaStreamTrack: wrtc.MediaStreamTrack,
+});
+const { Peer } = require('peerjs');
 
 const execFileAsync = promisify(execFile);
 
@@ -294,6 +304,24 @@ const CHANNELS = 2;
 const FRAME_DURATION_MS = 20;
 const SAMPLES_PER_FRAME = (SAMPLE_RATE * FRAME_DURATION_MS) / 1000; // 960
 const BYTES_PER_FRAME = SAMPLES_PER_FRAME * CHANNELS * 2; // 16-bit PCM = 2 bytes/sample
+const LIVEKIT_RETRY_COOLDOWN_MS = 5 * 60 * 1000;
+const liveKitFailuresByRoom = new Map();
+
+function describeError(err) {
+  if (!err) return { message: 'unknown error' };
+  return {
+    name: err.name,
+    message: err.message || String(err),
+    code: err.code,
+    status: err.status,
+    reason: err.reason,
+    stack: err.stack,
+  };
+}
+
+function delay(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
 
 class DJSession {
   constructor(roomId) {
@@ -302,6 +330,12 @@ class DJSession {
     this.lkRoom = null;
     this.audioSource = null;
     this.localTrack = null;
+    this.peer = null;
+    this.peerAudioSource = null;
+    this.peerAudioTrack = null;
+    this.peerStream = null;
+    this.peerConnections = [];
+    this.peerFallback = false;
     this.ffmpegProcess = null;
     this.pollInterval = null;
     this.currentVideoId = null;
@@ -313,6 +347,33 @@ class DJSession {
   async start() {
     console.log(`[DJ:${this.roomId}] Starting session...`);
 
+    try {
+      const recentFailure = liveKitFailuresByRoom.get(this.roomId);
+      if (recentFailure && Date.now() - recentFailure.at < LIVEKIT_RETRY_COOLDOWN_MS) {
+        console.warn(`[DJ:${this.roomId}] Skipping LiveKit attempt; recent failure is still cooling down`, recentFailure);
+        throw new Error(`LiveKit cooldown active after prior failure: ${recentFailure.error?.message || 'unknown error'}`);
+      }
+
+      await this.startLiveKit();
+      liveKitFailuresByRoom.delete(this.roomId);
+      await this.patchRoom({ djActive: true, djStatus: 'DJ connected', peerFallback: false });
+    } catch (err) {
+      const errorDetails = describeError(err);
+      liveKitFailuresByRoom.set(this.roomId, { at: Date.now(), error: errorDetails });
+      console.warn(`[DJ:${this.roomId}] LiveKit failed, starting PeerJS fallback`, {
+        roomId: this.roomId,
+        livekitUrl: process.env.LIVEKIT_URL || process.env.NEXT_PUBLIC_LIVEKIT_URL || null,
+        error: errorDetails,
+      });
+      await this.startPeerFallback();
+      await this.patchRoom({ djActive: true, djStatus: 'DJ connected via PeerJS fallback', peerFallback: true });
+    }
+
+    // Start polling room state for track changes
+    this.startPolling();
+  }
+
+  async startLiveKit() {
     // Get LiveKit token from main app
     const token = await this.getLiveKitToken();
     if (!token) throw new Error('Failed to get LiveKit token');
@@ -322,7 +383,17 @@ class DJSession {
 
     // Connect to LiveKit
     this.lkRoom = new Room();
-    await this.lkRoom.connect(livekitUrl, token);
+    try {
+      await this.lkRoom.connect(livekitUrl, token);
+    } catch (err) {
+      console.error(`[DJ:${this.roomId}] LiveKit connect failed`, {
+        roomId: this.roomId,
+        musicRoom: `${this.roomId}-music`,
+        livekitUrl,
+        error: describeError(err),
+      });
+      throw err;
+    }
     console.log(`[DJ:${this.roomId}] Connected to LiveKit room: ${this.roomId}-music`);
 
     // Create audio source and publish track
@@ -337,12 +408,76 @@ class DJSession {
     await new Promise(r => setTimeout(r, 500));
     this.ready = true;
     console.log(`[DJ:${this.roomId}] Audio source ready for frames`);
+  }
 
-    // Start polling room state for track changes
-    this.startPolling();
+  async startPeerFallback() {
+    const peerId = `hmo-dj-${this.roomId}`;
+    let lastError = null;
 
-    // Update room state
-    await this.patchRoom({ djActive: true, djStatus: 'DJ connected' });
+    for (let attempt = 1; attempt <= 4; attempt++) {
+      this.cleanupPeerFallback();
+      this.peerAudioSource = new wrtc.nonstandard.RTCAudioSource();
+      this.peerAudioTrack = this.peerAudioSource.createTrack();
+      this.peerStream = new wrtc.MediaStream([this.peerAudioTrack]);
+
+      try {
+        await new Promise((resolve, reject) => {
+          let settled = false;
+          this.peer = new Peer(peerId, { debug: 1 });
+
+          this.peer.on('open', () => {
+            settled = true;
+            this.peerFallback = true;
+            this.ready = true;
+            console.log(`[DJ:${this.roomId}] PeerJS fallback ready as ${peerId}`);
+            resolve();
+          });
+
+          this.peer.on('call', (call) => {
+            console.log(`[DJ:${this.roomId}] PeerJS listener connected: ${call.peer}`);
+            call.answer(this.peerStream);
+            this.peerConnections.push(call);
+            call.on('close', () => {
+              this.peerConnections = this.peerConnections.filter(c => c !== call);
+            });
+          });
+
+          this.peer.on('error', (err) => {
+            console.error(`[DJ:${this.roomId}] PeerJS error:`, err.message);
+            if (!settled) reject(err);
+          });
+
+          this.peer.on('disconnected', () => {
+            if (this.peer && !this.peer.destroyed) this.peer.reconnect();
+          });
+        });
+        return;
+      } catch (err) {
+        lastError = err;
+        const message = err?.message || String(err);
+        this.cleanupPeerFallback();
+        if (!/taken|unavailable|already/i.test(message) || attempt === 4) break;
+        const waitMs = attempt * 1500;
+        console.warn(`[DJ:${this.roomId}] PeerJS ID ${peerId} is taken; retrying in ${waitMs}ms`, { attempt, error: message });
+        await delay(waitMs);
+      }
+    }
+
+    throw lastError || new Error(`Could not start PeerJS fallback as ${peerId}`);
+  }
+
+  cleanupPeerFallback() {
+    for (const conn of this.peerConnections) {
+      try { conn.close(); } catch {}
+    }
+    this.peerConnections = [];
+    try { this.peerAudioTrack?.stop(); } catch {}
+    try { this.peer?.destroy(); } catch {}
+    this.peer = null;
+    this.peerAudioSource = null;
+    this.peerAudioTrack = null;
+    this.peerStream = null;
+    this.peerFallback = false;
   }
 
   async getLiveKitToken() {
@@ -477,9 +612,9 @@ class DJSession {
       if (draining) return;
       draining = true;
       while (frameQueue.length > 0 && !this.stopped && this.ready) {
-        const audioFrame = frameQueue.shift();
+        const samples = frameQueue.shift();
         try {
-          await this.audioSource.captureFrame(audioFrame);
+          await this.captureSamples(samples);
         } catch (err) {
           console.warn(`[DJ:${this.roomId}] captureFrame error (non-fatal):`, err.message);
           break;
@@ -497,8 +632,7 @@ class DJSession {
         buffer = buffer.subarray(BYTES_PER_FRAME);
         const copied = Buffer.from(frameData);
         const samples = new Int16Array(copied.buffer, copied.byteOffset, copied.length / 2);
-        const audioFrame = new AudioFrame(samples, SAMPLE_RATE, CHANNELS, SAMPLES_PER_FRAME);
-        frameQueue.push(audioFrame);
+        frameQueue.push(samples);
       }
       drainQueue();
     });
@@ -530,6 +664,25 @@ class DJSession {
       this.ffmpegProcess = null;
     }
     this.playing = false;
+  }
+
+  async captureSamples(samples) {
+    if (this.peerFallback) {
+      if (!this.peerAudioSource) return;
+      this.peerAudioSource.onData({
+        samples,
+        sampleRate: SAMPLE_RATE,
+        bitsPerSample: 16,
+        channelCount: CHANNELS,
+        // @roamhq/wrtc expects this value for the interleaved s16le buffer shape.
+        numberOfFrames: samples.length / CHANNELS / 2,
+      });
+      return;
+    }
+
+    if (!this.audioSource) return;
+    const audioFrame = new AudioFrame(samples, SAMPLE_RATE, CHANNELS, SAMPLES_PER_FRAME);
+    await this.audioSource.captureFrame(audioFrame);
   }
 
   async waitReady() {
@@ -604,7 +757,9 @@ class DJSession {
       try { await this.lkRoom.disconnect(); } catch {}
     }
 
-    await this.patchRoom({ djActive: false, isPlaying: false, djStatus: 'DJ stopped' });
+    this.cleanupPeerFallback();
+
+    await this.patchRoom({ djActive: false, isPlaying: false, djStatus: 'DJ stopped', peerFallback: false });
     console.log(`[DJ:${this.roomId}] Session stopped`);
   }
 
@@ -635,9 +790,9 @@ class DJSession {
       if (draining) return;
       draining = true;
       while (frameQueue.length > 0 && !this.stopped && this.ready) {
-        const audioFrame = frameQueue.shift();
+        const samples = frameQueue.shift();
         try {
-          await this.audioSource.captureFrame(audioFrame);
+          await this.captureSamples(samples);
         } catch (err) {
           console.warn(`[DJ:${this.roomId}] captureFrame error (non-fatal):`, err.message);
           break;
@@ -655,8 +810,7 @@ class DJSession {
         buffer = buffer.subarray(BYTES_PER_FRAME);
         const copied = Buffer.from(frameData);
         const samples = new Int16Array(copied.buffer, copied.byteOffset, copied.length / 2);
-        const audioFrame = new AudioFrame(samples, SAMPLE_RATE, CHANNELS, SAMPLES_PER_FRAME);
-        frameQueue.push(audioFrame);
+        frameQueue.push(samples);
       }
       drainQueue();
     });
@@ -690,7 +844,21 @@ app.post('/dj', async (req, res) => {
 
   try {
     if (action === 'start') {
-      if (djInstances.has(roomId)) return res.json({ success: true, message: 'DJ already running.' });
+      const existing = djInstances.get(roomId);
+      if (existing) {
+        if (existing.ready && !existing.stopped) {
+          return res.json({ success: true, message: 'DJ already running.' });
+        }
+        console.warn(`[DJ:${roomId}] Cleaning up stale DJ session before start`, {
+          ready: existing.ready,
+          stopped: existing.stopped,
+          peerFallback: existing.peerFallback,
+        });
+        try { await existing.stop(); } catch (err) {
+          console.warn(`[DJ:${roomId}] Stale session stop failed:`, err.message);
+        }
+        djInstances.delete(roomId);
+      }
       if (djInstances.size >= 5) return res.status(429).json({ success: false, message: 'Max concurrent DJ instances reached (5).' });
 
       const session = new DJSession(roomId);
@@ -700,6 +868,7 @@ app.post('/dj', async (req, res) => {
         return res.json({ success: true, message: 'DJ connected.' });
       } catch (err) {
         console.error(`[DJ:${roomId}] Start failed:`, err.message);
+        try { await session.stop(); } catch {}
         djInstances.delete(roomId);
         return res.status(500).json({ success: false, message: `DJ start failed: ${err.message}` });
       }
@@ -751,8 +920,11 @@ app.post('/dj', async (req, res) => {
 
 app.get('/dj', (req, res) => {
   const { roomId } = req.query;
-  if (roomId) return res.json({ running: djInstances.has(roomId) });
-  const instances = Array.from(djInstances.entries()).map(([id, s]) => ({ roomId: id, startedAt: s.startedAt }));
+  if (roomId) {
+    const session = djInstances.get(roomId);
+    return res.json({ running: !!session, mode: session?.peerFallback ? 'peerjs' : session ? 'livekit' : null });
+  }
+  const instances = Array.from(djInstances.entries()).map(([id, s]) => ({ roomId: id, startedAt: s.startedAt, mode: s.peerFallback ? 'peerjs' : 'livekit' }));
   return res.json({ instances });
 });
 

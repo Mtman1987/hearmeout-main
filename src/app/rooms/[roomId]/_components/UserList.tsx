@@ -40,6 +40,7 @@ interface UserListProps {
   onOpenAddSong: () => void;
   onOpenWatch?: () => void;
   voiceEnabled?: boolean;
+  voiceFallbackFailed?: boolean;
 }
 
 function LiveKitParticipants({ isHost, roomId }: { isHost: boolean; roomId: string }) {

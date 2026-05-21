@@ -37,10 +37,10 @@ export default function VoiceQueue({ roomId }: { roomId: string }) {
         else throw new Error('Failed');
       } catch {
         alert(`Failed to send Discord DM. Copy link manually:\n${roomUrl}\nExpires: ${expiresStr}`);
-        navigator.clipboard.writeText(`${roomUrl} (expires at ${expiresStr})`);
+        await copyTextToClipboard(`${roomUrl} (expires at ${expiresStr})`);
       }
     } else {
-      navigator.clipboard.writeText(`${roomUrl} (expires at ${expiresStr})`);
+      await copyTextToClipboard(`${roomUrl} (expires at ${expiresStr})`);
       alert(`Link copied! Send to ${nextPerson.username} via Twitch whisper.\nExpires: ${expiresStr}`);
     }
 
@@ -69,4 +69,26 @@ export default function VoiceQueue({ roomId }: { roomId: string }) {
       </CardContent>
     </Card>
   );
+}
+
+async function copyTextToClipboard(text: string) {
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch {}
+
+  try {
+    const textArea = document.createElement('textarea');
+    textArea.value = text;
+    textArea.setAttribute('readonly', '');
+    textArea.style.position = 'fixed';
+    textArea.style.left = '-9999px';
+    document.body.appendChild(textArea);
+    textArea.select();
+    const copied = document.execCommand('copy');
+    document.body.removeChild(textArea);
+    return copied;
+  } catch {
+    return false;
+  }
 }

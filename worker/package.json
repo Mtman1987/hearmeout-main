@@ -9,9 +9,11 @@
   },
   "dependencies": {
     "@livekit/rtc-node": "^0.12.2",
+    "@roamhq/wrtc": "^0.10.0",
     "cors": "^2.8.5",
     "dotenv": "^16.0.3",
     "express": "^4.18.2",
+    "peerjs": "^1.5.5",
     "youtubei.js": "^17.0.1"
   },
   "devDependencies": {
