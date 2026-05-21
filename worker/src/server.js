@@ -690,11 +690,14 @@ app.post('/dj', async (req, res) => {
 
       const session = new DJSession(roomId);
       djInstances.set(roomId, session);
-      session.start().catch(err => {
+      try {
+        await session.start();
+        return res.json({ success: true, message: 'DJ connected.' });
+      } catch (err) {
         console.error(`[DJ:${roomId}] Start failed:`, err.message);
         djInstances.delete(roomId);
-      });
-      return res.json({ success: true, message: 'DJ starting...' });
+        return res.status(500).json({ success: false, message: `DJ start failed: ${err.message}` });
+      }
     }
 
     if (action === 'play-url') {
