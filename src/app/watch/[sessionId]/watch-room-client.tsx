@@ -66,6 +66,13 @@ function isBrowserLimitedVideo(item: any) {
   return String(item?.overview || '').toLowerCase().includes('(mkv)');
 }
 
+function hlsFallbackUrlFor(item: any) {
+  const playbackUrl = String(item?.playbackUrl || '');
+  const match = playbackUrl.match(/^\/activity-provider\/xtream\/vod\/(\d+)$/i);
+  if (!match || !isBrowserLimitedVideo(item)) return playbackUrl;
+  return `/api/watch/xtream/hls/${match[1]}/index.m3u8`;
+}
+
 function mediaErrorMessage(error: MediaError | null | undefined) {
   if (!error) return 'Unknown media error';
   if (error.code === MediaError.MEDIA_ERR_ABORTED) return 'Media load was aborted';
@@ -245,7 +252,7 @@ export default function WatchRoomClient({ sessionId }: { sessionId: string }) {
       setMediaStatus('Popout blocked by browser');
       return;
     }
-    const playbackUrl = JSON.stringify(item.playbackUrl);
+    const playbackUrl = JSON.stringify(hlsFallbackUrlFor(item));
     const title = String(item.title || 'Watch video').replace(/[<>&"]/g, (char) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;' })[char] || char);
     popout.document.write(`<!doctype html>
 <html lang="en">
@@ -348,18 +355,28 @@ export default function WatchRoomClient({ sessionId }: { sessionId: string }) {
       requestId: state.current.requestId,
     });
 
-    if (item.playbackUrl.endsWith('.m3u8')) {
+    const mediaUrl = hlsFallbackUrlFor(item);
+    const usesHlsFallback = mediaUrl !== item.playbackUrl;
+    const loadingRequestId = state.current.requestId;
+
+    if (mediaUrl.endsWith('.m3u8')) {
       import('hls.js')
         .then(({ default: Hls }) => {
-          if (state.current?.requestId !== currentRequestId && Hls.isSupported()) {
+          if (state.current?.requestId === loadingRequestId && Hls.isSupported()) {
             hlsRef.current = new Hls();
-            hlsRef.current.loadSource(item.playbackUrl);
+            hlsRef.current.on(Hls.Events.ERROR, (_event: unknown, data: any) => {
+              const detail = data?.details || data?.type || 'HLS playback error';
+              setMediaStatus(`HLS error: ${detail}`);
+              console.error('[WatchRoom] HLS error', data);
+            });
+            hlsRef.current.loadSource(mediaUrl);
             hlsRef.current.attachMedia(video);
+            setMediaStatus(usesHlsFallback ? 'Preparing browser-compatible HLS stream' : `Loading ${item.title}`);
             return;
           }
 
           if (video.canPlayType('application/vnd.apple.mpegurl')) {
-            video.src = item.playbackUrl;
+            video.src = mediaUrl;
           } else if (!Hls.isSupported()) {
             setMediaStatus('HLS is not supported in this browser');
           }
@@ -369,7 +386,7 @@ export default function WatchRoomClient({ sessionId }: { sessionId: string }) {
           setMediaStatus('Failed to load HLS player');
         });
     } else {
-      video.src = item.playbackUrl;
+      video.src = mediaUrl;
       if (isBrowserLimitedVideo(item)) {
         setMediaStatus('MKV stream loaded. Browser playback may not be supported; use Download if video stays black.');
       }
@@ -458,7 +475,7 @@ export default function WatchRoomClient({ sessionId }: { sessionId: string }) {
             )}
             {state?.current && isBrowserLimitedVideo(state.current.item) && (
               <div className="absolute bottom-3 left-3 right-3 rounded-md border border-amber-400/40 bg-black/80 p-3 text-sm text-amber-100">
-                This provider returned an MKV stream. If the browser shows a black player, use Download or pick an MP4/HLS result.
+                This provider returned an MKV stream. The app is preparing an HLS browser fallback; use Download if conversion is slow or playback still fails.
               </div>
             )}
           </div>
