@@ -18,6 +18,7 @@ interface QueueWidgetProps {
   onPositionChange: (pos: { x: number; y: number }) => void;
   onSizeChange: (size: { width: number; height: number }) => void;
   onOpacityChange?: (opacity: number) => void;
+  onSaveLayout?: () => void;
   onClose: () => void;
   roomId: string;
   onOpenAddSong?: () => void;
@@ -38,6 +39,7 @@ export function QueueWidget({
   onPositionChange,
   onSizeChange,
   onOpacityChange,
+  onSaveLayout,
   onClose,
   roomId,
   onOpenAddSong,
@@ -68,6 +70,7 @@ export function QueueWidget({
       onPositionChange={onPositionChange}
       onSizeChange={onSizeChange}
       onOpacityChange={onOpacityChange}
+      onSaveLayout={onSaveLayout}
       onClose={onClose}
       title="Queue"
       minimalChrome

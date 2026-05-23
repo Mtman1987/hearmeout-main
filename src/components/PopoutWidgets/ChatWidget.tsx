@@ -9,10 +9,10 @@ interface ChatWidgetProps {
   id: string; position: { x: number; y: number }; size: { width: number; height: number };
   onPositionChange: (pos: { x: number; y: number }) => void; onSizeChange: (size: { width: number; height: number }) => void;
   opacity?: number; onOpacityChange?: (opacity: number) => void;
-  onClose: () => void; roomId: string; source?: 'space' | 'twitch' | 'discord';
+  onSaveLayout?: () => void; onClose: () => void; roomId: string; source?: 'space' | 'twitch' | 'discord';
 }
 
-export function ChatWidget({ id, position, size, onPositionChange, onSizeChange, opacity, onOpacityChange, onClose, roomId, source = 'discord' }: ChatWidgetProps) {
+export function ChatWidget({ id, position, size, onPositionChange, onSizeChange, opacity, onOpacityChange, onSaveLayout, onClose, roomId, source = 'discord' }: ChatWidgetProps) {
   const { user } = useSession();
   const [serverId, setServerId] = useState('1240832965865635881');
   const iframeRef = useRef<HTMLIFrameElement>(null);
@@ -28,7 +28,7 @@ export function ChatWidget({ id, position, size, onPositionChange, onSizeChange,
   }, [firestoreUser]);
 
   if (!user) {
-    return <DraggableContainer id={id} position={position} size={size} opacity={opacity} onOpacityChange={onOpacityChange} onPositionChange={onPositionChange} onSizeChange={onSizeChange} onClose={onClose} title="Chat">
+    return <DraggableContainer id={id} position={position} size={size} opacity={opacity} onOpacityChange={onOpacityChange} onSaveLayout={onSaveLayout} onPositionChange={onPositionChange} onSizeChange={onSizeChange} onClose={onClose} title="Chat">
       <div className="flex items-center justify-center h-full text-muted-foreground text-sm">Loading...</div>
     </DraggableContainer>;
   }
@@ -37,7 +37,7 @@ export function ChatWidget({ id, position, size, onPositionChange, onSizeChange,
 
   if (source === 'space') {
     return (
-      <DraggableContainer id={id} position={position} size={size} opacity={opacity} onOpacityChange={onOpacityChange} onPositionChange={onPositionChange} onSizeChange={onSizeChange} onClose={onClose} title={title} minimalChrome>
+      <DraggableContainer id={id} position={position} size={size} opacity={opacity} onOpacityChange={onOpacityChange} onSaveLayout={onSaveLayout} onPositionChange={onPositionChange} onSizeChange={onSizeChange} onClose={onClose} title={title} minimalChrome>
         <ChatBox compact />
       </DraggableContainer>
     );
@@ -50,7 +50,7 @@ export function ChatWidget({ id, position, size, onPositionChange, onSizeChange,
     : `${DSH_URL}/headless/forwarding?embed=1&mode=twitch&serverId=${encodeURIComponent(serverId)}${twitchChannel ? `&twitchChannel=${encodeURIComponent(twitchChannel)}` : ''}`;
 
   return (
-    <DraggableContainer id={id} position={position} size={size} opacity={opacity} onOpacityChange={onOpacityChange} onPositionChange={onPositionChange} onSizeChange={onSizeChange} onClose={onClose} title={title} minimalChrome>
+    <DraggableContainer id={id} position={position} size={size} opacity={opacity} onOpacityChange={onOpacityChange} onSaveLayout={onSaveLayout} onPositionChange={onPositionChange} onSizeChange={onSizeChange} onClose={onClose} title={title} minimalChrome>
       {source === 'twitch' && !twitchChannel ? (
         <div className="flex h-full items-center justify-center p-4 text-center text-sm text-muted-foreground">
           Set a Twitch channel from your user card first.

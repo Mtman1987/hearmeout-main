@@ -24,16 +24,51 @@ interface PopoutContextType {
   ) => void;
   closePopout: (id: string) => void;
   updatePopout: (id: string, updates: Partial<PopoutState>) => void;
+  savePopoutLayout: (id: string) => void;
   getPopout: (id: string) => PopoutState | undefined;
 }
 
 const PopoutContext = createContext<PopoutContextType | undefined>(undefined);
+const SAVED_LAYOUTS_KEY = 'hearmeout-popout-saved-layouts:v1';
+
+type SavedPopoutLayout = {
+  position: PopoutState['position'];
+  size: PopoutState['size'];
+  opacity?: number;
+};
 
 function getScopeFromPath(pathname: string): string {
   const parts = pathname.split('/').filter(Boolean);
   if (parts[0] === 'rooms' && parts[1]) return `room:${parts[1]}`;
   if (parts[0] === 'overlay' && parts[1]) return `overlay:${parts[1]}`;
   return 'global';
+}
+
+function layoutKeyFor(type: PopoutState['type'], customSettings: Record<string, any> = {}) {
+  const source = String(customSettings.source || type);
+  return `${type}:${source}`;
+}
+
+function readSavedLayouts(): Record<string, SavedPopoutLayout> {
+  try {
+    const raw = localStorage.getItem(SAVED_LAYOUTS_KEY);
+    return raw ? JSON.parse(raw) : {};
+  } catch {
+    return {};
+  }
+}
+
+function clampLayout(layout: SavedPopoutLayout): SavedPopoutLayout {
+  const width = Math.max(250, Math.min(layout.size.width, Math.max(250, window.innerWidth - 20)));
+  const height = Math.max(200, Math.min(layout.size.height, Math.max(200, window.innerHeight - 20)));
+  return {
+    position: {
+      x: Math.max(0, Math.min(layout.position.x, Math.max(0, window.innerWidth - width))),
+      y: Math.max(0, Math.min(layout.position.y, Math.max(0, window.innerHeight - height))),
+    },
+    size: { width, height },
+    opacity: layout.opacity,
+  };
 }
 
 export function PopoutProvider({ children }: { children: ReactNode }) {
@@ -68,16 +103,24 @@ export function PopoutProvider({ children }: { children: ReactNode }) {
   const openPopout = useCallback(
     (type: PopoutState['type'], initialSize = { width: 400, height: 300 }, customSettings: Record<string, any> = {}) => {
       const id = `${type}-${customSettings.source || 'widget'}-${Date.now()}`;
+      const savedLayout = readSavedLayouts()[layoutKeyFor(type, customSettings)];
+      const layout = savedLayout
+        ? clampLayout(savedLayout)
+        : {
+            position: {
+              x: Math.max(20, window.innerWidth - initialSize.width - 20),
+              y: Math.max(20, window.innerHeight - initialSize.height - 20),
+            },
+            size: initialSize,
+            opacity: 1,
+          };
       const newPopout: PopoutState = {
         id,
         type,
         isOpen: true,
-        position: {
-          x: Math.max(20, window.innerWidth - initialSize.width - 20),
-          y: Math.max(20, window.innerHeight - initialSize.height - 20),
-        },
-        size: initialSize,
-        opacity: 1,
+        position: layout.position,
+        size: layout.size,
+        opacity: layout.opacity ?? 1,
         customSettings,
       };
       setPopouts((prev) => [...prev, newPopout]);
@@ -95,13 +138,26 @@ export function PopoutProvider({ children }: { children: ReactNode }) {
     );
   }, []);
 
+  const savePopoutLayout = useCallback((id: string) => {
+    const popout = popouts.find((p) => p.id === id);
+    if (!popout) return;
+
+    const layouts = readSavedLayouts();
+    layouts[layoutKeyFor(popout.type, popout.customSettings)] = {
+      position: popout.position,
+      size: popout.size,
+      opacity: popout.opacity,
+    };
+    localStorage.setItem(SAVED_LAYOUTS_KEY, JSON.stringify(layouts));
+  }, [popouts]);
+
   const getPopout = useCallback((id: string) => {
     return popouts.find((p) => p.id === id);
   }, [popouts]);
 
   return (
     <PopoutContext.Provider
-      value={{ popouts, openPopout, closePopout, updatePopout, getPopout }}
+      value={{ popouts, openPopout, closePopout, updatePopout, savePopoutLayout, getPopout }}
     >
       {children}
     </PopoutContext.Provider>

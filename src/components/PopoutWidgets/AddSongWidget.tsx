@@ -15,6 +15,7 @@ interface AddSongWidgetProps {
   onPositionChange: (pos: { x: number; y: number }) => void;
   onSizeChange: (size: { width: number; height: number }) => void;
   onOpacityChange?: (opacity: number) => void;
+  onSaveLayout?: () => void;
   onClose: () => void;
   roomId: string;
 }
@@ -33,6 +34,7 @@ export function AddSongWidget({
   onPositionChange,
   onSizeChange,
   onOpacityChange,
+  onSaveLayout,
   onClose,
   roomId,
 }: AddSongWidgetProps) {
@@ -58,6 +60,7 @@ export function AddSongWidget({
       onPositionChange={onPositionChange}
       onSizeChange={onSizeChange}
       onOpacityChange={onOpacityChange}
+      onSaveLayout={onSaveLayout}
       onClose={onClose}
       title="Add Song"
       minimalChrome

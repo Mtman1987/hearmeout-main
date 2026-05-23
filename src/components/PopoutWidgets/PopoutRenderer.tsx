@@ -19,7 +19,7 @@ function getRoomIdFromPath(pathname: string): string {
 }
 
 export function PopoutRenderer() {
-  const { popouts, closePopout, updatePopout, openPopout } = usePopout();
+  const { popouts, closePopout, updatePopout, savePopoutLayout, openPopout } = usePopout();
   const pathname = usePathname() || '';
   const roomId = getRoomIdFromPath(pathname);
 
@@ -38,6 +38,7 @@ export function PopoutRenderer() {
               onSizeChange={(size) => updatePopout(popout.id, { size })}
               opacity={popout.opacity}
               onOpacityChange={(opacity) => updatePopout(popout.id, { opacity })}
+              onSaveLayout={() => savePopoutLayout(popout.id)}
               onClose={() => closePopout(popout.id)}
               roomId={widgetRoomId}
               source={popout.customSettings?.source}
@@ -55,6 +56,7 @@ export function PopoutRenderer() {
               onSizeChange={(size) => updatePopout(popout.id, { size })}
               opacity={popout.opacity}
               onOpacityChange={(opacity) => updatePopout(popout.id, { opacity })}
+              onSaveLayout={() => savePopoutLayout(popout.id)}
               onClose={() => closePopout(popout.id)}
               roomId={widgetRoomId}
               onOpenAddSong={() => openPopout('addSong', { width: 460, height: 560 }, { source: 'addSong', roomId: widgetRoomId })}
@@ -72,6 +74,7 @@ export function PopoutRenderer() {
               onSizeChange={(size) => updatePopout(popout.id, { size })}
               opacity={popout.opacity}
               onOpacityChange={(opacity) => updatePopout(popout.id, { opacity })}
+              onSaveLayout={() => savePopoutLayout(popout.id)}
               onClose={() => closePopout(popout.id)}
               roomId={widgetRoomId}
             />
@@ -88,6 +91,7 @@ export function PopoutRenderer() {
               onSizeChange={(size) => updatePopout(popout.id, { size })}
               opacity={popout.opacity}
               onOpacityChange={(opacity) => updatePopout(popout.id, { opacity })}
+              onSaveLayout={() => savePopoutLayout(popout.id)}
               onClose={() => closePopout(popout.id)}
               roomId={widgetRoomId}
             />
@@ -104,6 +108,7 @@ export function PopoutRenderer() {
               onSizeChange={(size) => updatePopout(popout.id, { size })}
               opacity={popout.opacity}
               onOpacityChange={(opacity) => updatePopout(popout.id, { opacity })}
+              onSaveLayout={() => savePopoutLayout(popout.id)}
               onClose={() => closePopout(popout.id)}
               roomId={widgetRoomId}
             />

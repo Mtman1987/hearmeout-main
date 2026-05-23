@@ -15,13 +15,14 @@ interface ScreenShareWidgetProps {
   onPositionChange: (pos: { x: number; y: number }) => void;
   onSizeChange: (size: { width: number; height: number }) => void;
   onOpacityChange?: (opacity: number) => void;
+  onSaveLayout?: () => void;
   onClose: () => void;
   roomId: string;
 }
 
 export function ScreenShareWidget({
   id, position, size, opacity,
-  onPositionChange, onSizeChange, onOpacityChange, onClose, roomId,
+  onPositionChange, onSizeChange, onOpacityChange, onSaveLayout, onClose, roomId,
 }: ScreenShareWidgetProps) {
   const { user } = useSession();
   const [sharing, setSharing] = useState(false);
@@ -114,6 +115,7 @@ export function ScreenShareWidget({
       onPositionChange={onPositionChange}
       onSizeChange={onSizeChange}
       onOpacityChange={onOpacityChange}
+      onSaveLayout={onSaveLayout}
       onClose={onClose}
       title="Screen Share"
       minimalChrome

@@ -2,7 +2,7 @@
 
 import React, { useRef, useState, useEffect } from 'react';
 import { cn } from '@/lib/utils';
-import { GripHorizontal, X } from 'lucide-react';
+import { GripHorizontal, Save, X } from 'lucide-react';
 import { Slider } from '@/components/ui/slider';
 
 interface DraggableContainerProps {
@@ -16,6 +16,7 @@ interface DraggableContainerProps {
   children: React.ReactNode;
   title?: string;
   onClose?: () => void;
+  onSaveLayout?: () => void;
   minimalChrome?: boolean;
 }
 
@@ -30,6 +31,7 @@ export function DraggableContainer({
   children,
   title,
   onClose,
+  onSaveLayout,
   minimalChrome = false,
 }: DraggableContainerProps) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -115,6 +117,16 @@ export function DraggableContainer({
                 className="w-16"
               />
             )}
+            {onSaveLayout && (
+              <button
+                onClick={onSaveLayout}
+                title="Save layout"
+                aria-label="Save popout layout"
+                className="text-muted-foreground hover:text-foreground transition-colors flex-shrink-0"
+              >
+                <Save className="w-4 h-4" />
+              </button>
+            )}
             {onClose && (
               <button
                 onClick={onClose}
@@ -142,6 +154,16 @@ export function DraggableContainer({
                 onValueChange={(value) => onOpacityChange(value[0])}
                 className="w-20"
               />
+            )}
+            {onSaveLayout && (
+              <button
+                onClick={onSaveLayout}
+                title="Save layout"
+                aria-label="Save popout layout"
+                className="text-muted-foreground hover:text-foreground transition-colors ml-2 flex-shrink-0"
+              >
+                <Save className="w-4 h-4" />
+              </button>
             )}
             {onClose && (
               <button

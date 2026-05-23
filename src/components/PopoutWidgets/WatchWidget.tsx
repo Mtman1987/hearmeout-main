@@ -14,6 +14,7 @@ interface WatchWidgetProps {
   onPositionChange: (pos: { x: number; y: number }) => void;
   onSizeChange: (size: { width: number; height: number }) => void;
   onOpacityChange?: (opacity: number) => void;
+  onSaveLayout?: () => void;
   onClose: () => void;
   roomId: string;
 }
@@ -54,7 +55,7 @@ function watchRequestErrorMessage(data: any) {
 
 export function WatchWidget({
   id, position, size, opacity,
-  onPositionChange, onSizeChange, onOpacityChange, onClose, roomId,
+  onPositionChange, onSizeChange, onOpacityChange, onSaveLayout, onClose, roomId,
 }: WatchWidgetProps) {
   const [state, setState] = useState<WatchState | null>(null);
   const [query, setQuery] = useState('');
@@ -131,6 +132,7 @@ export function WatchWidget({
       onPositionChange={onPositionChange}
       onSizeChange={onSizeChange}
       onOpacityChange={onOpacityChange}
+      onSaveLayout={onSaveLayout}
       onClose={onClose}
       title="Watch Party"
       minimalChrome
