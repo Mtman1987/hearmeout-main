@@ -82,6 +82,12 @@ function mediaErrorMessage(error: MediaError | null | undefined) {
   return `Media error ${error.code}`;
 }
 
+function shouldShowMkvFallbackNotice(item: any, mediaStatus: string) {
+  if (!isBrowserLimitedVideo(item)) return false;
+  const status = mediaStatus.toLowerCase();
+  return !status.includes('ready') && !status.includes('playing');
+}
+
 export default function WatchRoomClient({ sessionId }: { sessionId: string }) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const playerShellRef = useRef<HTMLDivElement | null>(null);
@@ -142,6 +148,21 @@ export default function WatchRoomClient({ sessionId }: { sessionId: string }) {
 
   function toggleMute() {
     setMuted((current) => !current);
+  }
+
+  async function enableSound() {
+    const video = videoRef.current;
+    setMuted(false);
+    setVolume(1);
+    if (!video) return;
+    video.muted = false;
+    video.volume = 1;
+    try {
+      await video.play();
+      setMediaStatus('Playing with sound enabled');
+    } catch (error: any) {
+      setMediaStatus(`Sound unlock failed: ${error?.message || 'press the native video play button'}`);
+    }
   }
 
   async function playLocalAndRemote() {
@@ -369,6 +390,9 @@ export default function WatchRoomClient({ sessionId }: { sessionId: string }) {
               setMediaStatus(`HLS error: ${detail}`);
               console.error('[WatchRoom] HLS error', data);
             });
+            hlsRef.current.on(Hls.Events.MANIFEST_PARSED, () => {
+              setMediaStatus(usesHlsFallback ? 'HLS fallback ready' : 'Ready to play');
+            });
             hlsRef.current.loadSource(mediaUrl);
             hlsRef.current.attachMedia(video);
             setMediaStatus(usesHlsFallback ? 'Preparing browser-compatible HLS stream' : `Loading ${item.title}`);
@@ -457,6 +481,12 @@ export default function WatchRoomClient({ sessionId }: { sessionId: string }) {
               onPause={() => {
                 setMediaStatus('Paused');
               }}
+              onVolumeChange={() => {
+                const video = videoRef.current;
+                if (!video) return;
+                setMuted(video.muted);
+                setVolume(video.volume);
+              }}
               onError={() => {
                 const mediaError = videoRef.current?.error;
                 const message = mediaErrorMessage(mediaError);
@@ -473,7 +503,7 @@ export default function WatchRoomClient({ sessionId }: { sessionId: string }) {
                 <span>Use the request panel or type !wr in Discord.</span>
               </div>
             )}
-            {state?.current && isBrowserLimitedVideo(state.current.item) && (
+            {state?.current && shouldShowMkvFallbackNotice(state.current.item, mediaStatus) && (
               <div className="absolute bottom-3 left-3 right-3 rounded-md border border-amber-400/40 bg-black/80 p-3 text-sm text-amber-100">
                 This provider returned an MKV stream. The app is preparing an HLS browser fallback; use Download if conversion is slow or playback still fails.
               </div>
@@ -488,6 +518,7 @@ export default function WatchRoomClient({ sessionId }: { sessionId: string }) {
             <button type="button" className="rounded-md border border-slate-700 bg-slate-800 px-3 py-2 hover:border-emerald-400" onClick={clearQueue}>Clear Queue</button>
             <button type="button" className="rounded-md border border-slate-700 bg-slate-800 px-3 py-2 hover:border-emerald-400 disabled:opacity-50" onClick={openPopout} disabled={!state?.current}>Pop Out</button>
             <button type="button" className="rounded-md border border-slate-700 bg-slate-800 px-3 py-2 hover:border-emerald-400 disabled:opacity-50" onClick={openFullscreen} disabled={!state?.current}>Fullscreen</button>
+            <button type="button" className="rounded-md border border-slate-700 bg-slate-800 px-3 py-2 hover:border-emerald-400 disabled:opacity-50" onClick={enableSound} disabled={!state?.current}>Enable Sound</button>
             {state?.current?.item?.playbackUrl && !String(state.current.item.playbackUrl).endsWith('.m3u8') && (
               <button
                 type="button"

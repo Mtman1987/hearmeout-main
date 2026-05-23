@@ -136,6 +136,8 @@ async function runFfmpegHls(streamId: string, dir: string, indexPath: string) {
       '6',
       '-hls_list_size',
       '0',
+      '-hls_playlist_type',
+      'event',
       '-hls_segment_filename',
       segmentPattern,
       indexPath,
