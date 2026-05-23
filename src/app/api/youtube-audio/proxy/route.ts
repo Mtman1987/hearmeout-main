@@ -86,14 +86,29 @@ function parseRequestedRange(rangeHeader: string | null, totalLength: number | n
   return { start, end };
 }
 
+function parseContentRange(value: string | null): { start: number; end: number; total: number | null } | null {
+  if (!value) return null;
+  const match = /^bytes\s+(\d+)-(\d+)\/(\d+|\*)$/i.exec(value.trim());
+  if (!match) return null;
+
+  const start = Number(match[1]);
+  const end = Number(match[2]);
+  const total = match[3] === '*' ? null : Number(match[3]);
+  if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || end < start) return null;
+  if (total !== null && (!Number.isSafeInteger(total) || total <= end)) return null;
+
+  return { start, end, total };
+}
+
 async function fetchAudioRange(
   upstreamUrl: string,
   start: number,
   end: number,
   headers: Record<string, string>,
-): Promise<{ body: Uint8Array; contentType: string | null }> {
+): Promise<{ body: Uint8Array; contentType: string | null; totalLength: number | null }> {
   const chunks: Uint8Array[] = [];
   let contentType: string | null = null;
+  let totalLength = getContentLengthFromUrl(upstreamUrl);
 
   for (let offset = start; offset <= end; offset += UPSTREAM_QUERY_CHUNK_SIZE) {
     const chunkEnd = Math.min(end, offset + UPSTREAM_QUERY_CHUNK_SIZE - 1);
@@ -106,6 +121,8 @@ async function fetchAudioRange(
     }
 
     contentType ||= res.headers.get('content-type');
+    const contentRange = parseContentRange(res.headers.get('content-range'));
+    if (!totalLength && contentRange?.total) totalLength = contentRange.total;
     chunks.push(new Uint8Array(await res.arrayBuffer()));
   }
 
@@ -117,7 +134,7 @@ async function fetchAudioRange(
     writeOffset += chunk.byteLength;
   }
 
-  return { body, contentType };
+  return { body, contentType, totalLength };
 }
 
 // POST: Client sends an extracted googlevideo URL for a video.
@@ -184,7 +201,7 @@ export async function GET(req: NextRequest) {
       'Accept-Encoding': 'identity',
     };
 
-    const { body, contentType: cdnContentType } = await fetchAudioRange(cached.url, start, end, headers);
+    const { body, contentType: cdnContentType, totalLength: resolvedTotalLength } = await fetchAudioRange(cached.url, start, end, headers);
     const queryMimeType = getMimeFromUrl(cached.url);
     if (isVideoMime(cdnContentType) || isVideoMime(queryMimeType)) {
       console.error(`[Proxy] Refusing non-audio CDN response for ${videoId}: ${cdnContentType || queryMimeType || 'unknown type'}`);
@@ -201,7 +218,12 @@ export async function GET(req: NextRequest) {
 
     const ct = isAudioMime(cdnContentType) ? cdnContentType : (cached.mimeType || (isAudioMime(queryMimeType) ? queryMimeType : null));
     if (ct) responseHeaders['Content-Type'] = ct;
-    if (totalLength) responseHeaders['Content-Range'] = `bytes ${start}-${start + body.byteLength - 1}/${totalLength}`;
+    if (!resolvedTotalLength) {
+      console.error(`[Proxy] Could not determine total audio length for ${videoId}`);
+      return new NextResponse('Proxy could not determine audio length', { status: 502 });
+    }
+
+    responseHeaders['Content-Range'] = `bytes ${start}-${start + body.byteLength - 1}/${resolvedTotalLength}`;
 
     return new NextResponse(Buffer.from(body), {
       status: 206,

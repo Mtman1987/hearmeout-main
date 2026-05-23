@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { DiscordSDK } from '@discord/embedded-app-sdk';
+import { DISCORD_CLIENT_ID } from '@/lib/public-config';
 import WatchRoomClient from '../watch/[sessionId]/watch-room-client';
 
 type ActivityState = {
@@ -26,7 +27,7 @@ export default function ActivityClient() {
   const [activity, setActivity] = useState<ActivityState | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [status, setStatus] = useState('Starting Discord Activity...');
-  const clientId = process.env.NEXT_PUBLIC_DISCORD_CLIENT_ID;
+  const clientId = DISCORD_CLIENT_ID;
 
   const fallbackSessionId = useMemo(() => {
     if (typeof window === 'undefined') return 'local-watch';

@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { DISCORD_CLIENT_ID } from '@/lib/public-config';
 
 function js(clientId: string) {
   return `
@@ -348,7 +349,7 @@ try {
 }
 
 export async function GET() {
-  return new NextResponse(js(process.env.NEXT_PUBLIC_DISCORD_CLIENT_ID || process.env.DISCORD_CLIENT_ID || ''), {
+  return new NextResponse(js(DISCORD_CLIENT_ID), {
     headers: {
       'content-type': 'application/javascript; charset=utf-8',
       'cache-control': 'no-store',

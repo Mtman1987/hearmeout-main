@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 
-function html(clientId: string) {
+function html() {
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -122,7 +122,7 @@ function html(clientId: string) {
 }
 
 export async function GET() {
-  return new NextResponse(html(process.env.NEXT_PUBLIC_DISCORD_CLIENT_ID || process.env.DISCORD_CLIENT_ID || ''), {
+  return new NextResponse(html(), {
     headers: {
       'content-type': 'text/html; charset=utf-8',
       'cache-control': 'no-store',
