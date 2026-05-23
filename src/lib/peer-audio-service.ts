@@ -363,6 +363,8 @@ export class PeerScreenShare {
   private peer: Peer | null = null;
   private stream: MediaStream | null = null;
   private connections: MediaConnection[] = [];
+  private heartbeat: ReturnType<typeof setInterval> | null = null;
+  private registryRoomId = '';
   private _ready = false;
   private _peerId = '';
 
@@ -397,6 +399,7 @@ export class PeerScreenShare {
 
     const peerId = getScreenPeerId(roomId, userId);
     this._peerId = peerId;
+    this.registryRoomId = `screen-${roomId}`;
 
     return new Promise((resolve, reject) => {
       this.peer = new Peer(peerId, { debug: 1 });
@@ -405,11 +408,13 @@ export class PeerScreenShare {
         console.log('[PeerScreen] Broadcasting as', peerId);
         this._ready = true;
         // Register in presence so viewers can discover us
-        fetch('/api/peer-voice/register', {
+        const register = () => fetch('/api/peer-voice/register', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ roomId: `screen-${roomId}`, peerId }),
+          body: JSON.stringify({ roomId: this.registryRoomId, peerId }),
         }).catch(() => {});
+        register();
+        this.heartbeat = setInterval(register, 5000);
         resolve(this.stream!);
       });
 
@@ -435,11 +440,15 @@ export class PeerScreenShare {
 
   stop() {
     // Unregister presence
-    if (this._peerId) {
+    if (this.heartbeat) {
+      clearInterval(this.heartbeat);
+      this.heartbeat = null;
+    }
+    if (this._peerId && this.registryRoomId) {
       fetch('/api/peer-voice/register', {
         method: 'DELETE',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ roomId: `screen-${this._peerId.split('-')[2]}`, peerId: this._peerId }),
+        body: JSON.stringify({ roomId: this.registryRoomId, peerId: this._peerId }),
         keepalive: true,
       }).catch(() => {});
     }
@@ -453,6 +462,7 @@ export class PeerScreenShare {
     }
     try { this.peer?.destroy(); } catch {}
     this.peer = null;
+    this.registryRoomId = '';
     this._ready = false;
   }
 }

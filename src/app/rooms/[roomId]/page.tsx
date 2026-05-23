@@ -6,7 +6,7 @@ import { LiveKitRoom, RoomContext, useConnectionState } from '@livekit/component
 import { ConnectionState } from 'livekit-client';
 import { SidebarProvider, SidebarInset, SidebarTrigger, useSidebar } from '@/components/ui/sidebar';
 import { Button } from "@/components/ui/button";
-import { Copy, X, LoaderCircle, FrameIcon, Music, Monitor } from 'lucide-react';
+import { Copy, X, LoaderCircle, FrameIcon, Music, Monitor, Film, ExternalLink } from 'lucide-react';
 import LeftSidebar from '@/app/components/LeftSidebar';
 import UserList from './_components/UserList';
 import ChatBox from './_components/ChatBox';
@@ -14,6 +14,7 @@ import VoiceQueue from './_components/VoiceQueue';
 import { cn } from "@/lib/utils";
 import { useToast } from '@/hooks/use-toast';
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { useSession } from '@/hooks/use-session';
 import { useDoc } from '@/hooks/use-db';
 import { dbUpdate, dbSet } from '@/lib/db-helpers';
@@ -22,7 +23,7 @@ import { dbGet } from '@/lib/db-helpers';
 import { Room as LKRoom, RoomEvent, Track, RemoteTrack } from 'livekit-client';
 import { generateLiveKitToken, generateMusicRoomToken } from '@/app/actions';
 import { PlaylistItem } from "@/types/playlist";
-import { PeerAudioListener, PeerVoiceMesh } from '@/lib/peer-audio-service';
+import { PeerAudioListener, PeerScreenViewer, PeerVoiceMesh } from '@/lib/peer-audio-service';
 
 interface RoomData {
   id: string;
@@ -40,6 +41,182 @@ interface RoomData {
   isPrivate?: boolean;
   password?: string;
   expiresAt?: string;
+}
+
+type WatchCardState = {
+  roomUrl?: string;
+  current: {
+    item: { title: string; year?: number; source?: string };
+    requestedBy?: { username?: string };
+  } | null;
+  playback?: { status?: string };
+};
+
+function SharedWatchCard({ roomId, onOpenWatch }: { roomId: string; onOpenWatch: () => void }) {
+    const [state, setState] = useState<WatchCardState | null>(null);
+    const sessionId = `room-${roomId}`;
+
+    useEffect(() => {
+        let cancelled = false;
+        const refresh = async () => {
+            try {
+                const res = await fetch(`/api/watch/sessions/${sessionId}/state`, { cache: 'no-store' });
+                if (!res.ok || cancelled) return;
+                setState(await res.json());
+            } catch {}
+        };
+        refresh();
+        const interval = setInterval(refresh, 3000);
+        return () => {
+            cancelled = true;
+            clearInterval(interval);
+        };
+    }, [sessionId]);
+
+    if (!state?.current) return null;
+
+    const watchRoomUrl = state.roomUrl || `/watch/${sessionId}`;
+
+    return (
+        <Card>
+            <CardHeader className="flex flex-row items-center justify-between gap-3 pb-3">
+                <CardTitle className="flex items-center gap-2 text-lg font-headline">
+                    <Film className="h-5 w-5" /> Watch Party
+                </CardTitle>
+                <div className="flex gap-2">
+                    <Button variant="outline" size="sm" onClick={onOpenWatch}>Controls</Button>
+                    <Button variant="outline" size="sm" asChild>
+                        <a href={watchRoomUrl} target="_blank" rel="noreferrer">
+                            <ExternalLink className="mr-1 h-3.5 w-3.5" /> Open
+                        </a>
+                    </Button>
+                </div>
+            </CardHeader>
+            <CardContent className="space-y-3">
+                <div className="aspect-video w-full overflow-hidden rounded-md border bg-black">
+                    <iframe
+                        src={watchRoomUrl}
+                        className="h-full w-full"
+                        allow="autoplay; fullscreen; encrypted-media; picture-in-picture"
+                        sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-presentation"
+                    />
+                </div>
+                <div className="min-w-0">
+                    <p className="truncate text-sm font-medium">
+                        {state.current.item.title}{state.current.item.year ? ` (${state.current.item.year})` : ''}
+                    </p>
+                    <p className="truncate text-xs text-muted-foreground">
+                        {state.current.item.source || 'watch'} · {state.playback?.status || 'idle'}
+                        {state.current.requestedBy?.username ? ` · by ${state.current.requestedBy.username}` : ''}
+                    </p>
+                </div>
+            </CardContent>
+        </Card>
+    );
+}
+
+function screenShareLabel(peerId: string) {
+    const cleaned = peerId.replace(/^hmo-screen-/, '');
+    const separator = cleaned.lastIndexOf('-');
+    return separator > -1 ? cleaned.slice(separator + 1) : cleaned;
+}
+
+function SharedScreenShareCard({ roomId }: { roomId: string }) {
+    const [availableShares, setAvailableShares] = useState<string[]>([]);
+    const [viewing, setViewing] = useState<string | null>(null);
+    const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
+    const viewerRef = useRef<PeerScreenViewer | null>(null);
+    const videoRef = useRef<HTMLVideoElement | null>(null);
+
+    useEffect(() => {
+        let cancelled = false;
+        const poll = async () => {
+            try {
+                const res = await fetch(`/api/peer-voice/peers?roomId=${encodeURIComponent(`screen-${roomId}`)}`, { cache: 'no-store' });
+                if (!res.ok || cancelled) return;
+                const { peers } = await res.json();
+                setAvailableShares(Array.isArray(peers) ? peers : []);
+            } catch {}
+        };
+        poll();
+        const interval = setInterval(poll, 3000);
+        return () => {
+            cancelled = true;
+            clearInterval(interval);
+        };
+    }, [roomId]);
+
+    useEffect(() => {
+        if (videoRef.current) {
+            videoRef.current.srcObject = remoteStream;
+        }
+    }, [remoteStream, viewing]);
+
+    useEffect(() => {
+        return () => viewerRef.current?.disconnect();
+    }, []);
+
+    const stopViewing = useCallback(() => {
+        viewerRef.current?.disconnect();
+        viewerRef.current = null;
+        setViewing(null);
+        setRemoteStream(null);
+        if (videoRef.current) videoRef.current.srcObject = null;
+    }, []);
+
+    const viewShare = useCallback(async (peerId: string) => {
+        stopViewing();
+        const viewer = new PeerScreenViewer();
+        viewerRef.current = viewer;
+        try {
+            await viewer.connect(
+                peerId,
+                (stream) => setRemoteStream(stream),
+                () => {
+                    setViewing(null);
+                    setRemoteStream(null);
+                },
+            );
+            setViewing(peerId);
+        } catch {
+            stopViewing();
+        }
+    }, [stopViewing]);
+
+    if (availableShares.length === 0) return null;
+
+    return (
+        <Card>
+            <CardHeader className="pb-3">
+                <CardTitle className="flex items-center gap-2 text-lg font-headline">
+                    <Monitor className="h-5 w-5" /> Screen Share
+                </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3">
+                <div className="aspect-video w-full overflow-hidden rounded-md border bg-black">
+                    {viewing ? (
+                        <video ref={videoRef} className="h-full w-full object-contain" autoPlay playsInline />
+                    ) : (
+                        <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
+                            Choose an active share to view.
+                        </div>
+                    )}
+                </div>
+                <div className="flex flex-wrap gap-2">
+                    {availableShares.map((peerId) => (
+                        <Button
+                            key={peerId}
+                            variant={viewing === peerId ? 'secondary' : 'outline'}
+                            size="sm"
+                            onClick={() => viewing === peerId ? stopViewing() : viewShare(peerId)}
+                        >
+                            {viewing === peerId ? 'Stop Viewing' : `View ${screenShareLabel(peerId)}`}
+                        </Button>
+                    ))}
+                </div>
+            </CardContent>
+        </Card>
+    );
 }
 
 function RoomHeader({ roomName, onToggleChat, showDJ, onToggleDJ, peerFallback, livekitReady, onScreenShare }: {
@@ -720,6 +897,11 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
                           voiceEnabled={voiceReady || voiceFallbackActive}
                           voiceFallbackFailed={voiceFallbackFailed}
                         />
+                        <SharedWatchCard
+                          roomId={roomId}
+                          onOpenWatch={() => openPopout('watch', { width: 640, height: 700 }, { source: 'watch' })}
+                        />
+                        <SharedScreenShareCard roomId={roomId} />
                         {isOwner && <VoiceQueue roomId={roomId} />}
                     </main>
                 </div>

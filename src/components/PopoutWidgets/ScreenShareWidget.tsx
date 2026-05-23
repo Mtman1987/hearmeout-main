@@ -27,6 +27,8 @@ export function ScreenShareWidget({
   const { user } = useSession();
   const [sharing, setSharing] = useState(false);
   const [viewing, setViewing] = useState<string | null>(null);
+  const [localStream, setLocalStream] = useState<MediaStream | null>(null);
+  const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
   const [availableShares, setAvailableShares] = useState<string[]>([]);
   const broadcasterRef = useRef<PeerScreenShare | null>(null);
   const viewerRef = useRef<PeerScreenViewer | null>(null);
@@ -57,10 +59,8 @@ export function ScreenShareWidget({
       const broadcaster = new PeerScreenShare();
       const stream = await broadcaster.start(roomId, user.uid, source);
       broadcasterRef.current = broadcaster;
+      setLocalStream(stream);
       setSharing(true);
-      if (localVideoRef.current) {
-        localVideoRef.current.srcObject = stream;
-      }
     } catch (err) {
       console.warn('[ScreenShare] Failed to start:', err);
     }
@@ -70,6 +70,7 @@ export function ScreenShareWidget({
     broadcasterRef.current?.stop();
     broadcasterRef.current = null;
     setSharing(false);
+    setLocalStream(null);
     if (localVideoRef.current) localVideoRef.current.srcObject = null;
   }, []);
 
@@ -84,10 +85,11 @@ export function ScreenShareWidget({
       await viewer.connect(
         peerId,
         (stream) => {
-          if (remoteVideoRef.current) remoteVideoRef.current.srcObject = stream;
+          setRemoteStream(stream);
         },
         () => {
           setViewing(null);
+          setRemoteStream(null);
           if (remoteVideoRef.current) remoteVideoRef.current.srcObject = null;
         },
       );
@@ -105,6 +107,18 @@ export function ScreenShareWidget({
       viewerRef.current?.disconnect();
     };
   }, []);
+
+  useEffect(() => {
+    if (localVideoRef.current) {
+      localVideoRef.current.srcObject = localStream;
+    }
+  }, [localStream, sharing]);
+
+  useEffect(() => {
+    if (remoteVideoRef.current) {
+      remoteVideoRef.current.srcObject = remoteStream;
+    }
+  }, [remoteStream, viewing]);
 
   return (
     <DraggableContainer
