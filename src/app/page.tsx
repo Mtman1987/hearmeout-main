@@ -56,8 +56,9 @@ export default function Home() {
   const isAdmin = !!user && ((user as any).isAdmin || user.discordId === '767875979561009173');
 
   React.useEffect(() => {
-    if (window.self === window.top) return;
-
+    try {
+      if (window.self === window.top) return;
+    } catch {}
     setIsEmbeddedLaunch(true);
   }, []);
 
