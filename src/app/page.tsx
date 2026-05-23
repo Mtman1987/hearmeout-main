@@ -2,6 +2,7 @@
 
 import React from 'react';
 import Link from "next/link";
+import ActivityClient from './activity/activity-client';
 import { Card, CardContent, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Trash2, Lock, Users, Clock } from "lucide-react";
@@ -44,6 +45,7 @@ function timeRemaining(expiresAt?: string) {
 }
 
 export default function Home() {
+  const [isEmbeddedLaunch, setIsEmbeddedLaunch] = React.useState(false);
   const { user } = useSession();
   const { toast } = useToast();
   // Show ALL rooms — both public and private are visible
@@ -53,12 +55,22 @@ export default function Home() {
 
   const isAdmin = !!user && ((user as any).isAdmin || user.discordId === '767875979561009173');
 
+  React.useEffect(() => {
+    if (window.self === window.top) return;
+
+    setIsEmbeddedLaunch(true);
+  }, []);
+
   const handleDeleteRoom = (roomId: string, roomName: string) => {
     if (!user) return;
     if (!confirm(`Delete "${roomName}"? This cannot be undone.`)) return;
     dbDelete('rooms', roomId);
     toast({ title: 'Room Deleted', description: `"${roomName}" has been deleted.` });
   };
+
+  if (isEmbeddedLaunch) {
+    return <ActivityClient />;
+  }
 
   return (
     <SidebarProvider>
@@ -131,4 +143,3 @@ export default function Home() {
     </SidebarProvider>
   );
 }
-
