@@ -3,16 +3,13 @@
 import { useEffect, useMemo, useState } from 'react';
 import { DiscordSDK } from '@discord/embedded-app-sdk';
 import { DISCORD_CLIENT_ID } from '@/lib/public-config';
+import { GLOBAL_WATCH_SESSION_ID } from '@/lib/watch-session';
 import WatchRoomClient from '../watch/[sessionId]/watch-room-client';
 
 type ActivityState = {
   sessionId: string;
   status: string;
 };
-
-function sessionIdFor(guildId: string | null | undefined, channelId: string | null | undefined) {
-  return `${guildId || 'local'}-${channelId || 'watch'}`.replace(/[^a-zA-Z0-9_-]/g, '-');
-}
 
 function withTimeout<T>(promise: Promise<T>, milliseconds: number) {
   return Promise.race([
@@ -30,9 +27,7 @@ export default function ActivityClient() {
   const clientId = DISCORD_CLIENT_ID;
 
   const fallbackSessionId = useMemo(() => {
-    if (typeof window === 'undefined') return 'local-watch';
-    const params = new URLSearchParams(window.location.search);
-    return params.get('sessionId') || sessionIdFor(params.get('guild_id'), params.get('channel_id')) || 'local-watch';
+    return GLOBAL_WATCH_SESSION_ID;
   }, []);
 
   useEffect(() => {
@@ -55,7 +50,7 @@ export default function ActivityClient() {
 
         setStatus('Opening watch room...');
         setActivity({
-          sessionId: sessionIdFor(discordSdk.guildId, discordSdk.channelId),
+          sessionId: GLOBAL_WATCH_SESSION_ID,
           status: 'Connected',
         });
       } catch (sdkError: any) {

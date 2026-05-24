@@ -3,6 +3,7 @@ import { findInternetArchiveRecommendation } from './internet-archive-provider';
 import { findWatchmodeRecommendation } from './watchmode-provider';
 import { startXtreamVodCache } from './xtream-cache';
 import { DISCORD_CLIENT_ID } from '@/lib/public-config';
+import { getGlobalWatchSessionId } from '@/lib/watch-session';
 
 type WatchCatalogItem = {
   id: string;
@@ -92,7 +93,7 @@ const TEST_CATALOG: WatchCatalogItem[] = [
 ];
 
 declare global {
-  // eslint-disable-next-line no-var
+  // eslint-disable-next-line no-unused-vars
   var __watchRequestSessions: Map<string, WatchSession> | undefined;
 }
 
@@ -102,10 +103,6 @@ const pendingRecommendations = new Map<string, WatchCatalogItem>();
 
 function normalize(value: unknown) {
   return String(value || '').trim().toLowerCase();
-}
-
-function safeId(value: string) {
-  return value.replace(/[^a-zA-Z0-9_-]/g, '-');
 }
 
 function getPublicBaseUrl(preferredBaseUrl?: string) {
@@ -266,7 +263,8 @@ export function getWatchCatalogItem(id: string | null | undefined) {
 }
 
 export function getWatchSession(sessionId: string, guildId?: string, channelId?: string) {
-  return sessions.get(sessionId) || createSession(sessionId, guildId, channelId);
+  const globalSessionId = getGlobalWatchSessionId();
+  return sessions.get(globalSessionId) || createSession(globalSessionId, guildId, channelId);
 }
 
 async function createDiscordActivityInvite(channelId: string) {
@@ -301,25 +299,13 @@ async function createDiscordActivityInvite(channelId: string) {
 }
 
 export function getResolvedWatchSession(sessionId: string, guildId?: string, channelId?: string) {
-  const exact = getWatchSession(sessionId, guildId, channelId);
-  if (exact.current || exact.queue.length) return exact;
-
-  const guildPrefix = safeId(`${guildId || sessionId.split('-')[0] || 'local'}-`);
-  const activeSessions = Array.from(sessions.values())
-    .filter((session) => session.id !== exact.id)
-    .filter((session) => session.id.startsWith(guildPrefix))
-    .filter((session) => session.current || session.queue.length)
-    .sort((a, b) => {
-      const aTime = Date.parse(a.events[0]?.at || '') || a.playback.updatedAt || 0;
-      const bTime = Date.parse(b.events[0]?.at || '') || b.playback.updatedAt || 0;
-      return bTime - aTime;
-    });
-
-  return activeSessions[0] || exact;
+  return getWatchSession(sessionId, guildId, channelId);
 }
 
 export function getWatchSessionId(guildId: string, channelId: string) {
-  return safeId(`${guildId || 'local'}-${channelId || 'watch'}`);
+  void guildId;
+  void channelId;
+  return getGlobalWatchSessionId();
 }
 
 export function getWatchRoomUrl(sessionId: string, preferredBaseUrl?: string) {
@@ -451,6 +437,7 @@ export async function handleWatchRequestCommand(params: {
   channelId: string;
   userMessageId?: string;
   publicBaseUrl?: string;
+  // eslint-disable-next-line no-unused-vars
   reply?: (content: string) => void | Promise<void>;
 }) {
   const reply = params.reply || ((content: string) => sendDiscordReply(params.channelId, content, params.userMessageId));

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import tmi from 'tmi.js';
 import { addSongToPlaylist, getRoomState } from '@/lib/bot-actions';
+import { handleWatchRequestCommand, parseWatchCommand } from '@/lib/watch-request-service';
 import { db, ensureDb } from '@/lib/db';
 import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
@@ -24,6 +25,14 @@ interface ServerBotTokens {
 
 const botInstances = new Map<string, BotInstance>();
 let isInitialized = false;
+
+function getPublicBaseUrl() {
+  return (
+    process.env.NEXT_PUBLIC_BASE_URL ||
+    process.env.APP_URL ||
+    'https://hearmeout-main.fly.dev'
+  ).replace(/\/$/, '');
+}
 
 // --- Token management (per-server) ---
 
@@ -258,6 +267,25 @@ function createMessageHandler(instance: BotInstance) {
     const message = msg.trim().toLowerCase();
     const requester = context['display-name'] || 'Someone from Twitch';
     const client = instance.client;
+    const watchCommand = parseWatchCommand(msg);
+
+    if (watchCommand) {
+      handleWatchRequestCommand({
+        message: msg,
+        discordUserId: context.username || context['user-id'] || 'twitch',
+        discordUserName: `${requester} (Twitch)`,
+        guildId: instance.tokens.serverId || 'local',
+        channelId: process.env.DISCORD_CHANNEL_ID || 'watch',
+        publicBaseUrl: getPublicBaseUrl(),
+        reply: (content) => {
+          client.say(target, `@${requester} ${content}`);
+        },
+      }).catch((error) => {
+        console.error('[Twitch Bot] watch request failed:', error);
+        client.say(target, `❌ @${requester} Watch request failed.`);
+      });
+      return;
+    }
 
     if (message.startsWith('!sr ')) {
       const songQuery = msg.substring(4).trim();
@@ -292,7 +320,7 @@ function createMessageHandler(instance: BotInstance) {
     }
 
     if (message === '!help' || message === '!commands') {
-      client.say(target, "🎵 Commands: !sr [song/URL] | !np | !status | !help");
+      client.say(target, "🎵 Commands: !sr [song/URL] | !wr [movie/show] | !np | !status | !help");
     }
   };
 }

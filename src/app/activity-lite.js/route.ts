@@ -1,12 +1,13 @@
 import { NextResponse } from 'next/server';
 import { DISCORD_CLIENT_ID } from '@/lib/public-config';
+import { GLOBAL_WATCH_SESSION_ID } from '@/lib/watch-session';
 
-function js(clientId: string) {
+function js(clientId: string, sessionId: string) {
   return `
 const CLIENT_ID = ${JSON.stringify(clientId)};
+const GLOBAL_SESSION_ID = ${JSON.stringify(sessionId)};
 const params = new URLSearchParams(location.search);
-const clean = (value) => String(value || '').replace(/[^a-zA-Z0-9_-]/g, '-');
-let sessionId = clean((params.get('guild_id') || 'local') + '-' + (params.get('channel_id') || 'watch'));
+let sessionId = GLOBAL_SESSION_ID;
 const video = document.getElementById('video');
 const empty = document.getElementById('empty');
 const statusEl = document.getElementById('activity-status');
@@ -362,7 +363,7 @@ try {
 }
 
 export async function GET() {
-  return new NextResponse(js(DISCORD_CLIENT_ID), {
+  return new NextResponse(js(DISCORD_CLIENT_ID, GLOBAL_WATCH_SESSION_ID), {
     headers: {
       'content-type': 'application/javascript; charset=utf-8',
       'cache-control': 'no-store',
