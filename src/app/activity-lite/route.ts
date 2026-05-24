@@ -37,7 +37,7 @@ function html() {
     .volume input { min-height: 0; padding: 0; accent-color: #34d399; }
     .download { min-height: 38px; width: 40px; display: inline-grid; place-items: center; border-radius: 6px; border: 1px solid #475569; background: #172033; color: #e5edf5; text-decoration: none; }
     .download:hover { border-color: #34d399; }
-    aside { position: absolute; z-index: 6; top: 62px; right: 12px; width: min(360px, calc(100vw - 24px)); max-height: calc(100vh - 78px); overflow: auto; display: none; }
+    aside { position: absolute; z-index: 20; top: 72px; right: 12px; width: min(380px, calc(100vw - 24px)); max-height: calc(100vh - 88px); overflow: auto; display: none; }
     aside.open { display: block; }
     aside section { display: none; background: rgba(15, 23, 42, .96); border: 1px solid #334155; border-radius: 8px; box-shadow: 0 18px 48px rgba(0,0,0,.45); }
     aside section.active { display: block; }

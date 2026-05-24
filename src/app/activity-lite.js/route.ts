@@ -206,24 +206,41 @@ async function control(action) {
   }
 }
 
-document.querySelectorAll('[data-action]').forEach((button) => {
-  button.addEventListener('click', () => {
-    const action = button.dataset.action;
-    if (action === 'play') {
-      mediaEl.textContent = 'Media: starting';
-      video.play()
-        .then(() => {
-          mediaEl.textContent = 'Media: playing';
-          return control('play');
-        })
-        .catch((err) => {
-          mediaEl.textContent = 'Media: press the video play control';
-          console.warn(err);
-        });
-      return;
-    }
-    control(action).catch((err) => console.warn('Control failed', err));
-  });
+function handleAction(action) {
+  if (action === 'play') {
+    mediaEl.textContent = 'Media: starting';
+    video.play()
+      .then(() => {
+        mediaEl.textContent = 'Media: playing';
+        return control('play');
+      })
+      .catch((err) => {
+        mediaEl.textContent = 'Media: press the video play control';
+        console.warn(err);
+      });
+    return;
+  }
+  control(action).catch((err) => console.warn('Control failed', err));
+}
+
+function handlePress(event) {
+  const controlEl = event.target && event.target.closest ? event.target.closest('[data-action], [data-panel]') : null;
+  if (!controlEl || controlEl.disabled) return;
+  event.preventDefault();
+  event.stopPropagation();
+  if (controlEl.dataset.panel) {
+    setDrawer(controlEl.dataset.panel);
+    return;
+  }
+  if (controlEl.dataset.action) {
+    handleAction(controlEl.dataset.action);
+  }
+}
+
+document.addEventListener('pointerup', handlePress);
+document.addEventListener('keydown', (event) => {
+  if (event.key !== 'Enter' && event.key !== ' ') return;
+  handlePress(event);
 });
 
 fullscreenBtn.addEventListener('click', () => {
@@ -253,10 +270,6 @@ fullscreenBtn.addEventListener('click', () => {
   } else {
     errorEl.textContent = 'The video is focused inside Discord. Browser fullscreen is not available in this frame.';
   }
-});
-
-document.querySelectorAll('[data-panel]').forEach((button) => {
-  button.addEventListener('click', () => setDrawer(button.dataset.panel));
 });
 
 popoutBtn.addEventListener('click', () => {
