@@ -31,6 +31,7 @@ let lastSeekApplyAt = 0;
 let mediaIsBuffering = false;
 let muted = false;
 let currentDownloadUrl = '';
+let lastPressAt = 0;
 
 function downloadUrlFor(url) {
   if (!url || !url.startsWith('/')) return url;
@@ -50,6 +51,7 @@ function applyVolume() {
 }
 
 document.getElementById('room').textContent = 'Room ' + sessionId;
+statusEl.textContent = 'Connecting';
 
 function discordHandshake() {
   const frameId = params.get('frame_id');
@@ -185,6 +187,7 @@ function setDrawer(panelName) {
 async function refresh() {
   try {
     render(await api('/api/watch/sessions/' + sessionId + '/state'));
+    if (statusEl.textContent !== 'Discord connected') statusEl.textContent = 'Live';
     errorEl.textContent = '';
   } catch (err) {
     statusEl.textContent = 'Disconnected';
@@ -210,10 +213,10 @@ async function control(action) {
 function handleAction(action) {
   if (action === 'play') {
     mediaEl.textContent = 'Media: starting';
+    control('play').catch((err) => console.warn('Control failed', err));
     video.play()
       .then(() => {
         mediaEl.textContent = 'Media: playing';
-        return control('play');
       })
       .catch((err) => {
         mediaEl.textContent = 'Media: press the video play control';
@@ -225,8 +228,11 @@ function handleAction(action) {
 }
 
 function handlePress(event) {
+  const now = Date.now();
+  if (now - lastPressAt < 80) return;
   const controlEl = event.target && event.target.closest ? event.target.closest('[data-action], [data-panel]') : null;
   if (!controlEl || controlEl.disabled) return;
+  lastPressAt = now;
   event.preventDefault();
   event.stopPropagation();
   if (controlEl.dataset.panel) {
@@ -239,6 +245,7 @@ function handlePress(event) {
 }
 
 document.addEventListener('pointerup', handlePress);
+document.addEventListener('click', handlePress);
 document.addEventListener('keydown', (event) => {
   if (event.key !== 'Enter' && event.key !== ' ') return;
   handlePress(event);

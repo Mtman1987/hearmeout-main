@@ -23,7 +23,8 @@ import { dbGet } from '@/lib/db-helpers';
 import { Room as LKRoom, RoomEvent, Track, RemoteTrack } from 'livekit-client';
 import { generateLiveKitToken, generateMusicRoomToken } from '@/app/actions';
 import { PlaylistItem } from "@/types/playlist";
-import { PeerAudioListener, PeerScreenViewer, PeerVoiceMesh } from '@/lib/peer-audio-service';
+import { getScreenPeerId, PeerAudioListener, PeerScreenViewer, PeerVoiceMesh } from '@/lib/peer-audio-service';
+import { GLOBAL_WATCH_SESSION_ID } from '@/lib/watch-session';
 
 interface RoomData {
   id: string;
@@ -46,6 +47,7 @@ interface RoomData {
 type WatchCardState = {
   roomUrl?: string;
   current: {
+    requestId: string;
     item: { title: string; year?: number; source?: string };
     requestedBy?: { username?: string };
   } | null;
@@ -54,7 +56,8 @@ type WatchCardState = {
 
 function SharedWatchCard({ roomId, onOpenWatch }: { roomId: string; onOpenWatch: () => void }) {
     const [state, setState] = useState<WatchCardState | null>(null);
-    const sessionId = `room-${roomId}`;
+    const [dismissedRequestId, setDismissedRequestId] = useState<string | null>(null);
+    const sessionId = GLOBAL_WATCH_SESSION_ID;
 
     useEffect(() => {
         let cancelled = false;
@@ -73,9 +76,10 @@ function SharedWatchCard({ roomId, onOpenWatch }: { roomId: string; onOpenWatch:
         };
     }, [sessionId]);
 
-    if (!state?.current) return null;
+    if (!state?.current || state.current.requestId === dismissedRequestId) return null;
 
     const watchRoomUrl = state.roomUrl || `/watch/${sessionId}`;
+    const closeWatchCard = () => setDismissedRequestId(state.current?.requestId || null);
 
     return (
         <Card>
@@ -89,6 +93,9 @@ function SharedWatchCard({ roomId, onOpenWatch }: { roomId: string; onOpenWatch:
                         <a href={watchRoomUrl} target="_blank" rel="noreferrer">
                             <ExternalLink className="mr-1 h-3.5 w-3.5" /> Open
                         </a>
+                    </Button>
+                    <Button variant="ghost" size="icon" onClick={closeWatchCard} aria-label="Close Watch Party card">
+                        <X className="h-4 w-4" />
                     </Button>
                 </div>
             </CardHeader>
@@ -122,9 +129,11 @@ function screenShareLabel(peerId: string) {
 }
 
 function SharedScreenShareCard({ roomId }: { roomId: string }) {
+    const { user } = useSession();
     const [availableShares, setAvailableShares] = useState<string[]>([]);
     const [viewing, setViewing] = useState<string | null>(null);
     const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
+    const [dismissedSignature, setDismissedSignature] = useState<string | null>(null);
     const viewerRef = useRef<PeerScreenViewer | null>(null);
     const videoRef = useRef<HTMLVideoElement | null>(null);
 
@@ -184,13 +193,30 @@ function SharedScreenShareCard({ roomId }: { roomId: string }) {
     }, [stopViewing]);
 
     if (availableShares.length === 0) return null;
+    const shareSignature = availableShares.slice().sort().join('|');
+    if (shareSignature === dismissedSignature) return null;
+    const ownPeerId = user ? getScreenPeerId(roomId, user.uid) : null;
+    const stopOwnShare = async () => {
+        if (!ownPeerId) return;
+        window.dispatchEvent(new CustomEvent('hmo-stop-screen-share', { detail: { roomId } }));
+        await fetch('/api/peer-voice/register', {
+            method: 'DELETE',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ roomId: `screen-${roomId}`, peerId: ownPeerId }),
+        }).catch(() => undefined);
+        stopViewing();
+        setAvailableShares((current) => current.filter((peerId) => peerId !== ownPeerId));
+    };
 
     return (
         <Card>
-            <CardHeader className="pb-3">
+            <CardHeader className="flex flex-row items-center justify-between gap-3 pb-3">
                 <CardTitle className="flex items-center gap-2 text-lg font-headline">
                     <Monitor className="h-5 w-5" /> Screen Share
                 </CardTitle>
+                <Button variant="ghost" size="icon" onClick={() => setDismissedSignature(shareSignature)} aria-label="Close Screen Share card">
+                    <X className="h-4 w-4" />
+                </Button>
             </CardHeader>
             <CardContent className="space-y-3">
                 <div className="aspect-video w-full overflow-hidden rounded-md border bg-black">
@@ -203,14 +229,23 @@ function SharedScreenShareCard({ roomId }: { roomId: string }) {
                     )}
                 </div>
                 <div className="flex flex-wrap gap-2">
+                    {ownPeerId && availableShares.includes(ownPeerId) && (
+                        <Button variant="destructive" size="sm" onClick={stopOwnShare}>
+                            Stop Sharing
+                        </Button>
+                    )}
                     {availableShares.map((peerId) => (
                         <Button
                             key={peerId}
                             variant={viewing === peerId ? 'secondary' : 'outline'}
                             size="sm"
-                            onClick={() => viewing === peerId ? stopViewing() : viewShare(peerId)}
+                            onClick={() => ownPeerId === peerId ? stopOwnShare() : viewing === peerId ? stopViewing() : viewShare(peerId)}
                         >
-                            {viewing === peerId ? 'Stop Viewing' : `View ${screenShareLabel(peerId)}`}
+                            {ownPeerId === peerId
+                                ? 'Stop Sharing'
+                                : viewing === peerId
+                                  ? 'Stop Viewing'
+                                  : `View ${screenShareLabel(peerId)}`}
                         </Button>
                     ))}
                 </div>

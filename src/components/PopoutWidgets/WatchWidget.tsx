@@ -5,6 +5,7 @@ import { DraggableContainer } from './DraggableContainer';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Film, Play, SkipForward, Trash2, Search, ExternalLink, LoaderCircle } from 'lucide-react';
+import { GLOBAL_WATCH_SESSION_ID } from '@/lib/watch-session';
 
 interface WatchWidgetProps {
   id: string;
@@ -62,7 +63,7 @@ export function WatchWidget({
   const [searching, setSearching] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const sessionId = `room-${roomId}`;
+  const sessionId = GLOBAL_WATCH_SESSION_ID;
 
   const refresh = useCallback(async () => {
     if (!roomId) return;

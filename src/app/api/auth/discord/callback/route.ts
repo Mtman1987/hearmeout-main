@@ -7,7 +7,13 @@ import { verifyDshRedirect } from '@/lib/dsh-redirect';
 
 const BASE_URL = config.baseUrl;
 const DSH_URL = config.dshUrl;
-const DB_API_KEY = config.dbApiKey;
+
+function loginErrorUrl(error: string, description?: string | null) {
+  const url = new URL('/login', BASE_URL);
+  url.searchParams.set('error', description || error);
+  if (description) url.searchParams.set('error_code', error);
+  return url.toString();
+}
 
 export async function GET(req: NextRequest) {
   await ensureDb();
@@ -21,42 +27,25 @@ export async function GET(req: NextRequest) {
     const verify = verifyDshRedirect('discord', searchParams);
     if (!verify.ok) {
       console.warn('[auth/discord/callback] rejected unsigned/forged redirect:', verify.reason);
-      return NextResponse.redirect(`${BASE_URL}/login?error=invalid_dsh_redirect`);
+      return NextResponse.redirect(loginErrorUrl('invalid_dsh_redirect', verify.reason));
     }
-    try {
-      // Fetch user's Discord tokens from shared user-specific tokens collection
-      const headers: Record<string, string> = {};
-      if (DB_API_KEY) headers['x-api-key'] = DB_API_KEY;
-      const response = await fetch(`${DSH_URL}/api/db?path=tokens/user_${userId}_discord`, { headers });
-      if (response.ok) {
-        const tokenData = await response.json();
-        if (tokenData.exists && tokenData.data) {
-          const d = tokenData.data;
-          const discordUserId = d.user_id || d.userId || userId;
-          const username = d.username;
-          const avatar = d.avatar;
-          
-          const uid = `discord_${discordUserId}`;
-          const photoURL = avatar
-            ? `https://cdn.discordapp.com/avatars/${discordUserId}/${avatar}.png`
-            : null;
-            
-          await db.setAsync('users', uid, {
-            id: uid,
-            username,
-            displayName: username,
-            photoURL,
-            discordId: discordUserId,
-          });
-          
-          await setSessionCookie(uid);
-          enrichUserFromDSH(discordUserId).catch(() => {});
-          return NextResponse.redirect(`${BASE_URL}/`);
-        }
-      }
-    } catch (error) {
-      console.error('Failed to retrieve user Discord tokens:', error);
-    }
+
+    const username = searchParams.get('username') || searchParams.get('display_name') || 'Discord User';
+    const avatar = searchParams.get('avatar');
+    const uid = `discord_${userId}`;
+    const photoURL = avatar ? `https://cdn.discordapp.com/avatars/${userId}/${avatar}.png` : null;
+
+    await db.setAsync('users', uid, {
+      id: uid,
+      username,
+      displayName: searchParams.get('display_name') || username,
+      photoURL,
+      discordId: userId,
+    });
+
+    await setSessionCookie(uid);
+    enrichUserFromDSH(userId).catch(() => {});
+    return NextResponse.redirect(`${BASE_URL}/`);
   }
 
   // Legacy flow - DSH redirected here after doing the real OAuth + writing user to shared SQLite
@@ -69,7 +58,7 @@ export async function GET(req: NextRequest) {
     const verify = verifyDshRedirect('discord', searchParams);
     if (!verify.ok) {
       console.warn('[auth/discord/callback] rejected unsigned/forged legacy redirect:', verify.reason);
-      return NextResponse.redirect(`${BASE_URL}/login?error=invalid_dsh_redirect`);
+      return NextResponse.redirect(loginErrorUrl('invalid_dsh_redirect', verify.reason));
     }
     const uid = `discord_${legacyUserId}`;
 
@@ -97,7 +86,7 @@ export async function GET(req: NextRequest) {
   // No user info — redirect to DSH to do the OAuth
   const error = searchParams.get('error');
   if (error) {
-    return NextResponse.redirect(`${BASE_URL}/login?error=${encodeURIComponent(error)}`);
+    return NextResponse.redirect(loginErrorUrl(error, searchParams.get('error_description')));
   }
 
   // Bounce to DSH OAuth flow

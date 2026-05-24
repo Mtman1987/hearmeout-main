@@ -74,6 +74,15 @@ export function ScreenShareWidget({
     if (localVideoRef.current) localVideoRef.current.srcObject = null;
   }, []);
 
+  useEffect(() => {
+    const handleStop = (event: Event) => {
+      const detail = (event as CustomEvent<{ roomId?: string }>).detail;
+      if (!detail?.roomId || detail.roomId === roomId) stopShare();
+    };
+    window.addEventListener('hmo-stop-screen-share', handleStop);
+    return () => window.removeEventListener('hmo-stop-screen-share', handleStop);
+  }, [roomId, stopShare]);
+
   const viewShare = useCallback(async (peerId: string) => {
     // Disconnect existing viewer
     viewerRef.current?.disconnect();
