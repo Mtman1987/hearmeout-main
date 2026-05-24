@@ -1,6 +1,5 @@
-import { addSongToPlaylist, getRoomState, skipTrack } from '@/lib/bot-actions';
-import { db, ensureDb } from '@/lib/db';
-import { getGlobalMusicRoomId } from '@/lib/music-session';
+import { getRoomState } from '@/lib/bot-actions';
+import { controlGlobalMusicSession, ensureGlobalMusicRoom, requestMusicItem } from '@/lib/music-session-service';
 
 export function parseMusicCommand(message: string) {
   const trimmed = message.trim();
@@ -17,23 +16,6 @@ export function parseMusicCommand(message: string) {
   if (/^!status$/i.test(trimmed)) return { command: '!status', action: 'status' as const };
   if (/^!(skip|next)$/i.test(trimmed)) return { command: '!skip', action: 'skip' as const };
   return null;
-}
-
-async function ensureGlobalMusicRoom() {
-  await ensureDb();
-  const roomId = getGlobalMusicRoomId();
-  const existing = db.get('rooms', roomId);
-  if (!existing) {
-    db.set('rooms', roomId, {
-      name: 'Main Music Room',
-      ownerId: 'admin',
-      playlist: [],
-      currentTrackId: '',
-      isPlaying: false,
-      createdAt: new Date().toISOString(),
-    });
-  }
-  return roomId;
 }
 
 export async function handleMusicCommand(params: {
@@ -56,8 +38,11 @@ export async function handleMusicCommand(params: {
       return true;
     }
 
-    const requester = `${params.username} (${params.platform})`;
-    const result = await addSongToPlaylist(parsed.query, roomId, requester);
+    const { result } = await requestMusicItem({
+      query: parsed.query,
+      username: params.username,
+      platform: params.platform,
+    });
     await reply(result.success ? `Queued in shared music: ${result.message}` : `Sorry: ${result.message}`);
     return true;
   }
@@ -81,8 +66,8 @@ export async function handleMusicCommand(params: {
   }
 
   if (parsed.action === 'skip') {
-    const result = await skipTrack(roomId);
-    await reply(result.success ? result.message : `Sorry: ${result.message}`);
+    await controlGlobalMusicSession('next');
+    await reply('Skipped to next track.');
     return true;
   }
 

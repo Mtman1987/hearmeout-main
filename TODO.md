@@ -17,8 +17,8 @@ Goal: make Discord, Twitch, HearMeOut, admin chat, Discord Activity, and OBS ove
 
 ## Phase 2: Unified Music Session
 - [x] Pick one global music room ID for all chat commands (`GLOBAL_MUSIC_ROOM_ID`, `TARGET_ROOM_ID`, or `default`).
-- [ ] Create a watch-party-style music session API, separate from room-scoped DJ WebRTC.
-- [ ] Store one global song queue, current song, playback status, position, and updated timestamp.
+- [x] Create a watch-party-style music session API, separate from room-scoped DJ WebRTC.
+- [x] Store one global song queue, current song, playback status, position, and updated timestamp.
 - [ ] Add request/search logic once, then have every `!sr` source call it.
 - [ ] Replace pause semantics with local volume/mute where possible so listeners do not desync themselves.
 - [ ] Keep global skip as an authoritative control: if one authorized surface skips, everyone advances.
