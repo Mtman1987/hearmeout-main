@@ -2,6 +2,7 @@ import { isXtreamMockEnabled, searchXtreamCatalog } from './xtream-provider';
 import { findInternetArchiveRecommendation } from './internet-archive-provider';
 import { findWatchmodeRecommendation } from './watchmode-provider';
 import { startXtreamVodCache } from './xtream-cache';
+import { DISCORD_CLIENT_ID } from '@/lib/public-config';
 
 type WatchCatalogItem = {
   id: string;
@@ -268,6 +269,37 @@ export function getWatchSession(sessionId: string, guildId?: string, channelId?:
   return sessions.get(sessionId) || createSession(sessionId, guildId, channelId);
 }
 
+async function createDiscordActivityInvite(channelId: string) {
+  const botToken = process.env.DISCORD_BOT_TOKEN;
+  if (!botToken || !channelId || !DISCORD_CLIENT_ID) return null;
+
+  try {
+    const response = await fetch(`https://discord.com/api/v10/channels/${channelId}/invites`, {
+      method: 'POST',
+      headers: { Authorization: `Bot ${botToken}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        max_age: 86400,
+        max_uses: 0,
+        target_application_id: DISCORD_CLIENT_ID,
+        target_type: 2,
+        temporary: false,
+        unique: true,
+      }),
+    });
+
+    const payload = await response.json().catch(() => null);
+    if (!response.ok || !payload?.code) {
+      console.error('[WatchRequest] Discord activity invite failed:', response.status, payload);
+      return null;
+    }
+
+    return `https://discord.gg/${payload.code}`;
+  } catch (error) {
+    console.error('[WatchRequest] Discord activity invite error:', error);
+    return null;
+  }
+}
+
 export function getResolvedWatchSession(sessionId: string, guildId?: string, channelId?: string) {
   const exact = getWatchSession(sessionId, guildId, channelId);
   if (exact.current || exact.queue.length) return exact;
@@ -292,6 +324,10 @@ export function getWatchSessionId(guildId: string, channelId: string) {
 
 export function getWatchRoomUrl(sessionId: string, preferredBaseUrl?: string) {
   return `${getPublicBaseUrl(preferredBaseUrl)}/watch/${sessionId}`;
+}
+
+export function getActivityUrl(preferredBaseUrl?: string) {
+  return `${getPublicBaseUrl(preferredBaseUrl)}/activity`;
 }
 
 export function getPublicWatchSession(session: WatchSession, preferredBaseUrl?: string) {
@@ -415,7 +451,10 @@ export async function handleWatchRequestCommand(params: {
   channelId: string;
   userMessageId?: string;
   publicBaseUrl?: string;
+  reply?: (content: string) => void | Promise<void>;
 }) {
+  const reply = params.reply || ((content: string) => sendDiscordReply(params.channelId, content, params.userMessageId));
+
   if (parseWatchAcceptCommand(params.message)) {
     const sessionId = getWatchSessionId(params.guildId, params.channelId);
     const accepted = acceptWatchRecommendation({
@@ -427,15 +466,11 @@ export async function handleWatchRequestCommand(params: {
     });
 
     if ('error' in accepted) {
-      sendDiscordReply(params.channelId, 'No pending Internet Archive recommendation. Search with !wr first.', params.userMessageId);
+      await reply('No pending Internet Archive recommendation. Search with !wr first.');
       return true;
     }
 
-    sendDiscordReply(
-      params.channelId,
-      `Added "${accepted.request.item.title}" from Internet Archive. Watch room: ${getWatchRoomUrl(sessionId, params.publicBaseUrl)}`,
-      params.userMessageId
-    );
+    await reply(`Added "${accepted.request.item.title}" from Internet Archive. Watch room: ${getWatchRoomUrl(sessionId, params.publicBaseUrl)}`);
     return true;
   }
 
@@ -443,7 +478,7 @@ export async function handleWatchRequestCommand(params: {
   if (!parsed) return false;
 
   if (!parsed.query) {
-    sendDiscordReply(params.channelId, `Usage: ${parsed.command} <movie, show, or test stream>`, params.userMessageId);
+    await reply(`Usage: ${parsed.command} <movie, show, or test stream>`);
     return true;
   }
 
@@ -459,40 +494,26 @@ export async function handleWatchRequestCommand(params: {
 
   if ('error' in result) {
     if (result.discovery) {
-      sendDiscordReply(
-        params.channelId,
-        `No playable Xtream/VOD match found. Watchmode found "${result.discovery.title}" (${result.discovery.year}) as a likely title, but Watchmode only provides discovery links/metadata, not a stream. Try a provider title, or search again for a public-domain fallback.`,
-        params.userMessageId
-      );
+      await reply(`No playable Xtream/VOD match found. Watchmode found "${result.discovery.title}" (${result.discovery.year}) as a likely title, but Watchmode only provides discovery links/metadata, not a stream. Try a provider title, or search again for a public-domain fallback.`);
       return true;
     }
 
     if (result.recommendation) {
-      sendDiscordReply(
-        params.channelId,
-        `No playable Xtream VOD/live match found. Internet Archive returned best title comparison: "${result.recommendation.title}". Type !add to accept this recommendation.`,
-        params.userMessageId
-      );
+      await reply(`No playable Xtream VOD/live match found. Internet Archive returned best title comparison: "${result.recommendation.title}". Type !add to accept this recommendation.`);
       return true;
     }
 
-    sendDiscordReply(
-      params.channelId,
-      `No match found for "${parsed.query}". Try "big buck bunny", "sintel", "tears of steel", or "hls".`,
-      params.userMessageId
-    );
+    await reply(`No match found for "${parsed.query}". Try "big buck bunny", "sintel", "tears of steel", or "hls".`);
     return true;
   }
 
   const position = result.session.current?.requestId === result.request.requestId
     ? 'now playing'
     : `queue position ${result.session.queue.length}`;
+  const activityInviteUrl = await createDiscordActivityInvite(params.channelId);
+  const joinUrl = activityInviteUrl || getActivityUrl(params.publicBaseUrl);
 
-  sendDiscordReply(
-    params.channelId,
-    `Added "${result.request.item.title}" (${position}). Watch room: ${getWatchRoomUrl(sessionId, params.publicBaseUrl)}`,
-    params.userMessageId
-  );
+  await reply(`Added "${result.request.item.title}" (${position}). Join the Activity: ${joinUrl}`);
 
   return true;
 }
