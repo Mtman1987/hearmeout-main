@@ -2,15 +2,21 @@
 
 Goal: make Discord, Twitch, HearMeOut, admin chat, Discord Activity, and OBS overlay all operate from one shared watch state, one shared music state, and one voice bridge.
 
+## Service Boundaries
+- Next app: command routing, shared queue/playback state, Discord/Twitch/admin APIs, browser clients, WebRTC signaling, and lightweight proxying.
+- DJ worker: CPU-heavy media extraction, video/audio conversion, ffmpeg, cache warming, and publishing audio/video streams when a shared browser player is not enough.
+- Rule of thumb: if it can block the event loop, transcode, or buffer large media, send it to the DJ worker; if it is state, commands, UI, or WebRTC coordination, keep it in Next.
+
 ## Phase 1: Unified Commands
 - [x] Make `!wr` use one global Discord Activity watch room instead of guild/channel scoped sessions.
-- [ ] Route `!sr <song>` through one command handler from Twitch chat.
-- [ ] Route `!sr <song>` through the same handler from Discord chat polling.
-- [ ] Route `!sr <song>` through the same handler from `/api/discord/chat`.
-- [ ] Route `!sr <song>` and `!wr <movie>` through admin chat before saving the message.
-- [ ] Keep `!np`, `!status`, and skip responses reading from the same music state.
+- [x] Route `!sr <song>` through one command handler from Twitch chat.
+- [x] Route `!sr <song>` through the same handler from Discord chat polling.
+- [x] Route `!sr <song>` through the same handler from `/api/discord/chat`.
+- [x] Route `!sr <song>` and `!wr <movie>` through admin chat before saving the message.
+- [x] Keep `!np`, `!status`, and skip responses reading from the same music state.
 
 ## Phase 2: Unified Music Session
+- [x] Pick one global music room ID for all chat commands (`GLOBAL_MUSIC_ROOM_ID`, `TARGET_ROOM_ID`, or `default`).
 - [ ] Create a watch-party-style music session API, separate from room-scoped DJ WebRTC.
 - [ ] Store one global song queue, current song, playback status, position, and updated timestamp.
 - [ ] Add request/search logic once, then have every `!sr` source call it.

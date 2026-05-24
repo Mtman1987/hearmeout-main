@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import tmi from 'tmi.js';
-import { addSongToPlaylist, getRoomState } from '@/lib/bot-actions';
+import { handleMusicCommand } from '@/lib/music-command-service';
 import { handleWatchRequestCommand, parseWatchCommand } from '@/lib/watch-request-service';
 import { db, ensureDb } from '@/lib/db';
 import { existsSync, readFileSync } from 'fs';
@@ -287,36 +287,19 @@ function createMessageHandler(instance: BotInstance) {
       return;
     }
 
-    if (message.startsWith('!sr ')) {
-      const songQuery = msg.substring(4).trim();
-      if (!songQuery) {
-        client.say(target, `@${requester}, usage: !sr [song name or YouTube URL]`);
-        return;
-      }
-      addSongToPlaylist(songQuery, targetRoomId, `${requester} (Twitch)`)
-        .then(result => {
-          client.say(target, result.success
-            ? `✅ @${requester} ${result.message}`
-            : `❌ @${requester} Sorry: ${result.message}`);
-        })
-        .catch(() => {
-          client.say(target, `❌ @${requester} A critical error occurred.`);
-        });
-    }
-
-    if (message === '!np') {
-      getRoomState(targetRoomId).then(state => {
-        if (!state?.currentTrack) { client.say(target, "🎵 Nothing playing. Use !sr to request!"); return; }
-        const s = state.isPlaying ? "▶️" : "⏸️";
-        client.say(target, `${s} "${state.currentTrack.title}" by ${state.currentTrack.artist}`);
-      }).catch(() => client.say(target, "❌ Error fetching now playing."));
-    }
-
-    if (message === '!status') {
-      getRoomState(targetRoomId).then(state => {
-        const s = state?.isPlaying ? "▶️" : "⏸️";
-        client.say(target, `🎵 DJ: ${state?.djDisplayName || 'None'} | ${s} | Queue: ${state?.playlistLength || 0}`);
-      }).catch(() => client.say(target, "❌ Error fetching status."));
+    if (message.startsWith('!sr') || message === '!np' || message === '!status' || message === '!skip' || message === '!next') {
+      handleMusicCommand({
+        message: msg,
+        userId: context.username || context['user-id'] || 'twitch',
+        username: String(requester),
+        platform: 'twitch',
+        reply: (content) => {
+          client.say(target, `@${requester} ${content}`);
+        },
+      }).catch((error) => {
+        console.error('[Twitch Bot] music command failed:', error);
+        client.say(target, `@${requester} Music command failed.`);
+      });
     }
 
     if (message === '!help' || message === '!commands') {

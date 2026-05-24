@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { handleMusicCommand } from '@/lib/music-command-service';
 import { handleWatchRequestCommand } from '@/lib/watch/watch-request-service';
 
 function getRequestBaseUrl(request: NextRequest) {
@@ -34,7 +35,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ success: false, error: 'Missing channelId' }, { status: 400 });
     }
 
-    const handled = await handleWatchRequestCommand({
+    let handled = await handleWatchRequestCommand({
       message,
       discordUserId: userId,
       discordUserName: userName,
@@ -46,6 +47,18 @@ export async function POST(request: NextRequest) {
         replies.push(content);
       },
     });
+
+    if (!handled) {
+      handled = await handleMusicCommand({
+        message,
+        userId,
+        username: userName,
+        platform: 'discord',
+        reply: (content) => {
+          replies.push(content);
+        },
+      });
+    }
 
     return NextResponse.json({ success: true, handled, replies, reply: replies[0] || null });
   } catch (error) {

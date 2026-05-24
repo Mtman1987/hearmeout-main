@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { DiscordChatService } from '@/lib/discord-chat-service';
+import { handleMusicCommand } from '@/lib/music-command-service';
 import { handleWatchRequestCommand } from '@/lib/watch/watch-request-service';
 import { db, ensureDb } from '@/lib/db';
 import { HARDCODED_GUILD_ID } from '@/lib/constants';
@@ -83,7 +84,7 @@ function startListener(target: DiscordBotTarget) {
       if (message.role === 'bot') return;
 
       try {
-        await handleWatchRequestCommand({
+        const handled = await handleWatchRequestCommand({
           message: message.content,
           discordUserId: message.authorId,
           discordUserName: message.author,
@@ -92,8 +93,16 @@ function startListener(target: DiscordBotTarget) {
           userMessageId: message.id,
           publicBaseUrl: getPublicBaseUrl(),
         });
+        if (!handled) {
+          await handleMusicCommand({
+            message: message.content,
+            userId: message.authorId,
+            username: message.author,
+            platform: 'discord',
+          });
+        }
       } catch (error) {
-        console.error('[Discord Bot] watch command handler failed:', error);
+        console.error('[Discord Bot] command handler failed:', error);
       }
     },
     (error) => {
