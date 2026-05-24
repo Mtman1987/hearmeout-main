@@ -51,16 +51,7 @@ async function sendDiscordMessage(channelId: string, content: string, username?:
       }
     }
 
-    const botRes = await fetch(`https://discord.com/api/v10/channels/${channelId}/messages`, {
-      method: 'POST',
-      headers: { Authorization: `Bot ${botToken}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ content }),
-      signal: timeoutSignal(7_000),
-    });
-
-    return botRes.ok
-      ? { ok: true, via: 'bot' }
-      : { ok: false, error: `Discord returned ${botRes.status}` };
+    return { ok: false, error: `Webhook unavailable for channel ${channelId}` };
   } catch (error: any) {
     return { ok: false, error: error?.message || 'Discord send failed' };
   }
