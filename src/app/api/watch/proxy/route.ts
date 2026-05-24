@@ -24,13 +24,21 @@ function isManifest(url: URL, contentType: string | null) {
 }
 
 function rewriteManifest(manifest: string, upstreamUrl: URL, proxyPath: string) {
+  const proxiedUrl = (value: string) => {
+    if (!value || value.startsWith('data:')) return value;
+    const absolute = new URL(value, upstreamUrl).toString();
+    return `${proxyPath}?url=${encodeURIComponent(absolute)}`;
+  };
+
   return manifest
     .split(/\r?\n/)
     .map((line) => {
       const trimmed = line.trim();
-      if (!trimmed || trimmed.startsWith('#')) return line;
-      const absolute = new URL(trimmed, upstreamUrl).toString();
-      return `${proxyPath}?url=${encodeURIComponent(absolute)}`;
+      if (!trimmed) return line;
+      if (trimmed.startsWith('#')) {
+        return line.replace(/URI="([^"]+)"/g, (_match, value) => `URI="${proxiedUrl(value)}"`);
+      }
+      return proxiedUrl(trimmed);
     })
     .join('\n');
 }
