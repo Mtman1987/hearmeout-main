@@ -393,19 +393,20 @@ function maybeStartVodCache(item: WatchCatalogItem) {
   startXtreamVodCache(match[1], item.title).catch(() => {});
 }
 
-export function controlWatchSession(sessionId: string, action: string, position = 0) {
+export function controlWatchSession(sessionId: string, action: string, position?: number) {
   const session = getWatchSession(sessionId);
 
   if (action === 'play' || action === 'pause') {
     session.playback.status = action === 'play' ? 'playing' : 'paused';
-    session.playback.position = Math.max(0, Number(position || session.playback.position || 0));
+    const nextPosition = position === undefined ? session.playback.position || 0 : position;
+    session.playback.position = Math.max(0, Number(nextPosition || 0));
     session.playback.updatedAt = Date.now();
     addEvent(session, `${action === 'play' ? 'Played' : 'Paused'} ${session.current?.item.title || 'session'}`);
     return session;
   }
 
   if (action === 'seek') {
-    session.playback.position = Math.max(0, Number(position || 0));
+    session.playback.position = Math.max(0, Number(position ?? 0));
     session.playback.updatedAt = Date.now();
     addEvent(session, `Seeked to ${Math.round(session.playback.position)}s`);
     return session;

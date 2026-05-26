@@ -116,7 +116,10 @@ export default function WatchRoomClient({ sessionId }: { sessionId: string }) {
   async function refresh() {
     try {
       const nextState = await api(`/api/watch/sessions/${sessionId}/state`);
-      setState(nextState);
+      setState((prev) => {
+        if (!prev) return nextState;
+        return (nextState?.playback?.updatedAt || 0) >= (prev?.playback?.updatedAt || 0) ? nextState : prev;
+      });
       setConnected(true);
     } catch {
       setConnected(false);

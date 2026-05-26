@@ -15,7 +15,7 @@ function withTimeout<T>(promise: Promise<T>, milliseconds: number) {
   return Promise.race([
     promise,
     new Promise<T>((_, reject) => {
-      window.setTimeout(() => reject(new Error('Discord Activity SDK timed out.')), milliseconds);
+      window.setTimeout(() => reject(new Error('Discord Activity SDK timed out while waiting for Discord client readiness.')), milliseconds);
     }),
   ]);
 }
@@ -44,7 +44,7 @@ export default function ActivityClient() {
         setStatus('Connecting to Discord...');
         const discordSdk = new DiscordSDK(clientId);
         setStatus('Waiting for Discord ready...');
-        await withTimeout(discordSdk.ready(), 5000);
+        await withTimeout(discordSdk.ready(), 20000);
 
         if (cancelled) return;
 
