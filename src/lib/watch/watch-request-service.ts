@@ -163,9 +163,7 @@ function getPublicBaseUrl(preferredBaseUrl?: string) {
 function getPublicPlaybackUrl(item: WatchCatalogItem) {
   const playbackUrl = item.playbackUrl;
   const xtreamVodMatch = playbackUrl.match(/^\/activity-provider\/xtream\/vod\/(\d+)$/i);
-  const isMkv = String(item.overview || '').toLowerCase().includes('(mkv)');
-  if (xtreamVodMatch && isMkv) return `/api/watch/xtream/hls/${xtreamVodMatch[1]}/index.m3u8`;
-  if (xtreamVodMatch) return `/activity-worker/watch/xtream/direct/vod/${xtreamVodMatch[1]}`;
+  if (xtreamVodMatch) return `/api/watch/xtream/hls/${xtreamVodMatch[1]}/index.m3u8`;
   if (playbackUrl.startsWith('/')) return playbackUrl;
   return `/activity-proxy?url=${encodeURIComponent(playbackUrl)}`;
 }
