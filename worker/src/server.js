@@ -44,6 +44,7 @@ const EXTRACTOR_PROFILE_DIR = process.env.EXTRACTOR_PROFILE_DIR || process.env.P
 const UPSTREAM_EXTRACTOR_URL = (process.env.UPSTREAM_EXTRACTOR_URL || process.env.LOCAL_EXTRACTOR_URL || '').replace(/\/+$/, '');
 const UPSTREAM_EXTRACTOR_SECRET = process.env.UPSTREAM_EXTRACTOR_SECRET || process.env.LOCAL_EXTRACTOR_SECRET || '';
 const CACHE_DIR = process.env.MUSIC_CACHE_DIR || (process.env.NODE_ENV === 'production' ? '/tmp/music' : join(__dirname, '..', '.cache', 'music'));
+const WATCH_HLS_DIR = process.env.WATCH_HLS_DIR || (process.env.NODE_ENV === 'production' ? '/tmp/watch-hls' : join(__dirname, '..', '.cache', 'watch-hls'));
 
 const VIDEO_ID_RE = /^[A-Za-z0-9_-]{11}$/;
 function isValidVideoId(id) {
@@ -323,6 +324,207 @@ app.get('/stream', authorizeWorker, async (req, res) => {
 
 app.get('/cache-stats', authorizeWorker, (req, res) => {
   res.status(410).json({ error: 'Legacy cache stats disabled' });
+});
+
+// ── Watch HLS Transcoder ────────────────────────────────────────────────
+const watchHlsJobs = new Map();
+const MIN_COMPLETE_VOD_SECONDS = 45 * 60;
+
+function cleanWatchStreamId(streamId) {
+  const clean = String(streamId || '').replace(/[^0-9]/g, '');
+  if (!clean) throw new Error('Invalid stream id');
+  return clean;
+}
+
+function cleanHlsFileName(fileName) {
+  const clean = String(fileName || '').replace(/[^a-zA-Z0-9_.-]/g, '');
+  if (!clean || clean.includes('..')) throw new Error('Invalid HLS file');
+  return clean;
+}
+
+function watchHlsPaths(streamId) {
+  const clean = cleanWatchStreamId(streamId);
+  const dir = join(WATCH_HLS_DIR, clean);
+  return {
+    clean,
+    dir,
+    indexPath: join(dir, 'index.m3u8'),
+  };
+}
+
+function readManifestDuration(manifest) {
+  return manifest
+    .split(/\r?\n/)
+    .filter((line) => line.startsWith('#EXTINF:'))
+    .reduce((sum, line) => {
+      const value = Number(line.replace(/^#EXTINF:/, '').replace(',', ''));
+      return Number.isFinite(value) ? sum + value : sum;
+    }, 0);
+}
+
+function hasUsableWatchHlsIndex(dir, indexPath) {
+  if (!existsSync(indexPath)) return false;
+  const indexStats = statSync(indexPath);
+  if (!indexStats.isFile() || indexStats.size <= 0) return false;
+
+  const manifest = require('fs').readFileSync(indexPath, 'utf8');
+  const durationSeconds = readManifestDuration(manifest);
+  if (manifest.includes('#EXT-X-ENDLIST') && durationSeconds > 0 && durationSeconds < MIN_COMPLETE_VOD_SECONDS) {
+    try { unlinkSync(indexPath); } catch {}
+    return false;
+  }
+
+  const firstSegment = manifest
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .find((line) => line && !line.startsWith('#'));
+  if (!firstSegment) return false;
+
+  const segmentPath = join(dir, cleanHlsFileName(firstSegment));
+  if (!existsSync(segmentPath)) return false;
+  const segmentStats = statSync(segmentPath);
+  return segmentStats.isFile() && segmentStats.size > 0;
+}
+
+function waitForWatchHlsIndex(streamId, timeoutMs = 45000) {
+  const { dir, indexPath } = watchHlsPaths(streamId);
+  const startedAt = Date.now();
+  return new Promise((resolve) => {
+    const timer = setInterval(() => {
+      if (hasUsableWatchHlsIndex(dir, indexPath)) {
+        clearInterval(timer);
+        resolve(true);
+        return;
+      }
+      if (Date.now() - startedAt >= timeoutMs) {
+        clearInterval(timer);
+        resolve(false);
+      }
+    }, 500);
+  });
+}
+
+function waitForWatchHlsFile(streamId, fileName, timeoutMs = 10000) {
+  const { dir } = watchHlsPaths(streamId);
+  const filePath = join(dir, cleanHlsFileName(fileName));
+  const startedAt = Date.now();
+  return new Promise((resolve) => {
+    const timer = setInterval(() => {
+      if (existsSync(filePath) && statSync(filePath).isFile()) {
+        clearInterval(timer);
+        resolve(filePath);
+        return;
+      }
+      if (Date.now() - startedAt >= timeoutMs) {
+        clearInterval(timer);
+        resolve(null);
+      }
+    }, 250);
+  });
+}
+
+function ensureWatchHls(streamId, sourceUrl) {
+  const { clean, dir, indexPath } = watchHlsPaths(streamId);
+  if (hasUsableWatchHlsIndex(dir, indexPath)) return Promise.resolve();
+  if (watchHlsJobs.has(clean)) return watchHlsJobs.get(clean);
+  if (!sourceUrl) return Promise.reject(new Error('Missing source URL for HLS conversion'));
+
+  mkdirSync(dir, { recursive: true });
+  try { if (existsSync(indexPath)) unlinkSync(indexPath); } catch {}
+
+  const promise = runWatchHlsFfmpeg(clean, sourceUrl, dir, indexPath)
+    .catch((error) => {
+      console.error(`[WatchHLS] Conversion failed for VOD ${clean}:`, error.message || error);
+      throw error;
+    })
+    .finally(() => {
+      watchHlsJobs.delete(clean);
+    });
+
+  watchHlsJobs.set(clean, promise);
+  return promise;
+}
+
+function runWatchHlsFfmpeg(streamId, sourceUrl, dir, indexPath) {
+  const segmentPattern = join(dir, 'seg_%05d.ts');
+  console.log(`[WatchHLS] Starting HLS conversion for VOD ${streamId}`);
+
+  return new Promise((resolve, reject) => {
+    const ffmpegArgs = [
+      '-hide_banner',
+      '-loglevel', 'warning',
+      '-threads', '2',
+      '-y',
+      '-user_agent', 'DiscordStreamHub/1.0',
+      '-reconnect', '1',
+      '-reconnect_streamed', '1',
+      '-reconnect_at_eof', '1',
+      '-reconnect_delay_max', '5',
+      '-i', sourceUrl,
+      '-map', '0:v:0?',
+      '-map', '0:a:0?',
+      '-c:v', 'copy',
+      '-c:a', 'aac',
+      '-ac', '2',
+      '-f', 'hls',
+      '-hls_time', '6',
+      '-hls_list_size', '0',
+      '-hls_playlist_type', 'event',
+      '-hls_segment_filename', segmentPattern,
+      indexPath,
+    ];
+
+    const command = process.platform === 'win32' ? 'ffmpeg' : 'nice';
+    const args = process.platform === 'win32' ? ffmpegArgs : ['-n', '10', 'ffmpeg', ...ffmpegArgs];
+    const child = spawn(command, args, { stdio: ['ignore', 'ignore', 'pipe'] });
+    let stderr = '';
+
+    child.stderr?.on('data', (chunk) => {
+      stderr = `${stderr}${chunk}`.slice(-4000);
+    });
+    child.once('error', reject);
+    child.once('exit', (code) => {
+      if (code === 0) {
+        resolve();
+        return;
+      }
+      reject(new Error(stderr || `ffmpeg exited with ${code}`));
+    });
+  });
+}
+
+app.get('/watch/xtream/hls/:streamId/:file', authorizeWorker, async (req, res) => {
+  try {
+    const streamId = cleanWatchStreamId(req.params.streamId);
+    const file = cleanHlsFileName(req.params.file);
+    const { dir } = watchHlsPaths(streamId);
+
+    if (file === 'index.m3u8') {
+      const sourceUrl = String(req.query.source || '');
+      if (sourceUrl && !/^https?:\/\//i.test(sourceUrl)) return res.status(400).json({ error: 'Invalid source URL' });
+      ensureWatchHls(streamId, sourceUrl).catch(() => {});
+      const ready = await waitForWatchHlsIndex(streamId);
+      if (!ready) return res.status(202).json({ error: 'HLS stream is still preparing. Try again in a few seconds.' });
+    }
+
+    const filePath = join(dir, file);
+    const resolvedPath = existsSync(filePath) ? filePath : await waitForWatchHlsFile(streamId, file);
+    if (!resolvedPath) return res.status(404).json({ error: 'HLS file not found' });
+
+    const stats = statSync(resolvedPath);
+    const contentType = file.endsWith('.m3u8')
+      ? 'application/vnd.apple.mpegurl'
+      : file.endsWith('.ts')
+        ? 'video/mp2t'
+        : 'application/octet-stream';
+
+    res.setHeader('Content-Type', contentType);
+    res.setHeader('Content-Length', String(stats.size));
+    res.setHeader('Cache-Control', file.endsWith('.m3u8') ? 'no-store' : 'public, max-age=3600');
+    createReadStream(resolvedPath).pipe(res);
+  } catch (err) {
+    res.status(502).json({ error: err.message || 'HLS conversion failed' });
+  }
 });
 
 // ══════════════════════════════════════════════════════════════════════════

@@ -2,10 +2,12 @@ import { NextResponse } from 'next/server';
 import { DISCORD_CLIENT_ID } from '@/lib/public-config';
 import { GLOBAL_WATCH_SESSION_ID } from '@/lib/watch-session';
 
-function js(clientId: string, sessionId: string) {
+export function js(clientId: string, sessionId: string) {
+  const appBaseUrl = process.env.NEXT_PUBLIC_BASE_URL || process.env.NEXT_PUBLIC_APP_URL || 'https://hearmeout-main.fly.dev';
   return `
 const CLIENT_ID = ${JSON.stringify(clientId)};
 const GLOBAL_SESSION_ID = ${JSON.stringify(sessionId)};
+const APP_BASE_URL = ${JSON.stringify(appBaseUrl.replace(/\/$/, ''))};
 const params = new URLSearchParams(location.search);
 let sessionId = GLOBAL_SESSION_ID;
 const video = document.getElementById('video');
@@ -23,6 +25,9 @@ const downloadLink = document.getElementById('download');
 const muteBtn = document.getElementById('mute');
 const volumeInput = document.getElementById('volume');
 const volumeLabel = document.getElementById('volume-label');
+const requestForm = document.getElementById('request-form');
+const queryInput = document.getElementById('query');
+const acceptRecommendationBtn = document.getElementById('accept-recommendation');
 let state = null;
 let currentRequestId = null;
 let hls = null;
@@ -31,13 +36,32 @@ let lastSeekApplyAt = 0;
 let mediaIsBuffering = false;
 let muted = false;
 let currentDownloadUrl = '';
-let lastPressAt = 0;
+let pendingRecommendation = null;
+let pendingPlay = false;
+let syncingCompletedPlayback = false;
+let syncingNativeControl = false;
+let lastNativePlayAt = 0;
 
 function downloadUrlFor(url) {
   if (!url || !url.startsWith('/')) return url;
-  const next = new URL(url, window.location.origin);
+  const next = new URL(appUrl(url), window.location.href);
   next.searchParams.set('download', '1');
   return next.toString();
+}
+
+function downloadUrlForItem(item) {
+  const idMatch = String((item && item.id) || '').match(/^xtream-vod-(\\d+)$/i);
+  if (idMatch) return '/activity-provider/xtream/vod/' + idMatch[1] + '?download=1';
+  return downloadUrlFor((item && item.playbackUrl) || '');
+}
+
+function appUrl(path) {
+  if (!path || /^https?:\\/\\//i.test(path)) return path;
+  let nextPath = path.startsWith('/') ? path : '/' + path;
+  if (nextPath.startsWith('/api/watch/xtream/hls/')) nextPath = nextPath.replace('/api/watch/xtream/hls/', '/activity-provider/xtream/hls/');
+  if (nextPath.startsWith('/activity/watch/xtream/hls/')) nextPath = nextPath.replace('/activity/watch/xtream/hls/', '/api/watch/xtream/hls/');
+  if (nextPath.startsWith('/activity/proxy')) nextPath = nextPath.replace('/activity/proxy', '/activity-proxy');
+  return nextPath;
 }
 
 function applyVolume() {
@@ -81,16 +105,31 @@ function discordHandshake() {
 }
 
 async function api(path, options) {
-  const response = await fetch(path, {
-    ...options,
+  const requestOptions = options || {};
+  const headers = { ...((requestOptions && requestOptions.headers) || {}) };
+  if (requestOptions.body && !headers['content-type']) headers['content-type'] = 'application/json';
+  const response = await fetch(appUrl(path), {
+    ...requestOptions,
     cache: 'no-store',
-    headers: { 'content-type': 'application/json', ...((options && options.headers) || {}) },
+    headers,
   });
   if (!response.ok) {
     const payload = await response.json().catch(() => null);
-    throw new Error((payload && payload.error) || 'Request failed: ' + response.status);
+    const error = new Error((payload && payload.error) || 'Request failed: ' + response.status);
+    error.payload = payload;
+    throw error;
   }
   return response.json();
+}
+
+function escapeHtml(value) {
+  return String(value || '').replace(/[&<>"']/g, (char) => ({
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    '"': '&quot;',
+    "'": '&#39;',
+  }[char] || char));
 }
 
 function position(playback) {
@@ -107,12 +146,67 @@ function applyPlayback() {
   applying = true;
   const now = Date.now();
   const isLive = state.current.item.type === 'live' || state.current.item.runtime === 'live';
+  if (!isLive && Number.isFinite(video.duration) && video.duration > 0 && remote >= video.duration - 0.5) {
+    if (!syncingCompletedPlayback) {
+      syncingCompletedPlayback = true;
+      if (state.queue && state.queue.length) {
+        control('next').finally(() => { syncingCompletedPlayback = false; });
+      } else {
+        video.pause();
+        video.currentTime = 0;
+        control('pause', 0).finally(() => { syncingCompletedPlayback = false; });
+      }
+    }
+    setTimeout(() => { applying = false; }, 100);
+    return;
+  }
   if (!isLive && drift > 8 && Number.isFinite(remote) && now - lastSeekApplyAt > 5000) {
     lastSeekApplyAt = now;
     video.currentTime = remote;
   }
-  if (state.playback.status === 'paused' && !video.paused) video.pause();
+  const playSyncInFlight = syncingNativeControl && Date.now() - lastNativePlayAt < 5000;
+  if (state.playback.status === 'paused' && !video.paused && !playSyncInFlight) video.pause();
+  if (state.playback.status === 'playing' && video.paused && !pendingPlay) startVideoPlayback();
   setTimeout(() => { applying = false; }, 100);
+}
+
+function startVideoPlayback() {
+  if (!state || !state.current) return Promise.resolve(false);
+  pendingPlay = true;
+  if (video.readyState < 2) {
+    mediaEl.textContent = 'Media: loading';
+    return Promise.resolve(false);
+  }
+  return video.play()
+    .then(() => {
+      pendingPlay = false;
+      mediaEl.textContent = 'Media: playing';
+      return true;
+    })
+    .catch((err) => {
+      pendingPlay = false;
+      mediaEl.textContent = 'Media: press the video play control';
+      console.warn(err);
+      return false;
+    });
+}
+
+function syncNativePlayback(action) {
+  if (!state || !state.current || applying || syncingCompletedPlayback || syncingNativeControl) return;
+  if (pendingPlay && action === 'play') return;
+  if (action === 'play') {
+    lastNativePlayAt = Date.now();
+    state.playback = {
+      ...state.playback,
+      status: 'playing',
+      position: video.currentTime || state.playback.position || 0,
+      updatedAt: Date.now(),
+    };
+  }
+  syncingNativeControl = true;
+  control(action)
+    .catch((err) => console.warn('Native playback sync failed', err))
+    .finally(() => { syncingNativeControl = false; });
 }
 
 function loadMedia(item) {
@@ -123,13 +217,38 @@ function loadMedia(item) {
   video.removeAttribute('src');
   lastSeekApplyAt = 0;
   mediaIsBuffering = true;
+  pendingPlay = false;
   mediaEl.textContent = 'Media: loading ' + item.title;
   if (item.playbackUrl.endsWith('.m3u8') && window.Hls && window.Hls.isSupported()) {
-    hls = new window.Hls();
-    hls.loadSource(item.playbackUrl);
+    hls = new window.Hls({
+      enableWorker: false,
+      lowLatencyMode: false,
+      backBufferLength: 30,
+      manifestLoadingTimeOut: 60000,
+      manifestLoadingMaxRetry: 4,
+      manifestLoadingRetryDelay: 1000,
+      manifestLoadingMaxRetryTimeout: 8000,
+      fragLoadingTimeOut: 60000,
+      fragLoadingMaxRetry: 4,
+      fragLoadingRetryDelay: 1000,
+      fragLoadingMaxRetryTimeout: 8000,
+    });
+    hls.on(window.Hls.Events.MANIFEST_PARSED, () => {
+      mediaEl.textContent = 'Media: ready';
+      mediaIsBuffering = false;
+      if (state && state.playback && state.playback.status === 'playing') startVideoPlayback();
+    });
+    hls.on(window.Hls.Events.ERROR, (_event, data) => {
+      const details = data && (data.details || data.type || data.reason || data.response && data.response.code);
+      mediaEl.textContent = data && data.fatal
+        ? 'Media: HLS error' + (details ? ' - ' + details : '')
+        : 'Media: buffering' + (details ? ' - ' + details : '');
+      if (data && data.fatal) console.warn('HLS fatal error', data);
+    });
+    hls.loadSource(appUrl(item.playbackUrl));
     hls.attachMedia(video);
   } else {
-    video.src = item.playbackUrl;
+    video.src = appUrl(item.playbackUrl);
   }
 }
 
@@ -139,14 +258,15 @@ function render(nextState) {
     sessionId = state.id;
     document.getElementById('room').textContent = 'Room ' + sessionId;
   }
+  empty.classList.toggle('hidden', Boolean(state.current));
   empty.style.display = state.current ? 'none' : 'grid';
   document.querySelectorAll('[data-action="next"]').forEach((button) => { button.disabled = !state.queue.length; });
   popoutBtn.disabled = !state.current;
   if (state.current) {
     titleEl.textContent = state.current.item.title + ' (' + state.current.item.year + ')';
-    const url = state.current.item.playbackUrl || '';
+    const url = downloadUrlForItem(state.current.item);
     if (url) {
-      currentDownloadUrl = downloadUrlFor(url);
+      currentDownloadUrl = url;
       downloadLink.disabled = false;
     } else {
       currentDownloadUrl = '';
@@ -163,12 +283,31 @@ function render(nextState) {
     currentDownloadUrl = '';
     downloadLink.disabled = true;
   }
-  queueEl.innerHTML = state.queue.length
-    ? state.queue.map((request, index) => '<li>' + (index + 1) + '. ' + request.item.title + '</li>').join('')
-    : '<li>Queue is empty.</li>';
+  const queueRows = [];
+  if (state.current) {
+    queueRows.push('<li><strong>Now playing:</strong> ' + escapeHtml(state.current.item.title) + '</li>');
+  }
+  if (state.queue.length) {
+    queueRows.push(...state.queue.map((request, index) => '<li><button type="button" class="queue-item" data-queue-index="' + index + '" title="Play ' + escapeHtml(request.item.title) + '"><span class="queue-index">' + (index + 1) + '</span><strong>' + escapeHtml(request.item.title) + '</strong></button></li>'));
+  }
+  queueEl.innerHTML = queueRows.length ? queueRows.join('') : '<li>Queue is empty.</li>';
   eventsEl.innerHTML = state.events.length
-    ? state.events.slice(0, 8).map((event) => '<li>' + new Date(event.at).toLocaleTimeString() + ' - ' + event.message + '</li>').join('')
+    ? state.events.slice(0, 8).map((event) => '<li>' + new Date(event.at).toLocaleTimeString() + ' - ' + escapeHtml(event.message) + '</li>').join('')
     : '<li>No events yet.</li>';
+}
+
+function setPendingRecommendation(recommendation) {
+  pendingRecommendation = recommendation || null;
+  if (!acceptRecommendationBtn) return;
+  if (pendingRecommendation) {
+    acceptRecommendationBtn.style.display = 'block';
+    acceptRecommendationBtn.disabled = false;
+    acceptRecommendationBtn.textContent = 'Add "' + pendingRecommendation.title + '"';
+  } else {
+    acceptRecommendationBtn.style.display = 'none';
+    acceptRecommendationBtn.disabled = true;
+    acceptRecommendationBtn.textContent = 'Add Recommended Match';
+  }
 }
 
 function setDrawer(panelName) {
@@ -196,10 +335,12 @@ async function refresh() {
   }
 }
 
-async function control(action) {
-  const body = { action, position: video.currentTime || 0 };
+async function control(action, positionOverride) {
+  const body = { action, position: Number.isFinite(positionOverride) ? positionOverride : (video.currentTime || 0) };
   try {
-    render(await api('/api/watch/sessions/' + sessionId + '/control', { method: 'POST', body: JSON.stringify(body) }));
+    const controlUrl = '/api/watch/sessions/' + sessionId + '/quick-control?action=' + encodeURIComponent(action) + '&position=' + encodeURIComponent(String(body.position || 0)) + '&format=json';
+    const result = await api(controlUrl);
+    render(result.session);
     if (action === 'seek') mediaEl.textContent = 'Media: synced at ' + Math.round(body.position) + 's';
     if (action === 'next') mediaEl.textContent = state && state.current ? 'Media: loaded next' : 'Media: queue ended';
     if (action === 'clear') mediaEl.textContent = 'Media: queue cleared';
@@ -210,45 +351,69 @@ async function control(action) {
   }
 }
 
+async function jumpToQueueIndex(index) {
+  if (!Number.isInteger(index) || index < 0) return;
+  mediaEl.textContent = 'Media: loading selected';
+  try {
+    const controlUrl = '/api/watch/sessions/' + sessionId + '/quick-control?action=jump&targetIndex=' + encodeURIComponent(String(index)) + '&position=0&format=json';
+    const result = await api(controlUrl);
+    render(result.session);
+    if (!state || !state.current) {
+      mediaEl.textContent = 'Media: queue ended';
+      return;
+    }
+    pendingPlay = true;
+    await control('play', 0);
+    await startVideoPlayback();
+  } catch (err) {
+    errorEl.textContent = err && err.message ? err.message : String(err);
+    console.warn('Queue jump failed', err);
+  }
+}
+
 function handleAction(action) {
   if (action === 'play') {
     mediaEl.textContent = 'Media: starting';
-    control('play').catch((err) => console.warn('Control failed', err));
-    video.play()
+    pendingPlay = true;
+    control('play')
+      .then(() => startVideoPlayback())
+      .catch((err) => console.warn('Control failed', err));
+    return;
+  }
+  if (action === 'next') {
+    mediaEl.textContent = 'Media: loading next';
+    control('next')
       .then(() => {
-        mediaEl.textContent = 'Media: playing';
+        if (!state || !state.current) return false;
+        pendingPlay = true;
+        return control('play', 0).then(() => startVideoPlayback());
       })
-      .catch((err) => {
-        mediaEl.textContent = 'Media: press the video play control';
-        console.warn(err);
-      });
+      .catch((err) => console.warn('Control failed', err));
     return;
   }
   control(action).catch((err) => console.warn('Control failed', err));
 }
 
-function handlePress(event) {
-  const now = Date.now();
-  if (now - lastPressAt < 80) return;
-  const controlEl = event.target && event.target.closest ? event.target.closest('[data-action], [data-panel]') : null;
-  if (!controlEl || controlEl.disabled) return;
-  lastPressAt = now;
-  event.preventDefault();
-  event.stopPropagation();
-  if (controlEl.dataset.panel) {
-    setDrawer(controlEl.dataset.panel);
-    return;
-  }
-  if (controlEl.dataset.action) {
-    handleAction(controlEl.dataset.action);
-  }
-}
+document.querySelectorAll('[data-panel]').forEach((button) => {
+  button.addEventListener('click', (event) => {
+    event.preventDefault();
+    setDrawer(button.dataset.panel);
+  });
+});
 
-document.addEventListener('pointerup', handlePress);
-document.addEventListener('click', handlePress);
-document.addEventListener('keydown', (event) => {
-  if (event.key !== 'Enter' && event.key !== ' ') return;
-  handlePress(event);
+document.querySelectorAll('[data-action]').forEach((button) => {
+  button.addEventListener('click', (event) => {
+    event.preventDefault();
+    if (button.disabled) return;
+    handleAction(button.dataset.action);
+  });
+});
+
+queueEl.addEventListener('click', (event) => {
+  const button = event.target && event.target.closest ? event.target.closest('[data-queue-index]') : null;
+  if (!button) return;
+  event.preventDefault();
+  jumpToQueueIndex(Number(button.dataset.queueIndex));
 });
 
 fullscreenBtn.addEventListener('click', () => {
@@ -293,7 +458,7 @@ popoutBtn.addEventListener('click', () => {
   }
   const title = String(item.title || 'Watch video').replace(/[<>&"]/g, (char) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;' }[char] || char));
   const src = JSON.stringify(item.playbackUrl);
-  popup.document.write('<!doctype html><html><head><title>' + title + '</title><style>html,body{height:100%;margin:0;background:#000;color:#e5edf5;font-family:Arial,sans-serif}body{display:grid;grid-template-rows:auto 1fr}header{display:flex;justify-content:space-between;gap:12px;align-items:center;padding:10px 12px;background:#111827}button{border:1px solid #475569;background:#1e293b;color:#e5edf5;border-radius:6px;padding:7px 10px}video{width:100%;height:100%;background:#000;display:block}</style></head><body><header><strong>' + title + '</strong><button onclick="document.querySelector(\\'video\\').requestFullscreen()">Fullscreen</button></header><video id="video" controls autoplay playsinline></video><script>const src=' + src + ';const video=document.getElementById("video");if(src.endsWith(".m3u8")){const s=document.createElement("script");s.src="https://cdn.jsdelivr.net/npm/hls.js@latest";s.onload=()=>{if(window.Hls&&window.Hls.isSupported()){const hls=new window.Hls();hls.loadSource(src);hls.attachMedia(video)}else{video.src=src}};document.head.appendChild(s)}else{video.src=src}<\\/script></body></html>');
+  popup.document.write('<!doctype html><html><head><title>' + title + '</title><style>html,body{height:100%;margin:0;background:#000;color:#e5edf5;font-family:Arial,sans-serif}body{display:grid;grid-template-rows:auto 1fr}header{display:flex;justify-content:space-between;gap:12px;align-items:center;padding:10px 12px;background:#111827}button{border:1px solid #475569;background:#1e293b;color:#e5edf5;border-radius:6px;padding:7px 10px}video{width:100%;height:100%;background:#000;display:block}</style></head><body><header><strong>' + title + '</strong><button onclick="document.querySelector(\\'video\\').requestFullscreen()">Fullscreen</button></header><video id="video" controls autoplay playsinline></video><script>const src=' + src + ';const video=document.getElementById("video");const hlsConfig={enableWorker:false,lowLatencyMode:false,backBufferLength:30,manifestLoadingTimeOut:60000,manifestLoadingMaxRetry:4,manifestLoadingRetryDelay:1000,manifestLoadingMaxRetryTimeout:8000,fragLoadingTimeOut:60000,fragLoadingMaxRetry:4,fragLoadingRetryDelay:1000,fragLoadingMaxRetryTimeout:8000};if(src.endsWith(".m3u8")){const s=document.createElement("script");s.src="https://cdn.jsdelivr.net/npm/hls.js@latest";s.onload=()=>{if(window.Hls&&window.Hls.isSupported()){const hls=new window.Hls(hlsConfig);hls.loadSource(src);hls.attachMedia(video)}else{video.src=src}};document.head.appendChild(s)}else{video.src=src}<\\/script></body></html>');
   popup.document.close();
   errorEl.textContent = '';
 });
@@ -326,31 +491,66 @@ volumeInput.addEventListener('input', () => {
   mediaEl.textContent = 'Media: volume ' + volumeLabel.textContent;
 });
 
-document.getElementById('request-form').addEventListener('submit', async (event) => {
+requestForm.addEventListener('submit', async (event) => {
   event.preventDefault();
   errorEl.textContent = '';
-  const query = document.getElementById('query').value.trim();
+  setPendingRecommendation(null);
+  const query = queryInput.value.trim();
   if (!query) return;
   try {
-    const result = await api('/api/watch/sessions/' + sessionId + '/request', {
+    const requestUrl = '/api/watch/sessions/' + sessionId + '/request?query=' + encodeURIComponent(query) + '&username=' + encodeURIComponent('activity tester') + '&userId=activity';
+    const result = await api(requestUrl);
+    queryInput.value = '';
+    render(result.session);
+    setDrawer('queue');
+    mediaEl.textContent = result.session && result.session.current ? 'Media: added to watch room' : 'Media: queued';
+  } catch (err) {
+    if (err.payload && err.payload.recommendation) {
+      setPendingRecommendation(err.payload.recommendation);
+    }
+    errorEl.textContent = err.message;
+  }
+});
+
+acceptRecommendationBtn.addEventListener('click', async () => {
+  if (!pendingRecommendation) return;
+  errorEl.textContent = '';
+  try {
+    const result = await api('/api/watch/sessions/' + sessionId + '/accept', {
       method: 'POST',
-      body: JSON.stringify({ query, username: 'activity tester' }),
+      body: JSON.stringify({ username: 'activity tester' }),
     });
-    document.getElementById('query').value = '';
+    setPendingRecommendation(null);
     render(result.session);
   } catch (err) {
     errorEl.textContent = err.message;
   }
 });
 
+video.addEventListener('play', () => {
+  if (state && state.playback && state.playback.status !== 'playing') syncNativePlayback('play');
+});
 video.addEventListener('playing', () => { mediaEl.textContent = 'Media: playing'; });
-video.addEventListener('canplay', () => { mediaIsBuffering = false; mediaEl.textContent = 'Media: ready'; });
+video.addEventListener('canplay', () => { mediaIsBuffering = false; mediaEl.textContent = 'Media: ready'; if (pendingPlay || (state && state.playback && state.playback.status === 'playing')) startVideoPlayback(); });
 video.addEventListener('waiting', () => { mediaIsBuffering = true; mediaEl.textContent = 'Media: buffering'; });
 video.addEventListener('stalled', () => { mediaIsBuffering = true; mediaEl.textContent = 'Media: buffering'; });
-video.addEventListener('loadeddata', () => { mediaIsBuffering = false; });
-video.addEventListener('pause', () => { if (!video.ended) mediaEl.textContent = 'Media: paused'; });
+video.addEventListener('loadeddata', () => { mediaIsBuffering = false; if (pendingPlay || (state && state.playback && state.playback.status === 'playing')) startVideoPlayback(); });
+video.addEventListener('pause', () => {
+  if (!video.ended) {
+    mediaEl.textContent = 'Media: paused';
+  }
+});
 video.addEventListener('seeked', () => { if (!applying && state && state.current) control('seek'); });
-video.addEventListener('ended', () => { mediaEl.textContent = 'Media: ended'; });
+video.addEventListener('ended', () => {
+  mediaEl.textContent = 'Media: ended';
+  if (!state || syncingCompletedPlayback) return;
+  syncingCompletedPlayback = true;
+  if (state.queue && state.queue.length) {
+    control('next').finally(() => { syncingCompletedPlayback = false; });
+  } else {
+    control('pause', 0).finally(() => { syncingCompletedPlayback = false; });
+  }
+});
 video.addEventListener('error', () => {
   mediaEl.textContent = 'Media: error';
   console.error(video.error);

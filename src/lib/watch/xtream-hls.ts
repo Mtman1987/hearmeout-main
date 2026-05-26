@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process';
 import { createReadStream, existsSync } from 'node:fs';
-import { mkdir, readdir, stat, unlink } from 'node:fs/promises';
+import { mkdir, readFile, readdir, stat, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import { getXtreamStreamUrl } from './xtream-provider';
 
@@ -11,6 +11,7 @@ type HlsJob = {
 
 const jobs = new Map<string, HlsJob>();
 const DEFAULT_HLS_BUDGET_BYTES = 1536 * 1024 * 1024;
+const MIN_COMPLETE_VOD_SECONDS = 45 * 60;
 
 function hlsRootDir() {
   return process.env.WATCH_HLS_DIR || (process.env.FLY_APP_NAME ? '/data/watch-hls' : join(process.cwd(), 'logs', 'watch-hls'));
@@ -70,7 +71,8 @@ export async function getXtreamHlsFile(streamId: string, fileName: string) {
 
 export async function ensureXtreamHls(streamId: string) {
   const { clean, dir, indexPath } = paths(streamId);
-  if (existsSync(indexPath)) return;
+  if (await hasUsableHlsIndex(dir, indexPath)) return;
+  if (existsSync(indexPath)) await unlink(indexPath).catch(() => {});
   if (jobs.has(clean)) return jobs.get(clean)!.promise;
 
   const maxJobs = Number(process.env.WATCH_HLS_MAX_JOBS || 1);
@@ -95,14 +97,38 @@ export async function ensureXtreamHls(streamId: string) {
 }
 
 export async function waitForXtreamHlsIndex(streamId: string, timeoutMs = 45_000) {
-  const { indexPath } = paths(streamId);
+  const { dir, indexPath } = paths(streamId);
   const startedAt = Date.now();
   while (Date.now() - startedAt < timeoutMs) {
-    const stats = await stat(indexPath).catch(() => null);
-    if (stats?.isFile() && stats.size > 0) return true;
+    if (await hasUsableHlsIndex(dir, indexPath)) return true;
     await new Promise((resolve) => setTimeout(resolve, 500));
   }
   return false;
+}
+
+async function hasUsableHlsIndex(dir: string, indexPath: string) {
+  const stats = await stat(indexPath).catch(() => null);
+  if (!stats?.isFile() || stats.size <= 0) return false;
+
+  const manifest = await readFile(indexPath, 'utf8').catch(() => '');
+  const manifestLines = manifest.split(/\r?\n/);
+  const durationSeconds = manifestLines
+    .filter((line) => line.startsWith('#EXTINF:'))
+    .reduce((sum, line) => {
+      const value = Number(line.replace(/^#EXTINF:/, '').replace(',', ''));
+      return Number.isFinite(value) ? sum + value : sum;
+    }, 0);
+  if (manifest.includes('#EXT-X-ENDLIST') && durationSeconds > 0 && durationSeconds < MIN_COMPLETE_VOD_SECONDS) {
+    return false;
+  }
+  const firstSegment = manifest
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .find((line) => line && !line.startsWith('#'));
+  if (!firstSegment) return false;
+
+  const segmentStats = await stat(join(dir, cleanFileName(firstSegment))).catch(() => null);
+  return Boolean(segmentStats?.isFile() && segmentStats.size > 0);
 }
 
 async function runFfmpegHls(streamId: string, dir: string, indexPath: string) {
@@ -111,13 +137,23 @@ async function runFfmpegHls(streamId: string, dir: string, indexPath: string) {
   console.log(`[XtreamHLS] Starting HLS conversion for VOD ${streamId}`);
 
   await new Promise<void>((resolve, reject) => {
-    const child = spawn('ffmpeg', [
+    const ffmpegArgs = [
       '-hide_banner',
       '-loglevel',
       'warning',
+      '-threads',
+      '1',
       '-y',
       '-user_agent',
       'DiscordStreamHub/1.0',
+      '-reconnect',
+      '1',
+      '-reconnect_streamed',
+      '1',
+      '-reconnect_at_eof',
+      '1',
+      '-reconnect_delay_max',
+      '5',
       '-i',
       upstreamUrl.toString(),
       '-map',
@@ -141,7 +177,10 @@ async function runFfmpegHls(streamId: string, dir: string, indexPath: string) {
       '-hls_segment_filename',
       segmentPattern,
       indexPath,
-    ], { stdio: ['ignore', 'ignore', 'pipe'] });
+    ];
+    const command = process.platform === 'win32' ? 'ffmpeg' : 'nice';
+    const args = process.platform === 'win32' ? ffmpegArgs : ['-n', '15', 'ffmpeg', ...ffmpegArgs];
+    const child = spawn(command, args, { stdio: ['ignore', 'ignore', 'pipe'] });
 
     let stderr = '';
     child.stderr?.on('data', (chunk) => {
@@ -149,7 +188,7 @@ async function runFfmpegHls(streamId: string, dir: string, indexPath: string) {
     });
     child.once('error', reject);
     child.once('exit', (code) => {
-      if (code === 0 || existsSync(indexPath)) {
+      if (code === 0) {
         resolve();
         return;
       }

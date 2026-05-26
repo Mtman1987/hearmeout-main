@@ -1,6 +1,4 @@
 import { NextResponse } from 'next/server';
-import { Readable } from 'node:stream';
-import { createCachedReadStream, getXtreamVodCache, isXtreamVodCacheInProgress, startXtreamVodCache, waitForXtreamVodCacheRange } from '@/lib/xtream-cache';
 import { fetchXtreamStream, type XtreamKind } from '@/lib/xtream-provider';
 
 function downloadFilename(streamId: string, contentType?: string | null) {
@@ -17,44 +15,6 @@ export async function GET(request: Request, context: { params: Promise<{ kind: s
   }
 
   try {
-    if (kind === 'vod') {
-      const cached = await getXtreamVodCache(streamId).catch(() => null);
-      if (cached) {
-        const cachedResponse = createCachedReadStream(cached, request.headers.get('range'));
-        if (cachedResponse) {
-          const headers = new Headers();
-          for (const [key, value] of Object.entries(cachedResponse.headers)) {
-            if (value !== undefined) headers.set(key, value);
-          }
-          headers.set('cache-control', 'public, max-age=300');
-          headers.set('access-control-allow-origin', '*');
-          if (download) headers.set('content-disposition', `attachment; filename="${downloadFilename(streamId, cachedResponse.headers['content-type'])}"`);
-          return new NextResponse(Readable.toWeb(cachedResponse.stream) as any, {
-            status: cachedResponse.status,
-            headers,
-          });
-        }
-      }
-
-      startXtreamVodCache(streamId, `VOD ${streamId}`);
-      if (isXtreamVodCacheInProgress(streamId)) {
-        const partial = await waitForXtreamVodCacheRange(streamId, request.headers.get('range'));
-        if (partial) {
-          const headers = new Headers();
-          for (const [key, value] of Object.entries(partial.headers)) {
-            if (value !== undefined) headers.set(key, value);
-          }
-          headers.set('cache-control', 'no-store');
-          headers.set('access-control-allow-origin', '*');
-          if (download) headers.set('content-disposition', `attachment; filename="${downloadFilename(streamId, partial.headers['content-type'])}"`);
-          return new NextResponse(Readable.toWeb(partial.stream) as any, {
-            status: partial.status,
-            headers,
-          });
-        }
-      }
-    }
-
     const upstream = await fetchXtreamStream(kind as XtreamKind, streamId, request.headers.get('range'), request.signal);
     if (!upstream.ok || !upstream.body) {
       return NextResponse.json({ error: `Xtream stream returned ${upstream.status}` }, { status: upstream.status || 502 });
@@ -68,7 +28,7 @@ export async function GET(request: Request, context: { params: Promise<{ kind: s
     });
     if (upstream.contentLength) headers.set('content-length', upstream.contentLength);
     if (upstream.contentRange) headers.set('content-range', upstream.contentRange);
-    if (download && kind === 'vod') headers.set('content-disposition', `attachment; filename="${downloadFilename(streamId, upstream.contentType)}"`);
+    if (download) headers.set('content-disposition', `attachment; filename="${downloadFilename(streamId, upstream.contentType)}"`);
 
     return new NextResponse(upstream.body as any, { status: upstream.status, headers });
   } catch (error: any) {

@@ -2,12 +2,6 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 
-declare global {
-  interface Window {
-    Hls?: any;
-  }
-}
-
 type WatchState = {
   id: string;
   roomUrl: string;
@@ -62,6 +56,13 @@ function downloadUrlFor(url: string) {
   return next.toString();
 }
 
+function downloadUrlForItem(item: any) {
+  const idMatch = String(item?.id || '').match(/^xtream-vod-(\d+)$/i);
+  if (idMatch) return `/activity-provider/xtream/vod/${idMatch[1]}?download=1`;
+  const playbackUrl = String(item?.playbackUrl || '');
+  return playbackUrl ? downloadUrlFor(playbackUrl) : '';
+}
+
 function isBrowserLimitedVideo(item: any) {
   return String(item?.overview || '').toLowerCase().includes('(mkv)');
 }
@@ -93,6 +94,7 @@ export default function WatchRoomClient({ sessionId }: { sessionId: string }) {
   const playerShellRef = useRef<HTMLDivElement | null>(null);
   const hlsRef = useRef<any>(null);
   const applyingRemoteState = useRef(false);
+  const syncingNativePlayback = useRef(false);
   const [state, setState] = useState<WatchState | null>(null);
   const [query, setQuery] = useState('');
   const [connected, setConnected] = useState(false);
@@ -102,6 +104,7 @@ export default function WatchRoomClient({ sessionId }: { sessionId: string }) {
   const [controlError, setControlError] = useState<string | null>(null);
   const [volume, setVolume] = useState(0.85);
   const [muted, setMuted] = useState(false);
+  const [dismissedMkvNoticeFor, setDismissedMkvNoticeFor] = useState<string | null>(null);
 
   const endpointSnippet = useMemo(() => `POST /api/discord/chat
 
@@ -186,6 +189,33 @@ export default function WatchRoomClient({ sessionId }: { sessionId: string }) {
     await sendControl('pause').catch(() => {});
   }
 
+  async function syncNativePlay() {
+    const video = videoRef.current;
+    if (!video || !state?.current || applyingRemoteState.current || syncingNativePlayback.current) return;
+    if (state.playback.status === 'playing') return;
+
+    syncingNativePlayback.current = true;
+    const position = video.currentTime || state.playback.position || 0;
+    setState((current) => current
+      ? {
+          ...current,
+          playback: {
+            ...current.playback,
+            status: 'playing',
+            position,
+            updatedAt: Date.now(),
+          },
+        }
+      : current);
+    try {
+      await sendControl('play', position);
+    } catch {
+      // sendControl surfaces the error in the UI.
+    } finally {
+      syncingNativePlayback.current = false;
+    }
+  }
+
   async function openFullscreen() {
     const target = videoRef.current || playerShellRef.current;
     const video = videoRef.current as any;
@@ -255,8 +285,9 @@ export default function WatchRoomClient({ sessionId }: { sessionId: string }) {
 
   function downloadCurrent() {
     const item = state?.current?.item;
-    if (!item?.playbackUrl) return;
-    const url = downloadUrlFor(item.playbackUrl);
+    if (!item) return;
+    const url = downloadUrlForItem(item);
+    if (!url) return;
     const anchor = document.createElement('a');
     anchor.href = url;
     anchor.download = `${String(item.title || 'watch-video').replace(/[^a-z0-9_-]+/gi, '-')}.mp4`;
@@ -480,6 +511,7 @@ export default function WatchRoomClient({ sessionId }: { sessionId: string }) {
               onPlaying={() => {
                 setMediaStatus('Playing');
                 console.log('[WatchRoom] Media playing');
+                syncNativePlay();
               }}
               onPause={() => {
                 setMediaStatus('Paused');
@@ -506,12 +538,26 @@ export default function WatchRoomClient({ sessionId }: { sessionId: string }) {
                 <span>Use the request panel or type !wr in Discord.</span>
               </div>
             )}
-            {state?.current && shouldShowMkvFallbackNotice(state.current.item, mediaStatus) && (
-              <div className="absolute bottom-3 left-3 right-3 rounded-md border border-amber-400/40 bg-black/80 p-3 text-sm text-amber-100">
-                This provider returned an MKV stream. The app is preparing an HLS browser fallback; use Download if conversion is slow or playback still fails.
+          </div>
+
+          {state?.current
+            && state.current.requestId !== dismissedMkvNoticeFor
+            && shouldShowMkvFallbackNotice(state.current.item, mediaStatus) && (
+              <div className="flex items-start gap-3 border-t border-amber-400/30 bg-amber-950/30 px-4 py-3 text-sm text-amber-100">
+                <p className="min-w-0 flex-1">
+                  This provider returned an MKV stream. The app is preparing an HLS browser fallback; use Pop Out or Download if conversion is slow or playback still fails.
+                </p>
+                <button
+                  type="button"
+                  className="grid h-7 w-7 shrink-0 place-items-center rounded border border-amber-300/40 bg-black/30 text-amber-100 hover:border-amber-200"
+                  aria-label="Dismiss MKV fallback notice"
+                  title="Dismiss"
+                  onClick={() => setDismissedMkvNoticeFor(state.current?.requestId || null)}
+                >
+                  x
+                </button>
               </div>
             )}
-          </div>
 
           <div className="flex flex-wrap items-center gap-2 border-t border-slate-700 p-4">
             <button type="button" className="rounded-md border border-slate-700 bg-slate-800 px-3 py-2 hover:border-emerald-400" onClick={playLocalAndRemote}>Play</button>
@@ -522,7 +568,7 @@ export default function WatchRoomClient({ sessionId }: { sessionId: string }) {
             <button type="button" className="rounded-md border border-slate-700 bg-slate-800 px-3 py-2 hover:border-emerald-400 disabled:opacity-50" onClick={openPopout} disabled={!state?.current}>Pop Out</button>
             <button type="button" className="rounded-md border border-slate-700 bg-slate-800 px-3 py-2 hover:border-emerald-400 disabled:opacity-50" onClick={openFullscreen} disabled={!state?.current}>Fullscreen</button>
             <button type="button" className="rounded-md border border-slate-700 bg-slate-800 px-3 py-2 hover:border-emerald-400 disabled:opacity-50" onClick={enableSound} disabled={!state?.current}>Enable Sound</button>
-            {state?.current?.item?.playbackUrl && !String(state.current.item.playbackUrl).endsWith('.m3u8') && (
+            {state?.current?.item && downloadUrlForItem(state.current.item) && (
               <button
                 type="button"
                 className="rounded-md border border-slate-700 bg-slate-800 px-3 py-2 hover:border-emerald-400"

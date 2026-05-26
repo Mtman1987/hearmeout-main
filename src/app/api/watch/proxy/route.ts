@@ -4,6 +4,7 @@ const DEFAULT_ALLOWED_HOSTS = new Set([
   'test-streams.mux.dev',
   'storage.googleapis.com',
   'commondatastorage.googleapis.com',
+  'test-videos.co.uk',
   'archive.org',
 ]);
 

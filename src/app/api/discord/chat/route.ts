@@ -16,7 +16,32 @@ function timeoutSignal(milliseconds: number) {
   return controller.signal;
 }
 
-async function sendDiscordMessage(channelId: string, content: string, username?: string) {
+function getStreamweaverDiscordChatUrl() {
+  const baseUrl = (
+    process.env.STREAMWEAVER_URL ||
+    process.env.STREAMWEAVE_URL ||
+    process.env.NEXT_PUBLIC_STREAMWEAVE_URL ||
+    'https://streamweaver-new.fly.dev'
+  ).replace(/\/$/, '');
+  return process.env.STREAMWEAVER_DISCORD_CHAT_URL || `${baseUrl}/api/discord/chat`;
+}
+
+async function forwardToStreamweaver(originalBody: any) {
+  const response = await fetch(getStreamweaverDiscordChatUrl(), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(originalBody),
+    signal: timeoutSignal(15_000),
+  });
+  const payload = await response.json().catch(() => null);
+  return {
+    ok: response.ok,
+    status: response.status,
+    payload,
+  };
+}
+
+async function sendDiscordMessage(channelId: string, content: string, username?: string, components?: any[]) {
   const botToken = process.env.DISCORD_BOT_TOKEN;
   if (!botToken) return { ok: false, error: 'DISCORD_BOT_TOKEN is not configured' };
 
@@ -44,7 +69,7 @@ async function sendDiscordMessage(channelId: string, content: string, username?:
         const sendRes = await fetch(`https://discord.com/api/v10/webhooks/${webhook.id}/${webhook.token}`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ content, username: username || 'HearMeOut' }),
+          body: JSON.stringify({ content, username: username || 'HearMeOut', components }),
           signal: timeoutSignal(7_000),
         });
         if (sendRes.ok) return { ok: true, via: 'webhook' };
@@ -55,6 +80,23 @@ async function sendDiscordMessage(channelId: string, content: string, username?:
   } catch (error: any) {
     return { ok: false, error: error?.message || 'Discord send failed' };
   }
+}
+
+function watchControlComponents(baseUrl: string) {
+  const sessionId = 'discord-watch-room';
+  const controlUrl = (action: string) => `${baseUrl}/api/watch/sessions/${sessionId}/quick-control?action=${encodeURIComponent(action)}`;
+  return [
+    {
+      type: 1,
+      components: [
+        { type: 2, style: 5, label: 'Play', url: controlUrl('play') },
+        { type: 2, style: 5, label: 'Pause', url: controlUrl('pause') },
+        { type: 2, style: 5, label: 'Sync', url: controlUrl('seek') },
+        { type: 2, style: 5, label: 'Next', url: controlUrl('next') },
+        { type: 2, style: 5, label: 'Clear', url: controlUrl('clear') },
+      ],
+    },
+  ];
 }
 
 export async function POST(request: NextRequest) {
@@ -73,6 +115,9 @@ export async function POST(request: NextRequest) {
     const userId = String(data.userId || data.authorId || 'discord').trim();
     const userName = String(data.userName || data.displayName || data.username || 'Discord User').trim();
     const replies: string[] = [];
+    const controlComponents = /^!(controls?|watch-controls)$/i.test(message)
+      ? watchControlComponents(getRequestBaseUrl(request))
+      : null;
 
     if (!message) {
       return NextResponse.json({ success: true, handled: false, skipped: 'empty message' });
@@ -82,7 +127,27 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ success: false, error: 'Missing channelId' }, { status: 400 });
     }
 
-    let handled = await handleWatchRequestCommand({
+    const alreadyFannedOutByDiscordStreamHub = request.headers.get('x-chat-origin') === 'dsh-fanout';
+    const streamweaverForward = alreadyFannedOutByDiscordStreamHub
+      ? {
+          ok: true,
+          status: 204,
+          payload: { success: true, skipped: 'already-fanned-out-by-discord-stream-hub' },
+        }
+      : await forwardToStreamweaver(body).catch((error) => ({
+          ok: false,
+          status: 0,
+          payload: { success: false, error: error?.message || 'Streamweaver forward failed' },
+        }));
+
+    let handled = false;
+    if (controlComponents) {
+      replies.push('Watch controls for the shared Activity session.');
+      handled = true;
+    }
+
+    if (!handled) {
+      handled = await handleWatchRequestCommand({
       message,
       discordUserId: userId,
       discordUserName: userName,
@@ -93,7 +158,8 @@ export async function POST(request: NextRequest) {
       reply: (content) => {
         replies.push(content);
       },
-    });
+      });
+    }
 
     if (!handled) {
       handled = await handleMusicCommand({
@@ -107,11 +173,37 @@ export async function POST(request: NextRequest) {
       });
     }
 
+    let streamweaverRelayName = 'Streamweaver';
+    if (!handled) {
+      const streamweaverResponse = streamweaverForward.payload?.response || streamweaverForward.payload?.data?.response;
+      handled = Boolean(
+        streamweaverForward.ok &&
+        streamweaverForward.payload?.success !== false &&
+        (streamweaverForward.payload?.handled || streamweaverForward.payload?.botResponded || streamweaverResponse)
+      );
+      if (handled && streamweaverResponse && !streamweaverForward.payload?.botResponded) {
+        replies.push(String(streamweaverResponse));
+        streamweaverRelayName = String(streamweaverForward.payload?.botName || streamweaverRelayName);
+      }
+    }
+
     const discordSends = handled
-      ? await Promise.all(replies.map((reply) => sendDiscordMessage(channelId, reply, 'HearMeOut')))
+      ? await Promise.all(replies.map((reply) => sendDiscordMessage(
+          channelId,
+          reply,
+          streamweaverForward.payload?.response ? streamweaverRelayName : 'HearMeOut',
+          controlComponents || undefined
+        )))
       : [];
 
-    return NextResponse.json({ success: true, handled, replies, reply: replies[0] || null, discordSends });
+    return NextResponse.json({
+      success: true,
+      handled,
+      replies,
+      reply: replies[0] || null,
+      discordSends,
+      streamweaverForward,
+    });
   } catch (error) {
     console.error('[Discord Chat] watch command failed:', error);
     return NextResponse.json({ success: false, error: 'Internal error' }, { status: 500 });

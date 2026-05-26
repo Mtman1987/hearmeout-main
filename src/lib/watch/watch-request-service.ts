@@ -1,9 +1,10 @@
 import { isXtreamMockEnabled, searchXtreamCatalog } from './xtream-provider';
 import { findInternetArchiveRecommendation } from './internet-archive-provider';
 import { findWatchmodeRecommendation } from './watchmode-provider';
-import { startXtreamVodCache } from './xtream-cache';
 import { DISCORD_CLIENT_ID } from '@/lib/public-config';
 import { getGlobalWatchSessionId } from '@/lib/watch-session';
+import { dirname } from 'path';
+import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'fs';
 
 type WatchCatalogItem = {
   id: string;
@@ -52,10 +53,10 @@ const TEST_CATALOG: WatchCatalogItem[] = [
     title: 'Big Buck Bunny',
     year: 2008,
     runtime: '10m',
-    source: 'Mux public HLS test stream',
+    source: 'Public MP4 test stream',
     poster: 'https://peach.blender.org/wp-content/uploads/title_anouncement.jpg',
-    playbackUrl: 'https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8',
-    overview: 'A short open movie HLS stream commonly used for playback testing.',
+    playbackUrl: 'https://test-videos.co.uk/vids/bigbuckbunny/mp4/h264/720/Big_Buck_Bunny_720_10s_1MB.mp4',
+    overview: 'A short open movie MP4 stream commonly used for playback testing.',
   },
   {
     id: 'sintel',
@@ -100,6 +101,46 @@ declare global {
 const sessions = globalThis.__watchRequestSessions || new Map<string, WatchSession>();
 globalThis.__watchRequestSessions = sessions;
 const pendingRecommendations = new Map<string, WatchCatalogItem>();
+const WATCH_STATE_FILE = process.env.WATCH_STATE_FILE || (process.env.FLY_APP_NAME ? '/data/watch-state.json' : './data/watch-state.json');
+let lastLoadedStateMtime = 0;
+
+function ensureWatchStateDir() {
+  const dir = dirname(WATCH_STATE_FILE);
+  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+}
+
+function loadWatchStateFromDisk() {
+  try {
+    if (!existsSync(WATCH_STATE_FILE)) return;
+    const raw = readFileSync(WATCH_STATE_FILE);
+    const mtime = statSync(WATCH_STATE_FILE).mtimeMs;
+    if (mtime && mtime <= lastLoadedStateMtime) return;
+    const payload = JSON.parse(raw.toString('utf8')) as {
+      sessions?: Array<[string, WatchSession]>;
+      pendingRecommendations?: Array<[string, WatchCatalogItem]>;
+    };
+    sessions.clear();
+    for (const [id, session] of payload.sessions || []) sessions.set(id, session);
+    pendingRecommendations.clear();
+    for (const [key, item] of payload.pendingRecommendations || []) pendingRecommendations.set(key, item);
+    lastLoadedStateMtime = mtime || Date.now();
+  } catch (error) {
+    console.error('[WatchRequest] Failed to load watch state:', error);
+  }
+}
+
+function saveWatchStateToDisk() {
+  try {
+    ensureWatchStateDir();
+    writeFileSync(WATCH_STATE_FILE, JSON.stringify({
+      sessions: Array.from(sessions.entries()),
+      pendingRecommendations: Array.from(pendingRecommendations.entries()),
+    }, null, 2));
+    lastLoadedStateMtime = statSync(WATCH_STATE_FILE).mtimeMs;
+  } catch (error) {
+    console.error('[WatchRequest] Failed to save watch state:', error);
+  }
+}
 
 function normalize(value: unknown) {
   return String(value || '').trim().toLowerCase();
@@ -119,7 +160,11 @@ function getPublicBaseUrl(preferredBaseUrl?: string) {
   return 'http://localhost:3000';
 }
 
-function getPublicPlaybackUrl(playbackUrl: string) {
+function getPublicPlaybackUrl(item: WatchCatalogItem) {
+  const playbackUrl = item.playbackUrl;
+  const xtreamVodMatch = playbackUrl.match(/^\/activity-provider\/xtream\/vod\/(\d+)$/i);
+  const isMkv = String(item.overview || '').toLowerCase().includes('(mkv)');
+  if (xtreamVodMatch && isMkv) return `/api/watch/xtream/hls/${xtreamVodMatch[1]}/index.m3u8`;
   if (playbackUrl.startsWith('/')) return playbackUrl;
   return `/activity-proxy?url=${encodeURIComponent(playbackUrl)}`;
 }
@@ -129,7 +174,7 @@ function getPublicWatchRequest(request: WatchRequest) {
     ...request,
     item: {
       ...request.item,
-      playbackUrl: getPublicPlaybackUrl(request.item.playbackUrl),
+      playbackUrl: getPublicPlaybackUrl(request.item),
     },
   };
 }
@@ -172,6 +217,7 @@ function createSession(id: string, guildId = 'local', channelId = 'watch'): Watc
     events: [],
   };
   sessions.set(id, session);
+  saveWatchStateToDisk();
   return session;
 }
 
@@ -192,6 +238,7 @@ function enqueue(session: WatchSession, item: WatchCatalogItem, requestedBy: Wat
     addEvent(session, `${requestedBy.username} queued ${item.title}`);
   }
 
+  saveWatchStateToDisk();
   return request;
 }
 
@@ -263,6 +310,7 @@ export function getWatchCatalogItem(id: string | null | undefined) {
 }
 
 export function getWatchSession(sessionId: string, guildId?: string, channelId?: string) {
+  loadWatchStateFromDisk();
   const globalSessionId = getGlobalWatchSessionId();
   return sessions.get(globalSessionId) || createSession(globalSessionId, guildId, channelId);
 }
@@ -350,6 +398,7 @@ export async function requestWatchItem(params: {
     });
     if (recommendation) {
       pendingRecommendations.set(`${params.sessionId}:${params.userId}`, recommendation);
+      saveWatchStateToDisk();
       return { error: 'No matching provider item' as const, recommendation };
     }
     return { error: 'No matching catalog item' as const };
@@ -360,7 +409,7 @@ export async function requestWatchItem(params: {
     userId: params.userId,
     username: params.username,
   });
-  maybeStartVodCache(item);
+  maybePrepareSharedHls(item);
 
   return { request, session };
 }
@@ -372,6 +421,7 @@ export function acceptWatchRecommendation(params: {
   userId: string;
   username: string;
 }) {
+  loadWatchStateFromDisk();
   const key = `${params.sessionId}:${params.userId}`;
   const item = pendingRecommendations.get(key);
   if (!item) return { error: 'No pending recommendation' as const };
@@ -382,18 +432,22 @@ export function acceptWatchRecommendation(params: {
     userId: params.userId,
     username: params.username,
   });
-  maybeStartVodCache(item);
+  maybePrepareSharedHls(item);
+  saveWatchStateToDisk();
 
   return { request, session };
 }
 
-function maybeStartVodCache(item: WatchCatalogItem) {
+function maybePrepareSharedHls(item: WatchCatalogItem) {
   const match = item.playbackUrl.match(/^\/activity-provider\/xtream\/vod\/(\d+)$/);
   if (!match) return;
-  startXtreamVodCache(match[1], item.title).catch(() => {});
+  if (!String(item.overview || '').toLowerCase().includes('(mkv)')) return;
+  fetch(`${getPublicBaseUrl()}/api/watch/xtream/hls/${match[1]}/index.m3u8`).catch((error) => {
+    console.error('[WatchRequest] Xtream shared HLS start failed:', error?.message || error);
+  });
 }
 
-export function controlWatchSession(sessionId: string, action: string, position?: number) {
+export function controlWatchSession(sessionId: string, action: string, position?: number, targetIndex?: number) {
   const session = getWatchSession(sessionId);
 
   if (action === 'play' || action === 'pause') {
@@ -402,6 +456,7 @@ export function controlWatchSession(sessionId: string, action: string, position?
     session.playback.position = Math.max(0, Number(nextPosition || 0));
     session.playback.updatedAt = Date.now();
     addEvent(session, `${action === 'play' ? 'Played' : 'Paused'} ${session.current?.item.title || 'session'}`);
+    saveWatchStateToDisk();
     return session;
   }
 
@@ -409,13 +464,29 @@ export function controlWatchSession(sessionId: string, action: string, position?
     session.playback.position = Math.max(0, Number(position ?? 0));
     session.playback.updatedAt = Date.now();
     addEvent(session, `Seeked to ${Math.round(session.playback.position)}s`);
+    saveWatchStateToDisk();
     return session;
   }
 
   if (action === 'next') {
     session.current = session.queue.shift() || null;
+    if (session.current) maybePrepareSharedHls(session.current.item);
     session.playback = { status: session.current ? 'paused' : 'idle', position: 0, updatedAt: Date.now() };
     addEvent(session, session.current ? `Loaded ${session.current.item.title}` : 'Queue ended');
+    saveWatchStateToDisk();
+    return session;
+  }
+
+  if (action === 'jump') {
+    const index = Number.isFinite(targetIndex) ? Math.floor(Number(targetIndex)) : -1;
+    if (index < 0 || index >= session.queue.length) throw new Error('Queue item is no longer available');
+    const [request] = session.queue.splice(index, 1);
+    session.queue = session.queue.slice(index);
+    session.current = request;
+    maybePrepareSharedHls(request.item);
+    session.playback = { status: 'paused', position: 0, updatedAt: Date.now() };
+    addEvent(session, `Loaded ${request.item.title}`);
+    saveWatchStateToDisk();
     return session;
   }
 
@@ -424,6 +495,7 @@ export function controlWatchSession(sessionId: string, action: string, position?
     session.current = null;
     session.playback = { status: 'idle', position: 0, updatedAt: Date.now() };
     addEvent(session, 'Cleared queue');
+    saveWatchStateToDisk();
     return session;
   }
 
