@@ -527,6 +527,52 @@ app.get('/watch/xtream/hls/:streamId/:file', authorizeWorker, async (req, res) =
   }
 });
 
+app.get('/watch/xtream/direct/:kind/:streamId', authorizeWorker, async (req, res) => {
+  try {
+    const kind = String(req.params.kind || '');
+    if (!['vod', 'live', 'series'].includes(kind)) return res.status(400).json({ error: 'Unsupported stream kind' });
+    const streamId = cleanWatchStreamId(req.params.streamId);
+    const sourceResponse = await fetch(`${APP_URL}/api/watch/xtream/source/${encodeURIComponent(kind)}/${encodeURIComponent(streamId)}`, {
+      headers: WORKER_CALLBACK_HEADERS,
+    });
+    const source = await sourceResponse.json().catch(() => null);
+    if (!sourceResponse.ok || !source?.url) {
+      return res.status(sourceResponse.status || 502).json({ error: source?.error || 'Could not resolve Xtream source' });
+    }
+
+    const headers = { 'user-agent': 'DiscordStreamHub/1.0' };
+    if (req.headers.range) headers.range = req.headers.range;
+    const upstream = await fetch(source.url, { headers });
+    if (!upstream.ok || !upstream.body) return res.status(upstream.status || 502).send(`Xtream stream returned ${upstream.status}`);
+
+    res.status(upstream.status);
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Accept-Ranges', upstream.headers.get('accept-ranges') || 'bytes');
+    for (const header of ['content-type', 'content-length', 'content-range', 'etag', 'last-modified']) {
+      const value = upstream.headers.get(header);
+      if (value) res.setHeader(header, value);
+    }
+    res.setHeader('Cache-Control', 'no-store');
+
+    const reader = upstream.body.getReader();
+    req.on('close', () => {
+      reader.cancel().catch(() => {});
+    });
+
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      if (!res.write(Buffer.from(value))) {
+        await new Promise((resolve) => res.once('drain', resolve));
+      }
+    }
+    res.end();
+  } catch (err) {
+    if (!res.headersSent) res.status(502).json({ error: err.message || 'Xtream stream failed' });
+    else res.end();
+  }
+});
+
 // ══════════════════════════════════════════════════════════════════════════
 // ── DJ Engine — Server-side LiveKit audio publishing via ffmpeg ──────────
 // ══════════════════════════════════════════════════════════════════════════
