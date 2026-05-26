@@ -45,6 +45,7 @@ const UPSTREAM_EXTRACTOR_URL = (process.env.UPSTREAM_EXTRACTOR_URL || process.en
 const UPSTREAM_EXTRACTOR_SECRET = process.env.UPSTREAM_EXTRACTOR_SECRET || process.env.LOCAL_EXTRACTOR_SECRET || '';
 const CACHE_DIR = process.env.MUSIC_CACHE_DIR || (process.env.NODE_ENV === 'production' ? '/tmp/music' : join(__dirname, '..', '.cache', 'music'));
 const WATCH_HLS_DIR = process.env.WATCH_HLS_DIR || (process.env.NODE_ENV === 'production' ? '/tmp/watch-hls' : join(__dirname, '..', '.cache', 'watch-hls'));
+const DIRECT_VOD_CHUNK_BYTES = Number(process.env.DIRECT_VOD_CHUNK_BYTES || 8 * 1024 * 1024);
 
 const VIDEO_ID_RE = /^[A-Za-z0-9_-]{11}$/;
 function isValidVideoId(id) {
@@ -78,6 +79,19 @@ function getCachedExtractedInfo(videoId) {
 }
 function getCachedExtractedUrl(videoId) {
   return getCachedExtractedInfo(videoId)?.url || null;
+}
+
+function capRangeHeader(rangeHeader) {
+  const match = String(rangeHeader || '').match(/^bytes=(\d+)-(\d*)$/i);
+  if (!match) return rangeHeader || `bytes=0-${DIRECT_VOD_CHUNK_BYTES - 1}`;
+
+  const start = Number(match[1]);
+  const requestedEnd = match[2] ? Number(match[2]) : null;
+  if (!Number.isSafeInteger(start) || start < 0) return rangeHeader;
+
+  const chunkEnd = start + DIRECT_VOD_CHUNK_BYTES - 1;
+  const end = requestedEnd === null || requestedEnd > chunkEnd ? chunkEnd : requestedEnd;
+  return `bytes=${start}-${end}`;
 }
 function setCachedExtractedInfo(videoId, info) {
   urlCache.set(videoId, { info, expires: Date.now() + 5 * 60 * 60 * 1000 });
@@ -540,10 +554,18 @@ app.get('/watch/xtream/direct/:kind/:streamId', authorizeWorker, async (req, res
       return res.status(sourceResponse.status || 502).json({ error: source?.error || 'Could not resolve Xtream source' });
     }
 
-    const headers = { 'user-agent': 'DiscordStreamHub/1.0' };
-    if (req.headers.range) headers.range = req.headers.range;
+    const range = capRangeHeader(req.headers.range);
+    const headers = { 'user-agent': 'DiscordStreamHub/1.0', range };
+    console.log('[XtreamDirect] request', { kind, streamId, range });
     const upstream = await fetch(source.url, { headers });
     if (!upstream.ok || !upstream.body) return res.status(upstream.status || 502).send(`Xtream stream returned ${upstream.status}`);
+    console.log('[XtreamDirect] upstream', {
+      kind,
+      streamId,
+      status: upstream.status,
+      contentLength: upstream.headers.get('content-length'),
+      contentRange: upstream.headers.get('content-range'),
+    });
 
     res.status(upstream.status);
     res.setHeader('Access-Control-Allow-Origin', '*');
