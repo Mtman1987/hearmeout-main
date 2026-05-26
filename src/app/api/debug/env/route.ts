@@ -1,6 +1,16 @@
 import { NextResponse } from 'next/server';
+import { getSession } from '@/lib/auth';
 
 export async function GET() {
+  const session = await getSession();
+  if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+
+  // Only allow admin users to view environment debug info
+  const { db, ensureDb } = await import('@/lib/db');
+  await ensureDb();
+  const userDoc = db.get('users', session.uid);
+  if (!userDoc?.isAdmin) return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+
   const envStatus = {
     nodeEnv: process.env.NODE_ENV,
     livekit: {

@@ -113,15 +113,46 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
 
     const musicRoomRef = useRef<LKRoom | null>(null);
     const musicAudioRef = useRef<HTMLAudioElement | null>(null);
+    const localVolumeRef = useRef(localVolume);
+    useEffect(() => { localVolumeRef.current = localVolume; }, [localVolume]);
+
+    const isStreamMode = !!userSettings?.streamMode;
+
+    // DJ start/stop via server-side API (Puppeteer on hmo-dj-worker)
+    const [djStarting, setDjStarting] = useState(false);
+    const handleStartDJ = useCallback(async () => {
+        setDjStarting(true);
+        try {
+            const res = await fetch('/api/dj', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ action: 'start', roomId }),
+            });
+            const data = await res.json();
+            if (!data.success) toast({ variant: 'destructive', title: 'DJ Error', description: data.message });
+        } catch (err) {
+            toast({ variant: 'destructive', title: 'DJ Error', description: 'Failed to start DJ' });
+        } finally {
+            setDjStarting(false);
+        }
+    }, [roomId, toast]);
+
+    const handleStopDJ = useCallback(async () => {
+        try {
+            await fetch('/api/dj', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ action: 'stop', roomId }),
+            });
+        } catch {}
+    }, [roomId]);
 
     // Connect to LiveKit Music Room as subscriber.
-    // The room owner/DJ already hears the music locally from /dj/[roomId]
-    // (WebAudio monitor). Subscribing here too would cause double playback,
-    // so owners skip this subscription entirely.
+    // Stream-mode users skip this — they hear music from the OBS overlay.
     useEffect(() => {
         if (isUserLoading || !user || !roomId) return;
-        if (isOwner) {
-            setMusicStatus('hosting (monitor on DJ tab)');
+        if (isStreamMode) {
+            setMusicStatus('stream mode (music in overlay)');
             return;
         }
         let cancelled = false;
@@ -145,7 +176,7 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
                         console.log('[MusicRoom] 🎵 Audio track received — attaching');
                         if (!musicAudioRef.current) musicAudioRef.current = new Audio();
                         track.attach(musicAudioRef.current);
-                        musicAudioRef.current.volume = localVolume;
+                        musicAudioRef.current.volume = localVolumeRef.current;
                         musicAudioRef.current.play().catch(e => console.warn('[MusicRoom] Autoplay blocked:', e));
                         setMusicStatus('🎵 streaming');
                     }
@@ -183,11 +214,13 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
             musicRoomRef.current = null;
             if (musicAudioRef.current) { musicAudioRef.current.srcObject = null; }
         };
-    }, [user, isUserLoading, roomId, isOwner]);
+    }, [user, isUserLoading, roomId, isStreamMode]);
 
     // Sync volume changes to the audio element
     useEffect(() => {
-        if (musicAudioRef.current) musicAudioRef.current.volume = localVolume;
+        if (musicAudioRef.current) {
+            musicAudioRef.current.volume = localVolume;
+        }
     }, [localVolume]);
 
     // Check if user is banned
@@ -211,16 +244,6 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
       const interval = setInterval(checkMove, 3000);
       return () => clearInterval(interval);
     }, [user, roomId, router, toast]);
-
-    if (isBanned) {
-      return (
-        <div className="flex-1 flex flex-col items-center justify-center text-center p-4">
-          <h3 className="text-2xl font-bold font-headline mb-4">You are banned from this room</h3>
-          <p className="text-muted-foreground mb-8">Contact the room owner if you think this is a mistake.</p>
-          <Button onClick={() => router.push('/')}>Go Home</Button>
-        </div>
-      );
-    }
 
     useEffect(() => {
         if (isUserLoading || !user || !roomId) return;
@@ -262,6 +285,16 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
     }, [roomId, room.autoRadio]);
 
     const livekitUrl = process.env.NEXT_PUBLIC_LIVEKIT_URL;
+
+    if (isBanned) {
+      return (
+        <div className="flex-1 flex flex-col items-center justify-center text-center p-4">
+          <h3 className="text-2xl font-bold font-headline mb-4">You are banned from this room</h3>
+          <p className="text-muted-foreground mb-8">Contact the room owner if you think this is a mistake.</p>
+          <Button onClick={() => router.push('/')}>Go Home</Button>
+        </div>
+      );
+    }
 
     if (!livekitUrl || !voiceToken) {
         return (
@@ -313,6 +346,10 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
                           showDJ={showDJ}
                           autoRadio={room.autoRadio}
                           onToggleAutoRadio={handleToggleAutoRadio}
+                          djIsLive={!!room.djActive}
+                          djStarting={djStarting}
+                          onStartDJ={handleStartDJ}
+                          onStopDJ={handleStopDJ}
                         />
                         {isOwner && <VoiceQueue roomId={roomId} />}
                     </main>
@@ -334,7 +371,7 @@ function RoomPageContent() {
     const { user, isLoading: isUserLoading } = useSession();
     const { data: room, isLoading: isRoomLoading, error: roomError } = useDoc<RoomData>('rooms', params.roomId, 2000);
 
-    if (isRoomLoading || !room) {
+    if (isRoomLoading) {
         return (
             <div className="flex flex-col h-screen">
                 <LeftSidebar roomId={params.roomId} />
@@ -348,7 +385,7 @@ function RoomPageContent() {
         );
     }
 
-    if (roomError) {
+    if (roomError || !room) {
         return (
             <div className="flex flex-col h-screen">
                 <LeftSidebar roomId={params.roomId} />

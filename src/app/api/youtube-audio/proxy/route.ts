@@ -1,31 +1,78 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { getSession } from '@/lib/auth';
+import { isValidVideoId } from '@/lib/validate-video-id';
 
 // In-memory store of client-extracted URLs (videoId → directUrl)
-// These are extracted by the DJ's browser and sent here for proxying
+// These are extracted by the DJ's browser and sent here for proxying.
 const extractedUrls = new Map<string, { url: string; expires: number }>();
 
-// POST: Client sends an extracted googlevideo URL for a video
+// Allowed base hosts for the upstream audio URL. A candidate host must
+// EITHER exactly equal one of these OR end with `.` + one of these — so
+// `youtube.com` is allowed but `evilyoutube.com` is not. Anything else is
+// rejected, so this endpoint can't be abused as a generic SSRF primitive
+// (e.g. against 169.254.169.254, localhost, internal services, etc).
+const ALLOWED_BASE_HOSTS = [
+  'googlevideo.com',
+  'youtube.com',
+  'ytimg.com',
+];
+
+function isAllowedAudioUrl(raw: unknown): raw is string {
+  if (typeof raw !== 'string') return false;
+  let parsed: URL;
+  try {
+    parsed = new URL(raw);
+  } catch {
+    return false;
+  }
+  if (parsed.protocol !== 'https:') return false;
+  const host = parsed.hostname.toLowerCase();
+  return ALLOWED_BASE_HOSTS.some((base) => host === base || host.endsWith(`.${base}`));
+}
+
+// POST: Client sends an extracted googlevideo URL for a video.
+// Requires an authenticated session AND a whitelisted host on `audioUrl`.
 export async function POST(req: NextRequest) {
-  const { videoId, audioUrl } = await req.json();
-  if (!videoId || !audioUrl) {
-    return NextResponse.json({ error: 'videoId and audioUrl required' }, { status: 400 });
+  const session = await getSession();
+  if (!session) {
+    return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
+  }
+
+  const body = await req.json().catch(() => null);
+  const videoId = body?.videoId;
+  const audioUrl = body?.audioUrl;
+
+  if (!isValidVideoId(videoId)) {
+    return NextResponse.json({ error: 'invalid videoId' }, { status: 400 });
+  }
+  if (!isAllowedAudioUrl(audioUrl)) {
+    return NextResponse.json({ error: 'audioUrl must be an https URL on a YouTube CDN' }, { status: 400 });
   }
 
   // Cache for 5 hours (URLs expire in ~6)
   extractedUrls.set(videoId, { url: audioUrl, expires: Date.now() + 5 * 60 * 60 * 1000 });
-  console.log(`[Proxy] Registered URL for ${videoId}`);
+  console.log(`[Proxy] Registered URL for ${videoId} by ${session.uid}`);
 
   return NextResponse.json({ proxyUrl: `/api/youtube-audio/proxy?videoId=${videoId}` });
 }
 
-// GET: Proxy the audio from googlevideo CDN
+// GET: Proxy the audio from googlevideo CDN.
+// GET stays public (listener playback), but we re-validate the stored URL's
+// host before we actually fetch — so even a stale / poisoned entry can't
+// cause an SSRF.
 export async function GET(req: NextRequest) {
   const videoId = new URL(req.url).searchParams.get('videoId');
-  if (!videoId) return new NextResponse('videoId required', { status: 400 });
+  if (!isValidVideoId(videoId)) {
+    return new NextResponse('invalid videoId', { status: 400 });
+  }
 
   const cached = extractedUrls.get(videoId);
   if (!cached || cached.expires < Date.now()) {
     return new NextResponse('No URL registered for this video', { status: 404 });
+  }
+  if (!isAllowedAudioUrl(cached.url)) {
+    extractedUrls.delete(videoId);
+    return new NextResponse('stored URL no longer allowed', { status: 400 });
   }
 
   try {

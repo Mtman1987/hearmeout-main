@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { TwitchChatService } from '@/lib/twitch-chat-service';
+import { getSession } from '@/lib/auth';
 
 /**
  * POST /api/twitch/join
@@ -7,6 +8,9 @@ import { TwitchChatService } from '@/lib/twitch-chat-service';
  * Joins a Twitch channel
  */
 export async function POST(req: NextRequest) {
+  const session = await getSession();
+  if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+
   try {
     const { channelName } = await req.json();
 

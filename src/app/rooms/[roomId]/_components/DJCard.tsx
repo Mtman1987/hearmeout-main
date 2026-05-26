@@ -1,7 +1,7 @@
 'use client';
 
-import React, { useState, useCallback, useEffect, useRef } from 'react';
-import { Music, Play, Pause, SkipForward, SkipBack, Volume2, VolumeX, Power, PowerOff, Radio } from 'lucide-react';
+import React, { useCallback } from 'react';
+import { Music, Play, Pause, SkipForward, SkipBack, Volume2, VolumeX, Power, PowerOff, Radio, LoaderCircle } from 'lucide-react';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -10,7 +10,6 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 import { SpeakingIndicator } from './SpeakingIndicator';
 import { cn } from '@/lib/utils';
 import { dbUpdate } from '@/lib/db-helpers';
-import { useToast } from '@/hooks/use-toast';
 import type { PlaylistItem } from '@/types/playlist';
 
 interface DJCardProps {
@@ -25,48 +24,20 @@ interface DJCardProps {
   canControl: boolean;
   autoRadio?: boolean;
   onToggleAutoRadio?: () => void;
+  djIsLive: boolean;
+  djStarting?: boolean;
+  onStartDJ: () => void;
+  onStopDJ: () => void;
 }
 
 export default function DJCard({
   roomId, playlist, currentTrackId, isPlaying, djActive,
   musicStatus, localVolume, onVolumeChange, canControl,
   autoRadio, onToggleAutoRadio,
+  djIsLive, djStarting, onStartDJ, onStopDJ,
 }: DJCardProps) {
-  const { toast } = useToast();
-  const [djPopupOpen, setDjPopupOpen] = useState(false);
-  const popupRef = useRef<Window | null>(null);
   const currentTrack = playlist?.find(t => t.id === currentTrackId);
   const isStreaming = musicStatus === '🎵 streaming';
-
-  // Check if popup is still open
-  useEffect(() => {
-    if (!djPopupOpen) return;
-    const check = setInterval(() => {
-      if (popupRef.current?.closed) {
-        setDjPopupOpen(false);
-        popupRef.current = null;
-        dbUpdate('rooms', roomId, { djActive: false });
-      }
-    }, 1000);
-    return () => clearInterval(check);
-  }, [djPopupOpen, roomId]);
-
-  const djLinkRef = useRef<HTMLAnchorElement | null>(null);
-
-  const handleStartDJ = useCallback(() => {
-    // Programmatically click a real anchor — browsers always open these as tabs
-    djLinkRef.current?.click();
-    // Small delay to let the tab open before updating state
-    setTimeout(() => setDjPopupOpen(true), 500);
-    toast({ title: '🎵 DJ Tab Opened', description: 'Switch to the DJ tab and click Start Broadcasting.' });
-  }, [toast]);
-
-  const handleStopDJ = useCallback(() => {
-    popupRef.current?.close();
-    popupRef.current = null;
-    setDjPopupOpen(false);
-    dbUpdate('rooms', roomId, { djActive: false, isPlaying: false });
-  }, [roomId]);
 
   const handlePlayPause = useCallback(() => {
     if (canControl) dbUpdate('rooms', roomId, { isPlaying: !isPlaying });
@@ -122,7 +93,7 @@ export default function DJCard({
               </p>
             ) : (
               <p className="text-sm text-muted-foreground">
-                {djPopupOpen ? 'DJ window open — click Start Broadcasting' : 'Click Start DJ to begin'}
+                {djIsLive ? 'DJ active — waiting for tracks' : 'Click Start DJ to begin'}
               </p>
             )}
             {musicStatus && musicStatus !== 'idle' && (
@@ -170,15 +141,17 @@ export default function DJCard({
 
           <Tooltip><TooltipTrigger asChild>
             <Button
-              variant={djPopupOpen ? 'destructive' : 'default'}
+              variant={djIsLive ? 'destructive' : 'default'}
               size="sm"
               className="w-full gap-2"
-              onClick={djPopupOpen ? handleStopDJ : handleStartDJ}
+              onClick={djIsLive ? onStopDJ : onStartDJ}
+              disabled={djStarting}
             >
-              {djPopupOpen ? <><PowerOff className="h-4 w-4" /> Stop DJ</> :
+              {djStarting ? <><LoaderCircle className="h-4 w-4 animate-spin" /> Starting...</> :
+                djIsLive ? <><PowerOff className="h-4 w-4" /> Stop DJ</> :
                 <><Power className="h-4 w-4" /> Start DJ</>}
             </Button>
-          </TooltipTrigger><TooltipContent><p>{djPopupOpen ? 'Close the DJ window' : 'Open DJ tab to play music for everyone'}</p></TooltipContent></Tooltip>
+          </TooltipTrigger><TooltipContent><p>{djIsLive ? 'Stop broadcasting music' : 'Start broadcasting music to everyone'}</p></TooltipContent></Tooltip>
 
           {canControl && (
             <Tooltip><TooltipTrigger asChild>
@@ -193,9 +166,6 @@ export default function DJCard({
               </Button>
             </TooltipTrigger><TooltipContent><p>When enabled, automatically finds and plays related songs when the playlist runs out</p></TooltipContent></Tooltip>
           )}
-
-          {/* Hidden anchor to force open as tab */}
-          <a ref={djLinkRef} href={`/dj/${roomId}`} target="_blank" rel="noopener" className="hidden" />
         </div>
       </CardContent>
     </Card>

@@ -2,22 +2,16 @@ import { NextRequest, NextResponse } from 'next/server';
 import { extractAudioUrl } from '@/lib/yt-extract';
 import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
+import { getExtractedUrl, setExtractedUrl, deleteExtractedUrl } from '@/lib/audio-url-cache';
+import { isValidVideoId } from '@/lib/validate-video-id';
 
 const CACHE_DIR = process.env.MUSIC_CACHE_DIR || join(process.cwd(), 'data', 'music');
-
-// Shared URL cache
-const urlCache = new Map<string, { url: string; expires: number }>();
-
-function getUrl(videoId: string): string | null {
-  const cached = urlCache.get(videoId);
-  if (cached && cached.expires > Date.now()) return cached.url;
-  return null;
-}
 
 // GET: Stream audio from CDN through our server (same-origin proxy)
 export async function GET(req: NextRequest) {
   const videoId = new URL(req.url).searchParams.get('videoId');
   if (!videoId) return new NextResponse('videoId required', { status: 400 });
+  if (!isValidVideoId(videoId)) return new NextResponse('Invalid video ID', { status: 400 });
 
   // Serve cached mp3 if available
   const mp3Path = join(CACHE_DIR, `${videoId}.mp3`);
@@ -33,12 +27,12 @@ export async function GET(req: NextRequest) {
   }
 
   // Get or extract URL
-  let audioUrl = getUrl(videoId);
+  let audioUrl = getExtractedUrl(videoId);
   if (!audioUrl) {
     const extracted = await extractAudioUrl(videoId);
     if (!extracted) return new NextResponse('Extraction failed', { status: 404 });
     audioUrl = extracted.url;
-    urlCache.set(videoId, { url: audioUrl, expires: Date.now() + 5 * 60 * 60 * 1000 });
+    setExtractedUrl(videoId, audioUrl);
   }
 
   // Proxy from CDN
@@ -54,10 +48,10 @@ export async function GET(req: NextRequest) {
 
     if (!cdnRes.ok && cdnRes.status !== 206) {
       // URL expired, try fresh extraction
-      urlCache.delete(videoId);
+      deleteExtractedUrl(videoId);
       const fresh = await extractAudioUrl(videoId);
       if (!fresh) return new NextResponse('CDN fetch failed', { status: 502 });
-      urlCache.set(videoId, { url: fresh.url, expires: Date.now() + 5 * 60 * 60 * 1000 });
+      setExtractedUrl(videoId, fresh.url);
 
       const retryRes = await fetch(fresh.url, { headers });
       if (!retryRes.ok && retryRes.status !== 206) {
