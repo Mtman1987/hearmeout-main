@@ -1,7 +1,6 @@
 import { isXtreamMockEnabled, searchXtreamCatalog } from './xtream-provider';
 import { findInternetArchiveRecommendation } from './internet-archive-provider';
 import { findWatchmodeRecommendation } from './watchmode-provider';
-import { getDjWorkerUrl } from '@/lib/dj-worker-config';
 import { DISCORD_CLIENT_ID } from '@/lib/public-config';
 import { getGlobalWatchSessionId } from '@/lib/watch-session';
 import { dirname } from 'path';
@@ -166,7 +165,7 @@ function getPublicPlaybackUrl(item: WatchCatalogItem) {
   const xtreamVodMatch = playbackUrl.match(/^\/activity-provider\/xtream\/vod\/(\d+)$/i);
   const isMkv = String(item.overview || '').toLowerCase().includes('(mkv)');
   if (xtreamVodMatch && isMkv) return `/api/watch/xtream/hls/${xtreamVodMatch[1]}/index.m3u8`;
-  if (xtreamVodMatch) return `${getDjWorkerUrl()}/watch/xtream/direct/vod/${xtreamVodMatch[1]}`;
+  if (xtreamVodMatch) return `/activity-worker/watch/xtream/direct/vod/${xtreamVodMatch[1]}`;
   if (playbackUrl.startsWith('/')) return playbackUrl;
   return `/activity-proxy?url=${encodeURIComponent(playbackUrl)}`;
 }
