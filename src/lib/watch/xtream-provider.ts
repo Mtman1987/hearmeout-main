@@ -127,27 +127,33 @@ function scoreItem(item: XtreamCatalogItem, query: string) {
   const needle = normalize(query);
   const compactNeedle = compact(query);
   const words = needle.split(/\s+/).filter((word) => word.length >= 3 && !['the', 'and'].includes(word));
+  const titleIntentWords = words.filter((word) => !['show', 'series', 'season', 'episode', 'episodes'].includes(word) && !/^\d+$/.test(word));
   const title = normalize(item.title);
   const compactTitle = compact(item.title);
   const overview = normalize(item.overview);
   const isVod = item.id.startsWith('xtream-vod-');
   const isSeries = item.id.startsWith('xtream-series-');
-  const isMovieSearch = !words.some((word) => ['show', 'series', 'season', 'episode'].includes(word));
+  const isSeriesSearch = words.some((word) => ['show', 'series', 'season', 'episode', 'episodes'].includes(word)) || /\bs\d{1,2}\s*e\d{1,2}\b/i.test(needle);
   let score = 0;
   if (title === needle) score += 100;
   if (title.includes(needle)) score += 50;
   if (compactNeedle.length >= 3 && compactTitle === compactNeedle) score += 100;
   if (compactNeedle.length >= 3 && compactTitle.includes(compactNeedle)) score += 50;
+  if (titleIntentWords.length >= 2 && titleIntentWords.every((word) => title.includes(word) || compactTitle.includes(compact(word)))) {
+    score += 80;
+  }
   for (const word of words) {
     if (title.includes(word)) score += 8;
     if (compactTitle.includes(compact(word))) score += 8;
     if (overview.includes(word)) score += 2;
   }
   if (score === 0) return 0;
-  if (isVod) score += 25;
+  if (isSeriesSearch && isSeries) score += 60;
+  if (isSeriesSearch && isVod) score -= 25;
+  if (!isSeriesSearch && isVod) score += 25;
   if (overview.includes('(mp4)')) score += 12;
   if (overview.includes('(mkv)')) score -= 20;
-  if (isSeries && isMovieSearch) score -= 30;
+  if (isSeries && !isSeriesSearch) score -= 30;
   return score;
 }
 
