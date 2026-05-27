@@ -101,12 +101,13 @@ function watchControlComponents(baseUrl: string) {
 
 export async function POST(request: NextRequest) {
   try {
-    let body;
+    let body: any;
     try {
-      body = await request.json();
-    } catch {
       const raw = await request.text();
       body = JSON.parse(raw.replace(/[\x00-\x1F\x7F]/g, ''));
+    } catch (error) {
+      console.error('[Discord Chat] invalid JSON payload:', error);
+      return NextResponse.json({ success: false, error: 'Invalid JSON payload' }, { status: 400 });
     }
     const data = body.root || body;
     const message = String(data.message || data.content || '').trim();
