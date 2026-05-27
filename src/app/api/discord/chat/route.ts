@@ -82,23 +82,6 @@ async function sendDiscordMessage(channelId: string, content: string, username?:
   }
 }
 
-function watchControlComponents(baseUrl: string) {
-  const sessionId = 'discord-watch-room';
-  const controlUrl = (action: string) => `${baseUrl}/api/watch/sessions/${sessionId}/quick-control?action=${encodeURIComponent(action)}`;
-  return [
-    {
-      type: 1,
-      components: [
-        { type: 2, style: 5, label: 'Play', url: controlUrl('play') },
-        { type: 2, style: 5, label: 'Pause', url: controlUrl('pause') },
-        { type: 2, style: 5, label: 'Sync', url: controlUrl('seek') },
-        { type: 2, style: 5, label: 'Next', url: controlUrl('next') },
-        { type: 2, style: 5, label: 'Clear', url: controlUrl('clear') },
-      ],
-    },
-  ];
-}
-
 export async function POST(request: NextRequest) {
   try {
     let body: any;
@@ -116,9 +99,7 @@ export async function POST(request: NextRequest) {
     const userId = String(data.userId || data.authorId || 'discord').trim();
     const userName = String(data.userName || data.displayName || data.username || 'Discord User').trim();
     const replies: string[] = [];
-    const controlComponents = /^!(controls?|watch-controls)$/i.test(message)
-      ? watchControlComponents(getRequestBaseUrl(request))
-      : null;
+    const isWatchControlCommand = /^!(controls?|watch-controls)$/i.test(message);
 
     if (!message) {
       return NextResponse.json({ success: true, handled: false, skipped: 'empty message' });
@@ -129,21 +110,15 @@ export async function POST(request: NextRequest) {
     }
 
     const alreadyFannedOutByDiscordStreamHub = request.headers.get('x-chat-origin') === 'dsh-fanout';
-    const streamweaverForward = alreadyFannedOutByDiscordStreamHub
-      ? {
-          ok: true,
-          status: 204,
-          payload: { success: true, skipped: 'already-fanned-out-by-discord-stream-hub' },
-        }
-      : await forwardToStreamweaver(body).catch((error) => ({
-          ok: false,
-          status: 0,
-          payload: { success: false, error: error?.message || 'Streamweaver forward failed' },
-        }));
+    let streamweaverForward = {
+      ok: true,
+      status: 204,
+      payload: { success: true, skipped: 'not-needed' } as any,
+    };
 
     let handled = false;
-    if (controlComponents) {
-      replies.push('Watch controls for the shared Activity session.');
+    if (isWatchControlCommand) {
+      replies.push('Use the Activity controls inside HearMeOut. Discord URL buttons were disabled because they trigger the Leaving Discord warning.');
       handled = true;
     }
 
@@ -176,6 +151,18 @@ export async function POST(request: NextRequest) {
 
     let streamweaverRelayName = 'Streamweaver';
     if (!handled) {
+      streamweaverForward = alreadyFannedOutByDiscordStreamHub
+        ? {
+            ok: true,
+            status: 204,
+            payload: { success: true, skipped: 'already-fanned-out-by-discord-stream-hub' },
+          }
+        : await forwardToStreamweaver(body).catch((error) => ({
+            ok: false,
+            status: 0,
+            payload: { success: false, error: error?.message || 'Streamweaver forward failed' },
+          }));
+
       const streamweaverResponse = streamweaverForward.payload?.response || streamweaverForward.payload?.data?.response;
       handled = Boolean(
         streamweaverForward.ok &&
@@ -193,7 +180,7 @@ export async function POST(request: NextRequest) {
           channelId,
           reply,
           streamweaverForward.payload?.response ? streamweaverRelayName : 'HearMeOut',
-          controlComponents || undefined
+          undefined
         )))
       : [];
 
