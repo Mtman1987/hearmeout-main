@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process';
 import { createReadStream, existsSync } from 'node:fs';
 import { mkdir, readFile, readdir, stat, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
-import { getXtreamStreamUrl } from './xtream-provider';
+import { getResolvedXtreamStreamUrl, type XtreamKind } from './xtream-provider';
 
 type HlsJob = {
   promise: Promise<void>;
@@ -18,9 +18,18 @@ function hlsRootDir() {
 }
 
 function cleanStreamId(streamId: string) {
-  const clean = String(streamId).replace(/[^0-9]/g, '');
+  const clean = String(streamId).toLowerCase().replace(/[^a-z0-9-]/g, '');
   if (!clean) throw new Error('Invalid Xtream HLS stream id');
   return clean;
+}
+
+function parseStreamKey(streamId: string): { kind: XtreamKind; id: string } {
+  const clean = cleanStreamId(streamId);
+  const match = clean.match(/^(vod|series|live)-(\d+)$/);
+  if (match) return { kind: match[1] as XtreamKind, id: match[2] };
+  const numeric = clean.replace(/[^0-9]/g, '');
+  if (!numeric) throw new Error('Invalid Xtream HLS stream id');
+  return { kind: 'vod', id: numeric };
 }
 
 function cleanFileName(fileName: string) {
@@ -40,13 +49,13 @@ function paths(streamId: string) {
 }
 
 export function isXtreamHlsUrl(playbackUrl: string) {
-  return /^\/activity-provider\/xtream\/vod\/\d+$/i.test(playbackUrl);
+  return /^\/activity-provider\/xtream\/(vod|series)\/\d+$/i.test(playbackUrl);
 }
 
 export function xtreamHlsUrl(playbackUrl: string) {
-  const match = playbackUrl.match(/^\/activity-provider\/xtream\/vod\/(\d+)$/i);
+  const match = playbackUrl.match(/^\/activity-provider\/xtream\/(vod|series)\/(\d+)$/i);
   if (!match) return playbackUrl;
-  return `/api/watch/xtream/hls/${match[1]}/index.m3u8`;
+  return `/api/watch/xtream/hls/${match[1].toLowerCase()}-${match[2]}/index.m3u8`;
 }
 
 export async function getXtreamHlsFile(streamId: string, fileName: string) {
@@ -132,9 +141,10 @@ async function hasUsableHlsIndex(dir: string, indexPath: string) {
 }
 
 async function runFfmpegHls(streamId: string, dir: string, indexPath: string) {
-  const upstreamUrl = await getXtreamStreamUrl('vod', streamId);
+  const stream = parseStreamKey(streamId);
+  const upstreamUrl = await getResolvedXtreamStreamUrl(stream.kind, stream.id);
   const segmentPattern = join(dir, 'seg_%05d.ts');
-  console.log(`[XtreamHLS] Starting HLS conversion for VOD ${streamId}`);
+  console.log(`[XtreamHLS] Starting HLS conversion for ${stream.kind} ${stream.id}`);
 
   await new Promise<void>((resolve, reject) => {
     const ffmpegArgs = [

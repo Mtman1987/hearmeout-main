@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { Readable } from 'node:stream';
 import { getDjWorkerUrl } from '@/lib/dj-worker-config';
 import { ensureXtreamHls, getXtreamHlsFile, waitForXtreamHlsIndex } from '@/lib/watch/xtream-hls';
-import { getXtreamStreamUrl } from '@/lib/watch/xtream-provider';
+import { getResolvedXtreamStreamUrl, type XtreamKind } from '@/lib/watch/xtream-provider';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -13,6 +13,15 @@ const CORS_HEADERS = {
   'access-control-allow-headers': 'content-type, range',
 };
 
+function parseStreamKey(streamId: string): { kind: XtreamKind; id: string } {
+  const clean = String(streamId).toLowerCase().replace(/[^a-z0-9-]/g, '');
+  const match = clean.match(/^(vod|series|live)-(\d+)$/);
+  if (match) return { kind: match[1] as XtreamKind, id: match[2] };
+  const numeric = clean.replace(/[^0-9]/g, '');
+  if (!numeric) throw new Error('Invalid Xtream HLS stream id');
+  return { kind: 'vod', id: numeric };
+}
+
 export async function GET(_request: Request, context: { params: Promise<{ streamId: string; file: string }> }) {
   const { streamId, file } = await context.params;
 
@@ -21,7 +30,8 @@ export async function GET(_request: Request, context: { params: Promise<{ stream
     if (workerUrl) {
       const remoteUrl = new URL(`${workerUrl}/watch/xtream/hls/${encodeURIComponent(streamId)}/${encodeURIComponent(file)}`);
       if (file === 'index.m3u8') {
-        const upstreamUrl = await getXtreamStreamUrl('vod', streamId);
+        const stream = parseStreamKey(streamId);
+        const upstreamUrl = await getResolvedXtreamStreamUrl(stream.kind, stream.id);
         remoteUrl.searchParams.set('source', upstreamUrl.toString());
       }
 

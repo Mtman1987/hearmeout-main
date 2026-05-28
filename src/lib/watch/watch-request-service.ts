@@ -163,8 +163,8 @@ function getPublicBaseUrl(preferredBaseUrl?: string) {
 
 function getPublicPlaybackUrl(item: WatchCatalogItem) {
   const playbackUrl = item.playbackUrl;
-  const xtreamVodMatch = playbackUrl.match(/^\/activity-provider\/xtream\/vod\/(\d+)$/i);
-  if (xtreamVodMatch) return `/api/watch/xtream/hls/${xtreamVodMatch[1]}/index.m3u8`;
+  const xtreamMatch = playbackUrl.match(/^\/activity-provider\/xtream\/(vod|series)\/(\d+)$/i);
+  if (xtreamMatch) return `/api/watch/xtream/hls/${xtreamMatch[1].toLowerCase()}-${xtreamMatch[2]}/index.m3u8`;
   if (playbackUrl.startsWith('/')) return playbackUrl;
   return `/activity-proxy?url=${encodeURIComponent(playbackUrl)}`;
 }
@@ -440,10 +440,10 @@ export function acceptWatchRecommendation(params: {
 }
 
 function maybePrepareSharedHls(item: WatchCatalogItem) {
-  const match = item.playbackUrl.match(/^\/activity-provider\/xtream\/vod\/(\d+)$/);
+  const match = item.playbackUrl.match(/^\/activity-provider\/xtream\/(vod|series)\/(\d+)$/);
   if (!match) return;
   if (!String(item.overview || '').toLowerCase().includes('(mkv)')) return;
-  fetch(`${getPublicBaseUrl()}/api/watch/xtream/hls/${match[1]}/index.m3u8`).catch((error) => {
+  fetch(`${getPublicBaseUrl()}/api/watch/xtream/hls/${match[1].toLowerCase()}-${match[2]}/index.m3u8`).catch((error) => {
     console.error('[WatchRequest] Xtream shared HLS start failed:', error?.message || error);
   });
 }

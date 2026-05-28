@@ -365,6 +365,10 @@ export async function getXtreamStreamUrl(kind: XtreamKind, streamId: string) {
   return new URL(`/${pathKind}/${encodeURIComponent(config.username)}/${encodeURIComponent(config.password)}/${cleanId}.${extension}`, config.baseUrl);
 }
 
+export async function getResolvedXtreamStreamUrl(kind: XtreamKind, streamId: string) {
+  return kind === 'series' ? getFirstSeriesEpisodeUrl(streamId) : getXtreamStreamUrl(kind, streamId);
+}
+
 async function getFirstSeriesEpisodeUrl(seriesId: string) {
   const config = getConfig();
   if (!config) throw new Error('Xtream provider is not configured');
@@ -425,7 +429,7 @@ function flattenSeriesEpisodes(episodes: unknown): Array<Record<string, unknown>
 }
 
 export async function fetchXtreamStream(kind: XtreamKind, streamId: string, range?: string | null, signal?: AbortSignal) {
-  const upstreamUrl = kind === 'series' ? await getFirstSeriesEpisodeUrl(streamId) : await getXtreamStreamUrl(kind, streamId);
+  const upstreamUrl = await getResolvedXtreamStreamUrl(kind, streamId);
   const headers: Record<string, string> = { 'user-agent': 'DiscordStreamHub/1.0' };
   if (range) headers.range = range;
   const upstream = await fetch(upstreamUrl, {

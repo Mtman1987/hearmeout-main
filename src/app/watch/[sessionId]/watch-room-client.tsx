@@ -58,8 +58,8 @@ function downloadUrlFor(url: string) {
 }
 
 function downloadUrlForItem(item: any) {
-  const idMatch = String(item?.id || '').match(/^xtream-vod-(\d+)$/i);
-  if (idMatch) return `/activity-provider/xtream/vod/${idMatch[1]}?download=1`;
+  const idMatch = String(item?.id || '').match(/^xtream-(vod|series)-(\d+)$/i);
+  if (idMatch) return `/activity-provider/xtream/${idMatch[1].toLowerCase()}/${idMatch[2]}?download=1`;
   const playbackUrl = String(item?.playbackUrl || '');
   return playbackUrl ? downloadUrlFor(playbackUrl) : '';
 }
@@ -70,9 +70,9 @@ function isBrowserLimitedVideo(item: any) {
 
 function hlsFallbackUrlFor(item: any) {
   const playbackUrl = String(item?.playbackUrl || '');
-  const match = playbackUrl.match(/^\/activity-provider\/xtream\/vod\/(\d+)$/i);
+  const match = playbackUrl.match(/^\/activity-provider\/xtream\/(vod|series)\/(\d+)$/i);
   if (!match || !isBrowserLimitedVideo(item)) return playbackUrl;
-  return `/api/watch/xtream/hls/${match[1]}/index.m3u8`;
+  return `/api/watch/xtream/hls/${match[1].toLowerCase()}-${match[2]}/index.m3u8`;
 }
 
 function isHlsPlaybackUrl(value: string) {
