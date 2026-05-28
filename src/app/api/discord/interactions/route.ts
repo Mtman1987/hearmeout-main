@@ -1,12 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { addSongToPlaylist, skipTrack } from '@/lib/bot-actions';
 import { db, ensureDb } from '@/lib/db';
-import { controlWatchSession, getPublicWatchSession } from '@/lib/watch/watch-request-service';
 import nacl from 'tweetnacl';
 
 const InteractionType = { PING: 1, APPLICATION_COMMAND: 2, MESSAGE_COMPONENT: 3, APPLICATION_COMMAND_AUTOCOMPLETE: 4, MODAL_SUBMIT: 5 };
 const InteractionResponseType = { PONG: 1, CHANNEL_MESSAGE_WITH_SOURCE: 4, DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE: 5, DEFERRED_UPDATE_MESSAGE: 6, UPDATE_MESSAGE: 7, MODAL: 9 };
-const HMO_WATCH_SESSION_ID = 'discord-watch-room';
 
 function verifyDiscordRequest(body: string, signature: string, timestamp: string): boolean {
   try {
@@ -26,32 +24,6 @@ async function sendFollowup(clientId: string, token: string, content: string): P
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ content }),
   }).catch(console.error);
-}
-
-async function updateInteraction(clientId: string, token: string, content: string): Promise<void> {
-  await fetch(`https://discord.com/api/v10/webhooks/${clientId}/${token}/messages/@original`, {
-    method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ content }),
-  }).catch(console.error);
-}
-
-async function handleHearMeOutWatchControl(action: string, token: string) {
-  const clientId = process.env.NEXT_PUBLIC_DISCORD_CLIENT_ID || process.env.DISCORD_CLIENT_ID;
-  if (!clientId) return;
-
-  try {
-    const session = controlWatchSession(HMO_WATCH_SESSION_ID, action);
-    const publicSession = getPublicWatchSession(session);
-    const title = publicSession.current?.item?.title || 'watch room';
-    const status = publicSession.playback?.status || 'updated';
-    const muted = publicSession.playback?.muted;
-    const label = action === 'next' ? 'Skipped' : action === 'clear' ? 'Cleared' : action[0].toUpperCase() + action.slice(1);
-    const audio = typeof muted === 'boolean' ? (muted ? ', muted' : ', unmuted') : '';
-    await updateInteraction(clientId, token, `✅ ${label}: **${title}** (${status}${audio})`);
-  } catch (error: any) {
-    await updateInteraction(clientId, token, `❌ ${error?.message || 'HearMeOut control request failed.'}`);
-  }
 }
 
 async function handlePlayPauseButton(body: any, token: string): Promise<void> {
@@ -99,15 +71,6 @@ export async function POST(req: NextRequest) {
 
   if (type === InteractionType.MESSAGE_COMPONENT) {
     const { custom_id } = data;
-
-    if (custom_id.startsWith('hmo_watch_control:')) {
-      const action = custom_id.split(':')[1] || '';
-      handleHearMeOutWatchControl(action, token).catch(console.error);
-      return NextResponse.json({
-        type: InteractionResponseType.DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE,
-        data: { flags: 64 },
-      });
-    }
 
     if (custom_id.startsWith('room_settings:')) {
       const roomId = custom_id.split(':')[1];
