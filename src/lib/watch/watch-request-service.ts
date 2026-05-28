@@ -202,6 +202,12 @@ function addEvent(session: WatchSession, message: string) {
   session.events = session.events.slice(0, 30);
 }
 
+function getEffectivePlaybackPosition(session: WatchSession, now = Date.now()) {
+  const basePosition = Number(session.playback.position || 0);
+  if (session.playback.status !== 'playing') return basePosition;
+  return Math.max(0, basePosition + (now - Number(session.playback.updatedAt || now)) / 1000);
+}
+
 function createSession(id: string, guildId = 'local', channelId = 'watch'): WatchSession {
   const session: WatchSession = {
     id,
@@ -454,18 +460,22 @@ export function controlWatchSession(sessionId: string, action: string, position?
   if (session.playback.muted === undefined) session.playback.muted = true;
 
   if (action === 'play' || action === 'pause') {
+    const now = Date.now();
+    const currentPosition = getEffectivePlaybackPosition(session, now);
     session.playback.status = action === 'play' ? 'playing' : 'paused';
-    const nextPosition = position === undefined ? session.playback.position || 0 : position;
+    const nextPosition = position === undefined ? currentPosition : position;
     session.playback.position = Math.max(0, Number(nextPosition || 0));
-    session.playback.updatedAt = Date.now();
+    session.playback.updatedAt = now;
     addEvent(session, `${action === 'play' ? 'Played' : 'Paused'} ${session.current?.item.title || 'session'}`);
     saveWatchStateToDisk();
     return session;
   }
 
   if (action === 'mute' || action === 'unmute') {
+    const now = Date.now();
+    session.playback.position = getEffectivePlaybackPosition(session, now);
     session.playback.muted = action === 'mute';
-    session.playback.updatedAt = Date.now();
+    session.playback.updatedAt = now;
     addEvent(session, `${action === 'mute' ? 'Muted' : 'Unmuted'} ${session.current?.item.title || 'session'}`);
     saveWatchStateToDisk();
     return session;

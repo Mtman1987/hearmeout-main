@@ -13,7 +13,8 @@ export async function GET(request: Request, context: { params: Promise<{ session
   const { sessionId } = await context.params;
   const url = new URL(request.url);
   const action = String(url.searchParams.get('action') || '').toLowerCase();
-  const position = Number(url.searchParams.get('position') || 0);
+  const positionParam = url.searchParams.get('position');
+  const position = positionParam === null ? undefined : Number(positionParam || 0);
   const targetIndex = Number(url.searchParams.get('targetIndex'));
 
   if (!ACTIONS.has(action)) {
