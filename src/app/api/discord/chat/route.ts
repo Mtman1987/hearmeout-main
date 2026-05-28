@@ -2,6 +2,13 @@ import { NextRequest, NextResponse } from 'next/server';
 import { handleMusicCommand } from '@/lib/music-command-service';
 import { handleWatchRequestCommand } from '@/lib/watch/watch-request-service';
 
+type DiscordMessagePayload = {
+  content?: string;
+  embeds?: unknown[];
+  components?: unknown[];
+  allowed_mentions?: unknown;
+};
+
 const processedDiscordMessages = new Map<string, number>();
 const PROCESSED_MESSAGE_TTL_MS = 10 * 60 * 1000;
 
@@ -140,7 +147,7 @@ export async function POST(request: NextRequest) {
     const userId = String(data.userId || data.authorId || 'discord').trim();
     const userName = String(data.userName || data.displayName || data.username || 'Discord User').trim();
     const isDM = !data.guildId && !data.serverId;
-    const replies: string[] = [];
+    const replies: Array<string | DiscordMessagePayload> = [];
     const isWatchControlCommand = /^!(controls?|watch-controls)$/i.test(message);
 
     if (!message) {
@@ -182,6 +189,11 @@ export async function POST(request: NextRequest) {
       reply: (content) => {
         replies.push(content);
       },
+      richReply: alreadyFannedOutByDiscordStreamHub
+        ? (content) => {
+            replies.push(content);
+          }
+        : undefined,
       });
     }
 
@@ -223,10 +235,10 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    const discordSends = handled
+    const discordSends = handled && !alreadyFannedOutByDiscordStreamHub
       ? await Promise.all(replies.map((reply) => sendDiscordMessage(
           channelId,
-          reply,
+          typeof reply === 'string' ? reply : '',
           streamweaverForward.payload?.response ? streamweaverRelayName : 'HearMeOut',
           undefined,
           isDM
