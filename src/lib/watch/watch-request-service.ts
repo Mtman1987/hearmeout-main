@@ -47,6 +47,13 @@ type WatchSession = {
   }>;
 };
 
+type DiscordMessagePayload = {
+  content?: string;
+  embeds?: unknown[];
+  components?: unknown[];
+  allowed_mentions?: unknown;
+};
+
 const TEST_CATALOG: WatchCatalogItem[] = [
   {
     id: 'bbb',
@@ -179,17 +186,74 @@ function getPublicWatchRequest(request: WatchRequest) {
   };
 }
 
-function sendDiscordReply(channelId: string, content: string, userMessageId?: string): void {
+function watchControlComponents(joinUrl?: string) {
+  const primaryRow = [
+    { type: 2, style: 3, label: 'Play', custom_id: 'hmo_watch_control:play', emoji: { name: '▶️' } },
+    { type: 2, style: 2, label: 'Pause', custom_id: 'hmo_watch_control:pause', emoji: { name: '⏸️' } },
+    { type: 2, style: 2, label: 'Mute', custom_id: 'hmo_watch_control:mute', emoji: { name: '🔇' } },
+    { type: 2, style: 2, label: 'Unmute', custom_id: 'hmo_watch_control:unmute', emoji: { name: '🔊' } },
+    { type: 2, style: 1, label: 'Next', custom_id: 'hmo_watch_control:next', emoji: { name: '⏭️' } },
+  ];
+  const secondaryRow = [
+    ...(joinUrl ? [{ type: 2, style: 5, label: 'Join Activity', url: joinUrl, emoji: { name: '🎬' } }] : []),
+    { type: 2, style: 4, label: 'Clear Queue', custom_id: 'hmo_watch_control:clear', emoji: { name: '🧹' } },
+  ];
+  return [
+    { type: 1, components: primaryRow },
+    { type: 1, components: secondaryRow },
+  ];
+}
+
+export function buildWatchControlsMessage(joinUrl?: string): DiscordMessagePayload {
+  return {
+    content: '',
+    embeds: [{
+      title: 'HearMeOut Watch Controls',
+      description: joinUrl ? `[Join the Discord Activity](${joinUrl})` : 'Control the shared HearMeOut watch room.',
+      color: 0x22c55e,
+      footer: { text: 'Controls update the shared Activity playback.' },
+    }],
+    components: watchControlComponents(joinUrl),
+    allowed_mentions: { parse: [] },
+  };
+}
+
+function buildWatchJoinMessage(title: string, position: string, joinUrl: string, item?: WatchCatalogItem): DiscordMessagePayload {
+  const fields = [
+    { name: 'Status', value: position, inline: true },
+    { name: 'Source', value: item?.source || 'Watch room', inline: true },
+  ];
+  if (item?.runtime) fields.push({ name: 'Runtime', value: item.runtime, inline: true });
+
+  return {
+    content: '',
+    embeds: [{
+      title,
+      description: `[Join the Discord Activity](${joinUrl})`,
+      color: 0x22c55e,
+      fields,
+      thumbnail: item?.poster ? { url: item.poster } : undefined,
+      footer: { text: 'Use the buttons below to keep everyone synced.' },
+    }],
+    components: watchControlComponents(joinUrl),
+    allowed_mentions: { parse: [] },
+  };
+}
+
+function sendDiscordReply(channelId: string, content: string | DiscordMessagePayload, userMessageId?: string): void {
   const botToken = process.env.DISCORD_BOT_TOKEN;
   if (!botToken || !channelId) return;
+  const body = typeof content === 'string'
+    ? { content, message_reference: userMessageId ? { message_id: userMessageId, fail_if_not_exists: false } : undefined }
+    : {
+        ...content,
+        message_reference: userMessageId ? { message_id: userMessageId, fail_if_not_exists: false } : undefined,
+      };
 
   fetch(`https://discord.com/api/v10/channels/${channelId}/messages`, {
     method: 'POST',
     headers: { Authorization: `Bot ${botToken}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      content,
-      message_reference: userMessageId ? { message_id: userMessageId, fail_if_not_exists: false } : undefined,
-    }),
+    body: JSON.stringify(body),
   }).catch((error) => console.error('[WatchRequest] Discord reply failed:', error));
 }
 
@@ -533,6 +597,8 @@ export async function handleWatchRequestCommand(params: {
   publicBaseUrl?: string;
   // eslint-disable-next-line no-unused-vars
   reply?: (content: string) => void | Promise<void>;
+  // eslint-disable-next-line no-unused-vars
+  richReply?: (content: DiscordMessagePayload) => void | Promise<void>;
 }) {
   const reply = params.reply || ((content: string) => sendDiscordReply(params.channelId, content, params.userMessageId));
 
@@ -594,7 +660,11 @@ export async function handleWatchRequestCommand(params: {
   const activityInviteUrl = await createDiscordActivityInvite(params.channelId);
   const joinUrl = activityInviteUrl || getActivityUrl(params.publicBaseUrl);
 
-  await reply(`Added "${result.request.item.title}" (${position}). Join the Activity: ${joinUrl}`);
+  if (params.richReply) {
+    await params.richReply(buildWatchJoinMessage(result.request.item.title, position, joinUrl, result.request.item));
+  } else {
+    await reply(`Added "${result.request.item.title}" (${position}). Join the Activity: ${joinUrl}`);
+  }
 
   return true;
 }

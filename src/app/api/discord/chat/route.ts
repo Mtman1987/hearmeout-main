@@ -2,6 +2,13 @@ import { NextRequest, NextResponse } from 'next/server';
 import { handleMusicCommand } from '@/lib/music-command-service';
 import { handleWatchRequestCommand } from '@/lib/watch/watch-request-service';
 
+type DiscordMessagePayload = {
+  content?: string;
+  embeds?: unknown[];
+  components?: unknown[];
+  allowed_mentions?: unknown;
+};
+
 const processedDiscordMessages = new Map<string, number>();
 const PROCESSED_MESSAGE_TTL_MS = 10 * 60 * 1000;
 
@@ -44,23 +51,37 @@ async function forwardToStreamweaver(originalBody: any) {
   };
 }
 
-async function sendDiscordMessageDirect(channelId: string, content: string, botToken: string) {
+async function sendDiscordMessageDirect(channelId: string, content: string | DiscordMessagePayload, botToken: string) {
+  const body = typeof content === 'string' ? { content } : content;
   const res = await fetch(`https://discord.com/api/v10/channels/${channelId}/messages`, {
     method: 'POST',
     headers: { Authorization: `Bot ${botToken}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ content }),
+    body: JSON.stringify(body),
     signal: timeoutSignal(7_000),
   });
   if (res.ok) return { ok: true, via: 'bot-message' };
   return { ok: false, error: `Bot message send failed (${res.status})` };
 }
 
-async function sendDiscordMessage(channelId: string, content: string, username?: string, components?: any[], isDM?: boolean) {
+async function deleteDiscordMessage(channelId: string, messageId: string) {
+  const botToken = process.env.DISCORD_BOT_TOKEN;
+  if (!botToken || !channelId || !messageId) return { ok: false, skipped: true };
+  const res = await fetch(`https://discord.com/api/v10/channels/${channelId}/messages/${messageId}`, {
+    method: 'DELETE',
+    headers: { Authorization: `Bot ${botToken}` },
+    signal: timeoutSignal(7_000),
+  }).catch(() => null);
+  return { ok: Boolean(res?.ok), status: res?.status || 0 };
+}
+
+async function sendDiscordMessage(channelId: string, content: string | DiscordMessagePayload, username?: string, components?: any[], isDM?: boolean) {
   const botToken = process.env.DISCORD_BOT_TOKEN;
   if (!botToken) return { ok: false, error: 'DISCORD_BOT_TOKEN is not configured' };
 
+  const hasRichPayload = typeof content !== 'string' || Boolean(components?.length);
+
   // DMs don't support webhooks — send directly via Bot API
-  if (isDM) {
+  if (isDM || hasRichPayload) {
     return sendDiscordMessageDirect(channelId, content, botToken);
   }
 
@@ -140,7 +161,7 @@ export async function POST(request: NextRequest) {
     const userId = String(data.userId || data.authorId || 'discord').trim();
     const userName = String(data.userName || data.displayName || data.username || 'Discord User').trim();
     const isDM = !data.guildId && !data.serverId;
-    const replies: string[] = [];
+    const replies: Array<string | DiscordMessagePayload> = [];
     const isWatchControlCommand = /^!(controls?|watch-controls)$/i.test(message);
 
     if (!message) {
@@ -180,6 +201,9 @@ export async function POST(request: NextRequest) {
       userMessageId: data.messageId || data.id,
       publicBaseUrl: getRequestBaseUrl(request),
       reply: (content) => {
+        replies.push(content);
+      },
+      richReply: (content) => {
         replies.push(content);
       },
       });
@@ -232,6 +256,9 @@ export async function POST(request: NextRequest) {
           isDM
         )))
       : [];
+    const deletedCommand = handled && !isDM
+      ? await deleteDiscordMessage(channelId, messageId)
+      : { ok: false, skipped: true };
 
     return NextResponse.json({
       success: true,
@@ -239,6 +266,7 @@ export async function POST(request: NextRequest) {
       replies,
       reply: replies[0] || null,
       discordSends,
+      deletedCommand,
       streamweaverForward,
     });
   } catch (error) {
