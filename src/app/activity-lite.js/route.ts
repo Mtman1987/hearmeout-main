@@ -52,6 +52,8 @@ function downloadUrlFor(url) {
 function downloadUrlForItem(item) {
   const idMatch = String((item && item.id) || '').match(/^xtream-vod-(\\d+)$/i);
   if (idMatch) return '/activity-provider/xtream/vod/' + idMatch[1] + '?download=1';
+  const episodeMatch = String((item && item.playbackUrl) || '').match(/^\\/activity-provider\\/xtream\\/episode\\/(\\d+-[a-z0-9]+)$/i);
+  if (episodeMatch) return '/activity-provider/xtream/episode/' + episodeMatch[1] + '?download=1';
   return downloadUrlFor((item && item.playbackUrl) || '');
 }
 
@@ -161,13 +163,7 @@ function applyPlayback() {
   if (!isLive && Number.isFinite(video.duration) && video.duration > 0 && remote >= video.duration - 0.5) {
     if (!syncingCompletedPlayback) {
       syncingCompletedPlayback = true;
-      if (state.queue && state.queue.length) {
-        control('next').finally(() => { syncingCompletedPlayback = false; });
-      } else {
-        video.pause();
-        video.currentTime = 0;
-        control('pause', 0).finally(() => { syncingCompletedPlayback = false; });
-      }
+      control('next').finally(() => { syncingCompletedPlayback = false; });
     }
     setTimeout(() => { applying = false; }, 100);
     return;
@@ -561,11 +557,7 @@ video.addEventListener('ended', () => {
   mediaEl.textContent = 'Media: ended';
   if (!state || syncingCompletedPlayback) return;
   syncingCompletedPlayback = true;
-  if (state.queue && state.queue.length) {
-    control('next').finally(() => { syncingCompletedPlayback = false; });
-  } else {
-    control('pause', 0).finally(() => { syncingCompletedPlayback = false; });
-  }
+  control('next').finally(() => { syncingCompletedPlayback = false; });
 });
 video.addEventListener('error', () => {
   mediaEl.textContent = 'Media: error';

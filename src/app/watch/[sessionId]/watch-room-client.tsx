@@ -61,6 +61,8 @@ function downloadUrlForItem(item: any) {
   const idMatch = String(item?.id || '').match(/^xtream-(vod|series)-(\d+)$/i);
   if (idMatch) return `/activity-provider/xtream/${idMatch[1].toLowerCase()}/${idMatch[2]}?download=1`;
   const playbackUrl = String(item?.playbackUrl || '');
+  const episodeMatch = playbackUrl.match(/^\/activity-provider\/xtream\/episode\/(\d+-[a-z0-9]+)$/i);
+  if (episodeMatch) return `/activity-provider/xtream/episode/${episodeMatch[1]}?download=1`;
   return playbackUrl ? downloadUrlFor(playbackUrl) : '';
 }
 
@@ -71,6 +73,8 @@ function isBrowserLimitedVideo(item: any) {
 function hlsFallbackUrlFor(item: any) {
   const playbackUrl = String(item?.playbackUrl || '');
   const match = playbackUrl.match(/^\/activity-provider\/xtream\/(vod|series)\/(\d+)$/i);
+  const episodeMatch = playbackUrl.match(/^\/activity-provider\/xtream\/episode\/(\d+-[a-z0-9]+)$/i);
+  if (episodeMatch) return `/api/watch/xtream/hls/episode-${episodeMatch[1].toLowerCase()}/index.m3u8`;
   if (!match || !isBrowserLimitedVideo(item)) return playbackUrl;
   return `/api/watch/xtream/hls/${match[1].toLowerCase()}-${match[2]}/index.m3u8`;
 }
@@ -554,6 +558,7 @@ export default function WatchRoomClient({ sessionId, activityMode = false }: { s
               }}
               onEnded={() => {
                 setMediaStatus('ended');
+                nextItem();
               }}
             />
             {!state?.current && (

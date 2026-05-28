@@ -1,6 +1,6 @@
 import type { ReadableStream } from 'node:stream/web';
 
-export type XtreamKind = 'vod' | 'live' | 'series';
+export type XtreamKind = 'vod' | 'live' | 'series' | 'episode';
 
 type XtreamStream = {
   stream_id?: number | string;
@@ -24,6 +24,13 @@ type M3uEntry = {
 
 type XtreamSeriesInfo = {
   episodes?: unknown;
+  info?: {
+    name?: string;
+    title?: string;
+    cover?: string;
+    movie_image?: string;
+    year?: string;
+  };
 };
 
 type XtreamCatalogItem = {
@@ -36,10 +43,39 @@ type XtreamCatalogItem = {
   poster: string;
   playbackUrl: string;
   overview: string;
+  metadata?: {
+    provider?: 'xtream';
+    kind?: 'series-episode';
+    seriesId?: string;
+    seriesTitle?: string;
+    seasonNumber?: number;
+    episodeNumber?: number;
+    episodeId?: string;
+    episodeExtension?: string;
+    episodeTitle?: string;
+  };
 };
 
 let cachedStreams: { expiresAt: number; items: XtreamCatalogItem[] } | null = null;
 const vodExtensions = new Map<string, string>();
+const episodeExtensions = new Map<string, string>();
+
+export type XtreamSeriesProgress = {
+  seasonNumber: number;
+  episodeNumber: number;
+};
+
+type XtreamEpisode = {
+  seriesId: string;
+  seriesTitle: string;
+  seasonNumber: number;
+  episodeNumber: number;
+  episodeId: string;
+  extension: string;
+  title: string;
+  poster: string;
+  year: number;
+};
 
 const MOCK_CATALOG: XtreamCatalogItem[] = [
   {
@@ -123,6 +159,48 @@ function compact(value: unknown) {
   return normalize(value).replace(/[^a-z0-9]/g, '');
 }
 
+function parseSeriesIntent(query: string | null | undefined) {
+  const raw = String(query || '').trim();
+  const normalized = normalize(raw);
+  const resume = /^resume\b/i.test(raw);
+  let seasonNumber: number | undefined;
+  let episodeNumber: number | undefined;
+
+  const sxe = normalized.match(/\bs(?:eason)?\s*(\d{1,3})\s*e(?:p(?:isode)?)?\s*(\d{1,3})\b/i)
+    || normalized.match(/\bs(\d{1,3})e(\d{1,3})\b/i);
+  if (sxe) {
+    seasonNumber = Number(sxe[1]);
+    episodeNumber = Number(sxe[2]);
+  }
+
+  const seasonEpisode = normalized.match(/\bseason\s*(\d{1,3})\b.*\b(?:episode|ep)\s*(\d{1,3})\b/i);
+  if (seasonEpisode) {
+    seasonNumber = Number(seasonEpisode[1]);
+    episodeNumber = Number(seasonEpisode[2]);
+  }
+
+  const episodeOnly = normalized.match(/\b(?:episode|ep)\s*(\d{1,3})\b/i);
+  if (!episodeNumber && episodeOnly) episodeNumber = Number(episodeOnly[1]);
+
+  const titleQuery = raw
+    .replace(/^resume\b/i, '')
+    .replace(/\bs(?:eason)?\s*\d{1,3}\s*e(?:p(?:isode)?)?\s*\d{1,3}\b/gi, '')
+    .replace(/\bs\d{1,3}e\d{1,3}\b/gi, '')
+    .replace(/\bseason\s*\d{1,3}\b/gi, '')
+    .replace(/\b(?:episode|episodes|ep)\s*\d{1,3}\b/gi, '')
+    .replace(/\b(show|series)\b/gi, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  return {
+    resume,
+    explicit: resume || Boolean(episodeNumber || seasonNumber),
+    titleQuery,
+    seasonNumber: Number.isFinite(seasonNumber) ? seasonNumber : undefined,
+    episodeNumber: Number.isFinite(episodeNumber) ? episodeNumber : undefined,
+  };
+}
+
 function scoreItem(item: XtreamCatalogItem, query: string) {
   const needle = normalize(query);
   const compactNeedle = compact(query);
@@ -182,6 +260,37 @@ function toCatalogItem(stream: XtreamStream, kind: XtreamKind): XtreamCatalogIte
     poster: stream.stream_icon || stream.cover || '',
     playbackUrl: `/activity-provider/xtream/${kind}/${streamId}`,
     overview: kind === 'series' ? 'Xtream SERIES result; starts from the first available episode.' : `Xtream ${kind.toUpperCase()} stream${extension ? ` (${extension})` : ''}.`,
+  };
+}
+
+function toEpisodeCatalogItem(episode: XtreamEpisode): XtreamCatalogItem {
+  episodeExtensions.set(episode.episodeId, episode.extension);
+  const episodeLabel = `S${episode.seasonNumber}E${episode.episodeNumber}`;
+  const episodeTitle = episode.title && !compact(episode.title).includes(compact(episodeLabel))
+    ? `${episodeLabel}: ${episode.title}`
+    : episodeLabel;
+
+  return {
+    id: `xtream-episode-${episode.episodeId}`,
+    type: 'movie',
+    title: `${episode.seriesTitle} - ${episodeTitle}`,
+    year: episode.year,
+    runtime: episodeLabel,
+    source: 'Xtream IPTV provider',
+    poster: episode.poster,
+    playbackUrl: `/activity-provider/xtream/episode/${episode.episodeId}-${episode.extension}`,
+    overview: `Xtream SERIES episode ${episodeLabel}.`,
+    metadata: {
+      provider: 'xtream',
+      kind: 'series-episode',
+      seriesId: episode.seriesId,
+      seriesTitle: episode.seriesTitle,
+      seasonNumber: episode.seasonNumber,
+      episodeNumber: episode.episodeNumber,
+      episodeId: episode.episodeId,
+      episodeExtension: episode.extension,
+      episodeTitle: episode.title,
+    },
   };
 }
 
@@ -350,18 +459,59 @@ export async function searchXtreamCatalog(query: string | null | undefined) {
   return playable;
 }
 
+export async function findXtreamSeriesEpisode(
+  query: string | null | undefined,
+  getProgress?: (seriesId: string) => XtreamSeriesProgress | undefined,
+) {
+  const intent = parseSeriesIntent(query);
+  if (!intent.explicit || !intent.titleQuery) return null;
+
+  const items = await getXtreamCatalog();
+  const seriesMatches = items
+    .filter((item) => item.id.startsWith('xtream-series-'))
+    .map((item) => ({ item, score: scoreItem(item, `${intent.titleQuery} series`) }))
+    .filter((entry) => entry.score >= 16)
+    .sort((a, b) => b.score - a.score);
+  const series = seriesMatches[0]?.item;
+  if (!series) return null;
+
+  const seriesId = series.id.replace('xtream-series-', '');
+  const progress = intent.resume ? getProgress?.(seriesId) : undefined;
+  const episodes = await getSeriesEpisodes(seriesId, series.title.replace(/\s+-\s+first episode$/i, ''));
+  if (!episodes.length) return null;
+
+  const targetSeason = progress?.seasonNumber ?? intent.seasonNumber ?? episodes[0].seasonNumber;
+  const seasonEpisodes = episodes.filter((episode) => episode.seasonNumber === targetSeason);
+  const targetEpisode = progress?.episodeNumber ?? intent.episodeNumber ?? seasonEpisodes[0]?.episodeNumber;
+  const episode = seasonEpisodes.find((entry) => entry.episodeNumber === targetEpisode) || seasonEpisodes[0] || episodes[0];
+
+  return toEpisodeCatalogItem(episode);
+}
+
+export async function getNextXtreamSeriesEpisode(seriesId: string, seasonNumber: number, episodeNumber: number, seriesTitle?: string) {
+  const episodes = await getSeriesEpisodes(seriesId, seriesTitle);
+  const index = episodes.findIndex((entry) => entry.seasonNumber === seasonNumber && entry.episodeNumber === episodeNumber);
+  if (index < 0 || index + 1 >= episodes.length) return null;
+  return toEpisodeCatalogItem(episodes[index + 1]);
+}
+
 export async function getXtreamStreamUrl(kind: XtreamKind, streamId: string) {
   const config = getConfig();
   if (!config) throw new Error('Xtream provider is not configured');
-  const cleanId = String(streamId).replace(/[^0-9]/g, '');
+  const extensionMatch = String(streamId).toLowerCase().match(/^(\d+)-([a-z0-9]+)$/);
+  const cleanId = (extensionMatch?.[1] || String(streamId)).replace(/[^0-9]/g, '');
   if (!cleanId) throw new Error('Invalid Xtream stream id');
 
   if (kind === 'vod' && !vodExtensions.has(cleanId)) {
     await getXtreamCatalog().catch(() => []);
   }
 
-  const extension = kind === 'live' ? 'ts' : (vodExtensions.get(cleanId) || 'mp4');
-  const pathKind = kind === 'live' ? 'live' : kind === 'series' ? 'series' : 'movie';
+  const extension = kind === 'live'
+    ? 'ts'
+    : kind === 'episode'
+      ? (extensionMatch?.[2] || episodeExtensions.get(cleanId) || 'mp4')
+      : (vodExtensions.get(cleanId) || 'mp4');
+  const pathKind = kind === 'live' ? 'live' : kind === 'series' || kind === 'episode' ? 'series' : 'movie';
   return new URL(`/${pathKind}/${encodeURIComponent(config.username)}/${encodeURIComponent(config.password)}/${cleanId}.${extension}`, config.baseUrl);
 }
 
@@ -404,6 +554,43 @@ async function getFirstSeriesEpisodeUrl(seriesId: string) {
   throw new Error('No playable Xtream series episodes found');
 }
 
+async function getSeriesEpisodes(seriesId: string, fallbackTitle?: string) {
+  const cleanSeriesId = String(seriesId).replace(/[^0-9]/g, '');
+  if (!cleanSeriesId) throw new Error('Invalid Xtream series id');
+
+  const url = playerApiUrl('get_series_info');
+  url.searchParams.set('series_id', cleanSeriesId);
+  const info = await fetchXtreamJson<XtreamSeriesInfo>(url);
+  const seriesTitle = info.info?.name || info.info?.title || fallbackTitle || `Series ${cleanSeriesId}`;
+  const poster = info.info?.cover || info.info?.movie_image || '';
+  const parsedYear = Number(info.info?.year);
+  const year = Number.isFinite(parsedYear) && parsedYear > 1900 ? parsedYear : new Date().getFullYear();
+  const episodes = flattenSeriesEpisodes(info.episodes);
+
+  return episodes
+    .map((episode, index): XtreamEpisode | null => {
+      const rawEpisodeId = firstStringValue(episode, ['id', 'stream_id', 'episode_id']);
+      const episodeId = String(rawEpisodeId).replace(/[^0-9]/g, '');
+      if (!episodeId) return null;
+      const seasonNumber = numberValue(episode, ['season', 'season_number'], 1);
+      const episodeNumber = numberValue(episode, ['episode_num', 'episode_number', 'episode', 'num'], index + 1);
+      const extension = (firstStringValue(episode, ['container_extension', 'extension', 'container']) || 'mp4').toLowerCase().replace(/[^a-z0-9]/g, '') || 'mp4';
+      return {
+        seriesId: cleanSeriesId,
+        seriesTitle,
+        seasonNumber,
+        episodeNumber,
+        episodeId,
+        extension,
+        title: firstStringValue(episode, ['title', 'name']),
+        poster,
+        year,
+      };
+    })
+    .filter((episode): episode is XtreamEpisode => Boolean(episode))
+    .sort((a, b) => a.seasonNumber - b.seasonNumber || a.episodeNumber - b.episodeNumber);
+}
+
 function firstStringValue(record: Record<string, unknown>, keys: string[]) {
   for (const key of keys) {
     const value = record[key];
@@ -413,19 +600,31 @@ function firstStringValue(record: Record<string, unknown>, keys: string[]) {
   return '';
 }
 
-function flattenSeriesEpisodes(episodes: unknown): Array<Record<string, unknown>> {
+function numberValue(record: Record<string, unknown>, keys: string[], fallback: number) {
+  for (const key of keys) {
+    const value = Number(record[key]);
+    if (Number.isFinite(value) && value > 0) return value;
+  }
+  return fallback;
+}
+
+function flattenSeriesEpisodes(episodes: unknown, seasonNumber?: number): Array<Record<string, unknown>> {
   if (Array.isArray(episodes)) {
-    return episodes.flatMap((entry) => flattenSeriesEpisodes(entry));
+    return episodes.flatMap((entry) => flattenSeriesEpisodes(entry, seasonNumber));
   }
 
   if (!episodes || typeof episodes !== 'object') return [];
 
   const record = episodes as Record<string, unknown>;
-  if (firstStringValue(record, ['id', 'stream_id', 'episode_id'])) return [record];
+  if (firstStringValue(record, ['id', 'stream_id', 'episode_id'])) {
+    return seasonNumber && !record.season && !record.season_number
+      ? [{ ...record, season: seasonNumber }]
+      : [record];
+  }
 
   return Object.keys(record)
     .sort((a, b) => Number(a) - Number(b))
-    .flatMap((key) => flattenSeriesEpisodes(record[key]));
+    .flatMap((key) => flattenSeriesEpisodes(record[key], Number(key) || seasonNumber));
 }
 
 export async function fetchXtreamStream(kind: XtreamKind, streamId: string, range?: string | null, signal?: AbortSignal) {

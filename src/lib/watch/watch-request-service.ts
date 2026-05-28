@@ -1,4 +1,4 @@
-import { isXtreamMockEnabled, searchXtreamCatalog } from './xtream-provider';
+import { findXtreamSeriesEpisode, getNextXtreamSeriesEpisode, isXtreamMockEnabled, searchXtreamCatalog } from './xtream-provider';
 import { findInternetArchiveRecommendation } from './internet-archive-provider';
 import { findWatchmodeRecommendation } from './watchmode-provider';
 import { DISCORD_CLIENT_ID } from '@/lib/public-config';
@@ -16,6 +16,17 @@ type WatchCatalogItem = {
   poster: string;
   playbackUrl: string;
   overview: string;
+  metadata?: {
+    provider?: 'xtream';
+    kind?: 'series-episode';
+    seriesId?: string;
+    seriesTitle?: string;
+    seasonNumber?: number;
+    episodeNumber?: number;
+    episodeId?: string;
+    episodeExtension?: string;
+    episodeTitle?: string;
+  };
 };
 
 type WatchRequest = {
@@ -45,6 +56,15 @@ type WatchSession = {
     at: string;
     message: string;
   }>;
+};
+
+type SeriesProgress = {
+  provider: 'xtream';
+  seriesId: string;
+  seriesTitle: string;
+  nextSeasonNumber: number;
+  nextEpisodeNumber: number;
+  updatedAt: number;
 };
 
 type DiscordMessagePayload = {
@@ -109,6 +129,7 @@ declare global {
 const sessions = globalThis.__watchRequestSessions || new Map<string, WatchSession>();
 globalThis.__watchRequestSessions = sessions;
 const pendingRecommendations = new Map<string, WatchCatalogItem>();
+const seriesProgress = new Map<string, SeriesProgress>();
 const WATCH_STATE_FILE = process.env.WATCH_STATE_FILE || (process.env.FLY_APP_NAME ? '/data/watch-state.json' : './data/watch-state.json');
 let lastLoadedStateMtime = 0;
 
@@ -126,11 +147,14 @@ function loadWatchStateFromDisk() {
     const payload = JSON.parse(raw.toString('utf8')) as {
       sessions?: Array<[string, WatchSession]>;
       pendingRecommendations?: Array<[string, WatchCatalogItem]>;
+      seriesProgress?: Array<[string, SeriesProgress]>;
     };
     sessions.clear();
     for (const [id, session] of payload.sessions || []) sessions.set(id, session);
     pendingRecommendations.clear();
     for (const [key, item] of payload.pendingRecommendations || []) pendingRecommendations.set(key, item);
+    seriesProgress.clear();
+    for (const [key, progress] of payload.seriesProgress || []) seriesProgress.set(key, progress);
     lastLoadedStateMtime = mtime || Date.now();
   } catch (error) {
     console.error('[WatchRequest] Failed to load watch state:', error);
@@ -143,6 +167,7 @@ function saveWatchStateToDisk() {
     writeFileSync(WATCH_STATE_FILE, JSON.stringify({
       sessions: Array.from(sessions.entries()),
       pendingRecommendations: Array.from(pendingRecommendations.entries()),
+      seriesProgress: Array.from(seriesProgress.entries()),
     }, null, 2));
     lastLoadedStateMtime = statSync(WATCH_STATE_FILE).mtimeMs;
   } catch (error) {
@@ -171,6 +196,8 @@ function getPublicBaseUrl(preferredBaseUrl?: string) {
 function getPublicPlaybackUrl(item: WatchCatalogItem) {
   const playbackUrl = item.playbackUrl;
   const xtreamMatch = playbackUrl.match(/^\/activity-provider\/xtream\/(vod|series)\/(\d+)$/i);
+  const episodeMatch = playbackUrl.match(/^\/activity-provider\/xtream\/episode\/(\d+-[a-z0-9]+)$/i);
+  if (episodeMatch) return `/api/watch/xtream/hls/episode-${episodeMatch[1].toLowerCase()}/index.m3u8`;
   if (xtreamMatch) return `/api/watch/xtream/hls/${xtreamMatch[1].toLowerCase()}-${xtreamMatch[2]}/index.m3u8`;
   if (playbackUrl.startsWith('/')) return playbackUrl;
   return `/activity-proxy?url=${encodeURIComponent(playbackUrl)}`;
@@ -363,6 +390,36 @@ export async function searchWatchProviders(query: string | null | undefined) {
   return searchWatchCatalog(query);
 }
 
+function progressKey(userId: string, seriesId: string) {
+  return `${userId || 'discord'}:xtream:${seriesId}`;
+}
+
+function getProgressForUser(userId: string, seriesId: string) {
+  const progress = seriesProgress.get(progressKey(userId, seriesId));
+  if (!progress) return undefined;
+  return {
+    seasonNumber: progress.nextSeasonNumber,
+    episodeNumber: progress.nextEpisodeNumber,
+  };
+}
+
+async function updateSeriesProgress(userId: string, item: WatchCatalogItem) {
+  const metadata = item.metadata;
+  if (metadata?.provider !== 'xtream' || metadata.kind !== 'series-episode' || !metadata.seriesId) return;
+  const seasonNumber = Number(metadata.seasonNumber || 1);
+  const episodeNumber = Number(metadata.episodeNumber || 1);
+  const next = await getNextXtreamSeriesEpisode(metadata.seriesId, seasonNumber, episodeNumber, metadata.seriesTitle).catch(() => null);
+  const nextMetadata = next?.metadata;
+  seriesProgress.set(progressKey(userId, metadata.seriesId), {
+    provider: 'xtream',
+    seriesId: metadata.seriesId,
+    seriesTitle: metadata.seriesTitle || item.title,
+    nextSeasonNumber: Number(nextMetadata?.seasonNumber || seasonNumber),
+    nextEpisodeNumber: Number(nextMetadata?.episodeNumber || episodeNumber + 1),
+    updatedAt: Date.now(),
+  });
+}
+
 export function getWatchCatalogItem(id: string | null | undefined) {
   return TEST_CATALOG.find((item) => item.id === id) || null;
 }
@@ -440,7 +497,16 @@ export async function requestWatchItem(params: {
   userId: string;
   username: string;
 }) {
-  const item = getWatchCatalogItem(params.itemId) || (await searchWatchProviders(params.query))[0];
+  loadWatchStateFromDisk();
+  const explicitEpisode = await findXtreamSeriesEpisode(params.query, (seriesId) => getProgressForUser(params.userId, seriesId)).catch((error) => {
+    console.error('[WatchRequest] Xtream episode lookup failed:', error);
+    return null;
+  });
+  let item = getWatchCatalogItem(params.itemId) || explicitEpisode || (await searchWatchProviders(params.query))[0];
+  if (item?.id.startsWith('xtream-series-') && !item.metadata) {
+    const seriesTitle = item.title.replace(/\s+-\s+first episode$/i, '');
+    item = await findXtreamSeriesEpisode(`${seriesTitle} episode 1`).catch(() => null) || item;
+  }
   if (!item) {
     const watchmodeRecommendation = await findWatchmodeRecommendation(params.query).catch((error) => {
       console.error('[WatchRequest] Watchmode fallback failed:', error);
@@ -468,6 +534,8 @@ export async function requestWatchItem(params: {
     username: params.username,
   });
   maybePrepareSharedHls(item);
+  await updateSeriesProgress(params.userId, item);
+  saveWatchStateToDisk();
 
   return { request, session };
 }
@@ -491,6 +559,7 @@ export function acceptWatchRecommendation(params: {
     username: params.username,
   });
   maybePrepareSharedHls(item);
+  updateSeriesProgress(params.userId, item).catch(() => {});
   saveWatchStateToDisk();
 
   return { request, session };
@@ -498,6 +567,13 @@ export function acceptWatchRecommendation(params: {
 
 function maybePrepareSharedHls(item: WatchCatalogItem) {
   const match = item.playbackUrl.match(/^\/activity-provider\/xtream\/(vod|series)\/(\d+)$/);
+  const episodeMatch = item.playbackUrl.match(/^\/activity-provider\/xtream\/episode\/(\d+-[a-z0-9]+)$/i);
+  if (episodeMatch) {
+    fetch(`${getPublicBaseUrl()}/api/watch/xtream/hls/episode-${episodeMatch[1].toLowerCase()}/index.m3u8`).catch((error) => {
+      console.error('[WatchRequest] Xtream episode HLS start failed:', error?.message || error);
+    });
+    return;
+  }
   if (!match) return;
   if (!String(item.overview || '').toLowerCase().includes('(mkv)')) return;
   fetch(`${getPublicBaseUrl()}/api/watch/xtream/hls/${match[1].toLowerCase()}-${match[2]}/index.m3u8`).catch((error) => {
@@ -505,7 +581,28 @@ function maybePrepareSharedHls(item: WatchCatalogItem) {
   });
 }
 
-export function controlWatchSession(sessionId: string, action: string, position?: number, targetIndex?: number) {
+async function getAutoNextEpisodeRequest(session: WatchSession) {
+  const current = session.current;
+  const metadata = current?.item.metadata;
+  const userId = current?.requestedBy.userId || 'discord';
+  if (metadata?.provider !== 'xtream' || metadata.kind !== 'series-episode' || !metadata.seriesId) return null;
+  const next = await getNextXtreamSeriesEpisode(
+    metadata.seriesId,
+    Number(metadata.seasonNumber || 1),
+    Number(metadata.episodeNumber || 1),
+    metadata.seriesTitle,
+  ).catch(() => null);
+  if (!next) return null;
+  await updateSeriesProgress(userId, next);
+  return {
+    requestId: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+    requestedBy: current!.requestedBy,
+    addedAt: new Date().toISOString(),
+    item: next,
+  };
+}
+
+export async function controlWatchSession(sessionId: string, action: string, position?: number, targetIndex?: number) {
   const session = getWatchSession(sessionId);
 
   if (session.playback.muted === undefined) session.playback.muted = true;
@@ -541,9 +638,10 @@ export function controlWatchSession(sessionId: string, action: string, position?
   }
 
   if (action === 'next') {
-    session.current = session.queue.shift() || null;
+    session.current = session.queue.shift() || await getAutoNextEpisodeRequest(session);
     if (session.current) maybePrepareSharedHls(session.current.item);
-    session.playback = { status: session.current ? 'paused' : 'idle', position: 0, updatedAt: Date.now(), muted: session.playback.muted ?? true };
+    if (session.current) await updateSeriesProgress(session.current.requestedBy.userId, session.current.item);
+    session.playback = { status: session.current ? 'playing' : 'idle', position: 0, updatedAt: Date.now(), muted: session.playback.muted ?? true };
     addEvent(session, session.current ? `Loaded ${session.current.item.title}` : 'Queue ended');
     saveWatchStateToDisk();
     return session;

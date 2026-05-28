@@ -15,7 +15,7 @@ export async function POST(request: Request, context: { params: Promise<{ sessio
     const parsedPosition = rawPosition === undefined || rawPosition === null || rawPosition === ''
       ? undefined
       : Number(rawPosition);
-    const session = controlWatchSession(
+    const session = await controlWatchSession(
       sessionId,
       String(body.action || '').toLowerCase(),
       Number.isFinite(parsedPosition as number) ? (parsedPosition as number) : undefined,

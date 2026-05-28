@@ -21,7 +21,7 @@ export async function GET(request: Request, context: { params: Promise<{ session
     return NextResponse.json({ error: 'Unsupported control action' }, { status: 400, headers: CORS_HEADERS });
   }
 
-  const session = controlWatchSession(sessionId, action, position, targetIndex);
+  const session = await controlWatchSession(sessionId, action, position, targetIndex);
   const title = session.current?.item.title || 'watch room';
   const label = action === 'seek' ? 'Synced' : action === 'clear' ? 'Cleared' : action[0].toUpperCase() + action.slice(1);
 

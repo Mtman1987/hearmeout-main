@@ -25,7 +25,7 @@ function cleanStreamId(streamId: string) {
 
 function parseStreamKey(streamId: string): { kind: XtreamKind; id: string } {
   const clean = cleanStreamId(streamId);
-  const match = clean.match(/^(vod|series|live)-(\d+)$/);
+  const match = clean.match(/^(vod|series|live)-(\d+)$/) || clean.match(/^(episode)-(\d+-[a-z0-9]+)$/);
   if (match) return { kind: match[1] as XtreamKind, id: match[2] };
   const numeric = clean.replace(/[^0-9]/g, '');
   if (!numeric) throw new Error('Invalid Xtream HLS stream id');
@@ -49,11 +49,14 @@ function paths(streamId: string) {
 }
 
 export function isXtreamHlsUrl(playbackUrl: string) {
-  return /^\/activity-provider\/xtream\/(vod|series)\/\d+$/i.test(playbackUrl);
+  return /^\/activity-provider\/xtream\/(?:vod|series)\/\d+$/i.test(playbackUrl)
+    || /^\/activity-provider\/xtream\/episode\/\d+-[a-z0-9]+$/i.test(playbackUrl);
 }
 
 export function xtreamHlsUrl(playbackUrl: string) {
   const match = playbackUrl.match(/^\/activity-provider\/xtream\/(vod|series)\/(\d+)$/i);
+  const episodeMatch = playbackUrl.match(/^\/activity-provider\/xtream\/episode\/(\d+-[a-z0-9]+)$/i);
+  if (episodeMatch) return `/api/watch/xtream/hls/episode-${episodeMatch[1].toLowerCase()}/index.m3u8`;
   if (!match) return playbackUrl;
   return `/api/watch/xtream/hls/${match[1].toLowerCase()}-${match[2]}/index.m3u8`;
 }
