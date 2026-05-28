@@ -2,6 +2,9 @@ import { NextRequest, NextResponse } from 'next/server';
 import { handleMusicCommand } from '@/lib/music-command-service';
 import { handleWatchRequestCommand } from '@/lib/watch/watch-request-service';
 
+const processedDiscordMessages = new Map<string, number>();
+const PROCESSED_MESSAGE_TTL_MS = 10 * 60 * 1000;
+
 function getRequestBaseUrl(request: NextRequest) {
   const forwardedProto = request.headers.get('x-forwarded-proto');
   const forwardedHost = request.headers.get('x-forwarded-host');
@@ -104,6 +107,22 @@ async function sendDiscordMessage(channelId: string, content: string, username?:
   }
 }
 
+function markDiscordMessageSeen(guildId: string, channelId: string, messageId: string) {
+  if (!messageId || !channelId) return false;
+
+  const now = Date.now();
+  for (const [key, seenAt] of processedDiscordMessages) {
+    if (now - seenAt > PROCESSED_MESSAGE_TTL_MS) {
+      processedDiscordMessages.delete(key);
+    }
+  }
+
+  const key = `${guildId}:${channelId}:${messageId}`;
+  if (processedDiscordMessages.has(key)) return true;
+  processedDiscordMessages.set(key, now);
+  return false;
+}
+
 export async function POST(request: NextRequest) {
   try {
     let body: any;
@@ -132,6 +151,12 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ success: false, error: 'Missing channelId' }, { status: 400 });
     }
 
+    const messageId = String(data.messageId || data.id || '').trim();
+    if (markDiscordMessageSeen(guildId, channelId, messageId)) {
+      console.log(`[Discord Chat] Duplicate message ignored: ${guildId}/${channelId}/${messageId}`);
+      return NextResponse.json({ success: true, handled: true, skipped: 'duplicate-message', replies: [] });
+    }
+
     const alreadyFannedOutByDiscordStreamHub = request.headers.get('x-chat-origin') === 'dsh-fanout';
     let streamweaverForward = {
       ok: true,
@@ -141,7 +166,7 @@ export async function POST(request: NextRequest) {
 
     let handled = false;
     if (isWatchControlCommand) {
-      replies.push('Use the Activity controls inside HearMeOut. Discord URL buttons were disabled because they trigger the Leaving Discord warning.');
+      // DSH owns Discord component interactions, so it posts the live control buttons.
       handled = true;
     }
 

@@ -230,7 +230,7 @@ function enqueue(session: WatchSession, item: WatchCatalogItem, requestedBy: Wat
 
   if (!session.current) {
     session.current = request;
-    session.playback = { status: 'paused', position: 0, updatedAt: Date.now() };
+    session.playback = { status: 'playing', position: 0, updatedAt: Date.now() };
     addEvent(session, `${requestedBy.username} loaded ${item.title}`);
   } else {
     session.queue.push(request);

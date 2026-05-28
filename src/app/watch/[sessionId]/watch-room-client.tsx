@@ -89,7 +89,7 @@ function shouldShowMkvFallbackNotice(item: any, mediaStatus: string) {
   return !status.includes('ready') && !status.includes('playing');
 }
 
-export default function WatchRoomClient({ sessionId }: { sessionId: string }) {
+export default function WatchRoomClient({ sessionId, activityMode = false }: { sessionId: string; activityMode?: boolean }) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const playerShellRef = useRef<HTMLDivElement | null>(null);
   const hlsRef = useRef<any>(null);
@@ -102,8 +102,8 @@ export default function WatchRoomClient({ sessionId }: { sessionId: string }) {
   const [mediaStatus, setMediaStatus] = useState('Waiting for media');
   const [requestError, setRequestError] = useState<string | null>(null);
   const [controlError, setControlError] = useState<string | null>(null);
-  const [volume, setVolume] = useState(0.85);
-  const [muted, setMuted] = useState(false);
+  const [volume, setVolume] = useState(activityMode ? 1 : 0.85);
+  const [muted, setMuted] = useState(activityMode);
   const [dismissedMkvNoticeFor, setDismissedMkvNoticeFor] = useState<string | null>(null);
 
   const endpointSnippet = useMemo(() => `POST /api/discord/chat
@@ -500,6 +500,8 @@ export default function WatchRoomClient({ sessionId }: { sessionId: string }) {
               ref={videoRef}
               className="h-full w-full bg-black"
               controls
+              muted={muted}
+              autoPlay={activityMode}
               playsInline
               onSeeked={() => {
                 if (!applyingRemoteState.current && state?.current) sendControl('seek');
@@ -507,6 +509,7 @@ export default function WatchRoomClient({ sessionId }: { sessionId: string }) {
               onCanPlay={() => {
                 setMediaStatus('Ready to play');
                 console.log('[WatchRoom] Media can play');
+                applyPlaybackState();
               }}
               onPlaying={() => {
                 setMediaStatus('Playing');
