@@ -74,6 +74,18 @@ function hlsFallbackUrlFor(item: any) {
   return `/api/watch/xtream/hls/${match[1]}/index.m3u8`;
 }
 
+function isHlsPlaybackUrl(value: string) {
+  if (!value) return false;
+  if (value.split('?')[0].endsWith('.m3u8')) return true;
+  try {
+    const parsed = new URL(value, window.location.origin);
+    const proxied = parsed.searchParams.get('url');
+    return Boolean(proxied?.split('?')[0].endsWith('.m3u8'));
+  } catch {
+    return false;
+  }
+}
+
 function mediaErrorMessage(error: MediaError | null | undefined) {
   if (!error) return 'Unknown media error';
   if (error.code === MediaError.MEDIA_ERR_ABORTED) return 'Media load was aborted';
@@ -414,7 +426,7 @@ export default function WatchRoomClient({ sessionId, activityMode = false }: { s
     const usesHlsFallback = mediaUrl !== item.playbackUrl;
     const loadingRequestId = state.current.requestId;
 
-    if (mediaUrl.endsWith('.m3u8')) {
+    if (isHlsPlaybackUrl(mediaUrl)) {
       import('hls.js')
         .then(({ default: Hls }) => {
           if (state.current?.requestId === loadingRequestId && Hls.isSupported()) {

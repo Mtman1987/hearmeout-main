@@ -14,6 +14,17 @@ function escapeHtml(value: unknown) {
   }[char] || char));
 }
 
+function isHlsPlaybackUrl(value: string) {
+  if (value.endsWith('.m3u8')) return true;
+  try {
+    const url = new URL(value, 'https://hearmeout.local');
+    const proxied = url.searchParams.get('url');
+    return Boolean(proxied?.endsWith('.m3u8'));
+  } catch {
+    return false;
+  }
+}
+
 function html(request: Request) {
   const configuredBaseUrl = process.env.NEXT_PUBLIC_BASE_URL || process.env.NEXT_PUBLIC_APP_URL;
   const baseUrl = (configuredBaseUrl || new URL(request.url).origin).replace(/\/$/, '');
@@ -22,6 +33,7 @@ function html(request: Request) {
   const title = current ? `${current.item.title} (${current.item.year})` : 'Waiting for a request';
   const media = current ? `${current.item.source} - requested by ${current.requestedBy.username}` : 'Media: idle';
   const src = current?.item.playbackUrl || '';
+  const nativeSrc = src && !isHlsPlaybackUrl(src) ? src : '';
 
   return `<!doctype html>
 <html lang="en">
@@ -84,7 +96,7 @@ function html(request: Request) {
         <div class="status" id="activity-status">Loading</div>
       </header>
       <div class="video-wrap">
-        <video id="video" controls playsinline ${src ? `src="${escapeHtml(src)}"` : ''}></video>
+        <video id="video" controls autoplay muted playsinline ${nativeSrc ? `src="${escapeHtml(nativeSrc)}"` : ''}></video>
         <div class="empty ${current ? 'hidden' : ''}" id="empty"><strong>No video loaded</strong><span>Use the request panel or type !wr in Discord.</span></div>
       </div>
       <div class="toolbar" aria-label="Watch controls">

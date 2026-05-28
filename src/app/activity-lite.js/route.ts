@@ -34,7 +34,7 @@ let hls = null;
 let applying = false;
 let lastSeekApplyAt = 0;
 let mediaIsBuffering = false;
-let muted = false;
+let muted = true;
 let currentDownloadUrl = '';
 let pendingRecommendation = null;
 let pendingPlay = false;
@@ -62,6 +62,18 @@ function appUrl(path) {
   if (nextPath.startsWith('/activity/watch/xtream/hls/')) nextPath = nextPath.replace('/activity/watch/xtream/hls/', '/api/watch/xtream/hls/');
   if (nextPath.startsWith('/activity/proxy')) nextPath = nextPath.replace('/activity/proxy', '/activity-proxy');
   return nextPath;
+}
+
+function isHlsPlaybackUrl(value) {
+  if (!value) return false;
+  if (String(value).split('?')[0].endsWith('.m3u8')) return true;
+  try {
+    const parsed = new URL(appUrl(value), window.location.href);
+    const proxied = parsed.searchParams.get('url');
+    return Boolean(proxied && proxied.split('?')[0].endsWith('.m3u8'));
+  } catch (err) {
+    return false;
+  }
 }
 
 function applyVolume() {
@@ -219,7 +231,8 @@ function loadMedia(item) {
   mediaIsBuffering = true;
   pendingPlay = false;
   mediaEl.textContent = 'Media: loading ' + item.title;
-  if (item.playbackUrl.endsWith('.m3u8') && window.Hls && window.Hls.isSupported()) {
+  const playbackUrl = appUrl(item.playbackUrl);
+  if (isHlsPlaybackUrl(item.playbackUrl) && window.Hls && window.Hls.isSupported()) {
     hls = new window.Hls({
       enableWorker: false,
       lowLatencyMode: false,
@@ -245,10 +258,10 @@ function loadMedia(item) {
         : 'Media: buffering' + (details ? ' - ' + details : '');
       if (data && data.fatal) console.warn('HLS fatal error', data);
     });
-    hls.loadSource(appUrl(item.playbackUrl));
+    hls.loadSource(playbackUrl);
     hls.attachMedia(video);
   } else {
-    video.src = appUrl(item.playbackUrl);
+    video.src = playbackUrl;
   }
 }
 
