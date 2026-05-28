@@ -61,7 +61,11 @@ async function sendDiscordMessage(channelId: string, content: string, username?:
 
   // DMs don't support webhooks — send directly via Bot API
   if (isDM) {
-    return sendDiscordMessageDirect(channelId, content, botToken);
+    try {
+      return await sendDiscordMessageDirect(channelId, content, botToken);
+    } catch (error: any) {
+      return { ok: false, error: error?.message || 'Discord DM send failed' };
+    }
   }
 
   try {
