@@ -11,6 +11,7 @@ type WatchState = {
     status: 'idle' | 'paused' | 'playing';
     position: number;
     updatedAt: number;
+    muted?: boolean;
   };
   events: Array<{ id: string; at: string; message: string }>;
 };
@@ -165,7 +166,9 @@ export default function WatchRoomClient({ sessionId, activityMode = false }: { s
   }
 
   function toggleMute() {
-    setMuted((current) => !current);
+    const nextMuted = !muted;
+    setMuted(nextMuted);
+    if (state?.current) sendControl(nextMuted ? 'mute' : 'unmute').catch(() => {});
   }
 
   async function enableSound() {
@@ -475,6 +478,12 @@ export default function WatchRoomClient({ sessionId, activityMode = false }: { s
     video.volume = volume;
     video.muted = muted;
   }, [volume, muted]);
+
+  useEffect(() => {
+    if (typeof state?.playback?.muted === 'boolean') {
+      setMuted(state.playback.muted);
+    }
+  }, [state?.playback?.muted]);
 
   async function submitRequest(event: React.FormEvent) {
     event.preventDefault();

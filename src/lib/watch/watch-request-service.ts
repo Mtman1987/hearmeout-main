@@ -38,6 +38,7 @@ type WatchSession = {
     status: 'idle' | 'paused' | 'playing';
     position: number;
     updatedAt: number;
+    muted?: boolean;
   };
   events: Array<{
     id: string;
@@ -212,6 +213,7 @@ function createSession(id: string, guildId = 'local', channelId = 'watch'): Watc
       status: 'idle',
       position: 0,
       updatedAt: Date.now(),
+      muted: true,
     },
     events: [],
   };
@@ -230,7 +232,7 @@ function enqueue(session: WatchSession, item: WatchCatalogItem, requestedBy: Wat
 
   if (!session.current) {
     session.current = request;
-    session.playback = { status: 'playing', position: 0, updatedAt: Date.now() };
+    session.playback = { status: 'playing', position: 0, updatedAt: Date.now(), muted: session.playback.muted ?? true };
     addEvent(session, `${requestedBy.username} loaded ${item.title}`);
   } else {
     session.queue.push(request);
@@ -449,12 +451,22 @@ function maybePrepareSharedHls(item: WatchCatalogItem) {
 export function controlWatchSession(sessionId: string, action: string, position?: number, targetIndex?: number) {
   const session = getWatchSession(sessionId);
 
+  if (session.playback.muted === undefined) session.playback.muted = true;
+
   if (action === 'play' || action === 'pause') {
     session.playback.status = action === 'play' ? 'playing' : 'paused';
     const nextPosition = position === undefined ? session.playback.position || 0 : position;
     session.playback.position = Math.max(0, Number(nextPosition || 0));
     session.playback.updatedAt = Date.now();
     addEvent(session, `${action === 'play' ? 'Played' : 'Paused'} ${session.current?.item.title || 'session'}`);
+    saveWatchStateToDisk();
+    return session;
+  }
+
+  if (action === 'mute' || action === 'unmute') {
+    session.playback.muted = action === 'mute';
+    session.playback.updatedAt = Date.now();
+    addEvent(session, `${action === 'mute' ? 'Muted' : 'Unmuted'} ${session.current?.item.title || 'session'}`);
     saveWatchStateToDisk();
     return session;
   }
@@ -470,7 +482,7 @@ export function controlWatchSession(sessionId: string, action: string, position?
   if (action === 'next') {
     session.current = session.queue.shift() || null;
     if (session.current) maybePrepareSharedHls(session.current.item);
-    session.playback = { status: session.current ? 'paused' : 'idle', position: 0, updatedAt: Date.now() };
+    session.playback = { status: session.current ? 'paused' : 'idle', position: 0, updatedAt: Date.now(), muted: session.playback.muted ?? true };
     addEvent(session, session.current ? `Loaded ${session.current.item.title}` : 'Queue ended');
     saveWatchStateToDisk();
     return session;
@@ -483,7 +495,7 @@ export function controlWatchSession(sessionId: string, action: string, position?
     session.queue = session.queue.slice(index);
     session.current = request;
     maybePrepareSharedHls(request.item);
-    session.playback = { status: 'paused', position: 0, updatedAt: Date.now() };
+    session.playback = { status: 'paused', position: 0, updatedAt: Date.now(), muted: session.playback.muted ?? true };
     addEvent(session, `Loaded ${request.item.title}`);
     saveWatchStateToDisk();
     return session;
@@ -492,7 +504,7 @@ export function controlWatchSession(sessionId: string, action: string, position?
   if (action === 'clear') {
     session.queue = [];
     session.current = null;
-    session.playback = { status: 'idle', position: 0, updatedAt: Date.now() };
+    session.playback = { status: 'idle', position: 0, updatedAt: Date.now(), muted: true };
     addEvent(session, 'Cleared queue');
     saveWatchStateToDisk();
     return session;

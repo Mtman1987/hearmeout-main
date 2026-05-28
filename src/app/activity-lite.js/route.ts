@@ -267,6 +267,10 @@ function loadMedia(item) {
 
 function render(nextState) {
   state = nextState;
+  if (state.playback && typeof state.playback.muted === 'boolean' && muted !== state.playback.muted) {
+    muted = state.playback.muted;
+    applyVolume();
+  }
   if (state.id && state.id !== sessionId) {
     sessionId = state.id;
     document.getElementById('room').textContent = 'Room ' + sessionId;
@@ -493,9 +497,8 @@ downloadLink.addEventListener('click', () => {
 });
 
 muteBtn.addEventListener('click', () => {
-  muted = !muted;
-  applyVolume();
-  mediaEl.textContent = video.muted ? 'Media: muted' : 'Media: volume on';
+  control(video.muted ? 'unmute' : 'mute')
+    .catch((err) => console.warn('Mute control failed', err));
 });
 
 volumeInput.addEventListener('input', () => {
