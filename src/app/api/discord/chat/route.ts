@@ -41,9 +41,25 @@ async function forwardToStreamweaver(originalBody: any) {
   };
 }
 
-async function sendDiscordMessage(channelId: string, content: string, username?: string, components?: any[]) {
+async function sendDiscordMessageDirect(channelId: string, content: string, botToken: string) {
+  const res = await fetch(`https://discord.com/api/v10/channels/${channelId}/messages`, {
+    method: 'POST',
+    headers: { Authorization: `Bot ${botToken}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ content }),
+    signal: timeoutSignal(7_000),
+  });
+  if (res.ok) return { ok: true, via: 'bot-message' };
+  return { ok: false, error: `Bot message send failed (${res.status})` };
+}
+
+async function sendDiscordMessage(channelId: string, content: string, username?: string, components?: any[], isDM?: boolean) {
   const botToken = process.env.DISCORD_BOT_TOKEN;
   if (!botToken) return { ok: false, error: 'DISCORD_BOT_TOKEN is not configured' };
+
+  // DMs don't support webhooks — send directly via Bot API
+  if (isDM) {
+    return sendDiscordMessageDirect(channelId, content, botToken);
+  }
 
   try {
     const webhooksRes = await fetch(`https://discord.com/api/v10/channels/${channelId}/webhooks`, {
@@ -76,9 +92,15 @@ async function sendDiscordMessage(channelId: string, content: string, username?:
       }
     }
 
-    return { ok: false, error: `Webhook unavailable for channel ${channelId}` };
+    // Fallback to direct Bot API if webhook fails (e.g. permissions issue)
+    return sendDiscordMessageDirect(channelId, content, botToken);
   } catch (error: any) {
-    return { ok: false, error: error?.message || 'Discord send failed' };
+    // Last-resort fallback to direct message on network/timeout errors
+    try {
+      return await sendDiscordMessageDirect(channelId, content, botToken);
+    } catch {
+      return { ok: false, error: error?.message || 'Discord send failed' };
+    }
   }
 }
 
@@ -98,6 +120,7 @@ export async function POST(request: NextRequest) {
     const guildId = String(data.guildId || data.serverId || 'local').trim();
     const userId = String(data.userId || data.authorId || 'discord').trim();
     const userName = String(data.userName || data.displayName || data.username || 'Discord User').trim();
+    const isDM = !data.guildId && !data.serverId;
     const replies: string[] = [];
     const isWatchControlCommand = /^!(controls?|watch-controls)$/i.test(message);
 
@@ -180,7 +203,8 @@ export async function POST(request: NextRequest) {
           channelId,
           reply,
           streamweaverForward.payload?.response ? streamweaverRelayName : 'HearMeOut',
-          undefined
+          undefined,
+          isDM
         )))
       : [];
 
