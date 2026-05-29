@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { parseJsonRequest } from '@/lib/request-json';
 import { controlWatchSession, getPublicWatchSession } from '@/lib/watch-request-service';
 
 const CORS_HEADERS = {
@@ -10,7 +11,7 @@ const CORS_HEADERS = {
 export async function POST(request: Request, context: { params: Promise<{ sessionId: string }> }) {
   try {
     const { sessionId } = await context.params;
-    const body = await request.json();
+    const body = await parseJsonRequest<any>(request);
     const rawPosition = body?.position;
     const parsedPosition = rawPosition === undefined || rawPosition === null || rawPosition === ''
       ? undefined
