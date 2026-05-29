@@ -51,24 +51,40 @@ async function forwardToStreamweaver(originalBody: any) {
   };
 }
 
-async function sendDiscordMessageDirect(channelId: string, content: string, botToken: string) {
+function buildDiscordMessageBody(reply: string | DiscordMessagePayload, username?: string, components?: any[]) {
+  if (typeof reply === 'string') {
+    return { content: reply, username, components };
+  }
+
+  return {
+    content: reply.content || '',
+    embeds: reply.embeds,
+    components: components || reply.components,
+    allowed_mentions: reply.allowed_mentions,
+    username,
+  };
+}
+
+async function sendDiscordMessageDirect(channelId: string, reply: string | DiscordMessagePayload, botToken: string, components?: any[]) {
+  const body = buildDiscordMessageBody(reply, undefined, components);
+  delete body.username;
   const res = await fetch(`https://discord.com/api/v10/channels/${channelId}/messages`, {
     method: 'POST',
     headers: { Authorization: `Bot ${botToken}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ content }),
+    body: JSON.stringify(body),
     signal: timeoutSignal(7_000),
   });
   if (res.ok) return { ok: true, via: 'bot-message' };
   return { ok: false, error: `Bot message send failed (${res.status})` };
 }
 
-async function sendDiscordMessage(channelId: string, content: string, username?: string, components?: any[], isDM?: boolean) {
+async function sendDiscordMessage(channelId: string, reply: string | DiscordMessagePayload, username?: string, components?: any[], isDM?: boolean) {
   const botToken = process.env.DISCORD_BOT_TOKEN;
   if (!botToken) return { ok: false, error: 'DISCORD_BOT_TOKEN is not configured' };
 
   // DMs don't support webhooks — send directly via Bot API
   if (isDM) {
-    return sendDiscordMessageDirect(channelId, content, botToken);
+    return sendDiscordMessageDirect(channelId, reply, botToken, components);
   }
 
   try {
@@ -95,7 +111,7 @@ async function sendDiscordMessage(channelId: string, content: string, username?:
         const sendRes = await fetch(`https://discord.com/api/v10/webhooks/${webhook.id}/${webhook.token}`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ content, username: username || 'HearMeOut', components }),
+          body: JSON.stringify(buildDiscordMessageBody(reply, username || 'HearMeOut', components)),
           signal: timeoutSignal(7_000),
         });
         if (sendRes.ok) return { ok: true, via: 'webhook' };
@@ -103,14 +119,64 @@ async function sendDiscordMessage(channelId: string, content: string, username?:
     }
 
     // Fallback to direct Bot API if webhook fails (e.g. permissions issue)
-    return sendDiscordMessageDirect(channelId, content, botToken);
+    return sendDiscordMessageDirect(channelId, reply, botToken, components);
   } catch (error: any) {
     // Last-resort fallback to direct message on network/timeout errors
     try {
-      return await sendDiscordMessageDirect(channelId, content, botToken);
+      return await sendDiscordMessageDirect(channelId, reply, botToken, components);
     } catch {
       return { ok: false, error: error?.message || 'Discord send failed' };
     }
+  }
+}
+
+
+function parseJsonText(raw: string) {
+  if (!raw.trim()) return {};
+  return JSON.parse(raw);
+}
+
+function parseNestedJsonValue(value: unknown) {
+  if (typeof value !== 'string') return value;
+  const trimmed = value.trim();
+  if (!trimmed || (!trimmed.startsWith('{') && !trimmed.startsWith('['))) return value;
+  return JSON.parse(trimmed);
+}
+
+function unwrapDiscordChatRoot(body: any): any {
+  let current = parseNestedJsonValue(body);
+  const seen = new Set<unknown>();
+
+  while (current && typeof current === 'object' && 'root' in current && !seen.has(current)) {
+    seen.add(current);
+    current = parseNestedJsonValue((current as { root?: unknown }).root);
+  }
+
+  return current && typeof current === 'object' ? current : {};
+}
+
+async function parseDiscordChatRequest(request: NextRequest) {
+  const raw = await request.text();
+  if (!raw.trim()) return {};
+
+  const contentType = request.headers.get('content-type') || '';
+  if (contentType.includes('application/x-www-form-urlencoded')) {
+    const params = new URLSearchParams(raw);
+    const payloadJson = params.get('payload_json');
+    if (payloadJson) return parseJsonText(payloadJson);
+
+    const rootJson = params.get('root');
+    if (rootJson) return { root: parseNestedJsonValue(rootJson) };
+
+    return Object.fromEntries(params.entries());
+  }
+
+  try {
+    return parseJsonText(raw);
+  } catch (initialError) {
+    const sanitized = raw.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, '');
+    if (sanitized !== raw) return parseJsonText(sanitized);
+    throw initialError;
   }
 }
 
@@ -134,13 +200,15 @@ export async function POST(request: NextRequest) {
   try {
     let body: any;
     try {
-      const raw = await request.text();
-      body = JSON.parse(raw.replace(/[\x00-\x1F\x7F]/g, ''));
+      body = await parseDiscordChatRequest(request);
     } catch (error) {
       console.error('[Discord Chat] invalid JSON payload:', error);
-      return NextResponse.json({ success: false, error: 'Invalid JSON payload' }, { status: 400 });
+      return NextResponse.json({
+        success: false,
+        error: 'Invalid JSON payload. Send valid JSON with Content-Type: application/json and build the body with JSON.stringify.',
+      }, { status: 400 });
     }
-    const data = body.root || body;
+    const data = unwrapDiscordChatRoot(body);
     const message = String(data.message || data.content || '').trim();
     const channelId = String(data.channelId || '').trim();
     const guildId = String(data.guildId || data.serverId || 'local').trim();
@@ -179,21 +247,19 @@ export async function POST(request: NextRequest) {
 
     if (!handled) {
       handled = await handleWatchRequestCommand({
-      message,
-      discordUserId: userId,
-      discordUserName: userName,
-      guildId,
-      channelId,
-      userMessageId: data.messageId || data.id,
-      publicBaseUrl: getRequestBaseUrl(request),
-      reply: (content) => {
-        replies.push(content);
-      },
-      richReply: alreadyFannedOutByDiscordStreamHub
-        ? (content) => {
-            replies.push(content);
-          }
-        : undefined,
+        message,
+        discordUserId: userId,
+        discordUserName: userName,
+        guildId,
+        channelId,
+        userMessageId: data.messageId || data.id,
+        publicBaseUrl: getRequestBaseUrl(request),
+        reply: (content) => {
+          replies.push(content);
+        },
+        richReply: (content) => {
+          replies.push(content);
+        },
       });
     }
 
@@ -238,9 +304,9 @@ export async function POST(request: NextRequest) {
     const discordSends = handled && !alreadyFannedOutByDiscordStreamHub
       ? await Promise.all(replies.map((reply) => sendDiscordMessage(
           channelId,
-          typeof reply === 'string' ? reply : '',
+          reply,
           streamweaverForward.payload?.response ? streamweaverRelayName : 'HearMeOut',
-          undefined,
+          typeof reply === 'string' ? undefined : reply.components,
           isDM
         )))
       : [];
