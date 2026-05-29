@@ -15,7 +15,7 @@ const CORS_HEADERS = {
 
 function parseStreamKey(streamId: string): { kind: XtreamKind; id: string } {
   const clean = String(streamId).toLowerCase().replace(/[^a-z0-9-]/g, '');
-  const match = clean.match(/^(vod|series|live)-(\d+)$/);
+  const match = clean.match(/^(vod|series|live)-(\d+)$/) || clean.match(/^(episode)-(\d+-[a-z0-9]+)$/);
   if (match) return { kind: match[1] as XtreamKind, id: match[2] };
   const numeric = clean.replace(/[^0-9]/g, '');
   if (!numeric) throw new Error('Invalid Xtream HLS stream id');

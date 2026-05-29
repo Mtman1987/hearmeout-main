@@ -11,7 +11,7 @@ export async function GET(request: Request, context: { params: Promise<{ kind: s
   }
 
   const { kind, streamId } = await context.params;
-  if (kind !== 'vod' && kind !== 'live' && kind !== 'series') {
+  if (kind !== 'vod' && kind !== 'live' && kind !== 'series' && kind !== 'episode') {
     return NextResponse.json({ error: 'Unsupported Xtream stream kind' }, { status: 400 });
   }
 

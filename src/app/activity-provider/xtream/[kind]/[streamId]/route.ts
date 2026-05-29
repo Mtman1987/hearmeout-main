@@ -10,7 +10,7 @@ function downloadFilename(streamId: string, contentType?: string | null) {
 export async function GET(request: Request, context: { params: Promise<{ kind: string; streamId: string }> }) {
   const { kind, streamId } = await context.params;
   const download = new URL(request.url).searchParams.get('download') === '1';
-  if (kind !== 'vod' && kind !== 'live' && kind !== 'series') {
+  if (kind !== 'vod' && kind !== 'live' && kind !== 'series' && kind !== 'episode') {
     return NextResponse.json({ error: 'Unsupported Xtream stream kind' }, { status: 400 });
   }
 
