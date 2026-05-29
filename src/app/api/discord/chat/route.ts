@@ -51,24 +51,40 @@ async function forwardToStreamweaver(originalBody: any) {
   };
 }
 
-async function sendDiscordMessageDirect(channelId: string, content: string, botToken: string) {
+function buildDiscordMessageBody(reply: string | DiscordMessagePayload, username?: string, components?: any[]) {
+  if (typeof reply === 'string') {
+    return { content: reply, username, components };
+  }
+
+  return {
+    content: reply.content || '',
+    embeds: reply.embeds,
+    components: components || reply.components,
+    allowed_mentions: reply.allowed_mentions,
+    username,
+  };
+}
+
+async function sendDiscordMessageDirect(channelId: string, reply: string | DiscordMessagePayload, botToken: string, components?: any[]) {
+  const body = buildDiscordMessageBody(reply, undefined, components);
+  delete body.username;
   const res = await fetch(`https://discord.com/api/v10/channels/${channelId}/messages`, {
     method: 'POST',
     headers: { Authorization: `Bot ${botToken}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ content }),
+    body: JSON.stringify(body),
     signal: timeoutSignal(7_000),
   });
   if (res.ok) return { ok: true, via: 'bot-message' };
   return { ok: false, error: `Bot message send failed (${res.status})` };
 }
 
-async function sendDiscordMessage(channelId: string, content: string, username?: string, components?: any[], isDM?: boolean) {
+async function sendDiscordMessage(channelId: string, reply: string | DiscordMessagePayload, username?: string, components?: any[], isDM?: boolean) {
   const botToken = process.env.DISCORD_BOT_TOKEN;
   if (!botToken) return { ok: false, error: 'DISCORD_BOT_TOKEN is not configured' };
 
   // DMs don't support webhooks — send directly via Bot API
   if (isDM) {
-    return sendDiscordMessageDirect(channelId, content, botToken);
+    return sendDiscordMessageDirect(channelId, reply, botToken, components);
   }
 
   try {
@@ -95,7 +111,7 @@ async function sendDiscordMessage(channelId: string, content: string, username?:
         const sendRes = await fetch(`https://discord.com/api/v10/webhooks/${webhook.id}/${webhook.token}`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ content, username: username || 'HearMeOut', components }),
+          body: JSON.stringify(buildDiscordMessageBody(reply, username || 'HearMeOut', components)),
           signal: timeoutSignal(7_000),
         });
         if (sendRes.ok) return { ok: true, via: 'webhook' };
@@ -103,11 +119,11 @@ async function sendDiscordMessage(channelId: string, content: string, username?:
     }
 
     // Fallback to direct Bot API if webhook fails (e.g. permissions issue)
-    return sendDiscordMessageDirect(channelId, content, botToken);
+    return sendDiscordMessageDirect(channelId, reply, botToken, components);
   } catch (error: any) {
     // Last-resort fallback to direct message on network/timeout errors
     try {
-      return await sendDiscordMessageDirect(channelId, content, botToken);
+      return await sendDiscordMessageDirect(channelId, reply, botToken, components);
     } catch {
       return { ok: false, error: error?.message || 'Discord send failed' };
     }
@@ -231,21 +247,19 @@ export async function POST(request: NextRequest) {
 
     if (!handled) {
       handled = await handleWatchRequestCommand({
-      message,
-      discordUserId: userId,
-      discordUserName: userName,
-      guildId,
-      channelId,
-      userMessageId: data.messageId || data.id,
-      publicBaseUrl: getRequestBaseUrl(request),
-      reply: (content) => {
-        replies.push(content);
-      },
-      richReply: alreadyFannedOutByDiscordStreamHub
-        ? (content) => {
-            replies.push(content);
-          }
-        : undefined,
+        message,
+        discordUserId: userId,
+        discordUserName: userName,
+        guildId,
+        channelId,
+        userMessageId: data.messageId || data.id,
+        publicBaseUrl: getRequestBaseUrl(request),
+        reply: (content) => {
+          replies.push(content);
+        },
+        richReply: (content) => {
+          replies.push(content);
+        },
       });
     }
 
@@ -290,9 +304,9 @@ export async function POST(request: NextRequest) {
     const discordSends = handled && !alreadyFannedOutByDiscordStreamHub
       ? await Promise.all(replies.map((reply) => sendDiscordMessage(
           channelId,
-          typeof reply === 'string' ? reply : '',
+          reply,
           streamweaverForward.payload?.response ? streamweaverRelayName : 'HearMeOut',
-          undefined,
+          typeof reply === 'string' ? undefined : reply.components,
           isDM
         )))
       : [];
