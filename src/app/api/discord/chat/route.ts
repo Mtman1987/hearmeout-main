@@ -114,6 +114,56 @@ async function sendDiscordMessage(channelId: string, content: string, username?:
   }
 }
 
+
+function parseJsonText(raw: string) {
+  if (!raw.trim()) return {};
+  return JSON.parse(raw);
+}
+
+function parseNestedJsonValue(value: unknown) {
+  if (typeof value !== 'string') return value;
+  const trimmed = value.trim();
+  if (!trimmed || (!trimmed.startsWith('{') && !trimmed.startsWith('['))) return value;
+  return JSON.parse(trimmed);
+}
+
+function unwrapDiscordChatRoot(body: any): any {
+  let current = parseNestedJsonValue(body);
+  const seen = new Set<unknown>();
+
+  while (current && typeof current === 'object' && 'root' in current && !seen.has(current)) {
+    seen.add(current);
+    current = parseNestedJsonValue((current as { root?: unknown }).root);
+  }
+
+  return current && typeof current === 'object' ? current : {};
+}
+
+async function parseDiscordChatRequest(request: NextRequest) {
+  const raw = await request.text();
+  if (!raw.trim()) return {};
+
+  const contentType = request.headers.get('content-type') || '';
+  if (contentType.includes('application/x-www-form-urlencoded')) {
+    const params = new URLSearchParams(raw);
+    const payloadJson = params.get('payload_json');
+    if (payloadJson) return parseJsonText(payloadJson);
+
+    const rootJson = params.get('root');
+    if (rootJson) return { root: parseNestedJsonValue(rootJson) };
+
+    return Object.fromEntries(params.entries());
+  }
+
+  try {
+    return parseJsonText(raw);
+  } catch (initialError) {
+    const sanitized = raw.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, '');
+    if (sanitized !== raw) return parseJsonText(sanitized);
+    throw initialError;
+  }
+}
+
 function markDiscordMessageSeen(guildId: string, channelId: string, messageId: string) {
   if (!messageId || !channelId) return false;
 
@@ -134,13 +184,15 @@ export async function POST(request: NextRequest) {
   try {
     let body: any;
     try {
-      const raw = await request.text();
-      body = JSON.parse(raw.replace(/[\x00-\x1F\x7F]/g, ''));
+      body = await parseDiscordChatRequest(request);
     } catch (error) {
       console.error('[Discord Chat] invalid JSON payload:', error);
-      return NextResponse.json({ success: false, error: 'Invalid JSON payload' }, { status: 400 });
+      return NextResponse.json({
+        success: false,
+        error: 'Invalid JSON payload. Send valid JSON with Content-Type: application/json and build the body with JSON.stringify.',
+      }, { status: 400 });
     }
-    const data = body.root || body;
+    const data = unwrapDiscordChatRoot(body);
     const message = String(data.message || data.content || '').trim();
     const channelId = String(data.channelId || '').trim();
     const guildId = String(data.guildId || data.serverId || 'local').trim();
