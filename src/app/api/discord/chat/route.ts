@@ -26,31 +26,6 @@ function timeoutSignal(milliseconds: number) {
   return controller.signal;
 }
 
-function getStreamweaverDiscordChatUrl() {
-  const baseUrl = (
-    process.env.STREAMWEAVER_URL ||
-    process.env.STREAMWEAVE_URL ||
-    process.env.NEXT_PUBLIC_STREAMWEAVE_URL ||
-    'https://streamweaver-new.fly.dev'
-  ).replace(/\/$/, '');
-  return process.env.STREAMWEAVER_DISCORD_CHAT_URL || `${baseUrl}/api/discord/chat`;
-}
-
-async function forwardToStreamweaver(originalBody: any) {
-  const response = await fetch(getStreamweaverDiscordChatUrl(), {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(originalBody),
-    signal: timeoutSignal(15_000),
-  });
-  const payload = await response.json().catch(() => null);
-  return {
-    ok: response.ok,
-    status: response.status,
-    payload,
-  };
-}
-
 function buildDiscordMessageBody(reply: string | DiscordMessagePayload, username?: string, components?: any[]) {
   if (typeof reply === 'string') {
     return { content: reply, username, components };
@@ -236,13 +211,6 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ success: true, handled: true, skipped: 'duplicate-message', replies: [] });
     }
 
-    const alreadyFannedOutByDiscordStreamHub = request.headers.get('x-chat-origin') === 'dsh-fanout';
-    let streamweaverForward = {
-      ok: true,
-      status: 204,
-      payload: { success: true, skipped: 'not-needed' } as any,
-    };
-
     let handled = false;
     if (isWatchControlCommand) {
       // DSH owns Discord component interactions, so it posts the live control buttons.
@@ -279,37 +247,11 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    let streamweaverRelayName = 'Streamweaver';
-    if (!handled) {
-      streamweaverForward = alreadyFannedOutByDiscordStreamHub
-        ? {
-            ok: true,
-            status: 204,
-            payload: { success: true, skipped: 'already-fanned-out-by-discord-stream-hub' },
-          }
-        : await forwardToStreamweaver(body).catch((error) => ({
-            ok: false,
-            status: 0,
-            payload: { success: false, error: error?.message || 'Streamweaver forward failed' },
-          }));
-
-      const streamweaverResponse = streamweaverForward.payload?.response || streamweaverForward.payload?.data?.response;
-      handled = Boolean(
-        streamweaverForward.ok &&
-        streamweaverForward.payload?.success !== false &&
-        (streamweaverForward.payload?.handled || streamweaverForward.payload?.botResponded || streamweaverResponse)
-      );
-      if (handled && streamweaverResponse && !streamweaverForward.payload?.botResponded) {
-        replies.push(String(streamweaverResponse));
-        streamweaverRelayName = String(streamweaverForward.payload?.botName || streamweaverRelayName);
-      }
-    }
-
-    const discordSends = handled && !alreadyFannedOutByDiscordStreamHub
+    const discordSends = handled
       ? await Promise.all(replies.map((reply) => sendDiscordMessage(
           channelId,
           reply,
-          streamweaverForward.payload?.response ? streamweaverRelayName : 'HearMeOut',
+          'HearMeOut',
           typeof reply === 'string' ? undefined : reply.components,
           isDM
         )))
@@ -321,7 +263,6 @@ export async function POST(request: NextRequest) {
       replies,
       reply: replies[0] || null,
       discordSends,
-      streamweaverForward,
     });
   } catch (error) {
     console.error('[Discord Chat] watch command failed:', error);
