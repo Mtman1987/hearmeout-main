@@ -10,11 +10,16 @@ import { PopoutRenderer } from '@/components/PopoutWidgets/PopoutRenderer';
 export const metadata: Metadata = {
   title: 'HearMeOut',
   description: 'Collaborative music and voice chat rooms.',
+  manifest: '/manifest.json',
   icons: {
     icon: '/brand/hearmeout-icon-192.png',
     apple: '/brand/hearmeout-icon-192.png',
     shortcut: '/favicon.ico',
   },
+};
+
+export const viewport = {
+  themeColor: '#f06c4f',
 };
 
 export default function RootLayout({

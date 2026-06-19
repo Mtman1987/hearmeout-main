@@ -1,0 +1,26 @@
+{
+  "name": "HearMeOut",
+  "short_name": "HearMeOut",
+  "description": "Collaborative music, movies, audio, and voice chat rooms.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#211421",
+  "theme_color": "#f06c4f",
+  "orientation": "portrait-primary",
+  "icons": [
+    {
+      "src": "/brand/hearmeout-icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/brand/hearmeout-icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ],
+  "categories": ["music", "entertainment", "social"]
+}
