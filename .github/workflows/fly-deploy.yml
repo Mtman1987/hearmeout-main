@@ -16,7 +16,7 @@ jobs:
     name: Deploy main app
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: superfly/flyctl-actions/setup-flyctl@master
       - name: Deploy hearmeout-main
         run: flyctl deploy . --remote-only --config fly.toml --yes
@@ -27,7 +27,7 @@ jobs:
     name: Deploy DJ worker
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: superfly/flyctl-actions/setup-flyctl@master
       - name: Deploy hmo-dj-worker
         run: flyctl deploy . --remote-only --config worker/fly.toml --yes
