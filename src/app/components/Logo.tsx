@@ -1,13 +1,17 @@
-import { Music2 } from 'lucide-react';
+import Image from 'next/image';
 import { cn } from '@/lib/utils';
 
 export function Logo({ className }: { className?: string }) {
   return (
     <div className={cn("flex items-center gap-2", className)}>
-      <Music2 className="h-6 w-6 text-primary" />
-      <h1 className="text-xl font-bold font-headline text-foreground">
-        HearMeOut
-      </h1>
+      <Image
+        src="/brand/hearmeout-logo.png"
+        alt="HearMeOut"
+        width={242}
+        height={282}
+        priority
+        className="h-20 w-auto rounded-xl object-contain"
+      />
     </div>
   );
 }
