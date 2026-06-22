@@ -473,6 +473,52 @@ async function getXtreamCatalog() {
   return items;
 }
 
+export async function getXtreamCatalogDiagnostics(query?: string | null) {
+  const items = await getXtreamCatalog();
+  const needle = normalize(query);
+  const compactNeedle = compact(query);
+  const queryWords = needle.split(/\s+/).filter((word) => word.length >= 3 && !SEARCH_STOP_WORDS.has(word));
+  const matchesQuery = (item: XtreamCatalogItem) => {
+    if (!needle && !compactNeedle) return true;
+    const title = normalize(item.title);
+    const compactTitle = compact(item.title);
+    if (needle && title.includes(needle)) return true;
+    if (compactNeedle.length >= 3 && compactTitle.includes(compactNeedle)) return true;
+    return queryWords.length > 0 && queryWords.every((word) => title.includes(word) || compactTitle.includes(compact(word)));
+  };
+
+  const kindCounts = items.reduce((counts, item) => {
+    const kind = item.id.startsWith('xtream-series-')
+      ? 'series'
+      : item.id.startsWith('xtream-vod-')
+        ? 'vod'
+        : item.id.startsWith('m3u-')
+          ? 'm3u'
+          : item.type;
+    counts[kind] = (counts[kind] || 0) + 1;
+    return counts;
+  }, {} as Record<string, number>);
+
+  return {
+    total: items.length,
+    counts: kindCounts,
+    seriesSearchEnabled: isSeriesSearchEnabled(),
+    playlistConfigured: Boolean(getPlaylistUrl()),
+    cacheExpiresInMs: cachedStreams ? Math.max(0, cachedStreams.expiresAt - Date.now()) : 0,
+    query: query || null,
+    querySample: items
+      .filter(matchesQuery)
+      .slice(0, 20)
+      .map((item) => ({
+        id: item.id,
+        title: item.title,
+        source: item.source,
+        runtime: item.runtime,
+        overview: item.overview,
+      })),
+  };
+}
+
 export async function searchXtreamCatalog(query: string | null | undefined) {
   const needle = normalize(query);
   if (!needle) return [];
