@@ -591,7 +591,11 @@ export async function requestWatchItem(params: {
       saveWatchStateToDisk();
       return { error: 'No matching provider item' as const, recommendation };
     }
-    return { error: 'No matching catalog item' as const };
+    return {
+      error: isXtreamConfigured()
+        ? `No playable provider match found for "${params.query || ''}"`
+        : 'No matching catalog item',
+    } as const;
   }
 
   const session = getWatchSession(params.sessionId, params.guildId, params.channelId);
