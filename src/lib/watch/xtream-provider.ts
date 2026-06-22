@@ -159,6 +159,20 @@ function compact(value: unknown) {
   return normalize(value).replace(/[^a-z0-9]/g, '');
 }
 
+function episodeTokens(seasonNumber?: number, episodeNumber?: number) {
+  if (!seasonNumber || !episodeNumber) return [];
+  const season = String(seasonNumber);
+  const episode = String(episodeNumber);
+  const paddedSeason = season.padStart(2, '0');
+  const paddedEpisode = episode.padStart(2, '0');
+  return Array.from(new Set([
+    `s${season}e${episode}`,
+    `s${paddedSeason}e${paddedEpisode}`,
+    `season${season}episode${episode}`,
+    `season${paddedSeason}episode${paddedEpisode}`,
+  ]));
+}
+
 const SEARCH_STOP_WORDS = new Set([
   'the',
   'and',
@@ -219,8 +233,10 @@ function parseSeriesIntent(query: string | null | undefined) {
 }
 
 function scoreItem(item: XtreamCatalogItem, query: string) {
-  const needle = normalize(query);
-  const compactNeedle = compact(query);
+  const intent = parseSeriesIntent(query);
+  const titleQuery = intent.explicit && intent.titleQuery ? intent.titleQuery : query;
+  const needle = normalize(titleQuery);
+  const compactNeedle = compact(titleQuery);
   const words = needle.split(/\s+/).filter((word) => word.length >= 3 && !SEARCH_STOP_WORDS.has(word));
   const titleIntentWords = words.filter((word) => !/^\d+$/.test(word));
   const title = normalize(item.title);
@@ -228,7 +244,7 @@ function scoreItem(item: XtreamCatalogItem, query: string) {
   const overview = normalize(item.overview);
   const isVod = item.id.startsWith('xtream-vod-');
   const isSeries = item.id.startsWith('xtream-series-');
-  const isSeriesSearch = /\b(show|series|season|episode|episodes)\b/.test(needle) || /\bs\d{1,2}\s*e\d{1,2}\b/i.test(needle);
+  const isSeriesSearch = intent.explicit || /\b(show|series|season|episode|episodes)\b/.test(normalize(query)) || /\bs\d{1,2}\s*e\d{1,2}\b/i.test(normalize(query));
   const exactTitle = title === needle || (compactNeedle.length >= 3 && compactTitle === compactNeedle);
   const containsTitle = title.includes(needle) || (compactNeedle.length >= 4 && compactTitle.includes(compactNeedle));
   const matchedTitleWords = titleIntentWords.filter((word) => title.includes(word) || compactTitle.includes(compact(word))).length;
@@ -260,6 +276,12 @@ function scoreItem(item: XtreamCatalogItem, query: string) {
   if (score === 0) return 0;
   if (isSeriesSearch && isSeries) score += 60;
   if (isSeriesSearch && isVod) score -= 25;
+  if (intent.seasonNumber && intent.episodeNumber) {
+    const tokenMatch = episodeTokens(intent.seasonNumber, intent.episodeNumber)
+      .some((token) => compactTitle.includes(token));
+    if (tokenMatch) score += 80;
+    if (!tokenMatch && /\bs\d{1,2}\s*e\d{1,2}\b/i.test(normalize(query)) && isVod) score -= 20;
+  }
   if (!isSeriesSearch && isVod) score += 25;
   if (overview.includes('(mp4)')) score += 12;
   if (overview.includes('(mkv)')) score -= 20;

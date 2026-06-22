@@ -26,6 +26,17 @@ function normalize(value: unknown) {
   return String(value || '').trim();
 }
 
+function searchValues(query: string) {
+  const cleaned = query
+    .replace(/\bs(?:eason)?\s*\d{1,3}\s*e(?:p(?:isode)?)?\s*\d{1,3}\b/gi, '')
+    .replace(/\bs\d{1,3}e\d{1,3}\b/gi, '')
+    .replace(/\bseason\s*\d{1,3}\b/gi, '')
+    .replace(/\b(?:episode|episodes|ep)\s*\d{1,3}\b/gi, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return Array.from(new Set([query, cleaned].map(normalize).filter(Boolean)));
+}
+
 function watchmodeUrl(path: string) {
   const url = new URL(path, 'https://api.watchmode.com');
   url.searchParams.set('apiKey', getApiKey());
@@ -62,17 +73,23 @@ export async function findWatchmodeRecommendation(query: string | null | undefin
   const needle = normalize(query);
   if (!needle || !getApiKey()) return null;
 
-  const searchTitleUrl = watchmodeUrl('/v1/search-title/');
-  searchTitleUrl.searchParams.set('search_value', needle);
-  searchTitleUrl.searchParams.set('search_type', '1');
+  for (const value of searchValues(needle)) {
+    const searchTitleUrl = watchmodeUrl('/v1/search-title/');
+    searchTitleUrl.searchParams.set('search_value', value);
+    searchTitleUrl.searchParams.set('search_type', '1');
 
-  const searchUrl = watchmodeUrl('/v1/search/');
-  searchUrl.searchParams.set('search_field', 'name');
-  searchUrl.searchParams.set('search_value', needle);
+    const searchUrl = watchmodeUrl('/v1/search/');
+    searchUrl.searchParams.set('search_field', 'name');
+    searchUrl.searchParams.set('search_value', value);
 
-  const payload = await fetchJson<{ title_results?: WatchmodeSearchResult[]; results?: WatchmodeSearchResult[] }>(searchTitleUrl)
-    .catch(() => fetchJson<{ title_results?: WatchmodeSearchResult[]; results?: WatchmodeSearchResult[] }>(searchUrl));
+    const payload = await fetchJson<{ title_results?: WatchmodeSearchResult[]; results?: WatchmodeSearchResult[] }>(searchTitleUrl)
+      .catch(() => fetchJson<{ title_results?: WatchmodeSearchResult[]; results?: WatchmodeSearchResult[] }>(searchUrl))
+      .catch(() => null);
 
-  const results = payload.title_results || payload.results || [];
-  return results.map(toMetadataItem).find(Boolean) || null;
+    const results = payload?.title_results || payload?.results || [];
+    const item = results.map(toMetadataItem).find(Boolean);
+    if (item) return item;
+  }
+
+  return null;
 }

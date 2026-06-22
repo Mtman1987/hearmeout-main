@@ -1,4 +1,4 @@
-import { findXtreamSeriesEpisode, getNextXtreamSeriesEpisode, isXtreamMockEnabled, searchXtreamCatalog } from './xtream-provider';
+import { findXtreamSeriesEpisode, getNextXtreamSeriesEpisode, isXtreamConfigured, isXtreamMockEnabled, searchXtreamCatalog } from './xtream-provider';
 import { findInternetArchiveRecommendation } from './internet-archive-provider';
 import { findWatchmodeRecommendation } from './watchmode-provider';
 import { resolveSongRequest } from '@/lib/bot-actions';
@@ -870,7 +870,12 @@ export async function handleWatchRequestCommand(params: {
       return true;
     }
 
-    await reply(`No match found for "${parsed.query}". Try "big buck bunny", "sintel", "tears of steel", or "hls".`);
+    if (isXtreamConfigured()) {
+      await reply(`No playable provider match found for "${parsed.query}". The Xtream provider is configured, but this title/episode did not match a playable catalog entry. Try the exact provider title, for example "rick and morty s01e01", or search just the show title.`);
+      return true;
+    }
+
+    await reply(`No match found for "${parsed.query}". No watch provider is configured, so only demo streams are available. Try "big buck bunny", "sintel", "tears of steel", or "hls".`);
     return true;
   }
 
