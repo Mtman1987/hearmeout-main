@@ -15,6 +15,7 @@ function cleanScopePart(value) {
 let sessionId = cleanScopePart(params.get('sessionId') || params.get('session_id') || '')
   || GLOBAL_SESSION_ID;
 const video = document.getElementById('video');
+const audio = document.getElementById('audio');
 const empty = document.getElementById('empty');
 const statusEl = document.getElementById('activity-status');
 const titleEl = document.getElementById('title');
@@ -45,6 +46,28 @@ let pendingPlay = false;
 let syncingCompletedPlayback = false;
 let syncingNativeControl = false;
 let lastNativePlayAt = 0;
+let media = video;
+
+function isAudioOnlyItem(item) {
+  const type = String((item && item.type) || '').toLowerCase();
+  const provider = String((item && item.metadata && item.metadata.provider) || '').toLowerCase();
+  return type === 'music' || type === 'tts' || provider === 'youtube' || provider === 'tts';
+}
+
+function setActiveMediaForItem(item) {
+  const nextMedia = isAudioOnlyItem(item) ? audio : video;
+  media = nextMedia || video;
+  video.classList.toggle('hidden', media !== video);
+  if (audio) audio.classList.toggle('hidden', media !== audio);
+}
+
+function resetInactiveMedia() {
+  const inactive = media === video ? audio : video;
+  if (!inactive) return;
+  inactive.pause();
+  inactive.removeAttribute('src');
+  inactive.load();
+}
 
 function downloadUrlFor(url) {
   if (!url || !url.startsWith('/')) return url;
@@ -84,12 +107,12 @@ function isHlsPlaybackUrl(value) {
 
 function applyVolume() {
   const value = Math.max(0, Math.min(100, Number(volumeInput.value || 0)));
-  video.volume = value / 100;
-  video.muted = muted || value === 0;
-  muteBtn.textContent = video.muted ? '🔇' : '🔊';
-  muteBtn.title = video.muted ? 'Unmute' : 'Mute';
+  media.volume = value / 100;
+  media.muted = muted || value === 0;
+  muteBtn.textContent = media.muted ? '🔇' : '🔊';
+  muteBtn.title = media.muted ? 'Unmute' : 'Mute';
   muteBtn.setAttribute('aria-label', muteBtn.title);
-  volumeLabel.textContent = (video.muted ? 0 : value) + '%';
+  volumeLabel.textContent = (media.muted ? 0 : value) + '%';
 }
 
 document.getElementById('room').textContent = 'Room ' + sessionId;
@@ -158,13 +181,13 @@ function position(playback) {
 
 function applyPlayback() {
   if (!state || !state.current) return;
-  if (mediaIsBuffering || video.readyState < 2) return;
+  if (mediaIsBuffering || media.readyState < 2) return;
   const remote = position(state.playback);
-  const drift = Math.abs((video.currentTime || 0) - remote);
+  const drift = Math.abs((media.currentTime || 0) - remote);
   applying = true;
   const now = Date.now();
   const isLive = state.current.item.type === 'live' || state.current.item.runtime === 'live';
-  if (!isLive && Number.isFinite(video.duration) && video.duration > 0 && remote >= video.duration - 0.5) {
+  if (!isLive && Number.isFinite(media.duration) && media.duration > 0 && remote >= media.duration - 0.5) {
     if (!syncingCompletedPlayback) {
       syncingCompletedPlayback = true;
       control('next').finally(() => { syncingCompletedPlayback = false; });
@@ -174,22 +197,22 @@ function applyPlayback() {
   }
   if (!isLive && drift > 8 && Number.isFinite(remote) && now - lastSeekApplyAt > 5000) {
     lastSeekApplyAt = now;
-    video.currentTime = remote;
+    media.currentTime = remote;
   }
   const playSyncInFlight = syncingNativeControl && Date.now() - lastNativePlayAt < 5000;
-  if (state.playback.status === 'paused' && !video.paused && !playSyncInFlight) video.pause();
-  if (state.playback.status === 'playing' && video.paused && !pendingPlay) startVideoPlayback();
+  if (state.playback.status === 'paused' && !media.paused && !playSyncInFlight) media.pause();
+  if (state.playback.status === 'playing' && media.paused && !pendingPlay) startVideoPlayback();
   setTimeout(() => { applying = false; }, 100);
 }
 
 function startVideoPlayback() {
   if (!state || !state.current) return Promise.resolve(false);
   pendingPlay = true;
-  if (video.readyState < 2) {
+  if (media.readyState < 2) {
     mediaEl.textContent = 'Media: loading';
     return Promise.resolve(false);
   }
-  return video.play()
+  return media.play()
     .then(() => {
       pendingPlay = false;
       mediaEl.textContent = 'Media: playing';
@@ -211,7 +234,7 @@ function syncNativePlayback(action) {
     state.playback = {
       ...state.playback,
       status: 'playing',
-      position: video.currentTime || state.playback.position || 0,
+      position: media.currentTime || state.playback.position || 0,
       updatedAt: Date.now(),
     };
   }
@@ -226,13 +249,19 @@ function loadMedia(item) {
     hls.destroy();
     hls = null;
   }
+  setActiveMediaForItem(item);
+  resetInactiveMedia();
   video.removeAttribute('src');
+  if (audio) audio.removeAttribute('src');
   lastSeekApplyAt = 0;
   mediaIsBuffering = true;
   pendingPlay = false;
   mediaEl.textContent = 'Media: loading ' + item.title;
   const playbackUrl = appUrl(item.playbackUrl);
-  if (isHlsPlaybackUrl(item.playbackUrl) && window.Hls && window.Hls.isSupported()) {
+  if (media === audio) {
+    audio.src = playbackUrl;
+    audio.load();
+  } else if (isHlsPlaybackUrl(item.playbackUrl) && window.Hls && window.Hls.isSupported()) {
     hls = new window.Hls({
       enableWorker: false,
       lowLatencyMode: false,
@@ -262,7 +291,9 @@ function loadMedia(item) {
     hls.attachMedia(video);
   } else {
     video.src = playbackUrl;
+    video.load();
   }
+  applyVolume();
 }
 
 function render(nextState) {
@@ -353,7 +384,7 @@ async function refresh() {
 }
 
 async function control(action, positionOverride) {
-  const body = { action, position: Number.isFinite(positionOverride) ? positionOverride : (video.currentTime || 0) };
+  const body = { action, position: Number.isFinite(positionOverride) ? positionOverride : (media.currentTime || 0) };
   try {
     const controlUrl = '/api/watch/sessions/' + sessionId + '/quick-control?action=' + encodeURIComponent(action) + '&position=' + encodeURIComponent(String(body.position || 0)) + '&format=json';
     const result = await api(controlUrl);
@@ -497,7 +528,7 @@ downloadLink.addEventListener('click', () => {
 });
 
 muteBtn.addEventListener('click', () => {
-  control(video.muted ? 'unmute' : 'mute')
+  control(media.muted ? 'unmute' : 'mute')
     .catch((err) => console.warn('Mute control failed', err));
 });
 
@@ -543,29 +574,54 @@ acceptRecommendationBtn.addEventListener('click', async () => {
   }
 });
 
-video.addEventListener('play', () => {
+function onMediaPlay(event) {
+  if (event.currentTarget !== media) return;
   if (state && state.playback && state.playback.status !== 'playing') syncNativePlayback('play');
-});
-video.addEventListener('playing', () => { mediaEl.textContent = 'Media: playing'; });
-video.addEventListener('canplay', () => { mediaIsBuffering = false; mediaEl.textContent = 'Media: ready'; if (pendingPlay || (state && state.playback && state.playback.status === 'playing')) startVideoPlayback(); });
-video.addEventListener('waiting', () => { mediaIsBuffering = true; mediaEl.textContent = 'Media: buffering'; });
-video.addEventListener('stalled', () => { mediaIsBuffering = true; mediaEl.textContent = 'Media: buffering'; });
-video.addEventListener('loadeddata', () => { mediaIsBuffering = false; if (pendingPlay || (state && state.playback && state.playback.status === 'playing')) startVideoPlayback(); });
-video.addEventListener('pause', () => {
-  if (!video.ended) {
+}
+function onMediaPlaying(event) { if (event.currentTarget === media) mediaEl.textContent = 'Media: playing'; }
+function onMediaCanPlay(event) {
+  if (event.currentTarget !== media) return;
+  mediaIsBuffering = false;
+  mediaEl.textContent = 'Media: ready';
+  if (pendingPlay || (state && state.playback && state.playback.status === 'playing')) startVideoPlayback();
+}
+function onMediaWaiting(event) { if (event.currentTarget === media) { mediaIsBuffering = true; mediaEl.textContent = 'Media: buffering'; } }
+function onMediaLoadedData(event) {
+  if (event.currentTarget !== media) return;
+  mediaIsBuffering = false;
+  if (pendingPlay || (state && state.playback && state.playback.status === 'playing')) startVideoPlayback();
+}
+function onMediaPause(event) {
+  if (event.currentTarget !== media) return;
+  if (!media.ended) {
     mediaEl.textContent = 'Media: paused';
   }
-});
-video.addEventListener('seeked', () => { if (!applying && state && state.current) control('seek'); });
-video.addEventListener('ended', () => {
+}
+function onMediaSeeked(event) { if (event.currentTarget === media && !applying && state && state.current) control('seek'); }
+function onMediaEnded(event) {
+  if (event.currentTarget !== media) return;
   mediaEl.textContent = 'Media: ended';
   if (!state || syncingCompletedPlayback) return;
   syncingCompletedPlayback = true;
   control('next').finally(() => { syncingCompletedPlayback = false; });
-});
-video.addEventListener('error', () => {
+}
+function onMediaError(event) {
+  if (event.currentTarget !== media) return;
   mediaEl.textContent = 'Media: error';
-  console.error(video.error);
+  console.error(media.error);
+}
+
+[video, audio].filter(Boolean).forEach((element) => {
+  element.addEventListener('play', onMediaPlay);
+  element.addEventListener('playing', onMediaPlaying);
+  element.addEventListener('canplay', onMediaCanPlay);
+  element.addEventListener('waiting', onMediaWaiting);
+  element.addEventListener('stalled', onMediaWaiting);
+  element.addEventListener('loadeddata', onMediaLoadedData);
+  element.addEventListener('pause', onMediaPause);
+  element.addEventListener('seeked', onMediaSeeked);
+  element.addEventListener('ended', onMediaEnded);
+  element.addEventListener('error', onMediaError);
 });
 
 try {

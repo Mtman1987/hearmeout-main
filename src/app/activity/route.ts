@@ -55,6 +55,8 @@ function html(request: Request) {
     .status { color: #86efac; border: 1px solid rgba(52,211,153,.5); border-radius: 999px; padding: 5px 10px; font-size: 13px; white-space: nowrap; background: rgba(0,0,0,.45); }
     .video-wrap { position: absolute; inset: 0; background: #000; }
     video { width: 100%; height: 100%; background: #000; display: block; object-fit: contain; }
+    video.hidden, audio.hidden { display: none !important; }
+    audio.audio-player { position: absolute; left: 50%; top: 50%; width: min(720px, calc(100vw - 32px)); transform: translate(-50%, -50%); z-index: 2; }
     .empty { position: absolute; inset: 0; display: grid; place-content: center; gap: 8px; text-align: center; color: #cbd5e1; background: rgba(0,0,0,.55); }
     .empty.hidden { display: none !important; }
     .toolbar { display: none; }
@@ -97,6 +99,7 @@ function html(request: Request) {
       </header>
       <div class="video-wrap">
         <video id="video" controls autoplay muted playsinline ${nativeSrc ? `src="${escapeHtml(nativeSrc)}"` : ''}></video>
+        <audio id="audio" class="audio-player hidden" controls autoplay></audio>
         <div class="empty ${current ? 'hidden' : ''}" id="empty"><strong>No video loaded</strong><span>Use the request panel or type !wr in Discord.</span></div>
       </div>
       <div class="toolbar" aria-label="Watch controls">
