@@ -12,14 +12,7 @@ const params = new URLSearchParams(location.search);
 function cleanScopePart(value) {
   return String(value || '').trim().replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 80);
 }
-function scopedSessionId(guildId, channelId) {
-  const cleanGuildId = cleanScopePart(guildId);
-  const cleanChannelId = cleanScopePart(channelId);
-  if (!cleanGuildId || !cleanChannelId || cleanGuildId === 'local') return '';
-  return 'discord-' + cleanGuildId + '-' + cleanChannelId;
-}
 let sessionId = cleanScopePart(params.get('sessionId') || params.get('session_id') || '')
-  || scopedSessionId(params.get('guild_id') || params.get('guildId'), params.get('channel_id') || params.get('channelId'))
   || GLOBAL_SESSION_ID;
 const video = document.getElementById('video');
 const empty = document.getElementById('empty');
