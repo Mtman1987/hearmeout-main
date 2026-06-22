@@ -99,6 +99,9 @@ function startListener(target: DiscordBotTarget) {
             userId: message.authorId,
             username: message.author,
             platform: 'discord',
+            guildId: target.guildId,
+            channelId: target.channelId,
+            publicBaseUrl: getPublicBaseUrl(),
           });
         }
       } catch (error) {

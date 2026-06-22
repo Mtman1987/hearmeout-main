@@ -69,6 +69,9 @@ export async function POST(req: NextRequest) {
         userId: session.uid,
         username: message.username || session.user?.displayName || 'Admin',
         platform: 'admin',
+        guildId: serverId,
+        channelId: process.env.DISCORD_CHANNEL_ID || 'admin-chat',
+        publicBaseUrl: getRequestBaseUrl(req),
         reply: addCommandReply,
       });
     }

@@ -1,5 +1,5 @@
-import { getRoomState } from '@/lib/bot-actions';
-import { controlGlobalMusicSession, ensureGlobalMusicRoom, requestMusicItem } from '@/lib/music-session-service';
+import { controlWatchSession, getActivityUrl, getResolvedWatchSession, requestWatchMusicItem } from '@/lib/watch-request-service';
+import { getScopedWatchSessionId } from '@/lib/watch-session';
 
 export function parseMusicCommand(message: string) {
   const trimmed = message.trim();
@@ -23,13 +23,16 @@ export async function handleMusicCommand(params: {
   userId?: string;
   username: string;
   platform: 'discord' | 'twitch' | 'admin' | 'activity' | 'web';
+  guildId?: string;
+  channelId?: string;
+  publicBaseUrl?: string;
   // eslint-disable-next-line no-unused-vars
   reply?: (content: string) => void | Promise<void>;
 }) {
   const parsed = parseMusicCommand(params.message);
   if (!parsed) return false;
 
-  const roomId = await ensureGlobalMusicRoom();
+  const sessionId = getScopedWatchSessionId(params.guildId, params.channelId);
   const reply = params.reply || (() => undefined);
 
   if (parsed.action === 'request') {
@@ -38,36 +41,46 @@ export async function handleMusicCommand(params: {
       return true;
     }
 
-    const { result } = await requestMusicItem({
+    const result = await requestWatchMusicItem({
+      sessionId,
       query: parsed.query,
+      userId: params.userId || params.username,
       username: params.username,
       platform: params.platform,
     });
-    await reply(result.success ? `Queued in shared music: ${result.message}` : `Sorry: ${result.message}`);
+    if ('error' in result) {
+      await reply(`Sorry: ${result.result.message}`);
+      return true;
+    }
+
+    const position = result.session.current?.requestId === result.request.requestId
+      ? 'now playing'
+      : `queue position ${result.session.queue.length}`;
+    await reply(`Queued in Watch Party: ${result.request.item.title} (${position}). Join: ${getActivityUrl(params.publicBaseUrl, sessionId)}`);
     return true;
   }
 
   if (parsed.action === 'nowPlaying') {
-    const state = await getRoomState(roomId);
-    if (!state?.currentTrack) {
+    const session = getResolvedWatchSession(sessionId);
+    if (!session.current) {
       await reply('Nothing is playing. Use !sr <song> to request one.');
       return true;
     }
-    const status = state.isPlaying ? 'Playing' : 'Ready';
-    await reply(`${status}: "${state.currentTrack.title}" by ${state.currentTrack.artist}`);
+    const status = session.playback.status === 'playing' ? 'Playing' : 'Ready';
+    await reply(`${status}: "${session.current.item.title}" from ${session.current.item.source}`);
     return true;
   }
 
   if (parsed.action === 'status') {
-    const state = await getRoomState(roomId);
-    const status = state?.isPlaying ? 'Playing' : 'Idle';
-    await reply(`Shared music: ${status} | DJ: ${state?.djDisplayName || 'None'} | Queue: ${state?.playlistLength || 0}`);
+    const session = getResolvedWatchSession(sessionId);
+    const status = session.playback.status === 'playing' ? 'Playing' : session.playback.status === 'paused' ? 'Paused' : 'Idle';
+    await reply(`Watch Party: ${status} | Current: ${session.current?.item.title || 'None'} | Queue: ${session.queue.length}`);
     return true;
   }
 
   if (parsed.action === 'skip') {
-    await controlGlobalMusicSession('next');
-    await reply('Skipped to next track.');
+    const session = await controlWatchSession(sessionId, 'next');
+    await reply(session.current ? `Skipped to: ${session.current.item.title}` : 'Skipped. Queue is now empty.');
     return true;
   }
 

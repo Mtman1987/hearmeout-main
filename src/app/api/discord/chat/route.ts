@@ -241,6 +241,9 @@ export async function POST(request: NextRequest) {
         userId,
         username: userName,
         platform: 'discord',
+        guildId,
+        channelId,
+        publicBaseUrl: getRequestBaseUrl(request),
         reply: (content) => {
           replies.push(content);
         },

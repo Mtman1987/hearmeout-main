@@ -159,6 +159,23 @@ function compact(value: unknown) {
   return normalize(value).replace(/[^a-z0-9]/g, '');
 }
 
+const SEARCH_STOP_WORDS = new Set([
+  'the',
+  'and',
+  'for',
+  'with',
+  'watch',
+  'play',
+  'movie',
+  'film',
+  'show',
+  'series',
+  'season',
+  'episode',
+  'episodes',
+  'please',
+]);
+
 function parseSeriesIntent(query: string | null | undefined) {
   const raw = String(query || '').trim();
   const normalized = normalize(raw);
@@ -204,23 +221,38 @@ function parseSeriesIntent(query: string | null | undefined) {
 function scoreItem(item: XtreamCatalogItem, query: string) {
   const needle = normalize(query);
   const compactNeedle = compact(query);
-  const words = needle.split(/\s+/).filter((word) => word.length >= 3 && !['the', 'and'].includes(word));
-  const titleIntentWords = words.filter((word) => !['show', 'series', 'season', 'episode', 'episodes'].includes(word) && !/^\d+$/.test(word));
+  const words = needle.split(/\s+/).filter((word) => word.length >= 3 && !SEARCH_STOP_WORDS.has(word));
+  const titleIntentWords = words.filter((word) => !/^\d+$/.test(word));
   const title = normalize(item.title);
   const compactTitle = compact(item.title);
   const overview = normalize(item.overview);
   const isVod = item.id.startsWith('xtream-vod-');
   const isSeries = item.id.startsWith('xtream-series-');
-  const isSeriesSearch = words.some((word) => ['show', 'series', 'season', 'episode', 'episodes'].includes(word)) || /\bs\d{1,2}\s*e\d{1,2}\b/i.test(needle);
-  let score = 0;
-  if (title === needle) score += 100;
-  if (title.includes(needle)) score += 50;
-  if (compactNeedle.length >= 3 && compactTitle === compactNeedle) score += 100;
-  if (compactNeedle.length >= 3 && compactTitle.includes(compactNeedle)) score += 50;
-  if (titleIntentWords.length >= 2 && titleIntentWords.every((word) => title.includes(word) || compactTitle.includes(compact(word)))) {
-    score += 80;
+  const isSeriesSearch = /\b(show|series|season|episode|episodes)\b/.test(needle) || /\bs\d{1,2}\s*e\d{1,2}\b/i.test(needle);
+  const exactTitle = title === needle || (compactNeedle.length >= 3 && compactTitle === compactNeedle);
+  const containsTitle = title.includes(needle) || (compactNeedle.length >= 4 && compactTitle.includes(compactNeedle));
+  const matchedTitleWords = titleIntentWords.filter((word) => title.includes(word) || compactTitle.includes(compact(word))).length;
+  const requiredTitleWords = titleIntentWords.length <= 2
+    ? titleIntentWords.length
+    : Math.ceil(titleIntentWords.length * 0.67);
+
+  if (!exactTitle && !containsTitle) {
+    if (titleIntentWords.length && matchedTitleWords < requiredTitleWords) return 0;
+    if (!titleIntentWords.length) return 0;
   }
-  for (const word of words) {
+
+  let score = 0;
+  if (title === needle) score += 140;
+  if (title.startsWith(`${needle} `)) score += 80;
+  if (title.includes(needle)) score += 65;
+  if (compactNeedle.length >= 3 && compactTitle === compactNeedle) score += 140;
+  if (compactNeedle.length >= 4 && compactTitle.includes(compactNeedle)) score += 65;
+  if (titleIntentWords.length >= 2 && titleIntentWords.every((word) => title.includes(word) || compactTitle.includes(compact(word)))) {
+    score += 90;
+  } else if (matchedTitleWords > 0) {
+    score += matchedTitleWords * 18;
+  }
+  for (const word of titleIntentWords) {
     if (title.includes(word)) score += 8;
     if (compactTitle.includes(compact(word))) score += 8;
     if (overview.includes(word)) score += 2;
@@ -425,7 +457,7 @@ export async function searchXtreamCatalog(query: string | null | undefined) {
   const items = await getXtreamCatalog();
   const matches = items
     .map((item) => ({ item, score: scoreItem(item, needle) }))
-    .filter((entry) => entry.score >= 16)
+    .filter((entry) => entry.score >= 30)
     .sort((a, b) => b.score - a.score)
     .slice(0, 50)
     .map((entry) => entry.item);

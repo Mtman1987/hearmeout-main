@@ -1,16 +1,39 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requestMusicItem } from '@/lib/music-session-service';
+import { getPublicWatchSession, requestWatchMusicItem } from '@/lib/watch-request-service';
+import { getGlobalWatchSessionId } from '@/lib/watch-session';
+
+function getRequestBaseUrl(request: Request) {
+  const url = new URL(request.url);
+  const forwardedProto = request.headers.get('x-forwarded-proto');
+  const forwardedHost = request.headers.get('x-forwarded-host');
+  const proto = forwardedProto || url.protocol.replace(':', '');
+  const host = forwardedHost || request.headers.get('host') || url.host;
+  return `${proto}://${host}`;
+}
 
 export async function POST(request: NextRequest) {
   const body = await request.json();
   const query = String(body.query || '').trim();
   if (!query) return NextResponse.json({ error: 'Missing query' }, { status: 400 });
 
-  const result = await requestMusicItem({
+  const result = await requestWatchMusicItem({
+    sessionId: body.sessionId || getGlobalWatchSessionId(),
     query,
     username: body.username || 'web user',
     platform: body.platform || 'web',
+    userId: body.userId || body.username || 'web',
   });
 
-  return NextResponse.json(result, { status: result.result.success ? 200 : 404 });
+  if ('error' in result) {
+    return NextResponse.json({
+      error: result.error,
+      result: result.result,
+    }, { status: 404 });
+  }
+
+  return NextResponse.json({
+    result: result.result,
+    request: result.request,
+    session: getPublicWatchSession(result.session, getRequestBaseUrl(request)),
+  });
 }

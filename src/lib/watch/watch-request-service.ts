@@ -1,14 +1,16 @@
 import { findXtreamSeriesEpisode, getNextXtreamSeriesEpisode, isXtreamMockEnabled, searchXtreamCatalog } from './xtream-provider';
 import { findInternetArchiveRecommendation } from './internet-archive-provider';
 import { findWatchmodeRecommendation } from './watchmode-provider';
+import { resolveSongRequest } from '@/lib/bot-actions';
 import { DISCORD_CLIENT_ID } from '@/lib/public-config';
-import { getGlobalWatchSessionId } from '@/lib/watch-session';
+import { getGlobalWatchSessionId, getScopedWatchSessionId } from '@/lib/watch-session';
+import type { PlaylistItem } from '@/types/playlist';
 import { dirname } from 'path';
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'fs';
 
 type WatchCatalogItem = {
   id: string;
-  type: 'movie' | 'live';
+  type: 'movie' | 'live' | 'music' | 'tts';
   title: string;
   year: number;
   runtime: string;
@@ -17,8 +19,8 @@ type WatchCatalogItem = {
   playbackUrl: string;
   overview: string;
   metadata?: {
-    provider?: 'xtream';
-    kind?: 'series-episode';
+    provider?: 'xtream' | 'youtube' | 'tts';
+    kind?: 'series-episode' | 'song' | 'tts';
     seriesId?: string;
     seriesTitle?: string;
     seasonNumber?: number;
@@ -26,6 +28,9 @@ type WatchCatalogItem = {
     episodeId?: string;
     episodeExtension?: string;
     episodeTitle?: string;
+    videoId?: string;
+    artist?: string;
+    originalUrl?: string;
   };
 };
 
@@ -195,6 +200,7 @@ function getPublicBaseUrl(preferredBaseUrl?: string) {
 
 function getPublicPlaybackUrl(item: WatchCatalogItem) {
   const playbackUrl = item.playbackUrl;
+  if (item.type === 'music' || item.type === 'tts') return playbackUrl;
   const xtreamMatch = playbackUrl.match(/^\/activity-provider\/xtream\/(vod|series)\/(\d+)$/i);
   const episodeMatch = playbackUrl.match(/^\/activity-provider\/xtream\/episode\/(\d+-[a-z0-9]+)$/i);
   if (episodeMatch) return `/api/watch/xtream/hls/episode-${episodeMatch[1].toLowerCase()}/index.m3u8`;
@@ -327,6 +333,66 @@ function enqueue(session: WatchSession, item: WatchCatalogItem, requestedBy: Wat
   return request;
 }
 
+function formatDurationMs(durationMs: number | undefined) {
+  const totalSeconds = Math.max(0, Math.round(Number(durationMs || 0) / 1000));
+  if (!totalSeconds) return 'unknown';
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${minutes}m ${seconds.toString().padStart(2, '0')}s`;
+}
+
+function musicTrackToWatchItem(track: PlaylistItem): WatchCatalogItem {
+  return {
+    id: `youtube-${track.id}`,
+    type: 'music',
+    title: track.title,
+    year: new Date().getFullYear(),
+    runtime: formatDurationMs(track.duration),
+    source: track.artist ? `YouTube Music: ${track.artist}` : 'YouTube Music',
+    poster: track.thumbnail || '',
+    playbackUrl: `/api/youtube-audio/stream?videoId=${encodeURIComponent(track.id)}`,
+    overview: `Song request from ${track.addedBy || 'unknown user'}.`,
+    metadata: {
+      provider: 'youtube',
+      kind: 'song',
+      videoId: track.id,
+      artist: track.artist,
+      originalUrl: track.url,
+    },
+  };
+}
+
+function isPlayableClientUrl(value: unknown) {
+  const raw = String(value || '').trim();
+  if (!raw) return false;
+  if (raw.startsWith('/')) return true;
+  try {
+    const url = new URL(raw);
+    return url.protocol === 'https:' || url.protocol === 'http:';
+  } catch {
+    return false;
+  }
+}
+
+function ttsToWatchItem(params: { audioUrl: string; text?: string; title?: string; botName?: string }): WatchCatalogItem {
+  const label = params.title || (params.text ? `${params.botName || 'Athena'}: ${params.text.slice(0, 80)}` : `${params.botName || 'Bot'} TTS`);
+  return {
+    id: `tts-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+    type: 'tts',
+    title: label,
+    year: new Date().getFullYear(),
+    runtime: 'speech',
+    source: params.botName || 'Bot TTS',
+    poster: '',
+    playbackUrl: params.audioUrl,
+    overview: params.text || 'Queued bot speech.',
+    metadata: {
+      provider: 'tts',
+      kind: 'tts',
+    },
+  };
+}
+
 export function parseWatchCommand(message: string) {
   const trimmed = message.trim();
   const match = trimmed.match(/^!(wr|watch)(?:\s+(.+))?$/i);
@@ -426,8 +492,8 @@ export function getWatchCatalogItem(id: string | null | undefined) {
 
 export function getWatchSession(sessionId: string, guildId?: string, channelId?: string) {
   loadWatchStateFromDisk();
-  const globalSessionId = getGlobalWatchSessionId();
-  return sessions.get(globalSessionId) || createSession(globalSessionId, guildId, channelId);
+  const resolvedSessionId = guildId && channelId ? getScopedWatchSessionId(guildId, channelId) : (sessionId || getGlobalWatchSessionId());
+  return sessions.get(resolvedSessionId) || createSession(resolvedSessionId, guildId, channelId);
 }
 
 async function createDiscordActivityInvite(channelId: string) {
@@ -466,17 +532,17 @@ export function getResolvedWatchSession(sessionId: string, guildId?: string, cha
 }
 
 export function getWatchSessionId(guildId: string, channelId: string) {
-  void guildId;
-  void channelId;
-  return getGlobalWatchSessionId();
+  return getScopedWatchSessionId(guildId, channelId);
 }
 
 export function getWatchRoomUrl(sessionId: string, preferredBaseUrl?: string) {
   return `${getPublicBaseUrl(preferredBaseUrl)}/watch/${sessionId}`;
 }
 
-export function getActivityUrl(preferredBaseUrl?: string) {
-  return `${getPublicBaseUrl(preferredBaseUrl)}/activity`;
+export function getActivityUrl(preferredBaseUrl?: string, sessionId?: string) {
+  const url = new URL(`${getPublicBaseUrl(preferredBaseUrl)}/activity`);
+  if (sessionId) url.searchParams.set('sessionId', sessionId);
+  return url.toString();
 }
 
 export function getPublicWatchSession(session: WatchSession, preferredBaseUrl?: string) {
@@ -538,6 +604,75 @@ export async function requestWatchItem(params: {
   saveWatchStateToDisk();
 
   return { request, session };
+}
+
+export async function requestWatchMusicItem(params: {
+  sessionId: string;
+  guildId?: string;
+  channelId?: string;
+  query?: string;
+  userId: string;
+  username: string;
+  platform?: 'discord' | 'twitch' | 'admin' | 'activity' | 'web';
+}) {
+  loadWatchStateFromDisk();
+  const query = String(params.query || '').trim();
+  if (!query) return { error: 'No matching music item' as const, result: { success: false, message: 'Missing song query.' } };
+
+  const resolved = await resolveSongRequest(query, `${params.username} (${params.platform || 'watch'})`);
+  if (!resolved.success || !resolved.track) {
+    return { error: 'No matching music item' as const, result: resolved };
+  }
+
+  const item = musicTrackToWatchItem(resolved.track);
+  const session = getWatchSession(params.sessionId, params.guildId, params.channelId);
+  const request = enqueue(session, item, {
+    userId: params.userId,
+    username: params.username,
+  });
+  saveWatchStateToDisk();
+
+  return {
+    result: { success: true, message: `Queued up: "${item.title}"` },
+    request,
+    session,
+  };
+}
+
+export async function requestWatchTtsItem(params: {
+  sessionId: string;
+  guildId?: string;
+  channelId?: string;
+  audioUrl?: string;
+  text?: string;
+  title?: string;
+  botName?: string;
+  userId: string;
+  username: string;
+}) {
+  loadWatchStateFromDisk();
+  if (!isPlayableClientUrl(params.audioUrl)) {
+    return { error: 'No matching TTS item' as const, result: { success: false, message: 'Missing or invalid TTS audio URL.' } };
+  }
+
+  const item = ttsToWatchItem({
+    audioUrl: String(params.audioUrl),
+    text: params.text,
+    title: params.title,
+    botName: params.botName,
+  });
+  const session = getWatchSession(params.sessionId, params.guildId, params.channelId);
+  const request = enqueue(session, item, {
+    userId: params.userId,
+    username: params.username,
+  });
+  saveWatchStateToDisk();
+
+  return {
+    result: { success: true, message: `Queued speech: "${item.title}"` },
+    request,
+    session,
+  };
 }
 
 export function acceptWatchRecommendation(params: {
@@ -743,7 +878,7 @@ export async function handleWatchRequestCommand(params: {
     ? 'now playing'
     : `queue position ${result.session.queue.length}`;
   const activityInviteUrl = await createDiscordActivityInvite(params.channelId);
-  const joinUrl = activityInviteUrl || getActivityUrl(params.publicBaseUrl);
+  const joinUrl = activityInviteUrl || getActivityUrl(params.publicBaseUrl, sessionId);
 
   if (params.richReply) {
     await params.richReply(buildWatchJoinMessage(result.request.item.title, position, joinUrl, result.request.item));

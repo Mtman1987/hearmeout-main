@@ -293,6 +293,9 @@ function createMessageHandler(instance: BotInstance) {
         userId: context.username || context['user-id'] || 'twitch',
         username: String(requester),
         platform: 'twitch',
+        guildId: instance.tokens.serverId || 'local',
+        channelId: process.env.DISCORD_CHANNEL_ID || `twitch-${channelName}`,
+        publicBaseUrl: getPublicBaseUrl(),
         reply: (content) => {
           client.say(target, `@${requester} ${content}`);
         },
