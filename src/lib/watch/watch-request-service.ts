@@ -233,7 +233,7 @@ function sendDiscordReply(channelId: string, content: string, userMessageId?: st
   }).catch((error) => console.error('[WatchRequest] Discord reply failed:', error));
 }
 
-function watchControlComponents(joinUrl?: string) {
+export function watchControlComponents(joinUrl?: string) {
   return [
     {
       type: 1,
@@ -255,7 +255,7 @@ function watchControlComponents(joinUrl?: string) {
   ];
 }
 
-function buildWatchJoinMessage(title: string, position: string, joinUrl: string, item?: WatchCatalogItem): DiscordMessagePayload {
+export function buildWatchJoinMessage(title: string, position: string, joinUrl: string, item?: WatchCatalogItem): DiscordMessagePayload {
   const fields = [
     { name: 'Status', value: position, inline: true },
     { name: 'Source', value: item?.source || 'Watch room', inline: true },

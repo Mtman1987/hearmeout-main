@@ -1,6 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { handleMusicCommand } from '@/lib/music-command-service';
-import { handleWatchRequestCommand } from '@/lib/watch/watch-request-service';
+import { GLOBAL_WATCH_SESSION_ID } from '@/lib/watch-session';
+import {
+  buildWatchJoinMessage,
+  getActivityUrl,
+  getResolvedWatchSession,
+  handleWatchRequestCommand,
+  watchControlComponents,
+} from '@/lib/watch/watch-request-service';
 
 type DiscordMessagePayload = {
   content?: string;
@@ -175,6 +182,34 @@ function markDiscordMessageSeen(guildId: string, channelId: string, messageId: s
   return false;
 }
 
+function isDirectDiscordMessage(data: any) {
+  const explicit = data.isDM ?? data.isDirectMessage ?? data.is_direct_message ?? data.dm;
+  if (explicit !== undefined) return Boolean(explicit);
+
+  const channelType = String(data.channelType ?? data.channel_type ?? data.channel?.type ?? '').toLowerCase();
+  return channelType === 'dm' || channelType === '1';
+}
+
+function buildWatchControlsReply(publicBaseUrl: string): DiscordMessagePayload {
+  const joinUrl = getActivityUrl(publicBaseUrl, GLOBAL_WATCH_SESSION_ID);
+  const session = getResolvedWatchSession(GLOBAL_WATCH_SESSION_ID);
+
+  if (session.current) {
+    const status = session.playback.status === 'playing'
+      ? 'now playing'
+      : session.playback.status === 'paused'
+        ? 'paused'
+        : 'ready';
+    return buildWatchJoinMessage(session.current.item.title, status, joinUrl, session.current.item);
+  }
+
+  return {
+    content: `Watch Party controls: ${joinUrl}`,
+    components: watchControlComponents(joinUrl),
+    allowed_mentions: { parse: [] },
+  };
+}
+
 export async function POST(request: NextRequest) {
   try {
     let body: any;
@@ -193,7 +228,7 @@ export async function POST(request: NextRequest) {
     const guildId = String(data.guildId || data.serverId || 'local').trim();
     const userId = String(data.userId || data.authorId || 'discord').trim();
     const userName = String(data.userName || data.displayName || data.username || 'Discord User').trim();
-    const isDM = !data.guildId && !data.serverId;
+    const isDM = isDirectDiscordMessage(data);
     const replies: Array<string | DiscordMessagePayload> = [];
     const isWatchControlCommand = /^!(controls?|watch-controls)$/i.test(message);
 
@@ -213,7 +248,7 @@ export async function POST(request: NextRequest) {
 
     let handled = false;
     if (isWatchControlCommand) {
-      // DSH owns Discord component interactions, so it posts the live control buttons.
+      replies.push(buildWatchControlsReply(getRequestBaseUrl(request)));
       handled = true;
     }
 

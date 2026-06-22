@@ -1,6 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { addSongToPlaylist, skipTrack } from '@/lib/bot-actions';
 import { db, ensureDb } from '@/lib/db';
+import { GLOBAL_WATCH_SESSION_ID } from '@/lib/watch-session';
+import {
+  buildWatchJoinMessage,
+  controlWatchSession,
+  getActivityUrl,
+  watchControlComponents,
+} from '@/lib/watch-request-service';
 import nacl from 'tweetnacl';
 
 const InteractionType = { PING: 1, APPLICATION_COMMAND: 2, MESSAGE_COMPONENT: 3, APPLICATION_COMMAND_AUTOCOMPLETE: 4, MODAL_SUBMIT: 5 };
@@ -51,6 +58,35 @@ async function handleSkipButton(body: any, token: string): Promise<void> {
   } catch { await sendFollowup(clientId!, token, '❌ Error skipping track.'); }
 }
 
+function getRequestBaseUrl(request: NextRequest) {
+  const forwardedProto = request.headers.get('x-forwarded-proto');
+  const forwardedHost = request.headers.get('x-forwarded-host');
+  const proto = forwardedProto || request.nextUrl.protocol.replace(':', '');
+  const host = forwardedHost || request.headers.get('host') || request.nextUrl.host;
+  return `${proto}://${host}`;
+}
+
+async function buildWatchControlUpdate(request: NextRequest, action: string) {
+  const session = await controlWatchSession(GLOBAL_WATCH_SESSION_ID, action);
+  const joinUrl = getActivityUrl(getRequestBaseUrl(request), GLOBAL_WATCH_SESSION_ID);
+
+  if (!session.current) {
+    return {
+      content: `Watch Party is empty. Join Activity: ${joinUrl}`,
+      embeds: [],
+      components: watchControlComponents(joinUrl),
+      allowed_mentions: { parse: [] },
+    };
+  }
+
+  const status = session.playback.status === 'playing'
+    ? 'now playing'
+    : session.playback.status === 'paused'
+      ? 'paused'
+      : 'ready';
+  return buildWatchJoinMessage(session.current.item.title, status, joinUrl, session.current.item);
+}
+
 export async function POST(req: NextRequest) {
   const rawBody = await req.text();
   const signature = req.headers.get('x-signature-ed25519') || '';
@@ -71,6 +107,27 @@ export async function POST(req: NextRequest) {
 
   if (type === InteractionType.MESSAGE_COMPONENT) {
     const { custom_id } = data;
+
+    if (custom_id.startsWith('hmo_watch_control:')) {
+      const action = String(custom_id.split(':')[1] || '').toLowerCase();
+      const allowedActions = new Set(['play', 'pause', 'mute', 'unmute', 'next', 'clear']);
+      if (!allowedActions.has(action)) {
+        return NextResponse.json({
+          type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
+          data: { content: 'Unsupported watch control.', flags: 64 },
+        });
+      }
+
+      try {
+        const update = await buildWatchControlUpdate(req, action);
+        return NextResponse.json({ type: InteractionResponseType.UPDATE_MESSAGE, data: update });
+      } catch (error: any) {
+        return NextResponse.json({
+          type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
+          data: { content: error?.message || 'Unable to update watch controls.', flags: 64 },
+        });
+      }
+    }
 
     if (custom_id.startsWith('room_settings:')) {
       const roomId = custom_id.split(':')[1];

@@ -9,6 +9,8 @@ function cleanScopePart(value: string) {
 }
 
 export function getScopedWatchSessionId(guildId?: string | null, channelId?: string | null) {
+  if (process.env.WATCH_SESSION_SCOPE !== 'channel') return GLOBAL_WATCH_SESSION_ID;
+
   const cleanGuildId = cleanScopePart(guildId || '');
   const cleanChannelId = cleanScopePart(channelId || '');
   if (!cleanGuildId || !cleanChannelId || cleanGuildId === 'local') return GLOBAL_WATCH_SESSION_ID;
