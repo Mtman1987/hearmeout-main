@@ -33,7 +33,12 @@ function html(request: Request) {
   const title = current ? `${current.item.title} (${current.item.year})` : 'Waiting for a request';
   const media = current ? `${current.item.source} - requested by ${current.requestedBy.username}` : 'Media: idle';
   const src = current?.item.playbackUrl || '';
-  const nativeSrc = src && !isHlsPlaybackUrl(src) ? src : '';
+  const isAudioOnly = current?.item.type === 'music'
+    || current?.item.type === 'tts'
+    || current?.item.metadata?.provider === 'youtube'
+    || current?.item.metadata?.provider === 'tts';
+  const nativeSrc = src && !isAudioOnly && !isHlsPlaybackUrl(src) ? src : '';
+  const audioSrc = src && isAudioOnly ? src : '';
 
   return `<!doctype html>
 <html lang="en">
@@ -98,8 +103,8 @@ function html(request: Request) {
         <div class="status" id="activity-status">Loading</div>
       </header>
       <div class="video-wrap">
-        <video id="video" controls autoplay muted playsinline ${nativeSrc ? `src="${escapeHtml(nativeSrc)}"` : ''}></video>
-        <audio id="audio" class="audio-player hidden" controls autoplay></audio>
+        <video id="video" class="${isAudioOnly ? 'hidden' : ''}" controls autoplay muted playsinline ${nativeSrc ? `src="${escapeHtml(nativeSrc)}"` : ''}></video>
+        <audio id="audio" class="audio-player ${isAudioOnly ? '' : 'hidden'}" controls autoplay ${audioSrc ? `src="${escapeHtml(audioSrc)}"` : ''}></audio>
         <div class="empty ${current ? 'hidden' : ''}" id="empty"><strong>No video loaded</strong><span>Use the request panel or type !wr in Discord.</span></div>
       </div>
       <div class="toolbar" aria-label="Watch controls">
