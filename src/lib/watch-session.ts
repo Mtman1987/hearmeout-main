@@ -4,15 +4,6 @@ export function getGlobalWatchSessionId() {
   return GLOBAL_WATCH_SESSION_ID;
 }
 
-function cleanScopePart(value: string) {
-  return String(value || '').trim().replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 80);
-}
-
-export function getScopedWatchSessionId(guildId?: string | null, channelId?: string | null) {
-  if (process.env.WATCH_SESSION_SCOPE !== 'channel') return GLOBAL_WATCH_SESSION_ID;
-
-  const cleanGuildId = cleanScopePart(guildId || '');
-  const cleanChannelId = cleanScopePart(channelId || '');
-  if (!cleanGuildId || !cleanChannelId || cleanGuildId === 'local') return GLOBAL_WATCH_SESSION_ID;
-  return `discord-${cleanGuildId}-${cleanChannelId}`;
+export function getScopedWatchSessionId(_guildId?: string | null, _channelId?: string | null) {
+  return GLOBAL_WATCH_SESSION_ID;
 }

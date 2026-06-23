@@ -69,6 +69,23 @@ function resetInactiveMedia() {
   inactive.load();
 }
 
+function clearActiveMedia() {
+  [video, audio].filter(Boolean).forEach((element) => {
+    element.pause();
+    element.removeAttribute('src');
+    element.load();
+  });
+}
+
+function isCurrentMediaActuallyEnded() {
+  if (!state || !state.current) return false;
+  const duration = Number(media.duration || 0);
+  const currentTime = Number(media.currentTime || 0);
+  if (!Number.isFinite(duration) || duration <= 0) return false;
+  if (media.readyState < 2) return false;
+  return currentTime >= duration - 0.5;
+}
+
 function downloadUrlFor(url) {
   if (!url || !url.startsWith('/')) return url;
   const next = new URL(appUrl(url), window.location.href);
@@ -330,6 +347,8 @@ function render(nextState) {
     mediaEl.textContent = 'Media: idle';
     currentDownloadUrl = '';
     downloadLink.disabled = true;
+    currentRequestId = null;
+    clearActiveMedia();
   }
   const queueRows = [];
   if (state.current) {
@@ -601,7 +620,7 @@ function onMediaSeeked(event) { if (event.currentTarget === media && !applying &
 function onMediaEnded(event) {
   if (event.currentTarget !== media) return;
   mediaEl.textContent = 'Media: ended';
-  if (!state || syncingCompletedPlayback) return;
+  if (!state || syncingCompletedPlayback || !isCurrentMediaActuallyEnded()) return;
   syncingCompletedPlayback = true;
   control('next').finally(() => { syncingCompletedPlayback = false; });
 }
