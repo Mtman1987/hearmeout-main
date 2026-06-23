@@ -34,6 +34,7 @@ type WatchCatalogItem = {
     audioPlaybackUrl?: string;
     videoPlaybackUrl?: string;
     playbackMode?: 'audio' | 'video';
+    playbackStrategy?: 'proxy' | 'embed';
   };
 };
 
@@ -359,6 +360,8 @@ function musicTrackToWatchItem(track: PlaylistItem): WatchCatalogItem {
   const videoId = encodeURIComponent(track.id);
   const videoPlaybackUrl = `/api/youtube-video/proxy?videoId=${videoId}&media=video`;
   const audioPlaybackUrl = `/api/youtube-video/proxy?videoId=${videoId}&media=audio`;
+  const embedPlaybackUrl = `https://www.youtube.com/embed/${videoId}`;
+  const useEmbed = track.playbackStrategy === 'embed';
   return {
     id: `youtube-${track.id}`,
     type: 'music',
@@ -367,17 +370,20 @@ function musicTrackToWatchItem(track: PlaylistItem): WatchCatalogItem {
     runtime: formatDurationMs(track.duration),
     source: track.artist ? `YouTube Video: ${track.artist}` : 'YouTube Video',
     poster: track.thumbnail || '',
-    playbackUrl: videoPlaybackUrl,
-    overview: `Song request from ${track.addedBy || 'unknown user'}.`,
+    playbackUrl: useEmbed ? embedPlaybackUrl : videoPlaybackUrl,
+    overview: useEmbed
+      ? `Song request from ${track.addedBy || 'unknown user'}. Using YouTube embed fallback because direct extraction was not playable.`
+      : `Song request from ${track.addedBy || 'unknown user'}.`,
     metadata: {
-      provider: 'youtube-video',
+      provider: useEmbed ? 'youtube' : 'youtube-video',
       kind: 'song',
       videoId: track.id,
       artist: track.artist,
       originalUrl: track.url,
-      audioPlaybackUrl,
-      videoPlaybackUrl,
+      audioPlaybackUrl: useEmbed ? undefined : audioPlaybackUrl,
+      videoPlaybackUrl: useEmbed ? embedPlaybackUrl : videoPlaybackUrl,
       playbackMode: 'video',
+      playbackStrategy: track.playbackStrategy || 'proxy',
     },
   };
 }

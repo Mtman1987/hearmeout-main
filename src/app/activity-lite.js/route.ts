@@ -21,7 +21,7 @@ function normalizeSessionAlias(value, fallback) {
   if (['watch', 'movie', 'movies', 'video', 'videos', 'main', 'default', 'global'].includes(raw)) return 'discord-watch-room';
   if (['music', 'song', 'songs', 'radio', 'dj'].includes(raw)) return 'discord-music-room';
   const clean = cleanScopePart(raw.replace(/[^a-z0-9_-]+/g, '-').replace(/^-+|-+$/g, ''));
-  return clean || fallback;
+  return clean ? 'watch-' + clean : fallback;
 }
 let sessionId = normalizeSessionAlias(params.get('sessionId') || params.get('session_id') || '', GLOBAL_SESSION_ID);
 const video = document.getElementById('video');
@@ -211,8 +211,6 @@ function registerYouTubeListeners() {
   if (!youtube || !youtube.contentWindow) return;
   try {
     youtube.contentWindow.postMessage(JSON.stringify({ event: 'listening' }), '*');
-    youtubeCommand('addEventListener', ['onStateChange']);
-    youtubeCommand('addEventListener', ['onReady']);
   } catch (err) {
     console.warn('YouTube listener registration failed', err);
   }

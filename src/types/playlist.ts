@@ -10,4 +10,5 @@ export type PlaylistItem = {
   addedAt: Date;
   plays: number;
   source: 'web' | 'discord' | 'twitch';
+  playbackStrategy?: 'proxy' | 'embed';
 };
