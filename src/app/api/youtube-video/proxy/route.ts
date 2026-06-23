@@ -180,14 +180,14 @@ export async function GET(req: NextRequest) {
       extractedUrls.delete(cacheKey(videoId, media));
       return new NextResponse('Resolved URL is not an audio stream', { status: 415 });
     }
-    if (!resolvedTotalLength) return new NextResponse('Proxy could not determine media length', { status: 502 });
+    const contentRangeTotal = resolvedTotalLength ? String(resolvedTotalLength) : '*';
 
     const responseHeaders: Record<string, string> = {
       'Access-Control-Allow-Origin': '*',
       'Cache-Control': 'no-cache',
       'Accept-Ranges': 'bytes',
       'Content-Length': String(body.byteLength),
-      'Content-Range': `bytes ${start}-${start + body.byteLength - 1}/${resolvedTotalLength}`,
+      'Content-Range': `bytes ${start}-${start + body.byteLength - 1}/${contentRangeTotal}`,
       'Content-Type': cdnContentType || extracted.mimeType || queryMimeType || (media === 'audio' ? 'audio/mp4' : 'video/mp4'),
     };
 
