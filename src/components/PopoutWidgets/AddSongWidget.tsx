@@ -3,18 +3,14 @@
 import React from 'react';
 import { DraggableContainer } from './DraggableContainer';
 import AddMusicPanel from '@/app/rooms/[roomId]/_components/AddMusicPanel';
-import { MUSIC_WATCH_SESSION_ID } from '@/lib/watch-session';
+import { getRoomWatchSessionId } from '@/lib/watch-session';
 import type { PlaylistItem } from '@/types/playlist';
 
-interface AddSongWidgetProps {
-  id: string;
-  position: { x: number; y: number };
-  size: { width: number; height: number };
-  opacity?: number;
-  onPositionChange: (pos: { x: number; y: number }) => void;
-  onSizeChange: (size: { width: number; height: number }) => void;
-  onOpacityChange?: (opacity: number) => void;
-  onSaveLayout?: () => void;
+type DraggableWidgetProps = Pick<React.ComponentProps<typeof DraggableContainer>,
+  'id' | 'position' | 'size' | 'opacity' | 'onPositionChange' | 'onSizeChange' | 'onOpacityChange' | 'onSaveLayout' | 'onClose'
+>;
+
+interface AddSongWidgetProps extends DraggableWidgetProps {
   onClose: () => void;
   roomId: string;
   sessionScope?: 'discord' | 'overlay';
@@ -30,11 +26,13 @@ export function AddSongWidget({
   onOpacityChange,
   onSaveLayout,
   onClose,
+  roomId,
 }: AddSongWidgetProps) {
+  const sessionId = getRoomWatchSessionId(roomId, 'music');
   const handleAddItems = React.useCallback(async (items: PlaylistItem[]) => {
     for (const item of items) {
       const query = item.url || [item.title, item.artist].filter(Boolean).join(' ');
-      const res = await fetch(`/api/watch/sessions/${encodeURIComponent(MUSIC_WATCH_SESSION_ID)}/request`, {
+      const res = await fetch(`/api/watch/sessions/${encodeURIComponent(sessionId)}/request`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -42,6 +40,7 @@ export function AddSongWidget({
           username: item.addedBy || 'local viewer',
           mediaType: 'music',
           platform: item.source || 'web',
+          roomId,
         }),
       });
       if (!res.ok) {
@@ -49,7 +48,7 @@ export function AddSongWidget({
         throw new Error(data?.error || `Could not add "${item.title}" to Music Videos.`);
       }
     }
-  }, []);
+  }, [roomId, sessionId]);
 
   return (
     <DraggableContainer

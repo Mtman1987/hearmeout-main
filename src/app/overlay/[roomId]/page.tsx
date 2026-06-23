@@ -21,7 +21,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { usePopout } from '@/components/PopoutWidgets/PopoutProvider';
-import { GLOBAL_WATCH_SESSION_ID, MUSIC_WATCH_SESSION_ID } from '@/lib/watch-session';
+import { getRoomWatchSessionId } from '@/lib/watch-session';
 
 type WatchPlayback = {
   status: 'idle' | 'paused' | 'playing';
@@ -126,6 +126,8 @@ export default function OverlayPage() {
   const params = useParams<{ roomId: string }>();
   const searchParams = useSearchParams();
   const roomId = params.roomId;
+  const movieSessionId = getRoomWatchSessionId(roomId, 'movie');
+  const musicSessionId = getRoomWatchSessionId(roomId, 'music');
   const requestedLane = (searchParams.get('media') || searchParams.get('lane') || 'auto').toLowerCase();
   const lane: MediaLane = requestedLane === 'music' || requestedLane === 'movie' ? requestedLane : 'auto';
   const { popouts, openPopout, closePopout } = usePopout();
@@ -153,14 +155,14 @@ export default function OverlayPage() {
   useEffect(() => { mutedRef.current = isMuted; }, [isMuted]);
 
   const activeBundle = useMemo(() => {
-    if (lane === 'music') return { lane: 'music' as const, sessionId: MUSIC_WATCH_SESSION_ID, state: musicState };
-    if (lane === 'movie') return { lane: 'movie' as const, sessionId: GLOBAL_WATCH_SESSION_ID, state: movieState };
+    if (lane === 'music') return { lane: 'music' as const, sessionId: musicSessionId, state: musicState };
+    if (lane === 'movie') return { lane: 'movie' as const, sessionId: movieSessionId, state: movieState };
 
-    if (sessionHasActiveMedia(musicState)) return { lane: 'music' as const, sessionId: MUSIC_WATCH_SESSION_ID, state: musicState };
-    if (sessionHasActiveMedia(movieState)) return { lane: 'movie' as const, sessionId: GLOBAL_WATCH_SESSION_ID, state: movieState };
-    if (musicState?.current) return { lane: 'music' as const, sessionId: MUSIC_WATCH_SESSION_ID, state: musicState };
-    return { lane: 'movie' as const, sessionId: GLOBAL_WATCH_SESSION_ID, state: movieState };
-  }, [lane, movieState, musicState]);
+    if (sessionHasActiveMedia(musicState)) return { lane: 'music' as const, sessionId: musicSessionId, state: musicState };
+    if (sessionHasActiveMedia(movieState)) return { lane: 'movie' as const, sessionId: movieSessionId, state: movieState };
+    if (musicState?.current) return { lane: 'music' as const, sessionId: musicSessionId, state: musicState };
+    return { lane: 'movie' as const, sessionId: movieSessionId, state: movieState };
+  }, [lane, movieSessionId, movieState, musicSessionId, musicState]);
 
   const activeState = activeBundle.state;
   const currentItem = activeState?.current?.item || null;
@@ -282,8 +284,8 @@ export default function OverlayPage() {
     const refresh = async () => {
       try {
         const [movie, music] = await Promise.all([
-          api(`/api/watch/sessions/${GLOBAL_WATCH_SESSION_ID}/state`),
-          api(`/api/watch/sessions/${MUSIC_WATCH_SESSION_ID}/state`),
+          api(`/api/watch/sessions/${movieSessionId}/state`),
+          api(`/api/watch/sessions/${musicSessionId}/state`),
         ]);
         setMovieState(movie);
         setMusicState(music);
@@ -297,7 +299,7 @@ export default function OverlayPage() {
     refresh();
     const interval = window.setInterval(refresh, 1000);
     return () => window.clearInterval(interval);
-  }, []);
+  }, [movieSessionId, musicSessionId]);
 
   useEffect(() => {
     const unlockOverlayAudio = () => {

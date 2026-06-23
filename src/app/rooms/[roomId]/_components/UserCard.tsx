@@ -1,8 +1,8 @@
 'use client';
 
-import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Headphones, Mic, MicOff, MoreVertical, Move, Pen, ShieldOff, Trash2, UserX, Volume2, VolumeX, LoaderCircle, LogOut, Radio, MessageSquare, Music, ListMusic, Users } from 'lucide-react';
-import { useTracks, AudioTrack, useRoomContext } from '@livekit/components-react';
+import React, { useCallback, useEffect, useState } from 'react';
+import { Headphones, Mic, MicOff, MoreVertical, Move, ShieldOff, Trash2, UserX, Volume2, VolumeX, LoaderCircle, LogOut, Radio, MessageSquare, Music, ListMusic, Users } from 'lucide-react';
+import { useRoomContext } from '@livekit/components-react';
 import * as LivekitClient from 'livekit-client';
 import { useSession } from '@/hooks/use-session';
 import { useDoc } from '@/hooks/use-db';
@@ -23,7 +23,7 @@ import { SpeakingIndicator } from "./SpeakingIndicator";
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useAudioDevice } from '@/hooks/use-audio-device';
-import { useVoiceControls, VoiceMode } from '@/hooks/use-voice-controls';
+import { useVoiceControls } from '@/hooks/use-voice-controls';
 import { useRouter } from 'next/navigation';
 
 interface RoomParticipantData { id: string; uid: string; displayName: string; photoURL: string; twitchChannel?: string; discordGuildId?: string; streamMode?: boolean; serverMuted?: boolean; }
@@ -48,7 +48,6 @@ export default function UserCard({ participant, isLocal, isHost, roomId }: { par
   const { devices: audioInputDevices, activeDeviceId: activeAudioInputDeviceId, setDevice: setAudioInputDevice } = useAudioDevice({ kind: 'audioinput' });
   const { devices: audioOutputDevices, activeDeviceId: activeAudioOutputDeviceId, setDevice: setAudioOutputDevice } = useAudioDevice({ kind: 'audiooutput' });
 
-  const allAudioTracks = useTracks([LivekitClient.Track.Source.Microphone, LivekitClient.Track.Source.Unknown], { onlySubscribed: true }).filter(track => track.participant.identity === participant.identity && track.publication);
   const { name, identity } = participant;
   const participantMeta = participant.metadata ? JSON.parse(participant.metadata) : {};
   const userRecordId = participantMeta.uid || identity;
@@ -139,7 +138,7 @@ export default function UserCard({ participant, isLocal, isHost, roomId }: { par
     const newMode = !streamMode;
     setStreamMode(newMode);
     dbSet(`rooms/${roomId}/users`, userRecordId, { streamMode: newMode }, true);
-    toast({ title: newMode ? 'Stream Mode ON' : 'Stream Mode OFF', description: newMode ? 'Main page audio disabled. Use overlay in OBS for all audio.' : 'Main page audio enabled.' });
+    toast({ title: newMode ? 'Stream Mode ON' : 'Stream Mode OFF', description: newMode ? 'Media plays through the OBS overlay. Room voices stay here.' : 'Media plays normally in the room again.' });
   };
 
   const handleSaveTwitch = () => {

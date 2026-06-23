@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { handleMusicCommand } from '@/lib/music-command-service';
-import { GLOBAL_WATCH_SESSION_ID, MUSIC_WATCH_SESSION_ID, normalizeWatchSessionAlias } from '@/lib/watch-session';
+import { GLOBAL_WATCH_SESSION_ID, MUSIC_WATCH_SESSION_ID, getScopedWatchSessionId, normalizeWatchSessionAlias } from '@/lib/watch-session';
 import {
   buildWatchJoinMessage,
   getActivityUrl,
@@ -203,7 +203,7 @@ function parseWatchControlsCommand(message: string) {
 function buildWatchControlsReply(publicBaseUrl: string, sessionId = GLOBAL_WATCH_SESSION_ID): DiscordMessagePayload {
   const joinUrl = getActivityUrl(publicBaseUrl, sessionId);
   const session = getResolvedWatchSession(sessionId);
-  const label = sessionId === MUSIC_WATCH_SESSION_ID ? 'Music Videos' : 'Movie Watch Party';
+  const label = session.metadata?.mediaKind === 'music' || sessionId === MUSIC_WATCH_SESSION_ID ? 'Channel Music Videos' : 'Channel Watch Party';
 
   if (session.current) {
     const status = session.playback.status === 'playing'
@@ -265,10 +265,15 @@ export async function POST(request: NextRequest) {
     if (watchControlsCommand) {
       const baseUrl = getRequestBaseUrl(request);
       if (watchControlsCommand.allSessions) {
-        replies.push(buildWatchControlsReply(baseUrl, GLOBAL_WATCH_SESSION_ID));
-        replies.push(buildWatchControlsReply(baseUrl, MUSIC_WATCH_SESSION_ID));
+        replies.push(buildWatchControlsReply(baseUrl, getScopedWatchSessionId(guildId, channelId, 'movie')));
+        replies.push(buildWatchControlsReply(baseUrl, getScopedWatchSessionId(guildId, channelId, 'music')));
       } else {
-        replies.push(buildWatchControlsReply(baseUrl, watchControlsCommand.sessionId));
+        const requestedSession = watchControlsCommand.sessionId === GLOBAL_WATCH_SESSION_ID
+          ? getScopedWatchSessionId(guildId, channelId, 'movie')
+          : watchControlsCommand.sessionId === MUSIC_WATCH_SESSION_ID
+            ? getScopedWatchSessionId(guildId, channelId, 'music')
+            : watchControlsCommand.sessionId;
+        replies.push(buildWatchControlsReply(baseUrl, requestedSession));
       }
       handled = true;
     }
@@ -305,7 +310,7 @@ export async function POST(request: NextRequest) {
         },
       });
       if (handled && /^!(sr|song)\b/i.test(message)) {
-        replies.push(buildWatchControlsReply(getRequestBaseUrl(request), MUSIC_WATCH_SESSION_ID));
+        replies.push(buildWatchControlsReply(getRequestBaseUrl(request), getScopedWatchSessionId(guildId, channelId, 'music')));
       }
     }
 

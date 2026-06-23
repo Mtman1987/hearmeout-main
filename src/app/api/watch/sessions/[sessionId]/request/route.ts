@@ -40,6 +40,8 @@ export async function POST(request: NextRequest, context: { params: Promise<{ se
   const requestKind = body.mediaType || body.type || body.kind;
   const result = isTtsRequest(requestKind) ? await requestWatchTtsItem({
     sessionId,
+    guildId: body.guildId,
+    channelId: body.channelId,
     audioUrl: body.audioUrl || body.ttsUrl || body.url,
     text: body.text,
     title: body.title,
@@ -48,12 +50,16 @@ export async function POST(request: NextRequest, context: { params: Promise<{ se
     username: body.username || body.botName || 'Athena',
   }) : isMusicRequest(requestKind) ? await requestWatchMusicItem({
     sessionId,
+    guildId: body.guildId,
+    channelId: body.channelId,
     query: body.query,
     userId: body.userId || 'local',
     username: body.username || 'local tester',
     platform: body.platform || 'web',
   }) : await requestWatchItem({
     sessionId,
+    guildId: body.guildId,
+    channelId: body.channelId,
     query: body.query,
     itemId: body.itemId,
     userId: body.userId || 'local',
@@ -77,6 +83,8 @@ export async function GET(request: NextRequest, context: { params: Promise<{ ses
   const requestKind = request.nextUrl.searchParams.get('mediaType') || request.nextUrl.searchParams.get('type') || request.nextUrl.searchParams.get('kind');
   const result = isTtsRequest(requestKind) ? await requestWatchTtsItem({
     sessionId,
+    guildId: request.nextUrl.searchParams.get('guildId') || undefined,
+    channelId: request.nextUrl.searchParams.get('channelId') || undefined,
     audioUrl: request.nextUrl.searchParams.get('audioUrl') || request.nextUrl.searchParams.get('ttsUrl') || request.nextUrl.searchParams.get('url') || undefined,
     text: request.nextUrl.searchParams.get('text') || undefined,
     title: request.nextUrl.searchParams.get('title') || undefined,
@@ -85,12 +93,16 @@ export async function GET(request: NextRequest, context: { params: Promise<{ ses
     username: request.nextUrl.searchParams.get('username') || request.nextUrl.searchParams.get('botName') || 'Athena',
   }) : isMusicRequest(requestKind) ? await requestWatchMusicItem({
     sessionId,
+    guildId: request.nextUrl.searchParams.get('guildId') || undefined,
+    channelId: request.nextUrl.searchParams.get('channelId') || undefined,
     query: request.nextUrl.searchParams.get('query') || request.nextUrl.searchParams.get('q') || undefined,
     userId: request.nextUrl.searchParams.get('userId') || 'local',
     username: request.nextUrl.searchParams.get('username') || 'local tester',
     platform: 'web',
   }) : await requestWatchItem({
     sessionId,
+    guildId: request.nextUrl.searchParams.get('guildId') || undefined,
+    channelId: request.nextUrl.searchParams.get('channelId') || undefined,
     query: request.nextUrl.searchParams.get('query') || request.nextUrl.searchParams.get('q') || undefined,
     itemId: request.nextUrl.searchParams.get('itemId') || undefined,
     userId: request.nextUrl.searchParams.get('userId') || 'local',

@@ -24,7 +24,7 @@ import { Room as LKRoom, RoomEvent, Track, RemoteTrack } from 'livekit-client';
 import { generateLiveKitToken, generateMusicRoomToken } from '@/app/actions';
 import { PlaylistItem } from "@/types/playlist";
 import { getScreenPeerId, PeerAudioListener, PeerScreenViewer, PeerVoiceMesh } from '@/lib/peer-audio-service';
-import { GLOBAL_WATCH_SESSION_ID } from '@/lib/watch-session';
+import { getRoomWatchSessionId } from '@/lib/watch-session';
 
 interface RoomData {
   id: string;
@@ -67,7 +67,7 @@ function watchUrlForRoom(url: string, canPause: boolean) {
 function SharedWatchCard({ roomId, onOpenWatch, sessionScope = 'discord', canPause = false }: { roomId: string; onOpenWatch: () => void; sessionScope?: 'discord' | 'overlay'; canPause?: boolean }) {
     const [state, setState] = useState<WatchCardState | null>(null);
     const [dismissedRequestId, setDismissedRequestId] = useState<string | null>(null);
-    const sessionId = GLOBAL_WATCH_SESSION_ID;
+    const sessionId = getRoomWatchSessionId(roomId, 'movie');
 
     useEffect(() => {
         let cancelled = false;
@@ -96,7 +96,7 @@ function SharedWatchCard({ roomId, onOpenWatch, sessionScope = 'discord', canPau
         <Card>
             <CardHeader className="flex flex-row items-center justify-between gap-3 pb-3">
                 <CardTitle className="flex items-center gap-2 text-lg font-headline">
-                    <Film className="h-5 w-5" /> Watch Party
+                    <Film className="h-5 w-5" /> Room Watch Party
                 </CardTitle>
                 <div className="flex gap-2">
                     <Button variant="outline" size="sm" onClick={onOpenWatch}>Controls</Button>
@@ -414,7 +414,7 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
     const [peerMicEnabled, setPeerMicEnabled] = useState(true);
     const peerVoiceRef = useRef<PeerVoiceMesh | null>(null);
     const peerVoiceStartingRef = useRef(false);
-    const [peerVoiceStreams, setPeerVoiceStreams] = useState<Map<string, MediaStream>>(new Map());
+    const [, setPeerVoiceStreams] = useState<Map<string, MediaStream>>(new Map());
     const peerVoiceAudioRefs = useRef<Map<string, HTMLAudioElement>>(new Map());
     const [localVolume, setLocalVolume] = useState(0.5);
     const [musicStatus, setMusicStatus] = useState<string | null>(null);
@@ -530,7 +530,7 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
             } else {
                 toast({ title: 'DJ Connected', description: data.message || 'Server DJ is starting.' });
             }
-        } catch (err) {
+        } catch {
             toast({ variant: 'destructive', title: 'DJ Error', description: 'Failed to start DJ' });
         } finally {
             setDjStarting(false);
@@ -860,9 +860,6 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
     // Room expiry check
     const expiresAt = room.expiresAt ? new Date(room.expiresAt).getTime() : null;
     const isExpired = expiresAt ? Date.now() > expiresAt : false;
-    const expiresInMs = expiresAt ? expiresAt - Date.now() : null;
-    const expiringSoon = expiresInMs !== null && expiresInMs > 0 && expiresInMs < 30 * 60 * 1000;
-
     if (isExpired) {
       return (
         <div className="flex-1 flex flex-col items-center justify-center text-center p-4">
@@ -985,7 +982,7 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
 
 function RoomPageContent() {
     const params = useParams<{ roomId: string }>();
-    const { user, isLoading: isUserLoading } = useSession();
+    const { user } = useSession();
     const { data: room, isLoading: isRoomLoading, error: roomError } = useDoc<RoomData>('rooms', params.roomId, 2000);
     const [passwordInput, setPasswordInput] = React.useState('');
     const [passwordUnlocked, setPasswordUnlocked] = React.useState(false);

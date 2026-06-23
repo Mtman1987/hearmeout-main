@@ -21,6 +21,15 @@ export async function POST(request: Request, context: { params: Promise<{ sessio
       String(body.action || '').toLowerCase(),
       Number.isFinite(parsedPosition as number) ? (parsedPosition as number) : undefined,
       Number(body.targetIndex),
+      {
+        actorUserId: body.actorUserId || body.userId,
+        roomId: body.roomId,
+        guildId: body.guildId,
+        channelId: body.channelId,
+        isHost: Boolean(body.isHost),
+        isAdmin: Boolean(body.isAdmin),
+        platform: body.platform || (body.guildId && body.channelId ? 'discord' : body.roomId ? 'room' : 'web'),
+      },
     );
     return NextResponse.json(getPublicWatchSession(session), { headers: CORS_HEADERS });
   } catch (error: any) {

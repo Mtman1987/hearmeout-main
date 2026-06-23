@@ -21,7 +21,15 @@ export async function GET(request: Request, context: { params: Promise<{ session
     return NextResponse.json({ error: 'Unsupported control action' }, { status: 400, headers: CORS_HEADERS });
   }
 
-  const session = await controlWatchSession(sessionId, action, position, targetIndex);
+  const session = await controlWatchSession(sessionId, action, position, targetIndex, {
+    actorUserId: url.searchParams.get('actorUserId') || url.searchParams.get('userId') || undefined,
+    roomId: url.searchParams.get('roomId') || undefined,
+    guildId: url.searchParams.get('guildId') || undefined,
+    channelId: url.searchParams.get('channelId') || undefined,
+    isHost: ['1', 'true', 'yes'].includes(String(url.searchParams.get('isHost') || '').toLowerCase()),
+    isAdmin: ['1', 'true', 'yes'].includes(String(url.searchParams.get('isAdmin') || '').toLowerCase()),
+    platform: (url.searchParams.get('platform') as any) || undefined,
+  });
   const title = session.current?.item.title || 'watch room';
   const label = action === 'seek' ? 'Synced' : action === 'clear' ? 'Cleared' : action[0].toUpperCase() + action.slice(1);
 

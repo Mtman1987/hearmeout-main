@@ -5,18 +5,13 @@ import { DraggableContainer } from './DraggableContainer';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Film, Music, Play, SkipForward, Trash2, Search, ExternalLink, LoaderCircle } from 'lucide-react';
-import { GLOBAL_WATCH_SESSION_ID, MUSIC_WATCH_SESSION_ID } from '@/lib/watch-session';
+import { getRoomWatchSessionId } from '@/lib/watch-session';
 
-interface WatchWidgetProps {
-  id: string;
-  position: { x: number; y: number };
-  size: { width: number; height: number };
-  opacity?: number;
-  onPositionChange: (pos: { x: number; y: number }) => void;
-  onSizeChange: (size: { width: number; height: number }) => void;
-  onOpacityChange?: (opacity: number) => void;
-  onSaveLayout?: () => void;
-  onClose: () => void;
+type DraggableWidgetProps = Pick<React.ComponentProps<typeof DraggableContainer>,
+  'id' | 'position' | 'size' | 'opacity' | 'onPositionChange' | 'onSizeChange' | 'onOpacityChange' | 'onSaveLayout' | 'onClose'
+>;
+
+interface WatchWidgetProps extends DraggableWidgetProps {
   roomId: string;
   sessionScope?: 'discord' | 'overlay';
   canControl?: boolean;
@@ -68,8 +63,8 @@ export function WatchWidget({
   const [searching, setSearching] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const movieSessionId = GLOBAL_WATCH_SESSION_ID;
-  const musicSessionId = MUSIC_WATCH_SESSION_ID;
+  const movieSessionId = getRoomWatchSessionId(roomId, 'movie');
+  const musicSessionId = getRoomWatchSessionId(roomId, 'music');
   const sessionId = tab === 'music' ? musicSessionId : movieSessionId;
 
   const refresh = useCallback(async () => {
@@ -99,7 +94,7 @@ export function WatchWidget({
       const res = await fetch(`/api/watch/sessions/${sessionId}/request`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ query: query.trim(), username: 'local viewer', mediaType: tab === 'music' ? 'music' : 'video' }),
+        body: JSON.stringify({ query: query.trim(), username: 'local viewer', mediaType: tab === 'music' ? 'music' : 'video', roomId }),
       });
       const data = await res.json();
       if (!res.ok) {
@@ -120,7 +115,7 @@ export function WatchWidget({
       const res = await fetch(`/api/watch/sessions/${sessionId}/control`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action, position: 0 }),
+        body: JSON.stringify({ action, position: 0, roomId, isHost: canControl, isAdmin: canControl }),
       });
       if (res.ok) setState(await res.json());
     } catch {}
@@ -143,7 +138,7 @@ export function WatchWidget({
       onOpacityChange={onOpacityChange}
       onSaveLayout={onSaveLayout}
       onClose={onClose}
-      title="Watch Party"
+      title={tab === 'music' ? 'Room Music Videos' : 'Room Watch Party'}
       minimalChrome
     >
       <div className="flex-1 overflow-y-auto p-3 space-y-3">
@@ -200,7 +195,7 @@ export function WatchWidget({
           </div>
         ) : (
           <div className="aspect-video w-full rounded-md border border-dashed border-border flex items-center justify-center text-muted-foreground text-sm">
-            <Film className="h-5 w-5 mr-2" /> No video loaded — search below
+            <Film className="h-5 w-5 mr-2" /> No room media loaded. Search below.
           </div>
         )}
 

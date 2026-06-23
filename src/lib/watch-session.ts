@@ -1,5 +1,6 @@
 export const GLOBAL_WATCH_SESSION_ID = 'discord-watch-room';
 export const MUSIC_WATCH_SESSION_ID = 'discord-music-room';
+export type WatchMediaKind = 'movie' | 'music';
 
 export function getGlobalWatchSessionId() {
   return GLOBAL_WATCH_SESSION_ID;
@@ -9,14 +10,28 @@ export function getMusicWatchSessionId() {
   return MUSIC_WATCH_SESSION_ID;
 }
 
-export function getOverlayWatchSessionId(roomId: string, kind: 'movie' | 'music' = 'movie') {
-  const cleanRoomId = String(roomId || 'room')
+function cleanScopePart(value: string | null | undefined, fallback: string, maxLength = 64) {
+  return String(value || fallback)
     .trim()
     .toLowerCase()
     .replace(/[^a-z0-9_-]+/g, '-')
     .replace(/^-+|-+$/g, '')
-    .slice(0, 48) || 'room';
-  return `watch-overlay-${cleanRoomId}-${kind}`;
+    .slice(0, maxLength) || fallback;
+}
+
+export function getRoomWatchSessionId(roomId: string, kind: WatchMediaKind = 'movie') {
+  return `watch-room-${cleanScopePart(roomId, 'room', 48)}-${kind}`;
+}
+
+export function getDiscordWatchSessionId(guildId?: string | null, channelId?: string | null, kind: WatchMediaKind = 'movie') {
+  const guild = cleanScopePart(guildId, '', 48);
+  const channel = cleanScopePart(channelId, '', 48);
+  if (!guild || !channel) return kind === 'music' ? MUSIC_WATCH_SESSION_ID : GLOBAL_WATCH_SESSION_ID;
+  return `watch-discord-${guild}-${channel}-${kind}`;
+}
+
+export function getOverlayWatchSessionId(roomId: string, kind: WatchMediaKind = 'movie') {
+  return getRoomWatchSessionId(roomId, kind);
 }
 
 export function normalizeWatchSessionAlias(value?: string | null, fallback = GLOBAL_WATCH_SESSION_ID) {
@@ -29,6 +44,6 @@ export function normalizeWatchSessionAlias(value?: string | null, fallback = GLO
   return slug ? `watch-${slug}` : fallback;
 }
 
-export function getScopedWatchSessionId(_guildId?: string | null, _channelId?: string | null) {
-  return GLOBAL_WATCH_SESSION_ID;
+export function getScopedWatchSessionId(guildId?: string | null, channelId?: string | null, kind: WatchMediaKind = 'movie') {
+  return getDiscordWatchSessionId(guildId, channelId, kind);
 }

@@ -221,7 +221,7 @@ export default function WatchRoomClient({ sessionId, activityMode = false, canPa
     try {
       const nextState = await api(`/api/watch/sessions/${sessionId}/control`, {
         method: 'POST',
-        body: JSON.stringify({ action, position }),
+        body: JSON.stringify({ action, position, isHost: canPause, isAdmin: canPause, platform: 'web' }),
       });
       setControlError(null);
       setState(nextState);

@@ -1,5 +1,5 @@
 import { controlWatchSession, extractWatchRoomAlias, getActivityUrl, getResolvedWatchSession, requestWatchMusicItem } from '@/lib/watch-request-service';
-import { getMusicWatchSessionId } from '@/lib/watch-session';
+import { getMusicWatchSessionId, getRoomWatchSessionId, getScopedWatchSessionId } from '@/lib/watch-session';
 
 export function parseMusicCommand(message: string) {
   const trimmed = message.trim();
@@ -25,6 +25,7 @@ export async function handleMusicCommand(params: {
   userId?: string;
   username: string;
   platform: 'discord' | 'twitch' | 'admin' | 'activity' | 'web';
+  roomId?: string;
   guildId?: string;
   channelId?: string;
   publicBaseUrl?: string;
@@ -34,7 +35,12 @@ export async function handleMusicCommand(params: {
   const parsed = parseMusicCommand(params.message);
   if (!parsed) return false;
 
-  const sessionId = 'sessionId' in parsed && parsed.sessionId ? parsed.sessionId : getMusicWatchSessionId();
+  const parsedSessionId = 'sessionId' in parsed && parsed.sessionId ? parsed.sessionId : getMusicWatchSessionId();
+  const sessionId = params.roomId && parsedSessionId === getMusicWatchSessionId()
+    ? getRoomWatchSessionId(params.roomId, 'music')
+    : params.platform === 'discord' && params.guildId && params.channelId && parsedSessionId === getMusicWatchSessionId()
+      ? getScopedWatchSessionId(params.guildId, params.channelId, 'music')
+      : parsedSessionId;
   const reply = params.reply || (() => undefined);
 
   if (parsed.action === 'request') {
@@ -45,6 +51,8 @@ export async function handleMusicCommand(params: {
 
     const result = await requestWatchMusicItem({
       sessionId,
+      guildId: params.guildId,
+      channelId: params.channelId,
       query: parsed.query,
       userId: params.userId || params.username,
       username: params.username,
@@ -81,7 +89,12 @@ export async function handleMusicCommand(params: {
   }
 
   if (parsed.action === 'skip') {
-    const session = await controlWatchSession(sessionId, 'next');
+    const session = await controlWatchSession(sessionId, 'next', undefined, undefined, {
+      actorUserId: params.userId,
+      guildId: params.guildId,
+      channelId: params.channelId,
+      platform: params.platform,
+    });
     await reply(session.current ? `Skipped to: ${session.current.item.title}` : 'Skipped. Queue is now empty.');
     return true;
   }

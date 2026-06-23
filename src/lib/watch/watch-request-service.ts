@@ -3,7 +3,7 @@ import { findInternetArchiveRecommendation } from './internet-archive-provider';
 import { findWatchmodeRecommendation } from './watchmode-provider';
 import { resolveSongRequest } from '@/lib/bot-actions';
 import { DISCORD_CLIENT_ID } from '@/lib/public-config';
-import { getGlobalWatchSessionId, getScopedWatchSessionId, normalizeWatchSessionAlias } from '@/lib/watch-session';
+import { getGlobalWatchSessionId, getMusicWatchSessionId, getRoomWatchSessionId, getScopedWatchSessionId, normalizeWatchSessionAlias, type WatchMediaKind } from '@/lib/watch-session';
 import type { PlaylistItem } from '@/types/playlist';
 import { dirname } from 'path';
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'fs';
@@ -48,10 +48,21 @@ type WatchRequest = {
   item: WatchCatalogItem;
 };
 
+type WatchSessionMetadata = {
+  scopeType: 'legacy' | 'room' | 'discord';
+  roomId?: string;
+  guildId?: string;
+  channelId?: string;
+  mediaKind: WatchMediaKind;
+  createdAt: number;
+  lastActiveAt: number;
+};
+
 type WatchSession = {
   id: string;
   guildId: string;
   channelId: string;
+  metadata?: WatchSessionMetadata;
   queue: WatchRequest[];
   current: WatchRequest | null;
   playback: {
@@ -81,6 +92,16 @@ type DiscordMessagePayload = {
   embeds?: unknown[];
   components?: unknown[];
   allowed_mentions?: unknown;
+};
+
+type WatchControlActor = {
+  actorUserId?: string;
+  roomId?: string;
+  guildId?: string;
+  channelId?: string;
+  isHost?: boolean;
+  isAdmin?: boolean;
+  platform?: 'room' | 'discord' | 'activity' | 'web' | 'admin' | 'twitch';
 };
 
 const TEST_CATALOG: WatchCatalogItem[] = [
@@ -353,11 +374,45 @@ function getEffectivePlaybackPosition(session: WatchSession, now = Date.now()) {
   return Math.max(0, basePosition + (now - Number(session.playback.updatedAt || now)) / 1000);
 }
 
-function createSession(id: string, guildId = 'local', channelId = 'watch'): WatchSession {
+function inferSessionMetadata(id: string, guildId = 'local', channelId = 'watch', mediaKind: WatchMediaKind = 'movie'): WatchSessionMetadata {
+  const now = Date.now();
+  const roomMatch = id.match(/^watch-room-(.+)-(movie|music)$/);
+  const discordMatch = id.match(/^watch-discord-(.+)-(.+)-(movie|music)$/);
+  if (roomMatch) {
+    return { scopeType: 'room', roomId: roomMatch[1], mediaKind: roomMatch[2] as WatchMediaKind, createdAt: now, lastActiveAt: now };
+  }
+  if (discordMatch) {
+    return {
+      scopeType: 'discord',
+      guildId: guildId || discordMatch[1],
+      channelId: channelId || discordMatch[2],
+      mediaKind: discordMatch[3] as WatchMediaKind,
+      createdAt: now,
+      lastActiveAt: now,
+    };
+  }
+  return {
+    scopeType: 'legacy',
+    guildId,
+    channelId,
+    mediaKind: id === getMusicWatchSessionId() ? 'music' : mediaKind,
+    createdAt: now,
+    lastActiveAt: now,
+  };
+}
+
+function touchSession(session: WatchSession) {
+  const metadata = session.metadata || inferSessionMetadata(session.id, session.guildId, session.channelId);
+  session.metadata = metadata;
+  metadata.lastActiveAt = Date.now();
+}
+
+function createSession(id: string, guildId = 'local', channelId = 'watch', mediaKind: WatchMediaKind = 'movie'): WatchSession {
   const session: WatchSession = {
     id,
     guildId,
     channelId,
+    metadata: inferSessionMetadata(id, guildId, channelId, mediaKind),
     queue: [],
     current: null,
     playback: {
@@ -374,6 +429,7 @@ function createSession(id: string, guildId = 'local', channelId = 'watch'): Watc
 }
 
 function enqueue(session: WatchSession, item: WatchCatalogItem, requestedBy: WatchRequest['requestedBy']) {
+  touchSession(session);
   const request: WatchRequest = {
     requestId: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
     requestedBy,
@@ -599,10 +655,17 @@ export function getWatchCatalogItem(id: string | null | undefined) {
   return TEST_CATALOG.find((item) => item.id === id) || null;
 }
 
-export function getWatchSession(sessionId: string, guildId?: string, channelId?: string) {
+export function getWatchSession(sessionId: string, guildId?: string, channelId?: string, mediaKind: WatchMediaKind = 'movie') {
   loadWatchStateFromDisk();
-  const resolvedSessionId = guildId && channelId ? getScopedWatchSessionId(guildId, channelId) : (sessionId || getGlobalWatchSessionId());
-  return sessions.get(resolvedSessionId) || createSession(resolvedSessionId, guildId, channelId);
+  const legacyFallback = mediaKind === 'music' ? getMusicWatchSessionId() : getGlobalWatchSessionId();
+  const normalizedSessionId = normalizeWatchSessionAlias(sessionId, legacyFallback);
+  const shouldUseDiscordScope = guildId && channelId && (!sessionId || normalizedSessionId === getGlobalWatchSessionId() || normalizedSessionId === getMusicWatchSessionId());
+  const resolvedSessionId = shouldUseDiscordScope
+    ? getScopedWatchSessionId(guildId, channelId, mediaKind)
+    : normalizedSessionId;
+  const session = sessions.get(resolvedSessionId) || createSession(resolvedSessionId, guildId, channelId, mediaKind);
+  if (!session.metadata) session.metadata = inferSessionMetadata(resolvedSessionId, guildId, channelId, mediaKind);
+  return session;
 }
 
 async function createDiscordActivityInvite(channelId: string) {
@@ -640,8 +703,8 @@ export function getResolvedWatchSession(sessionId: string, guildId?: string, cha
   return getWatchSession(sessionId, guildId, channelId);
 }
 
-export function getWatchSessionId(guildId: string, channelId: string) {
-  return getScopedWatchSessionId(guildId, channelId);
+export function getWatchSessionId(guildId: string, channelId: string, kind: WatchMediaKind = 'movie') {
+  return getScopedWatchSessionId(guildId, channelId, kind);
 }
 
 export function getWatchRoomUrl(sessionId: string, preferredBaseUrl?: string) {
@@ -707,7 +770,7 @@ export async function requestWatchItem(params: {
     } as const;
   }
 
-  const session = getWatchSession(params.sessionId, params.guildId, params.channelId);
+  const session = getWatchSession(params.sessionId, params.guildId, params.channelId, 'movie');
   const request = enqueue(session, item, {
     userId: params.userId,
     username: params.username,
@@ -717,6 +780,17 @@ export async function requestWatchItem(params: {
   saveWatchStateToDisk();
 
   return { request, session };
+}
+
+function assertCanControlWatchSession(session: WatchSession, action: string, actor?: WatchControlActor) {
+  const metadata = session.metadata || inferSessionMetadata(session.id, session.guildId, session.channelId);
+  session.metadata = metadata;
+  const scopeType = metadata.scopeType;
+  if (scopeType === 'legacy' && !actor) return;
+  if (actor?.isHost || actor?.isAdmin || actor?.platform === 'admin') return;
+  if (['play', 'mute', 'unmute', 'seek'].includes(action)) return;
+  if (actor?.platform === 'discord' && action === 'next') return;
+  throw new Error('Only the room host or an admin can use that watch control.');
 }
 
 export async function requestWatchMusicItem(params: {
@@ -738,7 +812,7 @@ export async function requestWatchMusicItem(params: {
   }
 
   const item = musicTrackToWatchItem(resolved.track);
-  const session = getWatchSession(params.sessionId, params.guildId, params.channelId);
+  const session = getWatchSession(params.sessionId, params.guildId, params.channelId, 'music');
   const request = enqueue(session, item, {
     userId: params.userId,
     username: params.username,
@@ -774,7 +848,7 @@ export async function requestWatchTtsItem(params: {
     title: params.title,
     botName: params.botName,
   });
-  const session = getWatchSession(params.sessionId, params.guildId, params.channelId);
+  const session = getWatchSession(params.sessionId, params.guildId, params.channelId, 'music');
   const request = enqueue(session, item, {
     userId: params.userId,
     username: params.username,
@@ -801,7 +875,7 @@ export function acceptWatchRecommendation(params: {
   if (!item) return { error: 'No pending recommendation' as const };
 
   pendingRecommendations.delete(key);
-  const session = getWatchSession(params.sessionId, params.guildId, params.channelId);
+  const session = getWatchSession(params.sessionId, params.guildId, params.channelId, 'movie');
   const request = enqueue(session, item, {
     userId: params.userId,
     username: params.username,
@@ -850,8 +924,10 @@ async function getAutoNextEpisodeRequest(session: WatchSession) {
   };
 }
 
-export async function controlWatchSession(sessionId: string, action: string, position?: number, targetIndex?: number) {
+export async function controlWatchSession(sessionId: string, action: string, position?: number, targetIndex?: number, actor?: WatchControlActor) {
   const session = getWatchSession(sessionId);
+  touchSession(session);
+  assertCanControlWatchSession(session, action, actor);
 
   if (session.playback.muted === undefined) session.playback.muted = true;
 
@@ -926,6 +1002,7 @@ export async function handleWatchRequestCommand(params: {
   discordUserName: string;
   guildId: string;
   channelId: string;
+  roomId?: string;
   userMessageId?: string;
   publicBaseUrl?: string;
   // eslint-disable-next-line no-unused-vars
@@ -936,7 +1013,7 @@ export async function handleWatchRequestCommand(params: {
   const reply = params.reply || ((content: string) => sendDiscordReply(params.channelId, content, params.userMessageId));
 
   if (parseWatchAcceptCommand(params.message)) {
-    const sessionId = getWatchSessionId(params.guildId, params.channelId);
+    const sessionId = params.roomId ? getRoomWatchSessionId(params.roomId, 'movie') : getWatchSessionId(params.guildId, params.channelId, 'movie');
     const accepted = acceptWatchRecommendation({
       sessionId,
       guildId: params.guildId,
@@ -962,7 +1039,10 @@ export async function handleWatchRequestCommand(params: {
     return true;
   }
 
-  const sessionId = parsed.sessionId || getWatchSessionId(params.guildId, params.channelId);
+  const defaultSessionId = params.roomId ? getRoomWatchSessionId(params.roomId, 'movie') : getWatchSessionId(params.guildId, params.channelId, 'movie');
+  const sessionId = parsed.sessionId === getGlobalWatchSessionId()
+    ? defaultSessionId
+    : (parsed.sessionId || defaultSessionId);
   const result = await requestWatchItem({
     sessionId,
     guildId: params.guildId,

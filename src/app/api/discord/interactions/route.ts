@@ -66,9 +66,23 @@ function getRequestBaseUrl(request: NextRequest) {
   return `${proto}://${host}`;
 }
 
-async function buildWatchControlUpdate(request: NextRequest, action: string, sessionId = GLOBAL_WATCH_SESSION_ID) {
+function discordMemberCanManageWatch(member: any) {
+  const permissions = BigInt(String(member?.permissions || '0') || '0');
+  const ADMINISTRATOR = BigInt(0x8);
+  const MANAGE_MESSAGES = BigInt(0x2000);
+  const MANAGE_GUILD = BigInt(0x20);
+  return Boolean(permissions & ADMINISTRATOR || permissions & MANAGE_MESSAGES || permissions & MANAGE_GUILD);
+}
+
+async function buildWatchControlUpdate(request: NextRequest, action: string, sessionId = GLOBAL_WATCH_SESSION_ID, actor?: any) {
   const resolvedSessionId = normalizeWatchSessionAlias(sessionId, GLOBAL_WATCH_SESSION_ID);
-  const session = await controlWatchSession(resolvedSessionId, action);
+  const session = await controlWatchSession(resolvedSessionId, action, undefined, undefined, {
+    actorUserId: actor?.userId,
+    guildId: actor?.guildId,
+    channelId: actor?.channelId,
+    isAdmin: Boolean(actor?.isAdmin),
+    platform: 'discord',
+  });
   const joinUrl = getActivityUrl(getRequestBaseUrl(request), resolvedSessionId);
 
   if (!session.current) {
@@ -100,7 +114,7 @@ export async function POST(req: NextRequest) {
   await ensureDb();
 
   const body = JSON.parse(rawBody);
-  const { type, data, member, token } = body;
+  const { type, data, member, token, guild_id, channel_id } = body;
 
   if (type === InteractionType.PING) {
     return NextResponse.json({ type: InteractionResponseType.PONG });
@@ -122,7 +136,12 @@ export async function POST(req: NextRequest) {
       }
 
       try {
-        const update = await buildWatchControlUpdate(req, action, sessionId);
+        const update = await buildWatchControlUpdate(req, action, sessionId, {
+          userId: member?.user?.id || body.user?.id,
+          guildId: guild_id,
+          channelId: channel_id,
+          isAdmin: discordMemberCanManageWatch(member),
+        });
         return NextResponse.json({ type: InteractionResponseType.UPDATE_MESSAGE, data: update });
       } catch (error: any) {
         return NextResponse.json({
