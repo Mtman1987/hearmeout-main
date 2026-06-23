@@ -384,8 +384,8 @@ function inferSessionMetadata(id: string, guildId = 'local', channelId = 'watch'
   if (discordMatch) {
     return {
       scopeType: 'discord',
-      guildId: guildId || discordMatch[1],
-      channelId: channelId || discordMatch[2],
+      guildId: guildId && guildId !== 'local' ? guildId : discordMatch[1],
+      channelId: channelId && channelId !== 'watch' ? channelId : discordMatch[2],
       mediaKind: discordMatch[3] as WatchMediaKind,
       createdAt: now,
       lastActiveAt: now,
