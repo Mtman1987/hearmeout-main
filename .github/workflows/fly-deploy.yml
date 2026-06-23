@@ -29,6 +29,16 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - uses: superfly/flyctl-actions/setup-flyctl@master
+      - name: Ensure hmo-dj-worker data volumes
+        run: |
+          set -euo pipefail
+          existing="$(flyctl volumes list -a hmo-dj-worker --json | jq '[.[] | select(.name == "data" and .region == "iad")] | length')"
+          needed="$((2 - existing))"
+          if [ "$needed" -gt 0 ]; then
+            flyctl volume create data -a hmo-dj-worker -r iad -n "$needed" --size 10 --yes
+          fi
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN_WORKER || secrets.FLY_API_TOKEN }}
       - name: Deploy hmo-dj-worker
         run: flyctl deploy . --remote-only --config worker/fly.toml --yes
         env:
