@@ -26,12 +26,45 @@ interface ServerBotTokens {
 const botInstances = new Map<string, BotInstance>();
 let isInitialized = false;
 
+const DEFAULT_COMMAND_BOT_NAMES = [
+  'athenabot87',
+  'streamweaverbot',
+  'streamweaver87',
+  'hearmeout',
+  'hearmeoutbot',
+  'nightbot',
+  'streamelements',
+  'streamlabs',
+  'moobot',
+  'fossabot',
+];
+
 function getPublicBaseUrl() {
   return (
     process.env.NEXT_PUBLIC_BASE_URL ||
     process.env.APP_URL ||
     'https://hearmeout-main.fly.dev'
   ).replace(/\/$/, '');
+}
+
+function getIgnoredCommandBotNames() {
+  const configured = String(process.env.TWITCH_COMMAND_BOT_IGNORE_LIST || '')
+    .split(',')
+    .map((value) => value.trim().toLowerCase())
+    .filter(Boolean);
+  return new Set([...DEFAULT_COMMAND_BOT_NAMES, ...configured]);
+}
+
+function isIgnoredCommandBot(context: tmi.ChatUserstate, botUsername?: string) {
+  const ignored = getIgnoredCommandBotNames();
+  if (botUsername) ignored.add(botUsername.toLowerCase());
+
+  const username = String(context.username || '').trim().toLowerCase();
+  const displayName = String(context['display-name'] || '').trim().toLowerCase();
+  return Boolean(
+    (username && ignored.has(username)) ||
+    (displayName && ignored.has(displayName))
+  );
 }
 
 // --- Token management (per-server) ---
@@ -268,6 +301,12 @@ function createMessageHandler(instance: BotInstance) {
     const requester = context['display-name'] || 'Someone from Twitch';
     const client = instance.client;
     const watchCommand = parseWatchCommand(msg);
+    const isCommand = message.startsWith('!');
+
+    if (isCommand && isIgnoredCommandBot(context, instance.tokens.username)) {
+      console.log(`[Twitch Bot] Ignoring bot-authored command from ${context.username || requester}: ${msg.trim()}`);
+      return;
+    }
 
     if (watchCommand) {
       handleWatchRequestCommand({
