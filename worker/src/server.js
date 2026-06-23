@@ -1,4 +1,5 @@
 const { resolve, join } = require('path');
+const { tmpdir } = require('os');
 const rootDir = resolve(__dirname, '..', '..');
 
 // In Docker/production, env vars are injected directly.
@@ -12,7 +13,7 @@ const express = require('express');
 const cors = require('cors');
 const { execFile, spawn } = require('child_process');
 const { promisify } = require('util');
-const { existsSync, mkdirSync, unlinkSync, statSync, readdirSync, readFileSync, createReadStream } = require('fs');
+const { existsSync, mkdirSync, unlinkSync, statSync, readdirSync, readFileSync, createReadStream, mkdtempSync, rmSync } = require('fs');
 const { AudioSource, AudioFrame, LocalAudioTrack, Room, RoomEvent, TrackPublishOptions, TrackSource } = require('@livekit/rtc-node');
 const wrtc = require('@roamhq/wrtc');
 const puppeteer = require('puppeteer');
@@ -130,6 +131,21 @@ function isVideoCandidate(rawUrl, contentType) {
   const responseType = normalizeContentType(contentType);
   const queryType = normalizeContentType(getMimeFromUrl(rawUrl));
   return responseType.startsWith('video/') || queryType.startsWith('video/');
+}
+
+function createExtractorUserDataDir(mode, videoId) {
+  const baseDir = EXTRACTOR_USER_DATA_DIR || join(tmpdir(), 'hmo-extractor');
+  mkdirSync(baseDir, { recursive: true });
+  return mkdtempSync(join(baseDir, `${mode}-${videoId}-`));
+}
+
+function cleanupExtractorUserDataDir(userDataDir) {
+  if (!userDataDir) return;
+  try {
+    rmSync(userDataDir, { recursive: true, force: true });
+  } catch (err) {
+    console.warn(`[Extract] Failed to clean Chromium profile ${userDataDir}: ${err.message?.slice(0, 120)}`);
+  }
 }
 
 async function extractDirectAudioFormat(videoId) {
@@ -274,10 +290,11 @@ async function extractAudioInfo(videoId, forceRefresh = false) {
   }
 
   console.warn(`[Extract] Browser capture starting for ${videoId}`);
+  const userDataDir = createExtractorUserDataDir('audio', videoId);
   const browser = await puppeteer.launch({
     executablePath: CHROMIUM_PATH,
     headless: true,
-    userDataDir: EXTRACTOR_USER_DATA_DIR,
+    userDataDir,
     args: [
       '--no-sandbox',
       '--disable-setuid-sandbox',
@@ -289,6 +306,7 @@ async function extractAudioInfo(videoId, forceRefresh = false) {
   });
 
   const page = await browser.newPage();
+  await page.setViewport({ width: 1280, height: 720 });
   let capturedUrl = null;
   let capturedContentType = null;
   let firstMediaUrl = null;
@@ -311,6 +329,10 @@ async function extractAudioInfo(videoId, forceRefresh = false) {
   try {
     const ytUrl = `https://www.youtube.com/watch?v=${encodeURIComponent(videoId)}&autoplay=1&mute=1&playsinline=1`;
     await page.goto(ytUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
+    await page.evaluate(() => {
+      const video = document.querySelector('video');
+      if (video) void video.play().catch(() => {});
+    }).catch(() => {});
 
     const extracted = await page.evaluate(() => {
       const yip = window.ytInitialPlayerResponse || JSON.parse(window.ytplayer?.config?.args?.player_response || 'null');
@@ -364,6 +386,7 @@ async function extractAudioInfo(videoId, forceRefresh = false) {
     return info;
   } finally {
     await browser.close().catch(() => {});
+    cleanupExtractorUserDataDir(userDataDir);
   }
 }
 
@@ -391,10 +414,11 @@ async function extractVideoInfo(videoId, forceRefresh = false) {
   }
 
   console.warn(`[Extract] Browser video capture starting for ${videoId}`);
+  const userDataDir = createExtractorUserDataDir('video', videoId);
   const browser = await puppeteer.launch({
     executablePath: CHROMIUM_PATH,
     headless: true,
-    userDataDir: EXTRACTOR_USER_DATA_DIR,
+    userDataDir,
     args: [
       '--no-sandbox',
       '--disable-setuid-sandbox',
@@ -406,6 +430,7 @@ async function extractVideoInfo(videoId, forceRefresh = false) {
   });
 
   const page = await browser.newPage();
+  await page.setViewport({ width: 1280, height: 720 });
   let capturedUrl = null;
   let capturedContentType = null;
   let firstMediaUrl = null;
@@ -428,6 +453,10 @@ async function extractVideoInfo(videoId, forceRefresh = false) {
   try {
     const ytUrl = `https://www.youtube.com/watch?v=${encodeURIComponent(videoId)}&autoplay=1&mute=1&playsinline=1`;
     await page.goto(ytUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
+    await page.evaluate(() => {
+      const video = document.querySelector('video');
+      if (video) void video.play().catch(() => {});
+    }).catch(() => {});
 
     const extracted = await page.evaluate(() => {
       const yip = window.ytInitialPlayerResponse || JSON.parse(window.ytplayer?.config?.args?.player_response || 'null');
@@ -481,6 +510,7 @@ async function extractVideoInfo(videoId, forceRefresh = false) {
     return info;
   } finally {
     await browser.close().catch(() => {});
+    cleanupExtractorUserDataDir(userDataDir);
   }
 }
 

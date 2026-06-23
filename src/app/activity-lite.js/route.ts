@@ -65,6 +65,9 @@ let lastEmbeddedPlaybackKey = '';
 let embeddedCurrentTime = 0;
 let lastEmbeddedNativeSyncAt = 0;
 let musicPlaybackMode = 'video';
+let activeMediaErrorKey = '';
+const mediaErrorCounts = {};
+const MEDIA_ERROR_FALLBACK_THRESHOLD = 5;
 
 function setActiveSessionTab() {
   sessionSwitchButtons.forEach((button) => {
@@ -75,13 +78,13 @@ function setActiveSessionTab() {
 function isAudioOnlyItem(item) {
   const type = String((item && item.type) || '').toLowerCase();
   const provider = String((item && item.metadata && item.metadata.provider) || '').toLowerCase();
-  return type === 'tts' || provider === 'tts';
+  const playbackUrl = String((item && item.playbackUrl) || '').toLowerCase();
+  return type === 'tts' || provider === 'tts' || (type === 'music' && playbackUrl.includes('/api/youtube-audio/'));
 }
 
 function isEmbeddedVideoItem(item) {
-  const provider = String((item && item.metadata && item.metadata.provider) || '').toLowerCase();
   const playbackUrl = String((item && item.playbackUrl) || '').toLowerCase();
-  return provider === 'youtube' || playbackUrl.includes('youtube.com/embed/') || playbackUrl.includes('youtube-nocookie.com/embed/');
+  return playbackUrl.includes('youtube.com/embed/') || playbackUrl.includes('youtube-nocookie.com/embed/');
 }
 
 function setActiveMediaForItem(item) {
@@ -134,6 +137,15 @@ function musicModeOptions(item) {
 function hasMusicModeToggle(item) {
   const options = musicModeOptions(item);
   return item?.type === 'music' && Boolean(options.video && options.audio);
+}
+
+function isYoutubeAudioMusicItem(item) {
+  return item?.type === 'music' && String((item && item.playbackUrl) || '').toLowerCase().includes('/api/youtube-audio/');
+}
+
+function youtubeEmbedUrlForItem(item) {
+  const videoId = item?.metadata?.videoId || String(item?.id || '').replace(/^youtube-/, '');
+  return /^[A-Za-z0-9_-]{11}$/.test(videoId) ? 'https://www.youtube.com/embed/' + encodeURIComponent(videoId) : '';
 }
 
 function playbackUrlForItem(item) {
@@ -432,6 +444,8 @@ function loadMedia(item) {
   lastEmbeddedPlaybackKey = '';
   embeddedCurrentTime = 0;
   lastEmbeddedNativeSyncAt = 0;
+  activeMediaErrorKey = state?.current ? state.current.requestId + ':' + playbackUrlForItem(item) : '';
+  if (activeMediaErrorKey) mediaErrorCounts[activeMediaErrorKey] = mediaErrorCounts[activeMediaErrorKey] || 0;
   mediaIsBuffering = true;
   pendingPlay = false;
   mediaEl.textContent = 'Media: loading ' + item.title;
@@ -843,6 +857,7 @@ function onMediaPlaying(event) { if (event.currentTarget === media) mediaEl.text
 function onMediaCanPlay(event) {
   if (event.currentTarget !== media) return;
   mediaIsBuffering = false;
+  if (activeMediaErrorKey) mediaErrorCounts[activeMediaErrorKey] = 0;
   mediaEl.textContent = 'Media: ready';
   if (pendingPlay || (state && state.playback && state.playback.status === 'playing')) startVideoPlayback();
 }
@@ -868,7 +883,39 @@ function onMediaEnded(event) {
 }
 function onMediaError(event) {
   if (event.currentTarget !== media) return;
-  mediaEl.textContent = 'Media: error';
+  const item = state?.current?.item;
+  const errorKey = activeMediaErrorKey || (state?.current ? state.current.requestId + ':' + playbackUrlForItem(item) : '');
+  const attempts = (mediaErrorCounts[errorKey] || 0) + 1;
+  mediaErrorCounts[errorKey] = attempts;
+  if (isYoutubeAudioMusicItem(item) && attempts < MEDIA_ERROR_FALLBACK_THRESHOLD) {
+    mediaEl.textContent = 'Media: retrying audio stream ' + attempts + '/' + MEDIA_ERROR_FALLBACK_THRESHOLD;
+    setTimeout(() => {
+      if (!state?.current || activeMediaErrorKey !== errorKey) return;
+      media.load();
+      if (state.playback?.status === 'playing') startVideoPlayback();
+    }, 750);
+  } else if (isYoutubeAudioMusicItem(item)) {
+    const embedUrl = youtubeEmbedUrlForItem(item);
+    if (embedUrl) {
+      mediaEl.textContent = 'Media: switching to YouTube embed fallback';
+      const fallbackItem = {
+        ...item,
+        playbackUrl: embedUrl,
+        metadata: {
+          ...(item.metadata || {}),
+          videoPlaybackUrl: embedUrl,
+          audioPlaybackUrl: undefined,
+          playbackStrategy: 'embed',
+        },
+      };
+      state.current.item = fallbackItem;
+      loadMedia(fallbackItem);
+      return;
+    }
+    mediaEl.textContent = 'Media: audio stream failed';
+  } else {
+    mediaEl.textContent = 'Media: error';
+  }
   console.error(media.error);
 }
 

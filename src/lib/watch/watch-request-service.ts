@@ -358,8 +358,7 @@ function formatDurationMs(durationMs: number | undefined) {
 
 function musicTrackToWatchItem(track: PlaylistItem): WatchCatalogItem {
   const videoId = encodeURIComponent(track.id);
-  const videoPlaybackUrl = `/api/youtube-video/proxy?videoId=${videoId}&media=video`;
-  const audioPlaybackUrl = `/api/youtube-video/proxy?videoId=${videoId}&media=audio`;
+  const audioPlaybackUrl = `/api/youtube-audio/stream?videoId=${videoId}`;
   const embedPlaybackUrl = `https://www.youtube.com/embed/${videoId}`;
   const useEmbed = track.playbackStrategy === 'embed';
   return {
@@ -368,20 +367,20 @@ function musicTrackToWatchItem(track: PlaylistItem): WatchCatalogItem {
     title: track.title,
     year: new Date().getFullYear(),
     runtime: formatDurationMs(track.duration),
-    source: track.artist ? `YouTube Video: ${track.artist}` : 'YouTube Video',
+    source: track.artist ? `YouTube Music: ${track.artist}` : 'YouTube Music',
     poster: track.thumbnail || '',
-    playbackUrl: useEmbed ? embedPlaybackUrl : videoPlaybackUrl,
+    playbackUrl: useEmbed ? embedPlaybackUrl : audioPlaybackUrl,
     overview: useEmbed
       ? `Song request from ${track.addedBy || 'unknown user'}. Using YouTube embed fallback because direct extraction was not playable.`
       : `Song request from ${track.addedBy || 'unknown user'}.`,
     metadata: {
-      provider: useEmbed ? 'youtube' : 'youtube-video',
+      provider: 'youtube',
       kind: 'song',
       videoId: track.id,
       artist: track.artist,
       originalUrl: track.url,
       audioPlaybackUrl: useEmbed ? undefined : audioPlaybackUrl,
-      videoPlaybackUrl: useEmbed ? embedPlaybackUrl : videoPlaybackUrl,
+      videoPlaybackUrl: useEmbed ? embedPlaybackUrl : undefined,
       playbackMode: 'video',
       playbackStrategy: track.playbackStrategy || 'proxy',
     },

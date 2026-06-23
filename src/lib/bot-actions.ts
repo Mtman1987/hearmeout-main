@@ -4,8 +4,6 @@ import { PlaylistItem } from "@/types/playlist";
 import { db, ensureDb } from '@/lib/db';
 import YouTube from 'youtube-sr';
 import { getAi } from '@/ai/genkit';
-import { getDjWorkerUrl } from '@/lib/dj-worker-config';
-import { isValidVideoId } from '@/lib/validate-video-id';
 
 function simpleHash(str: string): number {
   let hash = 0;
@@ -46,49 +44,6 @@ const COLD_START_QUERIES = [
   'dance pop hits',
   'hip hop chill playlist',
 ];
-const SONG_SEARCH_LIMIT = 5;
-const SONG_EXTRACT_TIMEOUT_MS = 12_000;
-
-type PlayableVideoCheck = {
-  playable: boolean;
-  reason?: string;
-  title?: string;
-  artist?: string;
-  duration?: number;
-};
-
-async function checkPlayableMusicVideo(videoId: string): Promise<PlayableVideoCheck> {
-  if (!isValidVideoId(videoId)) return { playable: false, reason: 'invalid video id' };
-
-  const workerUrl = getDjWorkerUrl();
-  try {
-    const res = await fetch(
-      `${workerUrl}/extract?videoId=${encodeURIComponent(videoId)}&mode=video`,
-      { cache: 'no-store', signal: AbortSignal.timeout(SONG_EXTRACT_TIMEOUT_MS) },
-    );
-    if (!res.ok) {
-      let reason = `extract returned ${res.status}`;
-      try {
-        const payload = await res.json();
-        reason = String(payload?.error || reason);
-      } catch {
-        // Keep the status-based reason.
-      }
-      return { playable: false, reason };
-    }
-    const payload = await res.json();
-    if (!payload?.url) return { playable: false, reason: 'extract returned no media URL' };
-    return {
-      playable: true,
-      title: typeof payload.title === 'string' && payload.title !== 'Unknown' ? payload.title : undefined,
-      artist: typeof payload.artist === 'string' && payload.artist !== 'Unknown' ? payload.artist : undefined,
-      duration: Number(payload.duration) > 0 ? Number(payload.duration) * 1000 : undefined,
-    };
-  } catch (error: any) {
-    return { playable: false, reason: error?.name === 'TimeoutError' ? 'extract timed out' : (error?.message || 'extract failed') };
-  }
-}
-
 function updateUserAutoRadioProfile(
   profiles: AutoRadioProfiles | undefined,
   userId: string,
@@ -255,7 +210,6 @@ export async function resolveSongRequest(
     let url: string;
     let thumbnail: string | undefined;
     let duration: number;
-    let playbackStrategy: PlaylistItem['playbackStrategy'] = 'proxy';
 
     if (isUrl) {
       try {
@@ -279,61 +233,18 @@ export async function resolveSongRequest(
         url = normalizedUrl;
         duration = 180000;
       }
-      const playable = await checkPlayableMusicVideo(videoId);
-      if (!playable.playable) {
-        console.warn(`[!sr] Rejected unplayable URL ${videoId}: ${playable.reason || 'unknown reason'}`);
-        return {
-          success: false,
-          message: `That YouTube video could not be loaded for the shared music player (${playable.reason || 'not playable'}). Try a different upload.`,
-        };
-      }
-      title = playable.title || title;
-      artist = playable.artist || artist;
-      duration = playable.duration || duration;
     } else {
-      const results = await YouTube.search(trimmedQuery, { limit: SONG_SEARCH_LIMIT, type: 'video' });
-      if (!results.length) {
+      const results = await YouTube.search(trimmedQuery, { limit: 1, type: 'video' });
+      if (!results.length || !results[0]?.id) {
         return { success: false, message: `No results for "${trimmedQuery}". Try a different search.` };
       }
-
-      let selected: { video: any; playable: PlayableVideoCheck; fallbackEmbed?: boolean } | null = null;
-      let fallbackVideo: any | null = null;
-      for (const video of results) {
-        const candidateId = String(video?.id || '');
-        if (!isValidVideoId(candidateId)) continue;
-        fallbackVideo ||= video;
-        const playable = await checkPlayableMusicVideo(candidateId);
-        if (playable.playable) {
-          selected = { video, playable };
-          break;
-        }
-        console.warn(`[!sr] Skipping unplayable search result "${video?.title || candidateId}" (${candidateId}): ${playable.reason || 'unknown reason'}`);
-      }
-
-      if (!selected) {
-        if (!fallbackVideo) {
-          return {
-            success: false,
-            message: `I found YouTube results for "${trimmedQuery}", but none had a valid video ID. Try a more specific song/video title or a direct YouTube URL.`,
-          };
-        }
-        selected = {
-          video: fallbackVideo,
-          playable: { playable: false },
-          fallbackEmbed: true,
-        };
-        playbackStrategy = 'embed';
-        console.warn(`[!sr] Falling back to YouTube embed for "${fallbackVideo.title || fallbackVideo.id}" (${fallbackVideo.id}) after ${SONG_SEARCH_LIMIT} extraction checks failed.`);
-      }
-
-      const video = selected.video;
+      const video = results[0];
       videoId = String(video.id);
-      title = selected.playable.title || video.title || 'Untitled';
-      artist = selected.playable.artist || video.channel?.name || 'Unknown Artist';
+      title = video.title || 'Untitled';
+      artist = video.channel?.name || 'Unknown Artist';
       url = video.url || `https://www.youtube.com/watch?v=${videoId}`;
       thumbnail = video.thumbnail?.url;
-      duration = selected.playable.duration || video.duration || 180000;
-      if (selected.fallbackEmbed) playbackStrategy = 'embed';
+      duration = video.duration || 180000;
     }
 
     console.log(`[!sr] Found: "${title}" by ${artist} (${videoId})`);
@@ -353,7 +264,7 @@ export async function resolveSongRequest(
         addedAt: new Date(),
         plays: 0,
         source: 'web' as const,
-        playbackStrategy,
+        playbackStrategy: 'proxy',
       },
     };
   } catch (error: any) {

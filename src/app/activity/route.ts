@@ -38,8 +38,8 @@ function html(request: Request) {
   const title = current ? `${current.item.title} (${current.item.year})` : 'Waiting for a request';
   const media = current ? `${current.item.source} - requested by ${current.requestedBy.username}` : 'Media: idle';
   const src = current?.item.playbackUrl || '';
-  const isEmbeddedVideo = current?.item.metadata?.provider === 'youtube';
-  const isAudioOnly = current?.item.type === 'tts' || current?.item.metadata?.provider === 'tts';
+  const isEmbeddedVideo = src.includes('youtube.com/embed/') || src.includes('youtube-nocookie.com/embed/');
+  const isAudioOnly = current?.item.type === 'tts' || current?.item.metadata?.provider === 'tts' || (current?.item.type === 'music' && src.includes('/api/youtube-audio/'));
   const nativeSrc = src && !isAudioOnly && !isEmbeddedVideo && !isHlsPlaybackUrl(src) ? src : '';
   const audioSrc = src && isAudioOnly ? src : '';
   const iframeSrc = src && isEmbeddedVideo ? src : '';
