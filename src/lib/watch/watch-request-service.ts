@@ -213,13 +213,57 @@ function getPublicPlaybackUrl(item: WatchCatalogItem) {
   return `/activity-proxy?url=${encodeURIComponent(playbackUrl)}`;
 }
 
+function getYoutubeMusicVideoId(item: WatchCatalogItem) {
+  const metadataId = item.metadata?.videoId;
+  if (metadataId && /^[A-Za-z0-9_-]{11}$/.test(metadataId)) return metadataId;
+  const itemIdMatch = item.id.match(/^youtube-([A-Za-z0-9_-]{11})$/);
+  if (itemIdMatch) return itemIdMatch[1];
+  try {
+    const parsed = new URL(item.playbackUrl, 'https://hearmeout.local');
+    const videoId = parsed.searchParams.get('videoId') || parsed.searchParams.get('v');
+    return videoId && /^[A-Za-z0-9_-]{11}$/.test(videoId) ? videoId : null;
+  } catch {
+    return null;
+  }
+}
+
+function getPublicWatchItem(item: WatchCatalogItem): WatchCatalogItem {
+  if (item.type !== 'music') {
+    return {
+      ...item,
+      playbackUrl: getPublicPlaybackUrl(item),
+    };
+  }
+
+  const videoId = getYoutubeMusicVideoId(item);
+  if (!videoId) {
+    return {
+      ...item,
+      playbackUrl: getPublicPlaybackUrl(item),
+    };
+  }
+
+  const audioPlaybackUrl = `/api/youtube-audio/stream?videoId=${encodeURIComponent(videoId)}`;
+  return {
+    ...item,
+    source: item.source.replace(/^YouTube Video/i, 'YouTube Music'),
+    playbackUrl: audioPlaybackUrl,
+    metadata: {
+      ...(item.metadata || {}),
+      provider: 'youtube',
+      kind: 'song',
+      videoId,
+      audioPlaybackUrl,
+      videoPlaybackUrl: undefined,
+      playbackStrategy: 'proxy',
+    },
+  };
+}
+
 function getPublicWatchRequest(request: WatchRequest) {
   return {
     ...request,
-    item: {
-      ...request.item,
-      playbackUrl: getPublicPlaybackUrl(request.item),
-    },
+    item: getPublicWatchItem(request.item),
   };
 }
 
