@@ -19,13 +19,22 @@ function cleanScopePart(value: string | null | undefined, fallback: string, maxL
     .slice(0, maxLength) || fallback;
 }
 
+function cleanDiscordScopePart(value: string | null | undefined, fallback: string, maxLength = 64) {
+  return String(value || fallback)
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .slice(0, maxLength) || fallback;
+}
+
 export function getRoomWatchSessionId(roomId: string, kind: WatchMediaKind = 'movie') {
   return `watch-room-${cleanScopePart(roomId, 'room', 48)}-${kind}`;
 }
 
 export function getDiscordWatchSessionId(guildId?: string | null, channelId?: string | null, kind: WatchMediaKind = 'movie') {
-  const guild = cleanScopePart(guildId, '', 48);
-  const channel = cleanScopePart(channelId, '', 48);
+  const guild = cleanDiscordScopePart(guildId, '', 48);
+  const channel = cleanDiscordScopePart(channelId, '', 48);
   if (!guild || !channel) return kind === 'music' ? MUSIC_WATCH_SESSION_ID : GLOBAL_WATCH_SESSION_ID;
   return `watch-discord-${guild}-${channel}-${kind}`;
 }

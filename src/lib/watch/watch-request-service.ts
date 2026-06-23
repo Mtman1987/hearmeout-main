@@ -377,7 +377,7 @@ function getEffectivePlaybackPosition(session: WatchSession, now = Date.now()) {
 function inferSessionMetadata(id: string, guildId = 'local', channelId = 'watch', mediaKind: WatchMediaKind = 'movie'): WatchSessionMetadata {
   const now = Date.now();
   const roomMatch = id.match(/^watch-room-(.+)-(movie|music)$/);
-  const discordMatch = id.match(/^watch-discord-(.+)-(.+)-(movie|music)$/);
+  const discordMatch = id.match(/^watch-discord-([a-z0-9_]+)-([a-z0-9_]+)-(movie|music)$/);
   if (roomMatch) {
     return { scopeType: 'room', roomId: roomMatch[1], mediaKind: roomMatch[2] as WatchMediaKind, createdAt: now, lastActiveAt: now };
   }
