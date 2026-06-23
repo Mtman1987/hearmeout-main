@@ -46,8 +46,8 @@ const COLD_START_QUERIES = [
   'dance pop hits',
   'hip hop chill playlist',
 ];
-const SONG_SEARCH_LIMIT = 6;
-const SONG_EXTRACT_TIMEOUT_MS = 45_000;
+const SONG_SEARCH_LIMIT = 5;
+const SONG_EXTRACT_TIMEOUT_MS = 12_000;
 
 type PlayableVideoCheck = {
   playable: boolean;
