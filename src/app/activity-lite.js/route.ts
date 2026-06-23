@@ -67,7 +67,7 @@ let lastEmbeddedNativeSyncAt = 0;
 let musicPlaybackMode = 'video';
 let activeMediaErrorKey = '';
 const mediaErrorCounts = {};
-const MEDIA_ERROR_FALLBACK_THRESHOLD = 5;
+const MEDIA_ERROR_FALLBACK_THRESHOLD = 1;
 
 function setActiveSessionTab() {
   sessionSwitchButtons.forEach((button) => {
