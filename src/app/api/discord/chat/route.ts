@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { handleMusicCommand } from '@/lib/music-command-service';
-import { GLOBAL_WATCH_SESSION_ID, normalizeWatchSessionAlias } from '@/lib/watch-session';
+import { GLOBAL_WATCH_SESSION_ID, MUSIC_WATCH_SESSION_ID, normalizeWatchSessionAlias } from '@/lib/watch-session';
 import {
   buildWatchJoinMessage,
   getActivityUrl,
@@ -193,14 +193,17 @@ function isDirectDiscordMessage(data: any) {
 function parseWatchControlsCommand(message: string) {
   const match = message.trim().match(/^!(controls?|watch-controls)(?:\s+(.+))?$/i);
   if (!match) return null;
+  const rawTarget = String(match[2] || '').trim();
   return {
-    sessionId: normalizeWatchSessionAlias(match[2], GLOBAL_WATCH_SESSION_ID),
+    allSessions: !rawTarget,
+    sessionId: normalizeWatchSessionAlias(rawTarget, GLOBAL_WATCH_SESSION_ID),
   };
 }
 
 function buildWatchControlsReply(publicBaseUrl: string, sessionId = GLOBAL_WATCH_SESSION_ID): DiscordMessagePayload {
   const joinUrl = getActivityUrl(publicBaseUrl, sessionId);
   const session = getResolvedWatchSession(sessionId);
+  const label = sessionId === MUSIC_WATCH_SESSION_ID ? 'Music Videos' : 'Movie Watch Party';
 
   if (session.current) {
     const status = session.playback.status === 'playing'
@@ -208,11 +211,15 @@ function buildWatchControlsReply(publicBaseUrl: string, sessionId = GLOBAL_WATCH
       : session.playback.status === 'paused'
         ? 'paused'
         : 'ready';
-    return buildWatchJoinMessage(session.current.item.title, status, joinUrl, session.current.item);
+    const payload = buildWatchJoinMessage(session.current.item.title, status, joinUrl, session.current.item);
+    return {
+      ...payload,
+      content: `${label} controls: ${joinUrl}`,
+    };
   }
 
   return {
-    content: `Watch Party controls for ${sessionId}: ${joinUrl}`,
+    content: `${label} controls: ${joinUrl}`,
     components: watchControlComponents(joinUrl),
     allowed_mentions: { parse: [] },
   };
@@ -256,7 +263,13 @@ export async function POST(request: NextRequest) {
 
     let handled = false;
     if (watchControlsCommand) {
-      replies.push(buildWatchControlsReply(getRequestBaseUrl(request), watchControlsCommand.sessionId));
+      const baseUrl = getRequestBaseUrl(request);
+      if (watchControlsCommand.allSessions) {
+        replies.push(buildWatchControlsReply(baseUrl, GLOBAL_WATCH_SESSION_ID));
+        replies.push(buildWatchControlsReply(baseUrl, MUSIC_WATCH_SESSION_ID));
+      } else {
+        replies.push(buildWatchControlsReply(baseUrl, watchControlsCommand.sessionId));
+      }
       handled = true;
     }
 
@@ -291,6 +304,9 @@ export async function POST(request: NextRequest) {
           replies.push(content);
         },
       });
+      if (handled && /^!(sr|song)\b/i.test(message)) {
+        replies.push(buildWatchControlsReply(getRequestBaseUrl(request), MUSIC_WATCH_SESSION_ID));
+      }
     }
 
     const discordSends = handled

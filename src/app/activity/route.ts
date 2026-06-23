@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { DISCORD_CLIENT_ID } from '@/lib/public-config';
-import { GLOBAL_WATCH_SESSION_ID, normalizeWatchSessionAlias } from '@/lib/watch-session';
+import { GLOBAL_WATCH_SESSION_ID, MUSIC_WATCH_SESSION_ID, normalizeWatchSessionAlias } from '@/lib/watch-session';
 import { getPublicWatchSession, getResolvedWatchSession } from '@/lib/watch/watch-request-service';
 import { js as activityJs } from '../activity-lite.js/route';
 
@@ -68,7 +68,10 @@ function html(request: Request) {
     audio.audio-player { position: absolute; left: 50%; top: 50%; width: min(720px, calc(100vw - 32px)); transform: translate(-50%, -50%); z-index: 2; }
     .empty { position: absolute; inset: 0; display: grid; place-content: center; gap: 8px; text-align: center; color: #cbd5e1; background: rgba(0,0,0,.55); }
     .empty.hidden { display: none !important; }
-    .toolbar { display: none; }
+    .room-tabs { position: fixed; top: 10px; left: 10px; z-index: 10; display: flex; gap: 6px; padding: 5px; border: 1px solid rgba(148,163,184,.35); border-radius: 8px; background: rgba(2,6,23,.78); backdrop-filter: blur(10px); }
+    .room-tab { min-height: 34px; border-color: transparent; background: transparent; padding: 6px 10px; }
+    .room-tab.active { border-color: rgba(52,211,153,.85); background: rgba(16,185,129,.18); color: #bbf7d0; }
+    .toolbar { position: fixed; left: 50%; bottom: 12px; z-index: 10; width: min(980px, calc(100vw - 20px)); display: flex; gap: 6px; align-items: center; justify-content: center; flex-wrap: wrap; padding: 7px; border: 1px solid rgba(148,163,184,.35); border-radius: 8px; background: rgba(2,6,23,.78); backdrop-filter: blur(10px); transform: translateX(-50%); }
     button, input { min-height: 38px; border-radius: 6px; border: 1px solid #475569; background: #172033; color: #e5edf5; padding: 8px 10px; font: inherit; }
     button { cursor: pointer; }
     button:disabled { opacity: .45; cursor: not-allowed; }
@@ -77,8 +80,9 @@ function html(request: Request) {
     .panel-btn.active { border-color: #34d399; color: #bbf7d0; }
     .volume { min-width: 220px; flex: 1; display: flex; align-items: center; gap: 8px; border: 1px solid #475569; border-radius: 6px; background: #0f172a; padding: 7px 9px; }
     .volume input { min-height: 0; padding: 0; accent-color: #34d399; }
-    .meta { display: none; }
+    .meta { position: fixed; left: 10px; right: 10px; bottom: 72px; z-index: 9; display: grid; justify-items: center; gap: 4px; text-align: center; pointer-events: none; text-shadow: 0 1px 4px #000; }
     aside { display: none; }
+    aside.open { position: fixed; right: 10px; top: 58px; bottom: 76px; z-index: 12; display: block; width: min(360px, calc(100vw - 20px)); overflow: auto; padding: 0; color: #e5edf5; background: rgba(2,6,23,.92); border: 1px solid rgba(148,163,184,.35); border-radius: 8px; }
     aside section { margin-bottom: 12px; padding: 12px; background: #151b25; border: 1px solid #283447; border-radius: 8px; }
     form { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; }
     input { width: 100%; background: #020617; }
@@ -92,7 +96,8 @@ function html(request: Request) {
     body.focus-mode main { grid-template-columns: 1fr; }
     body.focus-mode aside, body.focus-mode header, body.focus-mode .meta { display: none; }
     body.focus-mode .player { height: 100vh; }
-    .sr-only { position: absolute !important; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
+    body.focus-mode .room-tabs, body.focus-mode .toolbar, body.focus-mode .meta { opacity: .18; transition: opacity .15s ease; }
+    body.focus-mode .room-tabs:hover, body.focus-mode .toolbar:hover, body.focus-mode .meta:hover { opacity: 1; }
   </style>
   <script src="/api/activity/hls"></script>
 </head>
@@ -112,6 +117,10 @@ function html(request: Request) {
         <audio id="audio" class="audio-player ${isAudioOnly ? '' : 'hidden'}" controls autoplay ${audioSrc ? `src="${escapeHtml(audioSrc)}"` : ''}></audio>
         <div class="empty ${current ? 'hidden' : ''}" id="empty"><strong>No video loaded</strong><span>Use the request panel or type !wr in Discord.</span></div>
       </div>
+      <nav class="room-tabs" aria-label="Watch rooms">
+        <button class="room-tab" data-session-switch="${GLOBAL_WATCH_SESSION_ID}" type="button">Movies</button>
+        <button class="room-tab" data-session-switch="${MUSIC_WATCH_SESSION_ID}" type="button">Music</button>
+      </nav>
       <div class="toolbar" aria-label="Watch controls">
         <button data-action="play" title="Play">Play</button>
         <button data-action="pause" title="Pause">Pause</button>

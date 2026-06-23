@@ -8,6 +8,8 @@ export function js(clientId: string, sessionId: string) {
 const CLIENT_ID = ${JSON.stringify(clientId)};
 const GLOBAL_SESSION_ID = ${JSON.stringify(sessionId)};
 const APP_BASE_URL = ${JSON.stringify(appBaseUrl.replace(/\/$/, ''))};
+const MOVIE_SESSION_ID = 'discord-watch-room';
+const MUSIC_SESSION_ID = 'discord-music-room';
 const params = new URLSearchParams(location.search);
 function cleanScopePart(value) {
   return String(value || '').trim().replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 80);
@@ -42,6 +44,7 @@ const volumeLabel = document.getElementById('volume-label');
 const requestForm = document.getElementById('request-form');
 const queryInput = document.getElementById('query');
 const acceptRecommendationBtn = document.getElementById('accept-recommendation');
+const sessionSwitchButtons = Array.from(document.querySelectorAll('[data-session-switch]'));
 let state = null;
 let currentRequestId = null;
 let hls = null;
@@ -57,6 +60,12 @@ let syncingNativeControl = false;
 let lastNativePlayAt = 0;
 let media = video;
 let embeddedMode = false;
+
+function setActiveSessionTab() {
+  sessionSwitchButtons.forEach((button) => {
+    button.classList.toggle('active', button.dataset.sessionSwitch === sessionId);
+  });
+}
 
 function isAudioOnlyItem(item) {
   const type = String((item && item.type) || '').toLowerCase();
@@ -174,6 +183,7 @@ function applyVolume() {
 }
 
 document.getElementById('room').textContent = 'Room ' + sessionId;
+setActiveSessionTab();
 statusEl.textContent = 'Connecting';
 
 function discordHandshake() {
@@ -380,6 +390,7 @@ function render(nextState) {
     sessionId = state.id;
     document.getElementById('room').textContent = 'Room ' + sessionId;
   }
+  setActiveSessionTab();
   empty.classList.toggle('hidden', Boolean(state.current));
   empty.style.display = state.current ? 'none' : 'grid';
   document.querySelectorAll('[data-action="next"]').forEach((button) => { button.disabled = !state.queue.length; });
@@ -610,6 +621,34 @@ downloadLink.addEventListener('click', () => {
 muteBtn.addEventListener('click', () => {
   control(media.muted ? 'unmute' : 'mute')
     .catch((err) => console.warn('Mute control failed', err));
+});
+
+async function switchSession(nextSessionId) {
+  const normalized = normalizeSessionAlias(nextSessionId, sessionId || GLOBAL_SESSION_ID);
+  if (!normalized || normalized === sessionId) return;
+  sessionId = normalized;
+  currentRequestId = null;
+  pendingPlay = false;
+  setPendingRecommendation(null);
+  clearActiveMedia();
+  document.getElementById('room').textContent = 'Room ' + sessionId;
+  setActiveSessionTab();
+  try {
+    const nextUrl = new URL(window.location.href);
+    nextUrl.searchParams.set('sessionId', sessionId);
+    window.history.replaceState({}, '', nextUrl.toString());
+  } catch {}
+  mediaEl.textContent = sessionId === MUSIC_SESSION_ID ? 'Media: music room' : 'Media: movie room';
+  await refresh();
+}
+
+sessionSwitchButtons.forEach((button) => {
+  button.addEventListener('click', (event) => {
+    event.preventDefault();
+    switchSession(button.dataset.sessionSwitch).catch((err) => {
+      errorEl.textContent = err && err.message ? err.message : String(err);
+    });
+  });
 });
 
 volumeInput.addEventListener('input', () => {

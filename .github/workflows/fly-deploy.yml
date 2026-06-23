@@ -32,14 +32,14 @@ jobs:
       - name: Ensure hmo-dj-worker data volumes
         run: |
           set -euo pipefail
-          existing="$(flyctl volumes list -a hmo-dj-worker --json | jq '[.[] | select(.name == "data" and .region == "iad")] | length')"
-          needed="$((2 - existing))"
-          if [ "$needed" -gt 0 ]; then
-            flyctl volume create data -a hmo-dj-worker -r iad -n "$needed" --size 10 --yes
+          flyctl scale count 1 -a hmo-dj-worker --yes
+          unattached="$(flyctl volumes list -a hmo-dj-worker --json | jq '[.[] | select(.name == "data" and .region == "iad" and ((.attached_machine_id // "") == ""))] | length')"
+          if [ "$unattached" -lt 1 ]; then
+            flyctl volume create data -a hmo-dj-worker -r iad -n 1 --size 10 --yes
           fi
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN_WORKER || secrets.FLY_API_TOKEN }}
       - name: Deploy hmo-dj-worker
-        run: flyctl deploy . --remote-only --config worker/fly.toml --yes
+        run: flyctl deploy . --remote-only --config worker/fly.toml --strategy immediate --yes
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN_WORKER || secrets.FLY_API_TOKEN }}
