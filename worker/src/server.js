@@ -711,6 +711,20 @@ app.post('/offline-music/catalog', authorizeWorker, (req, res) => {
   }
 });
 
+app.delete('/offline-music/catalog', authorizeWorker, (req, res) => {
+  try {
+    const id = String(req.query.id || req.body?.id || '').trim();
+    if (!id) return res.status(400).json({ error: 'Missing track id' });
+    const items = readMusicCatalog();
+    const nextItems = items.filter((item) => String(item.id || '') !== id);
+    writeMusicCatalog(nextItems);
+    res.json({ removed: items.length - nextItems.length, count: nextItems.length, catalogFile: MUSIC_CATALOG_FILE });
+  } catch (err) {
+    console.error('[OfflineMusic] Catalog delete failed:', err.message || err);
+    res.status(500).json({ error: 'Music catalog delete failed' });
+  }
+});
+
 app.get('/offline-music/stream', authorizeWorker, (req, res) => {
   try {
     const resolved = offlineMusicPathFromId(req.query.id);
