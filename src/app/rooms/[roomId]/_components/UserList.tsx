@@ -71,7 +71,7 @@ export default function UserList({ roomId, musicStatus, djStatus, localVolume, o
 
   const isAdmin = !!user && !!(user as any).isAdmin;
   const isHost = !!user && (user.uid === room?.ownerId || isAdmin);
-  const canControl = !!user;
+  const canControl = isHost;
 
   return (
     <>

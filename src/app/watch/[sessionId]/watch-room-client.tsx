@@ -106,13 +106,14 @@ function isEmbeddedVideoUrl(value: string) {
   return raw.includes('youtube.com/embed/') || raw.includes('youtube-nocookie.com/embed/');
 }
 
-function iframeUrlFor(value: string) {
+function iframeUrlFor(value: string, showControls = true) {
   if (!value) return '';
   try {
     const url = new URL(value, window.location.origin);
     if (!isEmbeddedVideoUrl(url.toString())) return value;
     url.searchParams.set('enablejsapi', '1');
     url.searchParams.set('origin', window.location.origin);
+    if (!showControls) url.searchParams.set('controls', '0');
     return url.toString();
   } catch {
     return value;
@@ -146,7 +147,7 @@ function shouldShowMkvFallbackNotice(item: any, mediaStatus: string) {
   return !status.includes('ready') && !status.includes('playing');
 }
 
-export default function WatchRoomClient({ sessionId, activityMode = false }: { sessionId: string; activityMode?: boolean }) {
+export default function WatchRoomClient({ sessionId, activityMode = false, canPause = false }: { sessionId: string; activityMode?: boolean; canPause?: boolean }) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
   const playerShellRef = useRef<HTMLDivElement | null>(null);
@@ -676,7 +677,7 @@ export default function WatchRoomClient({ sessionId, activityMode = false }: { s
         if (state?.playback?.status !== 'playing') sendControl('play', embeddedCurrentTimeRef.current).catch(() => {});
       } else if (code === 2) {
         setMediaStatus('Embedded video paused');
-        if (state?.playback?.status === 'playing') sendControl('pause', embeddedCurrentTimeRef.current).catch(() => {});
+        if (canPause && state?.playback?.status === 'playing') sendControl('pause', embeddedCurrentTimeRef.current).catch(() => {});
       } else if (code === 0) {
         setMediaStatus('Embedded video ended');
         nextItem().catch(() => {});
@@ -686,7 +687,7 @@ export default function WatchRoomClient({ sessionId, activityMode = false }: { s
     };
     window.addEventListener('message', onMessage);
     return () => window.removeEventListener('message', onMessage);
-  }, [state?.playback?.status, embeddedMode]);
+  }, [state?.playback?.status, embeddedMode, canPause]);
 
   async function submitRequest(event: React.FormEvent) {
     event.preventDefault();
@@ -728,7 +729,7 @@ export default function WatchRoomClient({ sessionId, activityMode = false }: { s
               <iframe
                 ref={iframeRef}
                 className="absolute inset-0 h-full w-full border-0 bg-black"
-                src={iframeUrlFor(currentPlaybackUrl)}
+                src={iframeUrlFor(currentPlaybackUrl, canPause)}
                 allow="autoplay; fullscreen; encrypted-media; picture-in-picture"
                 allowFullScreen
                 onLoad={() => {
@@ -740,7 +741,7 @@ export default function WatchRoomClient({ sessionId, activityMode = false }: { s
             <video
               ref={videoRef}
               className={`h-full w-full bg-black ${embeddedMode ? 'hidden' : ''}`}
-              controls
+              controls={canPause}
               muted={muted}
               autoPlay={activityMode}
               playsInline
@@ -806,7 +807,9 @@ export default function WatchRoomClient({ sessionId, activityMode = false }: { s
 
           <div className="flex flex-wrap items-center gap-2 border-t border-slate-700 p-4">
             <button type="button" className="rounded-md border border-slate-700 bg-slate-800 px-3 py-2 hover:border-emerald-400" onClick={playLocalAndRemote}>Play</button>
-            <button type="button" className="rounded-md border border-slate-700 bg-slate-800 px-3 py-2 hover:border-emerald-400" onClick={pauseLocalAndRemote}>Pause</button>
+            {canPause && (
+              <button type="button" className="rounded-md border border-slate-700 bg-slate-800 px-3 py-2 hover:border-emerald-400" onClick={pauseLocalAndRemote}>Pause</button>
+            )}
             <button type="button" className="rounded-md border border-slate-700 bg-slate-800 px-3 py-2 hover:border-emerald-400" onClick={syncPlayback}>Sync</button>
             <button type="button" className="rounded-md border border-slate-700 bg-slate-800 px-3 py-2 hover:border-emerald-400" onClick={nextItem}>Next</button>
             <button type="button" className="rounded-md border border-slate-700 bg-slate-800 px-3 py-2 hover:border-emerald-400" onClick={clearQueue}>Clear Queue</button>

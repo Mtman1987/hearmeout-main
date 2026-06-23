@@ -19,6 +19,7 @@ interface WatchWidgetProps {
   onClose: () => void;
   roomId: string;
   sessionScope?: 'discord' | 'overlay';
+  canControl?: boolean;
 }
 
 type WatchState = {
@@ -58,6 +59,8 @@ function watchRequestErrorMessage(data: any) {
 export function WatchWidget({
   id, position, size, opacity,
   onPositionChange, onSizeChange, onOpacityChange, onSaveLayout, onClose, roomId,
+  sessionScope = 'discord',
+  canControl = false,
 }: WatchWidgetProps) {
   const [state, setState] = useState<WatchState | null>(null);
   const [query, setQuery] = useState('');
@@ -123,7 +126,8 @@ export function WatchWidget({
     } catch {}
   };
 
-  const watchRoomUrl = state?.roomUrl || `/watch/${sessionId}`;
+  const watchRoomUrl = `${state?.roomUrl || `/watch/${sessionId}`}${(state?.roomUrl || `/watch/${sessionId}`).includes('?') ? '&' : '?'}canPause=${canControl ? '1' : '0'}`;
+  const overlayUrl = `/overlay/${encodeURIComponent(roomId)}?media=${tab === 'music' ? 'music' : 'movie'}`;
   const discordActivityUrl = state?.roomUrl
     ? `https://discord.com/activities?url=${encodeURIComponent(state.roomUrl)}`
     : null;
@@ -154,14 +158,24 @@ export function WatchWidget({
 
         {state?.current ? (
           <div className="space-y-2">
-            <div className="aspect-video w-full rounded-md overflow-hidden border border-border bg-black">
-              <iframe
-                src={watchRoomUrl}
-                className="w-full h-full"
-                allow="autoplay; fullscreen; encrypted-media; picture-in-picture"
-                sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-presentation"
-              />
-            </div>
+            {sessionScope === 'overlay' ? (
+              <div className="flex aspect-video w-full flex-col items-center justify-center gap-2 rounded-md border border-dashed border-border bg-black p-3 text-center text-xs text-muted-foreground">
+                <Music className="h-5 w-5 text-emerald-300" />
+                <p>Stream Mode is on. Media output is the overlay browser source.</p>
+                <Button variant="outline" size="sm" asChild>
+                  <a href={overlayUrl} target="_blank" rel="noreferrer">Open Overlay</a>
+                </Button>
+              </div>
+            ) : (
+              <div className="aspect-video w-full rounded-md overflow-hidden border border-border bg-black">
+                <iframe
+                  src={watchRoomUrl}
+                  className="w-full h-full"
+                  allow="autoplay; fullscreen; encrypted-media; picture-in-picture"
+                  sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-presentation"
+                />
+              </div>
+            )}
             <div className="flex items-center justify-between gap-2">
               <div className="min-w-0 flex-1">
                 <p className="text-sm font-medium truncate">{state.current.item.title} ({state.current.item.year})</p>
@@ -169,17 +183,19 @@ export function WatchWidget({
                   {state.current.item.source} · by {state.current.requestedBy.username}
                 </p>
               </div>
-              <div className="flex gap-1">
-                <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => handleControl('play')}>
-                  <Play className="h-3.5 w-3.5" />
-                </Button>
-                <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => handleControl('next')}>
-                  <SkipForward className="h-3.5 w-3.5" />
-                </Button>
-                <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => handleControl('clear')}>
-                  <Trash2 className="h-3.5 w-3.5" />
-                </Button>
-              </div>
+              {canControl && (
+                <div className="flex gap-1">
+                  <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => handleControl('play')}>
+                    <Play className="h-3.5 w-3.5" />
+                  </Button>
+                  <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => handleControl('next')}>
+                    <SkipForward className="h-3.5 w-3.5" />
+                  </Button>
+                  <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => handleControl('clear')}>
+                    <Trash2 className="h-3.5 w-3.5" />
+                  </Button>
+                </div>
+              )}
             </div>
           </div>
         ) : (
@@ -190,8 +206,8 @@ export function WatchWidget({
 
         <div className="flex gap-2">
           <Button variant="outline" size="sm" className="flex-1 text-xs" asChild>
-            <a href={watchRoomUrl} target="_blank" rel="noreferrer">
-              <ExternalLink className="h-3.5 w-3.5 mr-1" /> Open Watch Room
+            <a href={sessionScope === 'overlay' ? overlayUrl : watchRoomUrl} target="_blank" rel="noreferrer">
+              <ExternalLink className="h-3.5 w-3.5 mr-1" /> {sessionScope === 'overlay' ? 'Open Overlay' : 'Open Watch Room'}
             </a>
           </Button>
           {discordActivityUrl && (

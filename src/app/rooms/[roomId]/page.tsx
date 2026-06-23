@@ -24,7 +24,7 @@ import { Room as LKRoom, RoomEvent, Track, RemoteTrack } from 'livekit-client';
 import { generateLiveKitToken, generateMusicRoomToken } from '@/app/actions';
 import { PlaylistItem } from "@/types/playlist";
 import { getScreenPeerId, PeerAudioListener, PeerScreenViewer, PeerVoiceMesh } from '@/lib/peer-audio-service';
-import { GLOBAL_WATCH_SESSION_ID, getOverlayWatchSessionId } from '@/lib/watch-session';
+import { GLOBAL_WATCH_SESSION_ID } from '@/lib/watch-session';
 
 interface RoomData {
   id: string;
@@ -54,10 +54,20 @@ type WatchCardState = {
   playback?: { status?: string };
 };
 
-function SharedWatchCard({ roomId, onOpenWatch, sessionScope = 'discord' }: { roomId: string; onOpenWatch: () => void; sessionScope?: 'discord' | 'overlay' }) {
+function watchUrlForRoom(url: string, canPause: boolean) {
+    try {
+        const next = new URL(url, window.location.origin);
+        next.searchParams.set('canPause', canPause ? '1' : '0');
+        return next.pathname + next.search;
+    } catch {
+        return `${url}${url.includes('?') ? '&' : '?'}canPause=${canPause ? '1' : '0'}`;
+    }
+}
+
+function SharedWatchCard({ roomId, onOpenWatch, sessionScope = 'discord', canPause = false }: { roomId: string; onOpenWatch: () => void; sessionScope?: 'discord' | 'overlay'; canPause?: boolean }) {
     const [state, setState] = useState<WatchCardState | null>(null);
     const [dismissedRequestId, setDismissedRequestId] = useState<string | null>(null);
-    const sessionId = sessionScope === 'overlay' ? getOverlayWatchSessionId(roomId, 'movie') : GLOBAL_WATCH_SESSION_ID;
+    const sessionId = GLOBAL_WATCH_SESSION_ID;
 
     useEffect(() => {
         let cancelled = false;
@@ -78,7 +88,8 @@ function SharedWatchCard({ roomId, onOpenWatch, sessionScope = 'discord' }: { ro
 
     if (!state?.current || state.current.requestId === dismissedRequestId) return null;
 
-    const watchRoomUrl = state.roomUrl || `/watch/${sessionId}`;
+    const watchRoomUrl = watchUrlForRoom(state.roomUrl || `/watch/${sessionId}`, canPause);
+    const overlayUrl = `/overlay/${encodeURIComponent(roomId)}?media=auto`;
     const closeWatchCard = () => setDismissedRequestId(state.current?.requestId || null);
 
     return (
@@ -90,8 +101,8 @@ function SharedWatchCard({ roomId, onOpenWatch, sessionScope = 'discord' }: { ro
                 <div className="flex gap-2">
                     <Button variant="outline" size="sm" onClick={onOpenWatch}>Controls</Button>
                     <Button variant="outline" size="sm" asChild>
-                        <a href={watchRoomUrl} target="_blank" rel="noreferrer">
-                            <ExternalLink className="mr-1 h-3.5 w-3.5" /> Open
+                        <a href={sessionScope === 'overlay' ? overlayUrl : watchRoomUrl} target="_blank" rel="noreferrer">
+                            <ExternalLink className="mr-1 h-3.5 w-3.5" /> {sessionScope === 'overlay' ? 'Overlay' : 'Open'}
                         </a>
                     </Button>
                     <Button variant="ghost" size="icon" onClick={closeWatchCard} aria-label="Close Watch Party card">
@@ -100,14 +111,24 @@ function SharedWatchCard({ roomId, onOpenWatch, sessionScope = 'discord' }: { ro
                 </div>
             </CardHeader>
             <CardContent className="space-y-3">
-                <div className="aspect-video w-full overflow-hidden rounded-md border bg-black">
-                    <iframe
-                        src={watchRoomUrl}
-                        className="h-full w-full"
-                        allow="autoplay; fullscreen; encrypted-media; picture-in-picture"
-                        sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-presentation"
-                    />
-                </div>
+                {sessionScope === 'overlay' ? (
+                    <div className="flex aspect-video w-full flex-col items-center justify-center gap-2 rounded-md border border-dashed bg-black/80 p-4 text-center text-sm text-muted-foreground">
+                        <Music className="h-6 w-6 text-emerald-300" />
+                        <p>Stream Mode is on. Media is playing through the OBS overlay URL, while room voices stay here.</p>
+                        <Button variant="outline" size="sm" asChild>
+                            <a href={overlayUrl} target="_blank" rel="noreferrer">Open Overlay</a>
+                        </Button>
+                    </div>
+                ) : (
+                    <div className="aspect-video w-full overflow-hidden rounded-md border bg-black">
+                        <iframe
+                            src={watchRoomUrl}
+                            className="h-full w-full"
+                            allow="autoplay; fullscreen; encrypted-media; picture-in-picture"
+                            sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-presentation"
+                        />
+                    </div>
+                )}
                 <div className="min-w-0">
                     <p className="truncate text-sm font-medium">
                         {state.current.item.title}{state.current.item.year ? ` (${state.current.item.year})` : ''}
@@ -406,8 +427,6 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
 
     const isAdmin = !!user && !!(user as any).isAdmin;
     const isOwner = !!user && (user.uid === room.ownerId || isAdmin);
-    const canControl = !!user;
-
     const musicRoomRef = useRef<LKRoom | null>(null);
     const fallbackRoomRef = useRef<LKRoom | null>(null);
     const musicAudioRef = useRef<HTMLAudioElement | null>(null);
@@ -859,7 +878,7 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
 
     return (
       voiceReady ? (
-      <LiveKitRoom serverUrl={livekitUrl} token={voiceToken} connect={true} audio={!userSettings?.streamMode} video={false}
+      <LiveKitRoom serverUrl={livekitUrl} token={voiceToken} connect={true} audio={true} video={false}
           options={{ dynacast: true, adaptiveStream: true }}
           onError={(err) => {
             if (voiceFallbackActiveRef.current || peerVoiceStartingRef.current) return;
@@ -932,15 +951,16 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
                           onStopDJ={handleStopDJ}
                           onStartAudio={handleStartMusicAudio}
                           onOpenQueue={() => openPopout('queue', { width: 760, height: 720 }, { source: 'queue' })}
-                          onOpenAddSong={() => openPopout('addSong', { width: 460, height: 560 }, { source: 'addSong', sessionScope: isStreamMode ? 'overlay' : 'discord', roomId })}
-                          onOpenWatch={() => openPopout('watch', { width: 760, height: 700 }, { source: 'watch', sessionScope: isStreamMode ? 'overlay' : 'discord', roomId })}
+                          onOpenAddSong={() => openPopout('addSong', { width: 460, height: 560 }, { source: 'addSong', sessionScope: isStreamMode ? 'overlay' : 'discord', roomId, canControl: isOwner })}
+                          onOpenWatch={() => openPopout('watch', { width: 760, height: 700 }, { source: 'watch', sessionScope: isStreamMode ? 'overlay' : 'discord', roomId, canControl: isOwner })}
                           voiceEnabled={voiceReady || voiceFallbackActive}
                           voiceFallbackFailed={voiceFallbackFailed}
                         />
                         <SharedWatchCard
                           roomId={roomId}
                           sessionScope={isStreamMode ? 'overlay' : 'discord'}
-                          onOpenWatch={() => openPopout('watch', { width: 760, height: 700 }, { source: 'watch', sessionScope: isStreamMode ? 'overlay' : 'discord', roomId })}
+                          canPause={isOwner}
+                          onOpenWatch={() => openPopout('watch', { width: 760, height: 700 }, { source: 'watch', sessionScope: isStreamMode ? 'overlay' : 'discord', roomId, canControl: isOwner })}
                         />
                         <SharedScreenShareCard roomId={roomId} />
                         {isOwner && <VoiceQueue roomId={roomId} />}

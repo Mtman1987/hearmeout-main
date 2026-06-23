@@ -100,6 +100,7 @@ export function PopoutRenderer() {
               onClose={() => closePopout(popout.id)}
               roomId={widgetRoomId}
               sessionScope={popout.customSettings?.sessionScope === 'overlay' ? 'overlay' : 'discord'}
+              canControl={popout.customSettings?.canControl === true}
             />
           );
         }
