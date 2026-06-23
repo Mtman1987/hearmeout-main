@@ -11,7 +11,9 @@ type HlsJob = {
 
 const jobs = new Map<string, HlsJob>();
 const DEFAULT_HLS_BUDGET_BYTES = 1536 * 1024 * 1024;
-const MIN_COMPLETE_VOD_SECONDS = 45 * 60;
+const HLS_SEGMENT_SECONDS = Number(process.env.WATCH_HLS_SEGMENT_SECONDS || 6);
+const HLS_LIST_SIZE = Number(process.env.WATCH_HLS_LIST_SIZE || 90);
+const HLS_DELETE_THRESHOLD = Number(process.env.WATCH_HLS_DELETE_THRESHOLD || 12);
 
 function hlsRootDir() {
   return process.env.WATCH_HLS_DIR || (process.env.FLY_APP_NAME ? '/data/watch-hls' : join(process.cwd(), 'logs', 'watch-hls'));
@@ -123,16 +125,7 @@ async function hasUsableHlsIndex(dir: string, indexPath: string) {
   if (!stats?.isFile() || stats.size <= 0) return false;
 
   const manifest = await readFile(indexPath, 'utf8').catch(() => '');
-  const manifestLines = manifest.split(/\r?\n/);
-  const durationSeconds = manifestLines
-    .filter((line) => line.startsWith('#EXTINF:'))
-    .reduce((sum, line) => {
-      const value = Number(line.replace(/^#EXTINF:/, '').replace(',', ''));
-      return Number.isFinite(value) ? sum + value : sum;
-    }, 0);
-  if (manifest.includes('#EXT-X-ENDLIST') && durationSeconds > 0 && durationSeconds < MIN_COMPLETE_VOD_SECONDS) {
-    return false;
-  }
+  if (manifest.includes('#EXT-X-PLAYLIST-TYPE:EVENT')) return false;
   const firstSegment = manifest
     .split(/\r?\n/)
     .map((line) => line.trim())
@@ -182,11 +175,13 @@ async function runFfmpegHls(streamId: string, dir: string, indexPath: string) {
       '-f',
       'hls',
       '-hls_time',
-      '6',
+      String(HLS_SEGMENT_SECONDS),
       '-hls_list_size',
-      '0',
-      '-hls_playlist_type',
-      'event',
+      String(HLS_LIST_SIZE),
+      '-hls_delete_threshold',
+      String(HLS_DELETE_THRESHOLD),
+      '-hls_flags',
+      'delete_segments+independent_segments+temp_file',
       '-hls_segment_filename',
       segmentPattern,
       indexPath,

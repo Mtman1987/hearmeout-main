@@ -12,7 +12,7 @@ const express = require('express');
 const cors = require('cors');
 const { execFile, spawn } = require('child_process');
 const { promisify } = require('util');
-const { existsSync, mkdirSync, unlinkSync, statSync, readdirSync, createReadStream } = require('fs');
+const { existsSync, mkdirSync, unlinkSync, statSync, readdirSync, readFileSync, createReadStream } = require('fs');
 const { AudioSource, AudioFrame, LocalAudioTrack, Room, RoomEvent, TrackPublishOptions, TrackSource } = require('@livekit/rtc-node');
 const wrtc = require('@roamhq/wrtc');
 const puppeteer = require('puppeteer');
@@ -46,6 +46,12 @@ const UPSTREAM_EXTRACTOR_SECRET = process.env.UPSTREAM_EXTRACTOR_SECRET || proce
 const CACHE_DIR = process.env.MUSIC_CACHE_DIR || (process.env.NODE_ENV === 'production' ? '/tmp/music' : join(__dirname, '..', '.cache', 'music'));
 const WATCH_HLS_DIR = process.env.WATCH_HLS_DIR || (process.env.NODE_ENV === 'production' ? '/tmp/watch-hls' : join(__dirname, '..', '.cache', 'watch-hls'));
 const DIRECT_VOD_CHUNK_BYTES = Number(process.env.DIRECT_VOD_CHUNK_BYTES || 8 * 1024 * 1024);
+const WATCH_HLS_SEGMENT_SECONDS = Number(process.env.WATCH_HLS_SEGMENT_SECONDS || 6);
+const WATCH_HLS_LIST_SIZE = Number(process.env.WATCH_HLS_LIST_SIZE || 90);
+const WATCH_HLS_DELETE_THRESHOLD = Number(process.env.WATCH_HLS_DELETE_THRESHOLD || 12);
+const WATCH_HLS_BUDGET_BYTES = Number(process.env.WATCH_HLS_BUDGET_BYTES || 1536 * 1024 * 1024);
+const FLY_MACHINE_ID = process.env.FLY_MACHINE_ID || '';
+const FLY_APP_NAME = process.env.FLY_APP_NAME || 'hmo-dj-worker';
 
 const VIDEO_ID_RE = /^[A-Za-z0-9_-]{11}$/;
 function isValidVideoId(id) {
@@ -342,7 +348,6 @@ app.get('/cache-stats', authorizeWorker, (req, res) => {
 
 // ── Watch HLS Transcoder ────────────────────────────────────────────────
 const watchHlsJobs = new Map();
-const MIN_COMPLETE_VOD_SECONDS = 45 * 60;
 
 function cleanWatchStreamId(streamId) {
   const clean = String(streamId || '').replace(/[^0-9]/g, '');
@@ -356,6 +361,11 @@ function cleanHlsFileName(fileName) {
   return clean;
 }
 
+function cleanFlyMachineId(machineId) {
+  const clean = String(machineId || '').replace(/[^a-zA-Z0-9]/g, '');
+  return clean || null;
+}
+
 function watchHlsPaths(streamId) {
   const clean = cleanWatchStreamId(streamId);
   const dir = join(WATCH_HLS_DIR, clean);
@@ -366,24 +376,13 @@ function watchHlsPaths(streamId) {
   };
 }
 
-function readManifestDuration(manifest) {
-  return manifest
-    .split(/\r?\n/)
-    .filter((line) => line.startsWith('#EXTINF:'))
-    .reduce((sum, line) => {
-      const value = Number(line.replace(/^#EXTINF:/, '').replace(',', ''));
-      return Number.isFinite(value) ? sum + value : sum;
-    }, 0);
-}
-
 function hasUsableWatchHlsIndex(dir, indexPath) {
   if (!existsSync(indexPath)) return false;
   const indexStats = statSync(indexPath);
   if (!indexStats.isFile() || indexStats.size <= 0) return false;
 
-  const manifest = require('fs').readFileSync(indexPath, 'utf8');
-  const durationSeconds = readManifestDuration(manifest);
-  if (manifest.includes('#EXT-X-ENDLIST') && durationSeconds > 0 && durationSeconds < MIN_COMPLETE_VOD_SECONDS) {
+  const manifest = readFileSync(indexPath, 'utf8');
+  if (manifest.includes('#EXT-X-PLAYLIST-TYPE:EVENT')) {
     try { unlinkSync(indexPath); } catch {}
     return false;
   }
@@ -398,6 +397,45 @@ function hasUsableWatchHlsIndex(dir, indexPath) {
   if (!existsSync(segmentPath)) return false;
   const segmentStats = statSync(segmentPath);
   return segmentStats.isFile() && segmentStats.size > 0;
+}
+
+function pinManifestSegmentsToMachine(manifest) {
+  if (!FLY_MACHINE_ID) return manifest;
+  const machineParam = `machine=${encodeURIComponent(FLY_MACHINE_ID)}`;
+  return manifest
+    .split(/\r?\n/)
+    .map((line) => {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith('#') || /[?&]machine=/.test(trimmed)) return line;
+      return `${line}${line.includes('?') ? '&' : '?'}${machineParam}`;
+    })
+    .join('\n');
+}
+
+function pruneWatchHlsRoot() {
+  if (!Number.isFinite(WATCH_HLS_BUDGET_BYTES) || WATCH_HLS_BUDGET_BYTES <= 0) return;
+  mkdirSync(WATCH_HLS_DIR, { recursive: true });
+
+  const files = [];
+  for (const entry of readdirSync(WATCH_HLS_DIR, { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue;
+    const dir = join(WATCH_HLS_DIR, entry.name);
+    for (const name of readdirSync(dir)) {
+      const filePath = join(dir, name);
+      let stats;
+      try { stats = statSync(filePath); } catch { continue; }
+      if (stats.isFile()) files.push({ filePath, size: stats.size, mtimeMs: stats.mtimeMs });
+    }
+  }
+
+  let total = files.reduce((sum, file) => sum + file.size, 0);
+  for (const file of files.sort((left, right) => left.mtimeMs - right.mtimeMs)) {
+    if (total <= WATCH_HLS_BUDGET_BYTES) break;
+    try {
+      unlinkSync(file.filePath);
+      total -= file.size;
+    } catch {}
+  }
 }
 
 function waitForWatchHlsIndex(streamId, timeoutMs = 45000) {
@@ -444,6 +482,7 @@ function ensureWatchHls(streamId, sourceUrl) {
   if (!sourceUrl) return Promise.reject(new Error('Missing source URL for HLS conversion'));
 
   mkdirSync(dir, { recursive: true });
+  pruneWatchHlsRoot();
   try { if (existsSync(indexPath)) unlinkSync(indexPath); } catch {}
 
   const promise = runWatchHlsFfmpeg(clean, sourceUrl, dir, indexPath)
@@ -481,9 +520,10 @@ function runWatchHlsFfmpeg(streamId, sourceUrl, dir, indexPath) {
       '-c:a', 'aac',
       '-ac', '2',
       '-f', 'hls',
-      '-hls_time', '6',
-      '-hls_list_size', '0',
-      '-hls_playlist_type', 'event',
+      '-hls_time', String(WATCH_HLS_SEGMENT_SECONDS),
+      '-hls_list_size', String(WATCH_HLS_LIST_SIZE),
+      '-hls_delete_threshold', String(WATCH_HLS_DELETE_THRESHOLD),
+      '-hls_flags', 'delete_segments+independent_segments+temp_file',
       '-hls_segment_filename', segmentPattern,
       indexPath,
     ];
@@ -511,6 +551,12 @@ app.get('/watch/xtream/hls/:streamId/:file', authorizeWorker, async (req, res) =
   try {
     const streamId = cleanWatchStreamId(req.params.streamId);
     const file = cleanHlsFileName(req.params.file);
+    const requestedMachine = cleanFlyMachineId(req.query.machine);
+    if (requestedMachine && FLY_MACHINE_ID && requestedMachine !== FLY_MACHINE_ID) {
+      res.setHeader('fly-replay', `instance=${requestedMachine};app=${FLY_APP_NAME}`);
+      return res.status(409).send('Replaying to HLS owner');
+    }
+
     const { dir } = watchHlsPaths(streamId);
 
     if (file === 'index.m3u8') {
@@ -533,8 +579,15 @@ app.get('/watch/xtream/hls/:streamId/:file', authorizeWorker, async (req, res) =
         : 'application/octet-stream';
 
     res.setHeader('Content-Type', contentType);
-    res.setHeader('Content-Length', String(stats.size));
     res.setHeader('Cache-Control', file.endsWith('.m3u8') ? 'no-store' : 'public, max-age=3600');
+
+    if (file.endsWith('.m3u8')) {
+      const manifest = pinManifestSegmentsToMachine(readFileSync(resolvedPath, 'utf8'));
+      res.setHeader('Content-Length', String(Buffer.byteLength(manifest)));
+      return res.send(manifest);
+    }
+
+    res.setHeader('Content-Length', String(stats.size));
     createReadStream(resolvedPath).pipe(res);
   } catch (err) {
     res.status(502).json({ error: err.message || 'HLS conversion failed' });

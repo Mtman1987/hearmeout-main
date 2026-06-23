@@ -7,9 +7,19 @@ primary_region = "iad"
 [env]
   NODE_ENV = "production"
   PORT = "3002"
-  MUSIC_CACHE_DIR = "/tmp/music"
+  MUSIC_CACHE_DIR = "/data/music"
+  WATCH_HLS_DIR = "/data/watch-hls"
+  WATCH_HLS_BUDGET_BYTES = "1610612736"
+  WATCH_HLS_DELETE_THRESHOLD = "12"
+  WATCH_HLS_LIST_SIZE = "90"
+  WATCH_HLS_SEGMENT_SECONDS = "6"
   APP_URL = "https://hearmeout-main.fly.dev"
   NEXT_PUBLIC_LIVEKIT_URL = "wss://streamweaver-7atx04ct.livekit.cloud"
+
+[mounts]
+  source = "data"
+  destination = "/data"
+  initial_size = "10gb"
 
 [http_service]
   internal_port = 3002

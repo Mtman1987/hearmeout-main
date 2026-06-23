@@ -13,6 +13,11 @@ const CORS_HEADERS = {
   'access-control-allow-headers': 'content-type, range',
 };
 
+function cleanMachineId(machineId: string | null) {
+  const clean = String(machineId || '').replace(/[^a-zA-Z0-9]/g, '');
+  return clean || null;
+}
+
 function parseStreamKey(streamId: string): { kind: XtreamKind; id: string } {
   const clean = String(streamId).toLowerCase().replace(/[^a-z0-9-]/g, '');
   const match = clean.match(/^(vod|series|live)-(\d+)$/) || clean.match(/^(episode)-(\d+-[a-z0-9]+)$/);
@@ -22,23 +27,29 @@ function parseStreamKey(streamId: string): { kind: XtreamKind; id: string } {
   return { kind: 'vod', id: numeric };
 }
 
-export async function GET(_request: Request, context: { params: Promise<{ streamId: string; file: string }> }) {
+export async function GET(request: Request, context: { params: Promise<{ streamId: string; file: string }> }) {
   const { streamId, file } = await context.params;
 
   try {
     const workerUrl = getDjWorkerUrl();
     if (workerUrl) {
+      const requestUrl = new URL(request.url);
+      const pinnedMachine = cleanMachineId(requestUrl.searchParams.get('machine'));
       const remoteUrl = new URL(`${workerUrl}/watch/xtream/hls/${encodeURIComponent(streamId)}/${encodeURIComponent(file)}`);
+      if (pinnedMachine) remoteUrl.searchParams.set('machine', pinnedMachine);
       if (file === 'index.m3u8') {
         const stream = parseStreamKey(streamId);
         const upstreamUrl = await getResolvedXtreamStreamUrl(stream.kind, stream.id);
         remoteUrl.searchParams.set('source', upstreamUrl.toString());
       }
 
+      const workerHeaders: Record<string, string> = {
+        'user-agent': 'HearMeOut/1.0',
+      };
+      if (pinnedMachine) workerHeaders['fly-force-instance-id'] = pinnedMachine;
+
       const workerResponse = await fetch(remoteUrl, {
-        headers: {
-          'user-agent': 'HearMeOut/1.0',
-        },
+        headers: workerHeaders,
       });
 
       const headers = new Headers(CORS_HEADERS);
