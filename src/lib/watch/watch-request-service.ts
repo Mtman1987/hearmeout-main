@@ -3,7 +3,7 @@ import { findInternetArchiveRecommendation } from './internet-archive-provider';
 import { findWatchmodeRecommendation } from './watchmode-provider';
 import { resolveSongRequest } from '@/lib/bot-actions';
 import { DISCORD_CLIENT_ID } from '@/lib/public-config';
-import { getGlobalWatchSessionId, getScopedWatchSessionId } from '@/lib/watch-session';
+import { getGlobalWatchSessionId, getScopedWatchSessionId, normalizeWatchSessionAlias } from '@/lib/watch-session';
 import type { PlaylistItem } from '@/types/playlist';
 import { dirname } from 'path';
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'fs';
@@ -233,23 +233,34 @@ function sendDiscordReply(channelId: string, content: string, userMessageId?: st
   }).catch((error) => console.error('[WatchRequest] Discord reply failed:', error));
 }
 
-export function watchControlComponents(joinUrl?: string) {
+function sessionIdFromJoinUrl(joinUrl?: string) {
+  if (!joinUrl) return getGlobalWatchSessionId();
+  try {
+    const url = new URL(joinUrl);
+    return normalizeWatchSessionAlias(url.searchParams.get('sessionId'), getGlobalWatchSessionId());
+  } catch {
+    return getGlobalWatchSessionId();
+  }
+}
+
+export function watchControlComponents(joinUrl?: string, sessionId = sessionIdFromJoinUrl(joinUrl)) {
+  const controlId = (action: string) => `hmo_watch_control:${action}:${sessionId}`;
   return [
     {
       type: 1,
       components: [
-        { type: 2, style: 3, label: 'Play', custom_id: 'hmo_watch_control:play', emoji: { name: '▶️' } },
-        { type: 2, style: 2, label: 'Pause', custom_id: 'hmo_watch_control:pause', emoji: { name: '⏸️' } },
-        { type: 2, style: 2, label: 'Mute', custom_id: 'hmo_watch_control:mute', emoji: { name: '🔇' } },
-        { type: 2, style: 2, label: 'Unmute', custom_id: 'hmo_watch_control:unmute', emoji: { name: '🔊' } },
-        { type: 2, style: 1, label: 'Next', custom_id: 'hmo_watch_control:next', emoji: { name: '⏭️' } },
+        { type: 2, style: 3, label: 'Play', custom_id: controlId('play'), emoji: { name: '▶️' } },
+        { type: 2, style: 2, label: 'Pause', custom_id: controlId('pause'), emoji: { name: '⏸️' } },
+        { type: 2, style: 2, label: 'Mute', custom_id: controlId('mute'), emoji: { name: '🔇' } },
+        { type: 2, style: 2, label: 'Unmute', custom_id: controlId('unmute'), emoji: { name: '🔊' } },
+        { type: 2, style: 1, label: 'Next', custom_id: controlId('next'), emoji: { name: '⏭️' } },
       ],
     },
     {
       type: 1,
       components: [
         ...(joinUrl ? [{ type: 2, style: 5, label: 'Join Activity', url: joinUrl, emoji: { name: '🎬' } }] : []),
-        { type: 2, style: 4, label: 'Clear Queue', custom_id: 'hmo_watch_control:clear', emoji: { name: '🧹' } },
+        { type: 2, style: 4, label: 'Clear Queue', custom_id: controlId('clear'), emoji: { name: '🧹' } },
       ],
     },
   ];
@@ -342,15 +353,16 @@ function formatDurationMs(durationMs: number | undefined) {
 }
 
 function musicTrackToWatchItem(track: PlaylistItem): WatchCatalogItem {
+  const videoId = encodeURIComponent(track.id);
   return {
     id: `youtube-${track.id}`,
     type: 'music',
     title: track.title,
     year: new Date().getFullYear(),
     runtime: formatDurationMs(track.duration),
-    source: track.artist ? `YouTube Music: ${track.artist}` : 'YouTube Music',
+    source: track.artist ? `YouTube Video: ${track.artist}` : 'YouTube Video',
     poster: track.thumbnail || '',
-    playbackUrl: `/api/youtube-audio/stream?videoId=${encodeURIComponent(track.id)}`,
+    playbackUrl: `https://www.youtube-nocookie.com/embed/${videoId}?autoplay=1&controls=1&playsinline=1&rel=0&enablejsapi=1`,
     overview: `Song request from ${track.addedBy || 'unknown user'}.`,
     metadata: {
       provider: 'youtube',
@@ -397,9 +409,24 @@ export function parseWatchCommand(message: string) {
   const trimmed = message.trim();
   const match = trimmed.match(/^!(wr|watch)(?:\s+(.+))?$/i);
   if (!match) return null;
+  const extracted = extractWatchRoomAlias((match[2] || '').trim());
   return {
     command: `!${match[1].toLowerCase()}`,
-    query: (match[2] || '').trim(),
+    query: extracted.query,
+    sessionId: extracted.sessionId,
+  };
+}
+
+export function extractWatchRoomAlias(query: string, fallbackSessionId?: string) {
+  let nextQuery = String(query || '').trim();
+  let roomAlias = '';
+  nextQuery = nextQuery.replace(/\s+--(?:room|tab|session)\s+("[^"]+"|'[^']+'|[^\s]+)\s*$/i, (_match, value) => {
+    roomAlias = String(value || '').replace(/^["']|["']$/g, '').trim();
+    return '';
+  }).trim();
+  return {
+    query: nextQuery,
+    sessionId: normalizeWatchSessionAlias(roomAlias, fallbackSessionId || getGlobalWatchSessionId()),
   };
 }
 
@@ -853,7 +880,7 @@ export async function handleWatchRequestCommand(params: {
     return true;
   }
 
-  const sessionId = getWatchSessionId(params.guildId, params.channelId);
+  const sessionId = parsed.sessionId || getWatchSessionId(params.guildId, params.channelId);
   const result = await requestWatchItem({
     sessionId,
     guildId: params.guildId,

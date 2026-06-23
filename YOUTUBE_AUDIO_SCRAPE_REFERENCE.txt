@@ -1,0 +1,69 @@
+HearMeOut YouTube audio scrape/playback reference
+==================================================
+
+This app still keeps the YouTube audio scrape/proxy implementation. The newer
+watch-party song flow can use full YouTube video embeds, but these files are the
+audio-only path to copy or reuse in other apps.
+
+Primary API routes
+------------------
+
+1. src/app/api/youtube-audio/stream/route.ts
+   Streams/proxies extracted YouTube audio for a videoId.
+
+   Previous watch-party song playback URL shape:
+   /api/youtube-audio/stream?videoId=<YOUTUBE_VIDEO_ID>
+
+2. src/app/api/youtube-audio/route.ts
+   Metadata/client extraction helper used by the audio flow.
+
+3. src/app/api/youtube-audio/proxy/route.ts
+   Proxy URL helper used by room/DJ overlay components.
+
+Client/helper files
+-------------------
+
+1. src/lib/yt-client-extract.ts
+   Client-side helper that calls /api/youtube-audio?videoId=...
+
+2. src/lib/audio-url-cache.ts
+   Shared cache used by /api/youtube-audio and /api/youtube-audio/stream.
+
+3. src/app/rooms/[roomId]/_components/OverlayCard.tsx
+   Existing overlay audio playback path using /api/youtube-audio/proxy.
+
+4. src/app/dj/[roomId]/page.tsx
+   DJ page audio playback path using /api/youtube-audio/proxy.
+
+5. src/app/rooms/[roomId]/page.tsx
+   Room music player still has a hidden <audio> playback element.
+
+Song resolution
+---------------
+
+src/lib/bot-actions.ts exports resolveSongRequest(songQuery, requester).
+It uses youtube-sr to resolve a search or YouTube URL into a PlaylistItem:
+
+- id: YouTube video ID
+- title
+- artist/channel
+- url
+- thumbnail
+- duration
+- addedBy
+
+Old watch-party conversion
+--------------------------
+
+The old audio-only watch-party conversion in src/lib/watch/watch-request-service.ts
+used this shape inside musicTrackToWatchItem(track):
+
+playbackUrl: `/api/youtube-audio/stream?videoId=${encodeURIComponent(track.id)}`
+type: 'music'
+metadata.provider: 'youtube'
+metadata.kind: 'song'
+metadata.videoId: track.id
+
+That route is intentionally still present for reuse. The current watch-party
+music flow may choose a full YouTube video embed instead, but the scraping/proxy
+code has not been removed.

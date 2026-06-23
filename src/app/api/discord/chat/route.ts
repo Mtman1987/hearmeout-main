@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { handleMusicCommand } from '@/lib/music-command-service';
-import { GLOBAL_WATCH_SESSION_ID } from '@/lib/watch-session';
+import { GLOBAL_WATCH_SESSION_ID, normalizeWatchSessionAlias } from '@/lib/watch-session';
 import {
   buildWatchJoinMessage,
   getActivityUrl,
@@ -190,9 +190,17 @@ function isDirectDiscordMessage(data: any) {
   return channelType === 'dm' || channelType === '1';
 }
 
-function buildWatchControlsReply(publicBaseUrl: string): DiscordMessagePayload {
-  const joinUrl = getActivityUrl(publicBaseUrl, GLOBAL_WATCH_SESSION_ID);
-  const session = getResolvedWatchSession(GLOBAL_WATCH_SESSION_ID);
+function parseWatchControlsCommand(message: string) {
+  const match = message.trim().match(/^!(controls?|watch-controls)(?:\s+(.+))?$/i);
+  if (!match) return null;
+  return {
+    sessionId: normalizeWatchSessionAlias(match[2], GLOBAL_WATCH_SESSION_ID),
+  };
+}
+
+function buildWatchControlsReply(publicBaseUrl: string, sessionId = GLOBAL_WATCH_SESSION_ID): DiscordMessagePayload {
+  const joinUrl = getActivityUrl(publicBaseUrl, sessionId);
+  const session = getResolvedWatchSession(sessionId);
 
   if (session.current) {
     const status = session.playback.status === 'playing'
@@ -204,7 +212,7 @@ function buildWatchControlsReply(publicBaseUrl: string): DiscordMessagePayload {
   }
 
   return {
-    content: `Watch Party controls: ${joinUrl}`,
+    content: `Watch Party controls for ${sessionId}: ${joinUrl}`,
     components: watchControlComponents(joinUrl),
     allowed_mentions: { parse: [] },
   };
@@ -230,7 +238,7 @@ export async function POST(request: NextRequest) {
     const userName = String(data.userName || data.displayName || data.username || 'Discord User').trim();
     const isDM = isDirectDiscordMessage(data);
     const replies: Array<string | DiscordMessagePayload> = [];
-    const isWatchControlCommand = /^!(controls?|watch-controls)$/i.test(message);
+    const watchControlsCommand = parseWatchControlsCommand(message);
 
     if (!message) {
       return NextResponse.json({ success: true, handled: false, skipped: 'empty message' });
@@ -247,8 +255,8 @@ export async function POST(request: NextRequest) {
     }
 
     let handled = false;
-    if (isWatchControlCommand) {
-      replies.push(buildWatchControlsReply(getRequestBaseUrl(request)));
+    if (watchControlsCommand) {
+      replies.push(buildWatchControlsReply(getRequestBaseUrl(request), watchControlsCommand.sessionId));
       handled = true;
     }
 

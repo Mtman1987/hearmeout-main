@@ -1,14 +1,16 @@
-import { controlWatchSession, getActivityUrl, getResolvedWatchSession, requestWatchMusicItem } from '@/lib/watch-request-service';
-import { getScopedWatchSessionId } from '@/lib/watch-session';
+import { controlWatchSession, extractWatchRoomAlias, getActivityUrl, getResolvedWatchSession, requestWatchMusicItem } from '@/lib/watch-request-service';
+import { getMusicWatchSessionId } from '@/lib/watch-session';
 
 export function parseMusicCommand(message: string) {
   const trimmed = message.trim();
   const requestMatch = trimmed.match(/^!(sr|song)(?:\s+(.+))?$/i);
   if (requestMatch) {
+    const extracted = extractWatchRoomAlias((requestMatch[2] || '').trim(), getMusicWatchSessionId());
     return {
       command: `!${requestMatch[1].toLowerCase()}`,
       action: 'request' as const,
-      query: (requestMatch[2] || '').trim(),
+      query: extracted.query,
+      sessionId: extracted.sessionId,
     };
   }
 
@@ -32,7 +34,7 @@ export async function handleMusicCommand(params: {
   const parsed = parseMusicCommand(params.message);
   if (!parsed) return false;
 
-  const sessionId = getScopedWatchSessionId(params.guildId, params.channelId);
+  const sessionId = 'sessionId' in parsed && parsed.sessionId ? parsed.sessionId : getMusicWatchSessionId();
   const reply = params.reply || (() => undefined);
 
   if (parsed.action === 'request') {
@@ -56,7 +58,7 @@ export async function handleMusicCommand(params: {
     const position = result.session.current?.requestId === result.request.requestId
       ? 'now playing'
       : `queue position ${result.session.queue.length}`;
-    await reply(`Queued in Watch Party: ${result.request.item.title} (${position}). Join: ${getActivityUrl(params.publicBaseUrl, sessionId)}`);
+    await reply(`Queued in Music Videos: ${result.request.item.title} (${position}). Join: ${getActivityUrl(params.publicBaseUrl, sessionId)}`);
     return true;
   }
 

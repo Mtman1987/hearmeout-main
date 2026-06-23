@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { DISCORD_CLIENT_ID } from '@/lib/public-config';
-import { GLOBAL_WATCH_SESSION_ID } from '@/lib/watch-session';
+import { GLOBAL_WATCH_SESSION_ID, normalizeWatchSessionAlias } from '@/lib/watch-session';
 import { getPublicWatchSession, getResolvedWatchSession } from '@/lib/watch/watch-request-service';
 import { js as activityJs } from '../activity-lite.js/route';
 
@@ -28,17 +28,21 @@ function isHlsPlaybackUrl(value: string) {
 function html(request: Request) {
   const configuredBaseUrl = process.env.NEXT_PUBLIC_BASE_URL || process.env.NEXT_PUBLIC_APP_URL;
   const baseUrl = (configuredBaseUrl || new URL(request.url).origin).replace(/\/$/, '');
-  const session = getPublicWatchSession(getResolvedWatchSession(GLOBAL_WATCH_SESSION_ID), baseUrl);
+  const requestUrl = new URL(request.url);
+  const requestedSessionId = normalizeWatchSessionAlias(
+    requestUrl.searchParams.get('sessionId') || requestUrl.searchParams.get('session_id'),
+    GLOBAL_WATCH_SESSION_ID,
+  );
+  const session = getPublicWatchSession(getResolvedWatchSession(requestedSessionId), baseUrl);
   const current = session.current;
   const title = current ? `${current.item.title} (${current.item.year})` : 'Waiting for a request';
   const media = current ? `${current.item.source} - requested by ${current.requestedBy.username}` : 'Media: idle';
   const src = current?.item.playbackUrl || '';
-  const isAudioOnly = current?.item.type === 'music'
-    || current?.item.type === 'tts'
-    || current?.item.metadata?.provider === 'youtube'
-    || current?.item.metadata?.provider === 'tts';
-  const nativeSrc = src && !isAudioOnly && !isHlsPlaybackUrl(src) ? src : '';
+  const isEmbeddedVideo = current?.item.metadata?.provider === 'youtube';
+  const isAudioOnly = current?.item.type === 'tts' || current?.item.metadata?.provider === 'tts';
+  const nativeSrc = src && !isAudioOnly && !isEmbeddedVideo && !isHlsPlaybackUrl(src) ? src : '';
   const audioSrc = src && isAudioOnly ? src : '';
+  const iframeSrc = src && isEmbeddedVideo ? src : '';
 
   return `<!doctype html>
 <html lang="en">
@@ -59,8 +63,8 @@ function html(request: Request) {
     .muted { color: #94a3b8; font-size: 13px; }
     .status { color: #86efac; border: 1px solid rgba(52,211,153,.5); border-radius: 999px; padding: 5px 10px; font-size: 13px; white-space: nowrap; background: rgba(0,0,0,.45); }
     .video-wrap { position: absolute; inset: 0; background: #000; }
-    video { width: 100%; height: 100%; background: #000; display: block; object-fit: contain; }
-    video.hidden, audio.hidden { display: none !important; }
+    video, iframe.youtube-player { width: 100%; height: 100%; background: #000; display: block; object-fit: contain; border: 0; }
+    video.hidden, audio.hidden, iframe.hidden { display: none !important; }
     audio.audio-player { position: absolute; left: 50%; top: 50%; width: min(720px, calc(100vw - 32px)); transform: translate(-50%, -50%); z-index: 2; }
     .empty { position: absolute; inset: 0; display: grid; place-content: center; gap: 8px; text-align: center; color: #cbd5e1; background: rgba(0,0,0,.55); }
     .empty.hidden { display: none !important; }
@@ -98,12 +102,13 @@ function html(request: Request) {
       <header>
         <div>
           <p class="muted">Discord Watch Requests</p>
-          <h1 id="room">Room ${escapeHtml(GLOBAL_WATCH_SESSION_ID)}</h1>
+          <h1 id="room">Room ${escapeHtml(requestedSessionId)}</h1>
         </div>
         <div class="status" id="activity-status">Loading</div>
       </header>
       <div class="video-wrap">
-        <video id="video" class="${isAudioOnly ? 'hidden' : ''}" controls autoplay muted playsinline ${nativeSrc ? `src="${escapeHtml(nativeSrc)}"` : ''}></video>
+        <video id="video" class="${isAudioOnly || isEmbeddedVideo ? 'hidden' : ''}" controls autoplay muted playsinline ${nativeSrc ? `src="${escapeHtml(nativeSrc)}"` : ''}></video>
+        <iframe id="youtube" class="youtube-player ${isEmbeddedVideo ? '' : 'hidden'}" ${iframeSrc ? `src="${escapeHtml(iframeSrc)}"` : ''} allow="autoplay; fullscreen; encrypted-media; picture-in-picture" allowfullscreen></iframe>
         <audio id="audio" class="audio-player ${isAudioOnly ? '' : 'hidden'}" controls autoplay ${audioSrc ? `src="${escapeHtml(audioSrc)}"` : ''}></audio>
         <div class="empty ${current ? 'hidden' : ''}" id="empty"><strong>No video loaded</strong><span>Use the request panel or type !wr in Discord.</span></div>
       </div>
@@ -151,7 +156,7 @@ function html(request: Request) {
     </aside>
   </main>
   <script>
-${activityJs(DISCORD_CLIENT_ID, GLOBAL_WATCH_SESSION_ID)}
+${activityJs(DISCORD_CLIENT_ID, requestedSessionId)}
   </script>
 </body>
 </html>`;

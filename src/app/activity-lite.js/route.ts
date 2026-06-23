@@ -12,9 +12,18 @@ const params = new URLSearchParams(location.search);
 function cleanScopePart(value) {
   return String(value || '').trim().replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 80);
 }
-let sessionId = cleanScopePart(params.get('sessionId') || params.get('session_id') || '')
-  || GLOBAL_SESSION_ID;
+function normalizeSessionAlias(value, fallback) {
+  const raw = String(value || '').trim().toLowerCase();
+  if (!raw) return fallback;
+  if (raw === 'discord-watch-room' || raw === 'discord-music-room' || raw.startsWith('watch-')) return cleanScopePart(raw) || fallback;
+  if (['watch', 'movie', 'movies', 'video', 'videos', 'main', 'default', 'global'].includes(raw)) return 'discord-watch-room';
+  if (['music', 'song', 'songs', 'radio', 'dj'].includes(raw)) return 'discord-music-room';
+  const clean = cleanScopePart(raw.replace(/[^a-z0-9_-]+/g, '-').replace(/^-+|-+$/g, ''));
+  return clean || fallback;
+}
+let sessionId = normalizeSessionAlias(params.get('sessionId') || params.get('session_id') || '', GLOBAL_SESSION_ID);
 const video = document.getElementById('video');
+const youtube = document.getElementById('youtube');
 const audio = document.getElementById('audio');
 const empty = document.getElementById('empty');
 const statusEl = document.getElementById('activity-status');
@@ -47,21 +56,42 @@ let syncingCompletedPlayback = false;
 let syncingNativeControl = false;
 let lastNativePlayAt = 0;
 let media = video;
+let embeddedMode = false;
 
 function isAudioOnlyItem(item) {
   const type = String((item && item.type) || '').toLowerCase();
   const provider = String((item && item.metadata && item.metadata.provider) || '').toLowerCase();
-  return type === 'music' || type === 'tts' || provider === 'youtube' || provider === 'tts';
+  return type === 'tts' || provider === 'tts';
+}
+
+function isEmbeddedVideoItem(item) {
+  const provider = String((item && item.metadata && item.metadata.provider) || '').toLowerCase();
+  const playbackUrl = String((item && item.playbackUrl) || '').toLowerCase();
+  return provider === 'youtube' || playbackUrl.includes('youtube.com/embed/') || playbackUrl.includes('youtube-nocookie.com/embed/');
 }
 
 function setActiveMediaForItem(item) {
+  embeddedMode = isEmbeddedVideoItem(item);
   const nextMedia = isAudioOnlyItem(item) ? audio : video;
   media = nextMedia || video;
-  video.classList.toggle('hidden', media !== video);
+  video.classList.toggle('hidden', embeddedMode || media !== video);
   if (audio) audio.classList.toggle('hidden', media !== audio);
+  if (youtube) youtube.classList.toggle('hidden', !embeddedMode);
 }
 
 function resetInactiveMedia() {
+  if (embeddedMode) {
+    video.pause();
+    video.removeAttribute('src');
+    video.load();
+    if (audio) {
+      audio.pause();
+      audio.removeAttribute('src');
+      audio.load();
+    }
+    return;
+  }
+  if (youtube) youtube.removeAttribute('src');
   const inactive = media === video ? audio : video;
   if (!inactive) return;
   inactive.pause();
@@ -75,10 +105,13 @@ function clearActiveMedia() {
     element.removeAttribute('src');
     element.load();
   });
+  if (youtube) youtube.removeAttribute('src');
+  embeddedMode = false;
 }
 
 function isCurrentMediaActuallyEnded() {
   if (!state || !state.current) return false;
+  if (embeddedMode) return false;
   const duration = Number(media.duration || 0);
   const currentTime = Number(media.currentTime || 0);
   if (!Number.isFinite(duration) || duration <= 0) return false;
@@ -94,6 +127,7 @@ function downloadUrlFor(url) {
 }
 
 function downloadUrlForItem(item) {
+  if (isEmbeddedVideoItem(item)) return '';
   const idMatch = String((item && item.id) || '').match(/^xtream-vod-(\\d+)$/i);
   if (idMatch) return '/activity-provider/xtream/vod/' + idMatch[1] + '?download=1';
   const episodeMatch = String((item && item.playbackUrl) || '').match(/^\\/activity-provider\\/xtream\\/episode\\/(\\d+-[a-z0-9]+)$/i);
@@ -124,6 +158,13 @@ function isHlsPlaybackUrl(value) {
 
 function applyVolume() {
   const value = Math.max(0, Math.min(100, Number(volumeInput.value || 0)));
+  if (embeddedMode) {
+    muteBtn.textContent = muted || value === 0 ? '🔇' : '🔊';
+    muteBtn.title = muted || value === 0 ? 'Unmute' : 'Mute';
+    muteBtn.setAttribute('aria-label', muteBtn.title);
+    volumeLabel.textContent = (muted ? 0 : value) + '%';
+    return;
+  }
   media.volume = value / 100;
   media.muted = muted || value === 0;
   muteBtn.textContent = media.muted ? '🔇' : '🔊';
@@ -198,6 +239,7 @@ function position(playback) {
 
 function applyPlayback() {
   if (!state || !state.current) return;
+  if (embeddedMode) return;
   if (mediaIsBuffering || media.readyState < 2) return;
   const remote = position(state.playback);
   const drift = Math.abs((media.currentTime || 0) - remote);
@@ -224,6 +266,11 @@ function applyPlayback() {
 
 function startVideoPlayback() {
   if (!state || !state.current) return Promise.resolve(false);
+  if (embeddedMode) {
+    pendingPlay = false;
+    mediaEl.textContent = 'Media: embedded video ready';
+    return Promise.resolve(true);
+  }
   pendingPlay = true;
   if (media.readyState < 2) {
     mediaEl.textContent = 'Media: loading';
@@ -244,6 +291,7 @@ function startVideoPlayback() {
 }
 
 function syncNativePlayback(action) {
+  if (embeddedMode) return;
   if (!state || !state.current || applying || syncingCompletedPlayback || syncingNativeControl) return;
   if (pendingPlay && action === 'play') return;
   if (action === 'play') {
@@ -275,7 +323,16 @@ function loadMedia(item) {
   pendingPlay = false;
   mediaEl.textContent = 'Media: loading ' + item.title;
   const playbackUrl = appUrl(item.playbackUrl);
-  if (media === audio) {
+  if (embeddedMode) {
+    if (youtube) {
+      youtube.src = playbackUrl;
+      mediaIsBuffering = false;
+      pendingPlay = false;
+      mediaEl.textContent = 'Media: embedded video ready';
+    } else {
+      mediaEl.textContent = 'Media: embedded player unavailable';
+    }
+  } else if (media === audio) {
     audio.src = playbackUrl;
     audio.load();
   } else if (isHlsPlaybackUrl(item.playbackUrl) && window.Hls && window.Hls.isSupported()) {
@@ -525,7 +582,11 @@ popoutBtn.addEventListener('click', () => {
   }
   const title = String(item.title || 'Watch video').replace(/[<>&"]/g, (char) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;' }[char] || char));
   const src = JSON.stringify(item.playbackUrl);
-  popup.document.write('<!doctype html><html><head><title>' + title + '</title><style>html,body{height:100%;margin:0;background:#000;color:#e5edf5;font-family:Arial,sans-serif}body{display:grid;grid-template-rows:auto 1fr}header{display:flex;justify-content:space-between;gap:12px;align-items:center;padding:10px 12px;background:#111827}button{border:1px solid #475569;background:#1e293b;color:#e5edf5;border-radius:6px;padding:7px 10px}video{width:100%;height:100%;background:#000;display:block}</style></head><body><header><strong>' + title + '</strong><button onclick="document.querySelector(\\'video\\').requestFullscreen()">Fullscreen</button></header><video id="video" controls autoplay playsinline></video><script>const src=' + src + ';const video=document.getElementById("video");const hlsConfig={enableWorker:false,lowLatencyMode:false,backBufferLength:30,manifestLoadingTimeOut:60000,manifestLoadingMaxRetry:4,manifestLoadingRetryDelay:1000,manifestLoadingMaxRetryTimeout:8000,fragLoadingTimeOut:60000,fragLoadingMaxRetry:4,fragLoadingRetryDelay:1000,fragLoadingMaxRetryTimeout:8000};if(src.endsWith(".m3u8")){const s=document.createElement("script");s.src="https://cdn.jsdelivr.net/npm/hls.js@latest";s.onload=()=>{if(window.Hls&&window.Hls.isSupported()){const hls=new window.Hls(hlsConfig);hls.loadSource(src);hls.attachMedia(video)}else{video.src=src}};document.head.appendChild(s)}else{video.src=src}<\\/script></body></html>');
+  if (isEmbeddedVideoItem(item)) {
+    popup.document.write('<!doctype html><html><head><title>' + title + '</title><style>html,body{height:100%;margin:0;background:#000;color:#e5edf5;font-family:Arial,sans-serif}body{display:grid;grid-template-rows:auto 1fr}header{display:flex;justify-content:space-between;gap:12px;align-items:center;padding:10px 12px;background:#111827}iframe{width:100%;height:100%;border:0;background:#000}</style></head><body><header><strong>' + title + '</strong></header><iframe src=' + src + ' allow="autoplay; fullscreen; encrypted-media; picture-in-picture" allowfullscreen></iframe></body></html>');
+  } else {
+    popup.document.write('<!doctype html><html><head><title>' + title + '</title><style>html,body{height:100%;margin:0;background:#000;color:#e5edf5;font-family:Arial,sans-serif}body{display:grid;grid-template-rows:auto 1fr}header{display:flex;justify-content:space-between;gap:12px;align-items:center;padding:10px 12px;background:#111827}button{border:1px solid #475569;background:#1e293b;color:#e5edf5;border-radius:6px;padding:7px 10px}video{width:100%;height:100%;background:#000;display:block}</style></head><body><header><strong>' + title + '</strong><button onclick="document.querySelector(\\'video\\').requestFullscreen()">Fullscreen</button></header><video id="video" controls autoplay playsinline></video><script>const src=' + src + ';const video=document.getElementById("video");const hlsConfig={enableWorker:false,lowLatencyMode:false,backBufferLength:30,manifestLoadingTimeOut:60000,manifestLoadingMaxRetry:4,manifestLoadingRetryDelay:1000,manifestLoadingMaxRetryTimeout:8000,fragLoadingTimeOut:60000,fragLoadingMaxRetry:4,fragLoadingRetryDelay:1000,fragLoadingMaxRetryTimeout:8000};if(src.endsWith(".m3u8")){const s=document.createElement("script");s.src="https://cdn.jsdelivr.net/npm/hls.js@latest";s.onload=()=>{if(window.Hls&&window.Hls.isSupported()){const hls=new window.Hls(hlsConfig);hls.loadSource(src);hls.attachMedia(video)}else{video.src=src}};document.head.appendChild(s)}else{video.src=src}<\\/script></body></html>');
+  }
   popup.document.close();
   errorEl.textContent = '';
 });

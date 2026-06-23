@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { addSongToPlaylist, skipTrack } from '@/lib/bot-actions';
 import { db, ensureDb } from '@/lib/db';
-import { GLOBAL_WATCH_SESSION_ID } from '@/lib/watch-session';
+import { GLOBAL_WATCH_SESSION_ID, normalizeWatchSessionAlias } from '@/lib/watch-session';
 import {
   buildWatchJoinMessage,
   controlWatchSession,
@@ -66,15 +66,16 @@ function getRequestBaseUrl(request: NextRequest) {
   return `${proto}://${host}`;
 }
 
-async function buildWatchControlUpdate(request: NextRequest, action: string) {
-  const session = await controlWatchSession(GLOBAL_WATCH_SESSION_ID, action);
-  const joinUrl = getActivityUrl(getRequestBaseUrl(request), GLOBAL_WATCH_SESSION_ID);
+async function buildWatchControlUpdate(request: NextRequest, action: string, sessionId = GLOBAL_WATCH_SESSION_ID) {
+  const resolvedSessionId = normalizeWatchSessionAlias(sessionId, GLOBAL_WATCH_SESSION_ID);
+  const session = await controlWatchSession(resolvedSessionId, action);
+  const joinUrl = getActivityUrl(getRequestBaseUrl(request), resolvedSessionId);
 
   if (!session.current) {
     return {
       content: `Watch Party is empty. Join Activity: ${joinUrl}`,
       embeds: [],
-      components: watchControlComponents(joinUrl),
+      components: watchControlComponents(joinUrl, resolvedSessionId),
       allowed_mentions: { parse: [] },
     };
   }
@@ -109,7 +110,9 @@ export async function POST(req: NextRequest) {
     const { custom_id } = data;
 
     if (custom_id.startsWith('hmo_watch_control:')) {
-      const action = String(custom_id.split(':')[1] || '').toLowerCase();
+      const parts = String(custom_id).split(':');
+      const action = String(parts[1] || '').toLowerCase();
+      const sessionId = normalizeWatchSessionAlias(parts[2], GLOBAL_WATCH_SESSION_ID);
       const allowedActions = new Set(['play', 'pause', 'mute', 'unmute', 'next', 'clear']);
       if (!allowedActions.has(action)) {
         return NextResponse.json({
@@ -119,7 +122,7 @@ export async function POST(req: NextRequest) {
       }
 
       try {
-        const update = await buildWatchControlUpdate(req, action);
+        const update = await buildWatchControlUpdate(req, action, sessionId);
         return NextResponse.json({ type: InteractionResponseType.UPDATE_MESSAGE, data: update });
       } catch (error: any) {
         return NextResponse.json({
