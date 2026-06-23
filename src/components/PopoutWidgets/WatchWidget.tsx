@@ -4,8 +4,8 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { DraggableContainer } from './DraggableContainer';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Film, Play, SkipForward, Trash2, Search, ExternalLink, LoaderCircle } from 'lucide-react';
-import { GLOBAL_WATCH_SESSION_ID } from '@/lib/watch-session';
+import { Film, Music, Play, SkipForward, Trash2, Search, ExternalLink, LoaderCircle } from 'lucide-react';
+import { GLOBAL_WATCH_SESSION_ID, MUSIC_WATCH_SESSION_ID, getOverlayWatchSessionId } from '@/lib/watch-session';
 
 interface WatchWidgetProps {
   id: string;
@@ -18,6 +18,7 @@ interface WatchWidgetProps {
   onSaveLayout?: () => void;
   onClose: () => void;
   roomId: string;
+  sessionScope?: 'discord' | 'overlay';
 }
 
 type WatchState = {
@@ -56,14 +57,17 @@ function watchRequestErrorMessage(data: any) {
 
 export function WatchWidget({
   id, position, size, opacity,
-  onPositionChange, onSizeChange, onOpacityChange, onSaveLayout, onClose, roomId,
+  onPositionChange, onSizeChange, onOpacityChange, onSaveLayout, onClose, roomId, sessionScope = 'discord',
 }: WatchWidgetProps) {
   const [state, setState] = useState<WatchState | null>(null);
   const [query, setQuery] = useState('');
+  const [tab, setTab] = useState<'movie' | 'music'>('movie');
   const [searching, setSearching] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const sessionId = GLOBAL_WATCH_SESSION_ID;
+  const movieSessionId = sessionScope === 'overlay' ? getOverlayWatchSessionId(roomId, 'movie') : GLOBAL_WATCH_SESSION_ID;
+  const musicSessionId = sessionScope === 'overlay' ? getOverlayWatchSessionId(roomId, 'music') : MUSIC_WATCH_SESSION_ID;
+  const sessionId = tab === 'music' ? musicSessionId : movieSessionId;
 
   const refresh = useCallback(async () => {
     if (!roomId) return;
@@ -92,7 +96,7 @@ export function WatchWidget({
       const res = await fetch(`/api/watch/sessions/${sessionId}/request`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ query: query.trim(), username: 'local viewer' }),
+        body: JSON.stringify({ query: query.trim(), username: 'local viewer', mediaType: tab === 'music' ? 'music' : 'video' }),
       });
       const data = await res.json();
       if (!res.ok) {
@@ -139,6 +143,15 @@ export function WatchWidget({
       minimalChrome
     >
       <div className="flex-1 overflow-y-auto p-3 space-y-3">
+        <div className="grid grid-cols-2 gap-2">
+          <Button type="button" variant={tab === 'movie' ? 'secondary' : 'outline'} size="sm" onClick={() => { setTab('movie'); setError(null); }}>
+            <Film className="mr-1 h-3.5 w-3.5" /> Movies
+          </Button>
+          <Button type="button" variant={tab === 'music' ? 'secondary' : 'outline'} size="sm" onClick={() => { setTab('music'); setError(null); }}>
+            <Music className="mr-1 h-3.5 w-3.5" /> Music
+          </Button>
+        </div>
+
         {state?.current ? (
           <div className="space-y-2">
             <div className="aspect-video w-full rounded-md overflow-hidden border border-border bg-black">
@@ -190,7 +203,7 @@ export function WatchWidget({
 
         <form onSubmit={handleSearch} className="flex gap-2">
           <Input
-            placeholder="Search movie or TV show..."
+            placeholder={tab === 'music' ? 'Search song or YouTube URL...' : 'Search movie or TV show...'}
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             disabled={searching}

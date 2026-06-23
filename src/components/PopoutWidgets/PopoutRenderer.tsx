@@ -59,7 +59,11 @@ export function PopoutRenderer() {
               onSaveLayout={() => savePopoutLayout(popout.id)}
               onClose={() => closePopout(popout.id)}
               roomId={widgetRoomId}
-              onOpenAddSong={() => openPopout('addSong', { width: 460, height: 560 }, { source: 'addSong', roomId: widgetRoomId })}
+              onOpenAddSong={() => openPopout('addSong', { width: 460, height: 560 }, {
+                source: 'addSong',
+                roomId: widgetRoomId,
+                sessionScope: popout.customSettings?.sessionScope === 'overlay' ? 'overlay' : 'discord',
+              })}
             />
           );
         }
@@ -77,6 +81,7 @@ export function PopoutRenderer() {
               onSaveLayout={() => savePopoutLayout(popout.id)}
               onClose={() => closePopout(popout.id)}
               roomId={widgetRoomId}
+              sessionScope={popout.customSettings?.sessionScope === 'overlay' ? 'overlay' : 'discord'}
             />
           );
         }
@@ -94,6 +99,7 @@ export function PopoutRenderer() {
               onSaveLayout={() => savePopoutLayout(popout.id)}
               onClose={() => closePopout(popout.id)}
               roomId={widgetRoomId}
+              sessionScope={popout.customSettings?.sessionScope === 'overlay' ? 'overlay' : 'discord'}
             />
           );
         }

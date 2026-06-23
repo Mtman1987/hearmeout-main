@@ -9,6 +9,16 @@ export function getMusicWatchSessionId() {
   return MUSIC_WATCH_SESSION_ID;
 }
 
+export function getOverlayWatchSessionId(roomId: string, kind: 'movie' | 'music' = 'movie') {
+  const cleanRoomId = String(roomId || 'room')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 48) || 'room';
+  return `watch-overlay-${cleanRoomId}-${kind}`;
+}
+
 export function normalizeWatchSessionAlias(value?: string | null, fallback = GLOBAL_WATCH_SESSION_ID) {
   const raw = String(value || '').trim().toLowerCase();
   if (!raw) return fallback;

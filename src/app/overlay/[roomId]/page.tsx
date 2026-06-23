@@ -181,8 +181,6 @@ export default function OverlayPage() {
 
   const track = room.playlist?.find(t => t.id === room.currentTrackId);
 
-  if (!track || !room.isPlaying) return <div className="min-h-screen bg-transparent" />;
-
   const hasPopout = (source: string) => popouts.some((p) => p.type === 'chat' && p.customSettings?.source === source);
   const hasQueue = popouts.some((p) => p.type === 'queue');
   const hasAddSong = popouts.some((p) => p.type === 'addSong');
@@ -197,22 +195,24 @@ export default function OverlayPage() {
   return (
     <div className="min-h-screen bg-transparent text-white relative">
       {/* Now Playing — bottom left, designed for OBS browser source */}
-      <div style={{ position: 'absolute', left: 20, bottom: 20 }}>
-        <div className="rounded-lg bg-black/80 backdrop-blur-md p-4 shadow-2xl min-w-[300px] flex items-center gap-4">
-          {track.thumbnail ? (
-            <Image src={track.thumbnail} alt="" width={64} height={64} className="rounded-md" unoptimized />
-          ) : (
-            <div className="w-16 h-16 bg-white/10 rounded-md flex items-center justify-center">
-              <Music className="w-8 h-8 text-white/80" />
+      {track && room.isPlaying && (
+        <div style={{ position: 'absolute', left: 20, bottom: 20 }}>
+          <div className="rounded-lg bg-black/80 backdrop-blur-md p-4 shadow-2xl min-w-[300px] flex items-center gap-4">
+            {track.thumbnail ? (
+              <Image src={track.thumbnail} alt="" width={64} height={64} className="rounded-md" unoptimized />
+            ) : (
+              <div className="w-16 h-16 bg-white/10 rounded-md flex items-center justify-center">
+                <Music className="w-8 h-8 text-white/80" />
+              </div>
+            )}
+            <div className="flex-1 overflow-hidden">
+              <h2 className="text-lg font-bold truncate">{track.title}</h2>
+              <p className="text-sm text-gray-400 truncate">{track.artist}</p>
             </div>
-          )}
-          <div className="flex-1 overflow-hidden">
-            <h2 className="text-lg font-bold truncate">{track.title}</h2>
-            <p className="text-sm text-gray-400 truncate">{track.artist}</p>
+            {room.djActive && <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse shrink-0" />}
           </div>
-          {room.djActive && <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse shrink-0" />}
         </div>
-      </div>
+      )}
 
       {/* Volume Controls — top right, only visible when hovering (for streamer monitoring) */}
       <div style={{ position: 'absolute', right: 20, top: 20 }} className="opacity-20 hover:opacity-100 transition-opacity">
@@ -266,13 +266,21 @@ export default function OverlayPage() {
               </DropdownMenuCheckboxItem>
               <DropdownMenuCheckboxItem
                 checked={hasAddSong}
-                onCheckedChange={() => togglePopout('addSong', 'addSong', { width: 460, height: 560 })}
+                onCheckedChange={() => {
+                  const existing = popouts.find((p) => p.type === 'addSong');
+                  if (existing) closePopout(existing.id);
+                  else openPopout('addSong', { width: 460, height: 560 }, { source: 'addSong', sessionScope: 'overlay', roomId });
+                }}
               >
                 Add Song
               </DropdownMenuCheckboxItem>
               <DropdownMenuCheckboxItem
                 checked={hasWatch}
-                onCheckedChange={() => togglePopout('watch', 'watch', { width: 640, height: 480 })}
+                onCheckedChange={() => {
+                  const existing = popouts.find((p) => p.type === 'watch');
+                  if (existing) closePopout(existing.id);
+                  else openPopout('watch', { width: 760, height: 620 }, { source: 'watch', sessionScope: 'overlay', roomId });
+                }}
               >
                 Watch Party
               </DropdownMenuCheckboxItem>

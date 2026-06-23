@@ -24,7 +24,7 @@ import { Room as LKRoom, RoomEvent, Track, RemoteTrack } from 'livekit-client';
 import { generateLiveKitToken, generateMusicRoomToken } from '@/app/actions';
 import { PlaylistItem } from "@/types/playlist";
 import { getScreenPeerId, PeerAudioListener, PeerScreenViewer, PeerVoiceMesh } from '@/lib/peer-audio-service';
-import { GLOBAL_WATCH_SESSION_ID } from '@/lib/watch-session';
+import { GLOBAL_WATCH_SESSION_ID, getOverlayWatchSessionId } from '@/lib/watch-session';
 
 interface RoomData {
   id: string;
@@ -54,10 +54,10 @@ type WatchCardState = {
   playback?: { status?: string };
 };
 
-function SharedWatchCard({ roomId, onOpenWatch }: { roomId: string; onOpenWatch: () => void }) {
+function SharedWatchCard({ roomId, onOpenWatch, sessionScope = 'discord' }: { roomId: string; onOpenWatch: () => void; sessionScope?: 'discord' | 'overlay' }) {
     const [state, setState] = useState<WatchCardState | null>(null);
     const [dismissedRequestId, setDismissedRequestId] = useState<string | null>(null);
-    const sessionId = GLOBAL_WATCH_SESSION_ID;
+    const sessionId = sessionScope === 'overlay' ? getOverlayWatchSessionId(roomId, 'movie') : GLOBAL_WATCH_SESSION_ID;
 
     useEffect(() => {
         let cancelled = false;
@@ -136,6 +136,7 @@ function SharedScreenShareCard({ roomId }: { roomId: string }) {
     const [dismissedSignature, setDismissedSignature] = useState<string | null>(null);
     const viewerRef = useRef<PeerScreenViewer | null>(null);
     const videoRef = useRef<HTMLVideoElement | null>(null);
+    const ownPeerId = user ? getScreenPeerId(roomId, user.uid) : null;
 
     useEffect(() => {
         let cancelled = false;
@@ -192,10 +193,14 @@ function SharedScreenShareCard({ roomId }: { roomId: string }) {
         }
     }, [stopViewing]);
 
+    useEffect(() => {
+        if (!ownPeerId || viewing || remoteStream || !availableShares.includes(ownPeerId)) return;
+        void viewShare(ownPeerId);
+    }, [availableShares, ownPeerId, remoteStream, viewShare, viewing]);
+
     if (availableShares.length === 0) return null;
     const shareSignature = availableShares.slice().sort().join('|');
     if (shareSignature === dismissedSignature) return null;
-    const ownPeerId = user ? getScreenPeerId(roomId, user.uid) : null;
     const stopOwnShare = async () => {
         if (!ownPeerId) return;
         window.dispatchEvent(new CustomEvent('hmo-stop-screen-share', { detail: { roomId } }));
@@ -927,14 +932,15 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
                           onStopDJ={handleStopDJ}
                           onStartAudio={handleStartMusicAudio}
                           onOpenQueue={() => openPopout('queue', { width: 760, height: 720 }, { source: 'queue' })}
-                          onOpenAddSong={() => openPopout('addSong', { width: 460, height: 560 }, { source: 'addSong' })}
-                          onOpenWatch={() => openPopout('watch', { width: 640, height: 700 }, { source: 'watch' })}
+                          onOpenAddSong={() => openPopout('addSong', { width: 460, height: 560 }, { source: 'addSong', sessionScope: isStreamMode ? 'overlay' : 'discord', roomId })}
+                          onOpenWatch={() => openPopout('watch', { width: 760, height: 700 }, { source: 'watch', sessionScope: isStreamMode ? 'overlay' : 'discord', roomId })}
                           voiceEnabled={voiceReady || voiceFallbackActive}
                           voiceFallbackFailed={voiceFallbackFailed}
                         />
                         <SharedWatchCard
                           roomId={roomId}
-                          onOpenWatch={() => openPopout('watch', { width: 640, height: 700 }, { source: 'watch' })}
+                          sessionScope={isStreamMode ? 'overlay' : 'discord'}
+                          onOpenWatch={() => openPopout('watch', { width: 760, height: 700 }, { source: 'watch', sessionScope: isStreamMode ? 'overlay' : 'discord', roomId })}
                         />
                         <SharedScreenShareCard roomId={roomId} />
                         {isOwner && <VoiceQueue roomId={roomId} />}

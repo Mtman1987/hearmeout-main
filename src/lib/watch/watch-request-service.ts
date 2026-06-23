@@ -19,7 +19,7 @@ type WatchCatalogItem = {
   playbackUrl: string;
   overview: string;
   metadata?: {
-    provider?: 'xtream' | 'youtube' | 'tts';
+    provider?: 'xtream' | 'youtube' | 'youtube-video' | 'tts';
     kind?: 'series-episode' | 'song' | 'tts';
     seriesId?: string;
     seriesTitle?: string;
@@ -31,6 +31,9 @@ type WatchCatalogItem = {
     videoId?: string;
     artist?: string;
     originalUrl?: string;
+    audioPlaybackUrl?: string;
+    videoPlaybackUrl?: string;
+    playbackMode?: 'audio' | 'video';
   };
 };
 
@@ -354,6 +357,8 @@ function formatDurationMs(durationMs: number | undefined) {
 
 function musicTrackToWatchItem(track: PlaylistItem): WatchCatalogItem {
   const videoId = encodeURIComponent(track.id);
+  const videoPlaybackUrl = `/api/youtube-video/proxy?videoId=${videoId}&media=video`;
+  const audioPlaybackUrl = `/api/youtube-video/proxy?videoId=${videoId}&media=audio`;
   return {
     id: `youtube-${track.id}`,
     type: 'music',
@@ -362,14 +367,17 @@ function musicTrackToWatchItem(track: PlaylistItem): WatchCatalogItem {
     runtime: formatDurationMs(track.duration),
     source: track.artist ? `YouTube Video: ${track.artist}` : 'YouTube Video',
     poster: track.thumbnail || '',
-    playbackUrl: `https://www.youtube-nocookie.com/embed/${videoId}?autoplay=1&controls=1&playsinline=1&rel=0&enablejsapi=1`,
+    playbackUrl: videoPlaybackUrl,
     overview: `Song request from ${track.addedBy || 'unknown user'}.`,
     metadata: {
-      provider: 'youtube',
+      provider: 'youtube-video',
       kind: 'song',
       videoId: track.id,
       artist: track.artist,
       originalUrl: track.url,
+      audioPlaybackUrl,
+      videoPlaybackUrl,
+      playbackMode: 'video',
     },
   };
 }

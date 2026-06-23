@@ -77,14 +77,18 @@ async function doRip(videoId) {
 }
 
 const urlCache = new Map();
-function getCachedExtractedInfo(videoId) {
-  const c = urlCache.get(videoId);
+function mediaCacheKey(videoId, mode = 'audio') {
+  return `${mode}:${videoId}`;
+}
+
+function getCachedExtractedInfo(videoId, mode = 'audio') {
+  const c = urlCache.get(mediaCacheKey(videoId, mode));
   if (c && c.expires > Date.now()) return c.info;
-  urlCache.delete(videoId);
+  urlCache.delete(mediaCacheKey(videoId, mode));
   return null;
 }
 function getCachedExtractedUrl(videoId) {
-  return getCachedExtractedInfo(videoId)?.url || null;
+  return getCachedExtractedInfo(videoId, 'audio')?.url || null;
 }
 
 function capRangeHeader(rangeHeader) {
@@ -99,8 +103,8 @@ function capRangeHeader(rangeHeader) {
   const end = requestedEnd === null || requestedEnd > chunkEnd ? chunkEnd : requestedEnd;
   return `bytes=${start}-${end}`;
 }
-function setCachedExtractedInfo(videoId, info) {
-  urlCache.set(videoId, { info, expires: Date.now() + 5 * 60 * 60 * 1000 });
+function setCachedExtractedInfo(videoId, info, mode = 'audio') {
+  urlCache.set(mediaCacheKey(videoId, mode), { info, expires: Date.now() + 5 * 60 * 60 * 1000 });
 }
 
 function getMimeFromUrl(rawUrl) {
@@ -120,6 +124,12 @@ function isAudioCandidate(rawUrl, contentType) {
   const responseType = normalizeContentType(contentType);
   const queryType = normalizeContentType(getMimeFromUrl(rawUrl));
   return responseType.startsWith('audio/') || queryType.startsWith('audio/');
+}
+
+function isVideoCandidate(rawUrl, contentType) {
+  const responseType = normalizeContentType(contentType);
+  const queryType = normalizeContentType(getMimeFromUrl(rawUrl));
+  return responseType.startsWith('video/') || queryType.startsWith('video/');
 }
 
 async function extractDirectAudioFormat(videoId) {
@@ -164,10 +174,57 @@ async function extractDirectAudioFormat(videoId) {
   return null;
 }
 
-async function extractFromUpstream(videoId) {
+async function extractDirectVideoFormat(videoId) {
+  const { Innertube, ClientType } = await import('youtubei.js');
+  const clients = ['ANDROID_VR', 'ANDROID', 'IOS', 'TV', 'MWEB', 'WEB'];
+
+  for (const client of clients) {
+    try {
+      const yt = await Innertube.create({ client_type: ClientType?.[client] || client });
+      const info = await yt.getBasicInfo(videoId);
+      const formats = [
+        ...(info.streaming_data?.formats || []),
+        ...(info.streaming_data?.adaptive_formats || []),
+      ];
+      const videoFormats = formats
+        .filter((format) => {
+          const mimeType = String(format.mime_type || format.mimeType || '');
+          const hasAudio = format.has_audio || format.audio_quality || format.audioQuality;
+          const hasVideo = format.has_video || format.width || format.height || mimeType.startsWith('video/');
+          return mimeType.startsWith('video/') && hasAudio && hasVideo;
+        })
+        .sort((a, b) => {
+          const aMime = String(a.mime_type || a.mimeType || '');
+          const bMime = String(b.mime_type || b.mimeType || '');
+          const aMp4 = aMime.includes('video/mp4') ? 1 : 0;
+          const bMp4 = bMime.includes('video/mp4') ? 1 : 0;
+          return (bMp4 - aMp4) || ((Number(b.height) || 0) - (Number(a.height) || 0)) || ((Number(b.bitrate) || 0) - (Number(a.bitrate) || 0));
+        });
+      console.log(`[Extract] ${client} direct lookup returned ${videoFormats.length} progressive video formats for ${videoId}`);
+
+      for (const format of videoFormats) {
+        let url = format.url;
+        if (!url && typeof format.decipher === 'function') {
+          url = await format.decipher(yt.session.player).catch(() => null);
+        }
+        if (!url) continue;
+        return {
+          url,
+          mimeType: format.mime_type || format.mimeType || getMimeFromUrl(url) || 'video/mp4',
+        };
+      }
+    } catch (err) {
+      console.warn(`[Extract] ${client} direct video lookup failed: ${err.message?.slice(0, 120)}`);
+    }
+  }
+
+  return null;
+}
+
+async function extractFromUpstream(videoId, mode = 'audio') {
   if (!UPSTREAM_EXTRACTOR_URL) return null;
 
-  const endpoint = `${UPSTREAM_EXTRACTOR_URL}/extract?videoId=${encodeURIComponent(videoId)}`;
+  const endpoint = `${UPSTREAM_EXTRACTOR_URL}/extract?videoId=${encodeURIComponent(videoId)}&mode=${encodeURIComponent(mode)}`;
   const headers = UPSTREAM_EXTRACTOR_SECRET
     ? { Authorization: `Bearer ${UPSTREAM_EXTRACTOR_SECRET}` }
     : {};
@@ -194,12 +251,12 @@ async function extractFromUpstream(videoId) {
 }
 
 async function extractAudioInfo(videoId) {
-  const cached = getCachedExtractedInfo(videoId);
+  const cached = getCachedExtractedInfo(videoId, 'audio');
   if (cached) return cached;
 
-  const upstreamInfo = await extractFromUpstream(videoId);
+  const upstreamInfo = await extractFromUpstream(videoId, 'audio');
   if (upstreamInfo?.url) {
-    setCachedExtractedInfo(videoId, upstreamInfo);
+    setCachedExtractedInfo(videoId, upstreamInfo, 'audio');
     return upstreamInfo;
   }
 
@@ -212,7 +269,7 @@ async function extractAudioInfo(videoId) {
       title: 'Unknown',
       artist: 'Unknown',
     };
-    setCachedExtractedInfo(videoId, info);
+    setCachedExtractedInfo(videoId, info, 'audio');
     return info;
   }
 
@@ -303,7 +360,124 @@ async function extractAudioInfo(videoId) {
       title: extracted.metadata.title,
       artist: extracted.metadata.artist,
     };
-    setCachedExtractedInfo(videoId, info);
+    setCachedExtractedInfo(videoId, info, 'audio');
+    return info;
+  } finally {
+    await browser.close().catch(() => {});
+  }
+}
+
+async function extractVideoInfo(videoId) {
+  const cached = getCachedExtractedInfo(videoId, 'video');
+  if (cached) return cached;
+
+  const upstreamInfo = await extractFromUpstream(videoId, 'video');
+  if (upstreamInfo?.url) {
+    setCachedExtractedInfo(videoId, upstreamInfo, 'video');
+    return upstreamInfo;
+  }
+
+  const directVideo = await extractDirectVideoFormat(videoId);
+  if (directVideo?.url) {
+    const info = {
+      url: directVideo.url,
+      mimeType: directVideo.mimeType || 'video/mp4',
+      duration: 0,
+      title: 'Unknown',
+      artist: 'Unknown',
+    };
+    setCachedExtractedInfo(videoId, info, 'video');
+    return info;
+  }
+
+  console.warn(`[Extract] Browser video capture starting for ${videoId}`);
+  const browser = await puppeteer.launch({
+    executablePath: CHROMIUM_PATH,
+    headless: true,
+    userDataDir: EXTRACTOR_USER_DATA_DIR,
+    args: [
+      '--no-sandbox',
+      '--disable-setuid-sandbox',
+      '--disable-dev-shm-usage',
+      '--disable-gpu',
+      `--profile-directory=${EXTRACTOR_PROFILE_DIR}`,
+      '--autoplay-policy=no-user-gesture-required',
+    ],
+  });
+
+  const page = await browser.newPage();
+  let capturedUrl = null;
+  let capturedContentType = null;
+  let firstMediaUrl = null;
+  let firstMediaContentType = null;
+
+  page.on('response', async (resp) => {
+    if (capturedUrl) return;
+    const url = resp.url();
+    if (!/googlevideo\.com\/videoplayback/.test(url)) return;
+    const contentType = resp.headers()['content-type'] || getMimeFromUrl(url) || null;
+    if (!firstMediaUrl) {
+      firstMediaUrl = url;
+      firstMediaContentType = contentType;
+    }
+    if (!isVideoCandidate(url, contentType)) return;
+    capturedUrl = url;
+    capturedContentType = contentType;
+  });
+
+  try {
+    const ytUrl = `https://www.youtube.com/watch?v=${encodeURIComponent(videoId)}&autoplay=1&mute=1&playsinline=1`;
+    await page.goto(ytUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
+
+    const extracted = await page.evaluate(() => {
+      const yip = window.ytInitialPlayerResponse || JSON.parse(window.ytplayer?.config?.args?.player_response || 'null');
+      const details = yip?.videoDetails || {};
+      const videoFormats = (yip?.streamingData?.formats || [])
+        .filter((format) => typeof format.url === 'string' && /^video\//i.test(format.mimeType || ''))
+        .sort((a, b) => (Number(b.height) || 0) - (Number(a.height) || 0) || (Number(b.bitrate) || 0) - (Number(a.bitrate) || 0));
+      return {
+        metadata: {
+          title: details.title || document.title || 'Unknown',
+          artist: details.author || 'Unknown',
+          duration: Number(details.lengthSeconds || 0),
+        },
+        videoFormat: videoFormats[0]
+          ? {
+              url: videoFormats[0].url,
+              mimeType: videoFormats[0].mimeType || null,
+            }
+          : null,
+      };
+    }).catch(() => ({
+      metadata: { title: 'Unknown', artist: 'Unknown', duration: 0 },
+      videoFormat: null,
+    }));
+
+    if (extracted.videoFormat?.url) {
+      capturedUrl = extracted.videoFormat.url;
+      capturedContentType = extracted.videoFormat.mimeType || getMimeFromUrl(capturedUrl) || null;
+    }
+
+    for (let i = 0; i < 40 && !capturedUrl; i++) {
+      await delay(500);
+    }
+
+    if (!capturedUrl) {
+      const kind = firstMediaUrl
+        ? `only captured non-video media (${firstMediaContentType || getMimeFromUrl(firstMediaUrl) || 'unknown type'})`
+        : 'no media request captured';
+      console.warn(`[Extract] ${kind} for ${videoId}`);
+      return null;
+    }
+
+    const info = {
+      url: capturedUrl,
+      mimeType: capturedContentType || 'application/octet-stream',
+      duration: extracted.metadata.duration,
+      title: extracted.metadata.title,
+      artist: extracted.metadata.artist,
+    };
+    setCachedExtractedInfo(videoId, info, 'video');
     return info;
   } finally {
     await browser.close().catch(() => {});
@@ -325,11 +499,12 @@ app.get('/music/:videoId', authorizeWorker, (req, res) => {
 
 app.get('/extract', authorizeWorker, async (req, res) => {
   const { videoId } = req.query;
+  const mode = String(req.query.mode || 'audio').toLowerCase() === 'video' ? 'video' : 'audio';
   if (!isValidVideoId(videoId)) return res.status(400).json({ error: 'Invalid videoId' });
   try {
-    const info = await extractAudioInfo(videoId);
+    const info = mode === 'video' ? await extractVideoInfo(videoId) : await extractAudioInfo(videoId);
     if (!info?.url) return res.status(503).json({ error: 'Browser extraction failed' });
-    return res.json(info);
+    return res.json({ ...info, mode });
   } catch (err) {
     console.error(`[Extract] Browser capture failed for ${videoId}`, describeError(err));
     return res.status(503).json({ error: 'Browser extraction failed' });

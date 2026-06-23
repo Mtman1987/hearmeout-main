@@ -55,14 +55,14 @@ function html(request: Request) {
     html, body { width: 100%; height: 100%; margin: 0; background: #000; color: #e5edf5; font-family: Arial, system-ui, sans-serif; }
     body { overflow: hidden; }
     main { width: 100vw; height: 100vh; background: #000; }
-    .player { position: relative; width: 100%; height: 100%; background: #000; }
+    .player { position: relative; width: 100%; height: 100%; background: #000; display: grid; grid-template-rows: minmax(0, 1fr) auto; overflow: hidden; }
     header { display: none; }
     h1, h2, p { margin: 0; }
     h1 { font-size: 18px; font-weight: 700; }
     h2 { font-size: 16px; margin-bottom: 10px; }
     .muted { color: #94a3b8; font-size: 13px; }
     .status { color: #86efac; border: 1px solid rgba(52,211,153,.5); border-radius: 999px; padding: 5px 10px; font-size: 13px; white-space: nowrap; background: rgba(0,0,0,.45); }
-    .video-wrap { position: absolute; inset: 0; background: #000; }
+    .video-wrap { position: relative; min-height: 0; background: #000; }
     video, iframe.youtube-player { width: 100%; height: 100%; background: #000; display: block; object-fit: contain; border: 0; }
     video.hidden, audio.hidden, iframe.hidden { display: none !important; }
     audio.audio-player { position: absolute; left: 50%; top: 50%; width: min(720px, calc(100vw - 32px)); transform: translate(-50%, -50%); z-index: 2; }
@@ -71,7 +71,7 @@ function html(request: Request) {
     .room-tabs { position: fixed; top: 10px; left: 10px; z-index: 10; display: flex; gap: 6px; padding: 5px; border: 1px solid rgba(148,163,184,.35); border-radius: 8px; background: rgba(2,6,23,.78); backdrop-filter: blur(10px); }
     .room-tab { min-height: 34px; border-color: transparent; background: transparent; padding: 6px 10px; }
     .room-tab.active { border-color: rgba(52,211,153,.85); background: rgba(16,185,129,.18); color: #bbf7d0; }
-    .toolbar { position: fixed; left: 50%; bottom: 12px; z-index: 10; width: min(980px, calc(100vw - 20px)); display: flex; gap: 6px; align-items: center; justify-content: center; flex-wrap: wrap; padding: 7px; border: 1px solid rgba(148,163,184,.35); border-radius: 8px; background: rgba(2,6,23,.78); backdrop-filter: blur(10px); transform: translateX(-50%); }
+    .toolbar { position: relative; z-index: 10; width: 100%; display: flex; gap: 6px; align-items: center; justify-content: center; flex-wrap: wrap; padding: 7px; border-top: 1px solid rgba(148,163,184,.35); background: rgba(2,6,23,.96); }
     button, input { min-height: 38px; border-radius: 6px; border: 1px solid #475569; background: #172033; color: #e5edf5; padding: 8px 10px; font: inherit; }
     button { cursor: pointer; }
     button:disabled { opacity: .45; cursor: not-allowed; }
@@ -80,7 +80,7 @@ function html(request: Request) {
     .panel-btn.active { border-color: #34d399; color: #bbf7d0; }
     .volume { min-width: 220px; flex: 1; display: flex; align-items: center; gap: 8px; border: 1px solid #475569; border-radius: 6px; background: #0f172a; padding: 7px 9px; }
     .volume input { min-height: 0; padding: 0; accent-color: #34d399; }
-    .meta { position: fixed; left: 10px; right: 10px; bottom: 72px; z-index: 9; display: grid; justify-items: center; gap: 4px; text-align: center; pointer-events: none; text-shadow: 0 1px 4px #000; }
+    .meta { position: fixed; left: 10px; right: 10px; bottom: 64px; z-index: 9; display: grid; justify-items: center; gap: 4px; text-align: center; pointer-events: none; text-shadow: 0 1px 4px #000; }
     aside { display: none; }
     aside.open { position: fixed; right: 10px; top: 58px; bottom: 76px; z-index: 12; display: block; width: min(360px, calc(100vw - 20px)); overflow: auto; padding: 0; color: #e5edf5; background: rgba(2,6,23,.92); border: 1px solid rgba(148,163,184,.35); border-radius: 8px; }
     aside section { margin-bottom: 12px; padding: 12px; background: #151b25; border: 1px solid #283447; border-radius: 8px; }
@@ -96,8 +96,8 @@ function html(request: Request) {
     body.focus-mode main { grid-template-columns: 1fr; }
     body.focus-mode aside, body.focus-mode header, body.focus-mode .meta { display: none; }
     body.focus-mode .player { height: 100vh; }
-    body.focus-mode .room-tabs, body.focus-mode .toolbar, body.focus-mode .meta { opacity: .18; transition: opacity .15s ease; }
-    body.focus-mode .room-tabs:hover, body.focus-mode .toolbar:hover, body.focus-mode .meta:hover { opacity: 1; }
+    body.focus-mode .room-tabs, body.focus-mode .meta { opacity: .18; transition: opacity .15s ease; }
+    body.focus-mode .room-tabs:hover, body.focus-mode .meta:hover { opacity: 1; }
   </style>
   <script src="/api/activity/hls"></script>
 </head>
@@ -132,6 +132,7 @@ function html(request: Request) {
         <button class="panel-btn" data-panel="request" type="button">Request</button>
         <button class="panel-btn" data-panel="queue" type="button">Queue</button>
         <button class="panel-btn" data-panel="events" type="button">Activity</button>
+        <button id="media-mode" type="button" hidden>Video</button>
         <button class="icon-btn" id="mute" type="button" title="Mute" aria-label="Mute">🔊</button>
         <div class="volume" title="Volume">
           <input id="volume" type="range" min="0" max="100" value="85" aria-label="Video volume" />
