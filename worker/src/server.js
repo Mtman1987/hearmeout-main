@@ -13,7 +13,7 @@ const express = require('express');
 const cors = require('cors');
 const { execFile, spawn } = require('child_process');
 const { promisify } = require('util');
-const { existsSync, mkdirSync, unlinkSync, statSync, readdirSync, readFileSync, createReadStream, mkdtempSync, rmSync } = require('fs');
+const { existsSync, mkdirSync, unlinkSync, statSync, readdirSync, readFileSync, writeFileSync, createReadStream, mkdtempSync, rmSync } = require('fs');
 const { AudioSource, AudioFrame, LocalAudioTrack, Room, RoomEvent, TrackPublishOptions, TrackSource } = require('@livekit/rtc-node');
 const wrtc = require('@roamhq/wrtc');
 const puppeteer = require('puppeteer');
@@ -46,6 +46,7 @@ const UPSTREAM_EXTRACTOR_URL = (process.env.UPSTREAM_EXTRACTOR_URL || process.en
 const UPSTREAM_EXTRACTOR_SECRET = process.env.UPSTREAM_EXTRACTOR_SECRET || process.env.LOCAL_EXTRACTOR_SECRET || '';
 const CACHE_DIR = process.env.MUSIC_CACHE_DIR || (process.env.NODE_ENV === 'production' ? '/tmp/music' : join(__dirname, '..', '.cache', 'music'));
 const WATCH_HLS_DIR = process.env.WATCH_HLS_DIR || (process.env.NODE_ENV === 'production' ? '/tmp/watch-hls' : join(__dirname, '..', '.cache', 'watch-hls'));
+const MUSIC_CATALOG_FILE = join(CACHE_DIR, 'search-index.json');
 const DIRECT_VOD_CHUNK_BYTES = Number(process.env.DIRECT_VOD_CHUNK_BYTES || 8 * 1024 * 1024);
 const WATCH_HLS_SEGMENT_SECONDS = Number(process.env.WATCH_HLS_SEGMENT_SECONDS || 6);
 const WATCH_HLS_LIST_SIZE = Number(process.env.WATCH_HLS_LIST_SIZE || 90);
@@ -120,6 +121,36 @@ function scoreOfflineTrack(track, query) {
   const needle = String(query || '').trim().toLowerCase();
   if (!needle) return 1;
   const haystack = `${track.title} ${track.artist} ${track.relativePath}`.toLowerCase();
+  if (haystack === needle) return 100;
+  if (haystack.includes(needle)) return 80;
+  return needle.split(/\s+/).filter(Boolean).reduce((score, word) => score + (haystack.includes(word) ? 10 : 0), 0);
+}
+
+function readMusicCatalog() {
+  try {
+    if (!existsSync(MUSIC_CATALOG_FILE)) return [];
+    const payload = JSON.parse(readFileSync(MUSIC_CATALOG_FILE, 'utf8'));
+    return Array.isArray(payload?.items) ? payload.items : [];
+  } catch (err) {
+    console.warn('[OfflineMusic] Could not read catalog:', err.message || err);
+    return [];
+  }
+}
+
+function writeMusicCatalog(items) {
+  mkdirSync(CACHE_DIR, { recursive: true });
+  writeFileSync(MUSIC_CATALOG_FILE, JSON.stringify({ updatedAt: new Date().toISOString(), items }, null, 2));
+}
+
+function scoreCatalogTrack(track, query) {
+  const needle = String(query || '').trim().toLowerCase();
+  if (!needle) return 1;
+  const haystack = [
+    track.title,
+    track.artist,
+    track.url,
+    ...(Array.isArray(track.queries) ? track.queries : []),
+  ].join(' ').toLowerCase();
   if (haystack === needle) return 100;
   if (haystack.includes(needle)) return 80;
   return needle.split(/\s+/).filter(Boolean).reduce((score, word) => score + (haystack.includes(word) ? 10 : 0), 0);
@@ -622,6 +653,61 @@ app.get('/offline-music', authorizeWorker, (req, res) => {
   } catch (err) {
     console.error('[OfflineMusic] List failed:', err.message || err);
     res.status(500).json({ error: 'Offline music list failed' });
+  }
+});
+
+app.get('/offline-music/catalog', authorizeWorker, (req, res) => {
+  try {
+    const query = String(req.query.query || '');
+    const limit = Math.max(1, Math.min(100, Number(req.query.limit || 25)));
+    const items = readMusicCatalog()
+      .map((item) => ({ item, score: scoreCatalogTrack(item, query) }))
+      .filter((entry) => entry.score > 0)
+      .sort((left, right) => right.score - left.score || String(left.item.title || '').localeCompare(String(right.item.title || '')))
+      .slice(0, limit)
+      .map(({ item }) => item);
+    res.json({ items, catalogFile: MUSIC_CATALOG_FILE });
+  } catch (err) {
+    console.error('[OfflineMusic] Catalog list failed:', err.message || err);
+    res.status(500).json({ error: 'Music catalog list failed' });
+  }
+});
+
+app.post('/offline-music/catalog', authorizeWorker, (req, res) => {
+  try {
+    const track = req.body?.track || {};
+    const id = String(track.id || '').trim();
+    const url = String(track.url || '').trim();
+    if (!id || !url) return res.status(400).json({ error: 'Missing track id or url' });
+
+    const query = String(req.body?.query || '').trim();
+    const now = new Date().toISOString();
+    const items = readMusicCatalog();
+    const existingIndex = items.findIndex((item) => String(item.id || '') === id);
+    const existing = existingIndex >= 0 ? items[existingIndex] : {};
+    const queries = new Set([...(Array.isArray(existing.queries) ? existing.queries : [])]);
+    if (query) queries.add(query);
+
+    const next = {
+      ...existing,
+      id,
+      title: String(track.title || existing.title || id),
+      artist: String(track.artist || existing.artist || 'Unknown Artist'),
+      url,
+      thumbnail: track.thumbnail || existing.thumbnail || '',
+      duration: Number(track.duration || existing.duration || 180000),
+      queries: Array.from(queries).slice(-20),
+      savedAt: existing.savedAt || now,
+      updatedAt: now,
+    };
+
+    if (existingIndex >= 0) items.splice(existingIndex, 1);
+    items.unshift(next);
+    writeMusicCatalog(items.slice(0, 1000));
+    res.json({ item: next, count: Math.min(items.length, 1000), catalogFile: MUSIC_CATALOG_FILE });
+  } catch (err) {
+    console.error('[OfflineMusic] Catalog save failed:', err.message || err);
+    res.status(500).json({ error: 'Music catalog save failed' });
   }
 });
 

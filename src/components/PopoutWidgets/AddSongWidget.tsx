@@ -3,9 +3,7 @@
 import React from 'react';
 import { DraggableContainer } from './DraggableContainer';
 import AddMusicPanel from '@/app/rooms/[roomId]/_components/AddMusicPanel';
-import { useDoc } from '@/hooks/use-db';
-import { dbUpdateStrict } from '@/lib/db-helpers';
-import { getOverlayWatchSessionId } from '@/lib/watch-session';
+import { MUSIC_WATCH_SESSION_ID } from '@/lib/watch-session';
 import type { PlaylistItem } from '@/types/playlist';
 
 interface AddSongWidgetProps {
@@ -22,12 +20,6 @@ interface AddSongWidgetProps {
   sessionScope?: 'discord' | 'overlay';
 }
 
-interface RoomData {
-  playlist: PlaylistItem[];
-  currentTrackId?: string;
-  isPlaying?: boolean;
-}
-
 export function AddSongWidget({
   id,
   position,
@@ -38,43 +30,26 @@ export function AddSongWidget({
   onOpacityChange,
   onSaveLayout,
   onClose,
-  roomId,
-  sessionScope = 'discord',
 }: AddSongWidgetProps) {
-  const { data: room } = useDoc<RoomData>('rooms', roomId, 2000);
-
   const handleAddItems = React.useCallback(async (items: PlaylistItem[]) => {
-    if (sessionScope === 'overlay') {
-      const sessionId = getOverlayWatchSessionId(roomId, 'music');
-      for (const item of items) {
-        const query = item.url || [item.title, item.artist].filter(Boolean).join(' ');
-        const res = await fetch(`/api/watch/sessions/${encodeURIComponent(sessionId)}/request`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            query,
-            username: item.addedBy || 'local viewer',
-            mediaType: 'music',
-            platform: item.source || 'web',
-          }),
-        });
-        if (!res.ok) {
-          const data = await res.json().catch(() => null);
-          throw new Error(data?.error || `Could not add "${item.title}" to overlay music.`);
-        }
+    for (const item of items) {
+      const query = item.url || [item.title, item.artist].filter(Boolean).join(' ');
+      const res = await fetch(`/api/watch/sessions/${encodeURIComponent(MUSIC_WATCH_SESSION_ID)}/request`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          query,
+          username: item.addedBy || 'local viewer',
+          mediaType: 'music',
+          platform: item.source || 'web',
+        }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => null);
+        throw new Error(data?.error || `Could not add "${item.title}" to Music Videos.`);
       }
-      return;
     }
-
-    const current = room?.playlist || [];
-    const newPlaylist = [...current, ...items];
-    const updates: Record<string, unknown> = { playlist: newPlaylist };
-    if ((!room?.isPlaying || !room.currentTrackId) && items.length > 0) {
-      updates.currentTrackId = items[0].id;
-      updates.isPlaying = true;
-    }
-    await dbUpdateStrict('rooms', roomId, updates);
-  }, [room, roomId, sessionScope]);
+  }, []);
 
   return (
     <DraggableContainer

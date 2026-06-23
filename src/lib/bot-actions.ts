@@ -4,7 +4,7 @@ import { PlaylistItem } from "@/types/playlist";
 import { db, ensureDb } from '@/lib/db';
 import YouTube from 'youtube-sr';
 import { getAi } from '@/ai/genkit';
-import { findOfflineMusicTrack } from '@/lib/offline-music';
+import { findOfflineMusicTrack, findSavedMusicTrack, saveSearchedMusicTrack } from '@/lib/offline-music';
 
 function simpleHash(str: string): number {
   let hash = 0;
@@ -259,6 +259,29 @@ export async function resolveSongRequest(
         };
       }
 
+      const savedTrack = await findSavedMusicTrack(trimmedQuery);
+      if (savedTrack) {
+        console.log(`[!sr] Found saved song metadata: "${savedTrack.title}" (${savedTrack.id})`);
+        return {
+          success: true,
+          message: `Queued saved song: "${savedTrack.title}"`,
+          track: {
+            id: savedTrack.id,
+            title: savedTrack.title,
+            artist: savedTrack.artist,
+            url: savedTrack.url,
+            thumbnail: savedTrack.thumbnail,
+            artId: selectArtId(savedTrack.id),
+            duration: savedTrack.duration,
+            addedBy: requester,
+            addedAt: new Date(),
+            plays: 0,
+            source: 'web' as const,
+            playbackStrategy: 'proxy',
+          },
+        };
+      }
+
       const results = await YouTube.search(trimmedQuery, { limit: 1, type: 'video' });
       if (!results.length || !results[0]?.id) {
         return { success: false, message: `No results for "${trimmedQuery}". Try a different search.` };
@@ -273,6 +296,14 @@ export async function resolveSongRequest(
     }
 
     console.log(`[!sr] Found: "${title}" by ${artist} (${videoId})`);
+    await saveSearchedMusicTrack({
+      id: videoId,
+      title,
+      artist,
+      url,
+      thumbnail,
+      duration,
+    }, trimmedQuery);
 
     return {
       success: true,

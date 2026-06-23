@@ -5,7 +5,7 @@ import { DraggableContainer } from './DraggableContainer';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Film, Music, Play, SkipForward, Trash2, Search, ExternalLink, LoaderCircle } from 'lucide-react';
-import { GLOBAL_WATCH_SESSION_ID, MUSIC_WATCH_SESSION_ID, getOverlayWatchSessionId } from '@/lib/watch-session';
+import { GLOBAL_WATCH_SESSION_ID, MUSIC_WATCH_SESSION_ID } from '@/lib/watch-session';
 
 interface WatchWidgetProps {
   id: string;
@@ -57,7 +57,7 @@ function watchRequestErrorMessage(data: any) {
 
 export function WatchWidget({
   id, position, size, opacity,
-  onPositionChange, onSizeChange, onOpacityChange, onSaveLayout, onClose, roomId, sessionScope = 'discord',
+  onPositionChange, onSizeChange, onOpacityChange, onSaveLayout, onClose, roomId,
 }: WatchWidgetProps) {
   const [state, setState] = useState<WatchState | null>(null);
   const [query, setQuery] = useState('');
@@ -65,8 +65,8 @@ export function WatchWidget({
   const [searching, setSearching] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const movieSessionId = sessionScope === 'overlay' ? getOverlayWatchSessionId(roomId, 'movie') : GLOBAL_WATCH_SESSION_ID;
-  const musicSessionId = sessionScope === 'overlay' ? getOverlayWatchSessionId(roomId, 'music') : MUSIC_WATCH_SESSION_ID;
+  const movieSessionId = GLOBAL_WATCH_SESSION_ID;
+  const musicSessionId = MUSIC_WATCH_SESSION_ID;
   const sessionId = tab === 'music' ? musicSessionId : movieSessionId;
 
   const refresh = useCallback(async () => {

@@ -60,7 +60,8 @@ function downloadUrlFor(url: string) {
 function downloadUrlForItem(item: any) {
   const idMatch = String(item?.id || '').match(/^xtream-(vod|series)-(\d+)$/i);
   if (idMatch) return `/activity-provider/xtream/${idMatch[1].toLowerCase()}/${idMatch[2]}?download=1`;
-  const playbackUrl = String(item?.playbackUrl || '');
+  const playbackUrl = String(playbackUrlForItem(item) || '');
+  if (isEmbeddedVideoUrl(playbackUrl)) return '';
   const episodeMatch = playbackUrl.match(/^\/activity-provider\/xtream\/episode\/(\d+-[a-z0-9]+)$/i);
   if (episodeMatch) return `/activity-provider/xtream/episode/${episodeMatch[1]}?download=1`;
   return playbackUrl ? downloadUrlFor(playbackUrl) : '';
@@ -71,12 +72,51 @@ function isBrowserLimitedVideo(item: any) {
 }
 
 function hlsFallbackUrlFor(item: any) {
-  const playbackUrl = String(item?.playbackUrl || '');
+  const playbackUrl = String(playbackUrlForItem(item) || '');
   const match = playbackUrl.match(/^\/activity-provider\/xtream\/(vod|series)\/(\d+)$/i);
   const episodeMatch = playbackUrl.match(/^\/activity-provider\/xtream\/episode\/(\d+-[a-z0-9]+)$/i);
   if (episodeMatch) return `/api/watch/xtream/hls/episode-${episodeMatch[1].toLowerCase()}/index.m3u8`;
   if (!match || !isBrowserLimitedVideo(item)) return playbackUrl;
   return `/api/watch/xtream/hls/${match[1].toLowerCase()}-${match[2]}/index.m3u8`;
+}
+
+function musicModeOptions(item: any) {
+  const metadata = item?.metadata || {};
+  return {
+    video: metadata.videoPlaybackUrl || item?.playbackUrl || '',
+    audio: metadata.audioPlaybackUrl || '',
+  };
+}
+
+function hasMusicModeToggle(item: any) {
+  const options = musicModeOptions(item);
+  return item?.type === 'music' && Boolean(options.video && options.audio);
+}
+
+function playbackUrlForItem(item: any, mode?: 'audio' | 'video') {
+  if (hasMusicModeToggle(item)) {
+    const options = musicModeOptions(item);
+    return (mode || item?.metadata?.playbackMode || 'video') === 'audio' ? options.audio : options.video;
+  }
+  return item?.playbackUrl || '';
+}
+
+function isEmbeddedVideoUrl(value: string) {
+  const raw = String(value || '').toLowerCase();
+  return raw.includes('youtube.com/embed/') || raw.includes('youtube-nocookie.com/embed/');
+}
+
+function iframeUrlFor(value: string) {
+  if (!value) return '';
+  try {
+    const url = new URL(value, window.location.origin);
+    if (!isEmbeddedVideoUrl(url.toString())) return value;
+    url.searchParams.set('enablejsapi', '1');
+    url.searchParams.set('origin', window.location.origin);
+    return url.toString();
+  } catch {
+    return value;
+  }
 }
 
 function isHlsPlaybackUrl(value: string) {
@@ -108,10 +148,13 @@ function shouldShowMkvFallbackNotice(item: any, mediaStatus: string) {
 
 export default function WatchRoomClient({ sessionId, activityMode = false }: { sessionId: string; activityMode?: boolean }) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const iframeRef = useRef<HTMLIFrameElement | null>(null);
   const playerShellRef = useRef<HTMLDivElement | null>(null);
   const hlsRef = useRef<any>(null);
   const applyingRemoteState = useRef(false);
   const syncingNativePlayback = useRef(false);
+  const embeddedCurrentTimeRef = useRef(0);
+  const lastEmbeddedPlaybackKeyRef = useRef('');
   const [state, setState] = useState<WatchState | null>(null);
   const [query, setQuery] = useState('');
   const [connected, setConnected] = useState(false);
@@ -122,6 +165,33 @@ export default function WatchRoomClient({ sessionId, activityMode = false }: { s
   const [volume, setVolume] = useState(activityMode ? 1 : 0.85);
   const [muted, setMuted] = useState(activityMode);
   const [dismissedMkvNoticeFor, setDismissedMkvNoticeFor] = useState<string | null>(null);
+  const [musicPlaybackMode, setMusicPlaybackMode] = useState<'audio' | 'video'>('video');
+
+  const currentItem = state?.current?.item;
+  const currentPlaybackUrl = currentItem ? playbackUrlForItem(currentItem, musicPlaybackMode) : '';
+  const embeddedMode = Boolean(currentPlaybackUrl && isEmbeddedVideoUrl(currentPlaybackUrl));
+
+  function youtubeCommand(func: string, args: unknown[] = []) {
+    const frame = iframeRef.current;
+    if (!frame?.contentWindow) return false;
+    try {
+      frame.contentWindow.postMessage(JSON.stringify({ event: 'command', func, args }), '*');
+      return true;
+    } catch (error) {
+      console.warn('[WatchRoom] YouTube command failed', func, error);
+      return false;
+    }
+  }
+
+  function registerYouTubeListeners() {
+    const frame = iframeRef.current;
+    if (!frame?.contentWindow) return;
+    try {
+      frame.contentWindow.postMessage(JSON.stringify({ event: 'listening' }), '*');
+    } catch (error) {
+      console.warn('[WatchRoom] YouTube listener registration failed', error);
+    }
+  }
 
   const endpointSnippet = useMemo(() => `POST /api/discord/chat
 
@@ -167,15 +237,29 @@ export default function WatchRoomClient({ sessionId, activityMode = false }: { s
     const normalized = Math.max(0, Math.min(1, nextVolume));
     setVolume(normalized);
     if (normalized > 0 && muted) setMuted(false);
+    if (embeddedMode) {
+      youtubeCommand('setVolume', [Math.round(normalized * 100)]);
+      youtubeCommand(muted || normalized === 0 ? 'mute' : 'unMute');
+    }
   }
 
   function toggleMute() {
     const nextMuted = !muted;
     setMuted(nextMuted);
+    if (embeddedMode) youtubeCommand(nextMuted ? 'mute' : 'unMute');
     if (state?.current) sendControl(nextMuted ? 'mute' : 'unmute').catch(() => {});
   }
 
   async function enableSound() {
+    if (embeddedMode) {
+      setMuted(false);
+      setVolume(1);
+      youtubeCommand('setVolume', [100]);
+      youtubeCommand('unMute');
+      youtubeCommand('playVideo');
+      setMediaStatus('Playing with sound enabled');
+      return;
+    }
     const video = videoRef.current;
     setMuted(false);
     setVolume(1);
@@ -191,6 +275,11 @@ export default function WatchRoomClient({ sessionId, activityMode = false }: { s
   }
 
   async function playLocalAndRemote() {
+    if (embeddedMode) {
+      youtubeCommand('playVideo');
+      await sendControl('play', embeddedCurrentTimeRef.current || playbackPosition(state?.playback)).catch(() => {});
+      return;
+    }
     const video = videoRef.current;
     if (video) {
       try {
@@ -204,6 +293,11 @@ export default function WatchRoomClient({ sessionId, activityMode = false }: { s
   }
 
   async function pauseLocalAndRemote() {
+    if (embeddedMode) {
+      youtubeCommand('pauseVideo');
+      await sendControl('pause', embeddedCurrentTimeRef.current || playbackPosition(state?.playback)).catch(() => {});
+      return;
+    }
     videoRef.current?.pause();
     await sendControl('pause').catch(() => {});
   }
@@ -326,8 +420,33 @@ export default function WatchRoomClient({ sessionId, activityMode = false }: { s
       setMediaStatus('Popout blocked by browser');
       return;
     }
-    const playbackUrl = JSON.stringify(hlsFallbackUrlFor(item));
+    const mediaUrl = hlsFallbackUrlFor(item);
+    const playbackUrl = JSON.stringify(mediaUrl);
     const title = String(item.title || 'Watch video').replace(/[<>&"]/g, (char) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;' })[char] || char);
+    if (isEmbeddedVideoUrl(mediaUrl)) {
+      const iframeSrc = JSON.stringify(iframeUrlFor(mediaUrl));
+      popout.document.write(`<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>${title}</title>
+  <style>
+    html, body { height: 100%; margin: 0; background: #000; color: #e5edf5; font-family: Arial, system-ui, sans-serif; }
+    body { display: grid; grid-template-rows: auto 1fr; }
+    header { padding: 10px 12px; background: #111827; border-bottom: 1px solid #334155; }
+    strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: block; }
+    iframe { width: 100%; height: 100%; border: 0; background: #000; display: block; }
+  </style>
+</head>
+<body>
+  <header><strong>${title}</strong></header>
+  <iframe src=${iframeSrc} allow="autoplay; fullscreen; encrypted-media; picture-in-picture" allowfullscreen></iframe>
+</body>
+</html>`);
+      popout.document.close();
+      return;
+    }
     popout.document.write(`<!doctype html>
 <html lang="en">
 <head>
@@ -372,6 +491,25 @@ export default function WatchRoomClient({ sessionId, activityMode = false }: { s
   }
 
   function applyPlaybackState(nextState = state) {
+    if (embeddedMode && nextState?.current) {
+      const remotePosition = playbackPosition(nextState.playback);
+      const playbackKey = [
+        nextState.current.requestId,
+        nextState.playback.status,
+        Math.round(Number(nextState.playback.position || 0)),
+        Number(nextState.playback.updatedAt || 0),
+      ].join(':');
+      if (playbackKey !== lastEmbeddedPlaybackKeyRef.current && Number.isFinite(remotePosition)) {
+        lastEmbeddedPlaybackKeyRef.current = playbackKey;
+        youtubeCommand('seekTo', [Math.max(0, remotePosition), true]);
+      }
+      youtubeCommand(nextState.playback.status === 'playing' ? 'playVideo' : 'pauseVideo');
+      youtubeCommand('setVolume', [Math.round(volume * 100)]);
+      youtubeCommand(muted || volume === 0 ? 'mute' : 'unMute');
+      setMediaStatus(nextState.playback.status === 'playing' ? 'Embedded video playing' : 'Embedded video ready');
+      return;
+    }
+
     const video = videoRef.current;
     if (!video || !nextState?.current) return;
 
@@ -409,13 +547,16 @@ export default function WatchRoomClient({ sessionId, activityMode = false }: { s
   useEffect(() => {
     const video = videoRef.current;
     const item = state?.current?.item;
-    if (!video || !item || state.current.requestId === currentRequestId) {
+    if (!item || state.current.requestId === currentRequestId) {
       applyPlaybackState(state || undefined);
       return;
     }
 
     setCurrentRequestId(state.current.requestId);
-    video.poster = '';
+    setMusicPlaybackMode(item?.metadata?.playbackMode || 'video');
+    embeddedCurrentTimeRef.current = 0;
+    lastEmbeddedPlaybackKeyRef.current = '';
+    if (video) video.poster = '';
 
     if (hlsRef.current) {
       hlsRef.current.destroy();
@@ -432,6 +573,22 @@ export default function WatchRoomClient({ sessionId, activityMode = false }: { s
     const mediaUrl = hlsFallbackUrlFor(item);
     const usesHlsFallback = mediaUrl !== item.playbackUrl;
     const loadingRequestId = state.current.requestId;
+
+    if (isEmbeddedVideoUrl(mediaUrl)) {
+      if (video) {
+        video.pause();
+        video.removeAttribute('src');
+        video.load();
+      }
+      setMediaStatus('Embedded video ready');
+      window.setTimeout(() => {
+        registerYouTubeListeners();
+        applyPlaybackState(state);
+      }, 600);
+      return;
+    }
+
+    if (!video) return;
 
     if (isHlsPlaybackUrl(mediaUrl)) {
       import('hls.js')
@@ -470,7 +627,7 @@ export default function WatchRoomClient({ sessionId, activityMode = false }: { s
     }
 
     applyPlaybackState(state);
-  }, [state?.current?.requestId]);
+  }, [state?.current?.requestId, musicPlaybackMode]);
 
   useEffect(() => {
     applyPlaybackState();
@@ -478,16 +635,58 @@ export default function WatchRoomClient({ sessionId, activityMode = false }: { s
 
   useEffect(() => {
     const video = videoRef.current;
+    if (embeddedMode) {
+      youtubeCommand('setVolume', [Math.round(volume * 100)]);
+      youtubeCommand(muted || volume === 0 ? 'mute' : 'unMute');
+      return;
+    }
     if (!video) return;
     video.volume = volume;
     video.muted = muted;
-  }, [volume, muted]);
+  }, [volume, muted, embeddedMode]);
 
   useEffect(() => {
     if (typeof state?.playback?.muted === 'boolean') {
       setMuted(state.playback.muted);
     }
   }, [state?.playback?.muted]);
+
+  useEffect(() => {
+    const onMessage = (event: MessageEvent) => {
+      const frame = iframeRef.current;
+      if (!frame || event.source !== frame.contentWindow) return;
+      let payload: any = event.data;
+      if (typeof payload === 'string') {
+        try {
+          payload = JSON.parse(payload);
+        } catch {
+          return;
+        }
+      }
+      if (!payload || typeof payload !== 'object') return;
+
+      if (payload.event === 'infoDelivery' && typeof payload.info?.currentTime === 'number') {
+        embeddedCurrentTimeRef.current = payload.info.currentTime;
+      }
+
+      if (payload.event !== 'onStateChange') return;
+      const code = Number(payload.info);
+      if (code === 1) {
+        setMediaStatus('Embedded video playing');
+        if (state?.playback?.status !== 'playing') sendControl('play', embeddedCurrentTimeRef.current).catch(() => {});
+      } else if (code === 2) {
+        setMediaStatus('Embedded video paused');
+        if (state?.playback?.status === 'playing') sendControl('pause', embeddedCurrentTimeRef.current).catch(() => {});
+      } else if (code === 0) {
+        setMediaStatus('Embedded video ended');
+        nextItem().catch(() => {});
+      } else if (code === 3) {
+        setMediaStatus('Embedded video buffering');
+      }
+    };
+    window.addEventListener('message', onMessage);
+    return () => window.removeEventListener('message', onMessage);
+  }, [state?.playback?.status, embeddedMode]);
 
   async function submitRequest(event: React.FormEvent) {
     event.preventDefault();
@@ -497,7 +696,11 @@ export default function WatchRoomClient({ sessionId, activityMode = false }: { s
     try {
       const result = await api(`/api/watch/sessions/${sessionId}/request`, {
         method: 'POST',
-        body: JSON.stringify({ query: trimmed, username: 'local tester' }),
+        body: JSON.stringify({
+          query: trimmed,
+          username: 'local tester',
+          mediaType: sessionId === 'discord-music-room' || sessionId.toLowerCase().includes('music') ? 'music' : 'video',
+        }),
       });
       setQuery('');
       setState(result.session);
@@ -521,9 +724,22 @@ export default function WatchRoomClient({ sessionId, activityMode = false }: { s
           </div>
 
           <div ref={playerShellRef} className="relative aspect-video bg-black">
+            {embeddedMode && currentPlaybackUrl && (
+              <iframe
+                ref={iframeRef}
+                className="absolute inset-0 h-full w-full border-0 bg-black"
+                src={iframeUrlFor(currentPlaybackUrl)}
+                allow="autoplay; fullscreen; encrypted-media; picture-in-picture"
+                allowFullScreen
+                onLoad={() => {
+                  registerYouTubeListeners();
+                  applyPlaybackState();
+                }}
+              />
+            )}
             <video
               ref={videoRef}
-              className="h-full w-full bg-black"
+              className={`h-full w-full bg-black ${embeddedMode ? 'hidden' : ''}`}
               controls
               muted={muted}
               autoPlay={activityMode}
@@ -597,6 +813,23 @@ export default function WatchRoomClient({ sessionId, activityMode = false }: { s
             <button type="button" className="rounded-md border border-slate-700 bg-slate-800 px-3 py-2 hover:border-emerald-400 disabled:opacity-50" onClick={openPopout} disabled={!state?.current}>Pop Out</button>
             <button type="button" className="rounded-md border border-slate-700 bg-slate-800 px-3 py-2 hover:border-emerald-400 disabled:opacity-50" onClick={openFullscreen} disabled={!state?.current}>Fullscreen</button>
             <button type="button" className="rounded-md border border-slate-700 bg-slate-800 px-3 py-2 hover:border-emerald-400 disabled:opacity-50" onClick={enableSound} disabled={!state?.current}>Enable Sound</button>
+            {state?.current?.item && hasMusicModeToggle(state.current.item) && (
+              <button
+                type="button"
+                className="rounded-md border border-slate-700 bg-slate-800 px-3 py-2 hover:border-emerald-400"
+                onClick={() => {
+                  const nextMode = musicPlaybackMode === 'audio' ? 'video' : 'audio';
+                  const wasPlaying = state.playback.status === 'playing';
+                  const position = embeddedMode ? embeddedCurrentTimeRef.current : videoRef.current?.currentTime || playbackPosition(state.playback);
+                  setMusicPlaybackMode(nextMode);
+                  setCurrentRequestId(null);
+                  if (Number.isFinite(position)) sendControl('seek', position).catch(() => {});
+                  if (wasPlaying) window.setTimeout(() => playLocalAndRemote(), 300);
+                }}
+              >
+                {musicPlaybackMode === 'audio' ? 'Audio' : 'Video'}
+              </button>
+            )}
             {state?.current?.item && downloadUrlForItem(state.current.item) && (
               <button
                 type="button"
