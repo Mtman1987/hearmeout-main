@@ -19,7 +19,7 @@ type WatchCatalogItem = {
   playbackUrl: string;
   overview: string;
   metadata?: {
-    provider?: 'xtream' | 'youtube' | 'youtube-video' | 'tts';
+    provider?: 'xtream' | 'youtube' | 'youtube-video' | 'tts' | 'offline';
     kind?: 'series-episode' | 'song' | 'tts';
     seriesId?: string;
     seriesTitle?: string;
@@ -34,7 +34,7 @@ type WatchCatalogItem = {
     audioPlaybackUrl?: string;
     videoPlaybackUrl?: string;
     playbackMode?: 'audio' | 'video';
-    playbackStrategy?: 'proxy' | 'embed';
+    playbackStrategy?: 'proxy' | 'embed' | 'offline';
   };
 };
 
@@ -244,6 +244,7 @@ function getPublicWatchItem(item: WatchCatalogItem): WatchCatalogItem {
   }
 
   const audioPlaybackUrl = `/api/youtube-audio/stream?videoId=${encodeURIComponent(videoId)}`;
+  const videoPlaybackUrl = `https://www.youtube.com/embed/${encodeURIComponent(videoId)}`;
   return {
     ...item,
     source: item.source.replace(/^YouTube Video/i, 'YouTube Music'),
@@ -254,7 +255,8 @@ function getPublicWatchItem(item: WatchCatalogItem): WatchCatalogItem {
       kind: 'song',
       videoId,
       audioPlaybackUrl,
-      videoPlaybackUrl: undefined,
+      videoPlaybackUrl,
+      playbackMode: 'video',
       playbackStrategy: 'proxy',
     },
   };
@@ -401,6 +403,29 @@ function formatDurationMs(durationMs: number | undefined) {
 }
 
 function musicTrackToWatchItem(track: PlaylistItem): WatchCatalogItem {
+  if (track.source === 'offline' && track.playbackUrl) {
+    return {
+      id: `offline-${track.id}`,
+      type: 'music',
+      title: track.title,
+      year: new Date().getFullYear(),
+      runtime: formatDurationMs(track.duration),
+      source: track.artist ? `Offline Music: ${track.artist}` : 'Offline Music Library',
+      poster: track.thumbnail || '',
+      playbackUrl: track.playbackUrl,
+      overview: `Offline backup song request from ${track.addedBy || 'unknown user'}.`,
+      metadata: {
+        provider: 'offline',
+        kind: 'song',
+        artist: track.artist,
+        originalUrl: track.url,
+        audioPlaybackUrl: track.playbackUrl,
+        playbackMode: 'audio',
+        playbackStrategy: 'offline',
+      },
+    };
+  }
+
   const videoId = encodeURIComponent(track.id);
   const audioPlaybackUrl = `/api/youtube-audio/stream?videoId=${videoId}`;
   const embedPlaybackUrl = `https://www.youtube.com/embed/${videoId}`;

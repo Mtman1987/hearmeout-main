@@ -55,8 +55,74 @@ const FLY_MACHINE_ID = process.env.FLY_MACHINE_ID || '';
 const FLY_APP_NAME = process.env.FLY_APP_NAME || 'hmo-dj-worker';
 
 const VIDEO_ID_RE = /^[A-Za-z0-9_-]{11}$/;
+const OFFLINE_AUDIO_EXTENSIONS = new Set(['.mp3', '.m4a', '.aac', '.ogg', '.opus', '.wav', '.flac']);
 function isValidVideoId(id) {
   return typeof id === 'string' && VIDEO_ID_RE.test(id);
+}
+
+function offlineMusicId(relativePath) {
+  return Buffer.from(relativePath, 'utf8').toString('base64url');
+}
+
+function offlineMusicPathFromId(id) {
+  const relativePath = Buffer.from(String(id || ''), 'base64url').toString('utf8');
+  if (!relativePath || relativePath.includes('..') || resolve(CACHE_DIR, relativePath) === resolve(CACHE_DIR)) return null;
+  const fullPath = resolve(CACHE_DIR, relativePath);
+  const root = resolve(CACHE_DIR);
+  if (fullPath !== root && !fullPath.startsWith(`${root}${require('path').sep}`)) return null;
+  return { fullPath, relativePath };
+}
+
+function titleFromFileName(fileName) {
+  return fileName.replace(/\.[^.]+$/, '').replace(/[_-]+/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
+function mimeForOfflineFile(fileName) {
+  const lower = fileName.toLowerCase();
+  if (lower.endsWith('.mp3')) return 'audio/mpeg';
+  if (lower.endsWith('.m4a') || lower.endsWith('.aac')) return 'audio/mp4';
+  if (lower.endsWith('.ogg')) return 'audio/ogg';
+  if (lower.endsWith('.opus')) return 'audio/opus';
+  if (lower.endsWith('.wav')) return 'audio/wav';
+  if (lower.endsWith('.flac')) return 'audio/flac';
+  return 'application/octet-stream';
+}
+
+function listOfflineMusicFiles(dir = CACHE_DIR, prefix = '') {
+  if (!existsSync(dir)) return [];
+  const items = [];
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    if (entry.name.startsWith('.')) continue;
+    const relativePath = prefix ? `${prefix}/${entry.name}` : entry.name;
+    const fullPath = join(dir, entry.name);
+    if (entry.isDirectory()) {
+      items.push(...listOfflineMusicFiles(fullPath, relativePath));
+      continue;
+    }
+    const ext = entry.name.slice(entry.name.lastIndexOf('.')).toLowerCase();
+    if (!OFFLINE_AUDIO_EXTENSIONS.has(ext)) continue;
+    const stats = statSync(fullPath);
+    items.push({
+      id: offlineMusicId(relativePath),
+      title: titleFromFileName(entry.name),
+      artist: prefix ? prefix.split('/').pop() || 'Offline Library' : 'Offline Library',
+      duration: 180000,
+      fileName: entry.name,
+      relativePath,
+      size: stats.size,
+      playbackUrl: `/api/offline-music?id=${encodeURIComponent(offlineMusicId(relativePath))}`,
+    });
+  }
+  return items;
+}
+
+function scoreOfflineTrack(track, query) {
+  const needle = String(query || '').trim().toLowerCase();
+  if (!needle) return 1;
+  const haystack = `${track.title} ${track.artist} ${track.relativePath}`.toLowerCase();
+  if (haystack === needle) return 100;
+  if (haystack.includes(needle)) return 80;
+  return needle.split(/\s+/).filter(Boolean).reduce((score, word) => score + (haystack.includes(word) ? 10 : 0), 0);
 }
 
 // ── Middleware ──────────────────────────────────────────────────────────
@@ -542,6 +608,60 @@ app.get('/extract', authorizeWorker, async (req, res) => {
   }
 });
 
+app.get('/offline-music', authorizeWorker, (req, res) => {
+  try {
+    const query = String(req.query.query || '');
+    const limit = Math.max(1, Math.min(50, Number(req.query.limit || 10)));
+    const items = listOfflineMusicFiles()
+      .map((item) => ({ item, score: scoreOfflineTrack(item, query) }))
+      .filter((entry) => entry.score > 0)
+      .sort((left, right) => right.score - left.score || left.item.title.localeCompare(right.item.title))
+      .slice(0, limit)
+      .map(({ item }) => item);
+    res.json({ items, cacheDir: CACHE_DIR });
+  } catch (err) {
+    console.error('[OfflineMusic] List failed:', err.message || err);
+    res.status(500).json({ error: 'Offline music list failed' });
+  }
+});
+
+app.get('/offline-music/stream', authorizeWorker, (req, res) => {
+  try {
+    const resolved = offlineMusicPathFromId(req.query.id);
+    if (!resolved || !existsSync(resolved.fullPath)) return res.status(404).send('Offline song not found');
+    const stats = statSync(resolved.fullPath);
+    if (!stats.isFile()) return res.status(404).send('Offline song not found');
+
+    const range = req.headers.range;
+    const contentType = mimeForOfflineFile(resolved.fullPath);
+    res.setHeader('Accept-Ranges', 'bytes');
+    res.setHeader('Cache-Control', 'public, max-age=3600');
+    res.setHeader('Content-Type', contentType);
+
+    if (range) {
+      const match = /^bytes=(\d+)-(\d*)$/i.exec(range);
+      if (!match) return res.status(416).send('Invalid range');
+      const start = Number(match[1]);
+      const requestedEnd = match[2] ? Number(match[2]) : stats.size - 1;
+      if (!Number.isSafeInteger(start) || start < 0 || start >= stats.size) {
+        res.setHeader('Content-Range', `bytes */${stats.size}`);
+        return res.status(416).send('Range not satisfiable');
+      }
+      const end = Math.min(requestedEnd, stats.size - 1);
+      res.status(206);
+      res.setHeader('Content-Length', String(end - start + 1));
+      res.setHeader('Content-Range', `bytes ${start}-${end}/${stats.size}`);
+      return createReadStream(resolved.fullPath, { start, end }).pipe(res);
+    }
+
+    res.setHeader('Content-Length', String(stats.size));
+    createReadStream(resolved.fullPath).pipe(res);
+  } catch (err) {
+    console.error('[OfflineMusic] Stream failed:', err.message || err);
+    if (!res.headersSent) res.status(500).send('Offline song stream failed');
+  }
+});
+
 app.get('/stream', authorizeWorker, async (req, res) => {
   const { videoId } = req.query;
   if (!isValidVideoId(videoId)) return res.status(400).send('Invalid videoId');
@@ -728,8 +848,8 @@ function runWatchHlsFfmpeg(streamId, sourceUrl, dir, indexPath) {
       '-f', 'hls',
       '-hls_time', String(WATCH_HLS_SEGMENT_SECONDS),
       '-hls_list_size', String(WATCH_HLS_LIST_SIZE),
-      '-hls_delete_threshold', String(WATCH_HLS_DELETE_THRESHOLD),
-      '-hls_flags', 'delete_segments+independent_segments+temp_file',
+      ...(WATCH_HLS_LIST_SIZE > 0 ? ['-hls_delete_threshold', String(WATCH_HLS_DELETE_THRESHOLD)] : []),
+      '-hls_flags', WATCH_HLS_LIST_SIZE > 0 ? 'delete_segments+independent_segments+temp_file' : 'independent_segments+temp_file',
       '-hls_segment_filename', segmentPattern,
       indexPath,
     ];

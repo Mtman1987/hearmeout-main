@@ -9,6 +9,7 @@ export type PlaylistItem = {
   addedBy: string;
   addedAt: Date;
   plays: number;
-  source: 'web' | 'discord' | 'twitch';
-  playbackStrategy?: 'proxy' | 'embed';
+  source: 'web' | 'discord' | 'twitch' | 'offline';
+  playbackUrl?: string;
+  playbackStrategy?: 'proxy' | 'embed' | 'offline';
 };

@@ -78,12 +78,12 @@ function setActiveSessionTab() {
 function isAudioOnlyItem(item) {
   const type = String((item && item.type) || '').toLowerCase();
   const provider = String((item && item.metadata && item.metadata.provider) || '').toLowerCase();
-  const playbackUrl = String((item && item.playbackUrl) || '').toLowerCase();
+  const playbackUrl = String(playbackUrlForItem(item) || '').toLowerCase();
   return type === 'tts' || provider === 'tts' || (type === 'music' && playbackUrl.includes('/api/youtube-audio/'));
 }
 
 function isEmbeddedVideoItem(item) {
-  const playbackUrl = String((item && item.playbackUrl) || '').toLowerCase();
+  const playbackUrl = String(playbackUrlForItem(item) || '').toLowerCase();
   return playbackUrl.includes('youtube.com/embed/') || playbackUrl.includes('youtube-nocookie.com/embed/');
 }
 
@@ -140,7 +140,7 @@ function hasMusicModeToggle(item) {
 }
 
 function isYoutubeAudioMusicItem(item) {
-  return item?.type === 'music' && String((item && item.playbackUrl) || '').toLowerCase().includes('/api/youtube-audio/');
+  return item?.type === 'music' && String(playbackUrlForItem(item) || '').toLowerCase().includes('/api/youtube-audio/');
 }
 
 function youtubeEmbedUrlForItem(item) {

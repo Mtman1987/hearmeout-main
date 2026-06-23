@@ -4,6 +4,7 @@ import { PlaylistItem } from "@/types/playlist";
 import { db, ensureDb } from '@/lib/db';
 import YouTube from 'youtube-sr';
 import { getAi } from '@/ai/genkit';
+import { findOfflineMusicTrack } from '@/lib/offline-music';
 
 function simpleHash(str: string): number {
   let hash = 0;
@@ -234,6 +235,30 @@ export async function resolveSongRequest(
         duration = 180000;
       }
     } else {
+      const offlineTrack = await findOfflineMusicTrack(trimmedQuery);
+      if (offlineTrack) {
+        console.log(`[!sr] Found offline backup: "${offlineTrack.title}" (${offlineTrack.id})`);
+        return {
+          success: true,
+          message: `Queued offline backup: "${offlineTrack.title}"`,
+          track: {
+            id: offlineTrack.id,
+            title: offlineTrack.title,
+            artist: offlineTrack.artist,
+            url: offlineTrack.playbackUrl,
+            playbackUrl: offlineTrack.playbackUrl,
+            thumbnail: undefined,
+            artId: selectArtId(offlineTrack.id),
+            duration: offlineTrack.duration,
+            addedBy: requester,
+            addedAt: new Date(),
+            plays: 0,
+            source: 'offline' as const,
+            playbackStrategy: 'offline',
+          },
+        };
+      }
+
       const results = await YouTube.search(trimmedQuery, { limit: 1, type: 'video' });
       if (!results.length || !results[0]?.id) {
         return { success: false, message: `No results for "${trimmedQuery}". Try a different search.` };
