@@ -1,61 +1,307 @@
 'use client';
 
-// OBS Overlay — shows now-playing info for stream display AND plays
-// music audio via LiveKit WebRTC. Streamers capture this browser source
-// in OBS so music audio is on a separate channel from speakers' voices,
-// allowing them to strip music for copyright reasons.
+// OBS overlay media lane.
+//
+// Voice chat stays in the normal room browser. Movies and music play here so
+// streamers can route this browser source to a separate OBS audio track.
 
-import { useParams } from 'next/navigation';
-import { useDoc } from '@/hooks/use-db';
-import { Music, Play, Volume2, VolumeX } from 'lucide-react';
+import { useParams, useSearchParams } from 'next/navigation';
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import Image from 'next/image';
-import type { PlaylistItem } from '@/types/playlist';
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { Music, Play, Volume2, VolumeX, Film } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Slider } from '@/components/ui/slider';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
-import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
-import { Room as LKRoom, RoomEvent, Track, RemoteTrack } from 'livekit-client';
-import { generateMusicRoomToken } from '@/app/actions';
+import {
+  DropdownMenu,
+  DropdownMenuCheckboxItem,
+  DropdownMenuContent,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import { usePopout } from '@/components/PopoutWidgets/PopoutProvider';
-import { PeerAudioListener } from '@/lib/peer-audio-service';
+import { GLOBAL_WATCH_SESSION_ID, MUSIC_WATCH_SESSION_ID } from '@/lib/watch-session';
 
-interface RoomData {
-  name: string;
-  playlist: PlaylistItem[];
-  currentTrackId: string;
-  isPlaying: boolean;
-  djActive: boolean;
+type WatchPlayback = {
+  status: 'idle' | 'paused' | 'playing';
+  position: number;
+  updatedAt: number;
+  muted?: boolean;
+};
+
+type WatchRequest = {
+  requestId: string;
+  item: any;
+  requestedBy?: { username?: string };
+};
+
+type WatchState = {
+  id: string;
+  queue: WatchRequest[];
+  current: WatchRequest | null;
+  playback: WatchPlayback;
+};
+
+type MediaLane = 'auto' | 'music' | 'movie';
+
+async function api(path: string) {
+  const response = await fetch(path, { cache: 'no-store' });
+  if (!response.ok) throw new Error(`Request failed: ${response.status}`);
+  return response.json();
+}
+
+function playbackPosition(playback?: WatchPlayback) {
+  if (!playback) return 0;
+  if (playback.status !== 'playing') return playback.position || 0;
+  return (playback.position || 0) + (Date.now() - playback.updatedAt) / 1000;
+}
+
+function musicModeOptions(item: any) {
+  const metadata = item?.metadata || {};
+  return {
+    video: metadata.videoPlaybackUrl || item?.playbackUrl || '',
+    audio: metadata.audioPlaybackUrl || '',
+  };
+}
+
+function hasMusicModeToggle(item: any) {
+  const options = musicModeOptions(item);
+  return item?.type === 'music' && Boolean(options.video && options.audio);
+}
+
+function playbackUrlForItem(item: any, mode: 'video' | 'audio' = 'video') {
+  if (hasMusicModeToggle(item)) {
+    const options = musicModeOptions(item);
+    return mode === 'audio' ? options.audio : options.video;
+  }
+  return item?.playbackUrl || '';
+}
+
+function hlsFallbackUrlFor(item: any, mode: 'video' | 'audio' = 'video') {
+  const playbackUrl = String(playbackUrlForItem(item, mode) || '');
+  const isBrowserLimitedVideo = String(item?.overview || '').toLowerCase().includes('(mkv)');
+  const episodeMatch = playbackUrl.match(/^\/activity-provider\/xtream\/episode\/(\d+-[a-z0-9]+)$/i);
+  const match = playbackUrl.match(/^\/activity-provider\/xtream\/(vod|series)\/(\d+)$/i);
+  if (episodeMatch) return `/api/watch/xtream/hls/episode-${episodeMatch[1].toLowerCase()}/index.m3u8`;
+  if (!match || !isBrowserLimitedVideo) return playbackUrl;
+  return `/api/watch/xtream/hls/${match[1].toLowerCase()}-${match[2]}/index.m3u8`;
+}
+
+function isEmbeddedVideoUrl(value: string) {
+  const raw = String(value || '').toLowerCase();
+  return raw.includes('youtube.com/embed/') || raw.includes('youtube-nocookie.com/embed/');
+}
+
+function iframeUrlFor(value: string) {
+  if (!value) return '';
+  try {
+    const url = new URL(value, window.location.origin);
+    if (!isEmbeddedVideoUrl(url.toString())) return value;
+    url.searchParams.set('enablejsapi', '1');
+    url.searchParams.set('origin', window.location.origin);
+    return url.toString();
+  } catch {
+    return value;
+  }
+}
+
+function isHlsPlaybackUrl(value: string) {
+  if (!value) return false;
+  if (value.split('?')[0].endsWith('.m3u8')) return true;
+  try {
+    const parsed = new URL(value, window.location.origin);
+    const proxied = parsed.searchParams.get('url');
+    return Boolean(proxied?.split('?')[0].endsWith('.m3u8'));
+  } catch {
+    return false;
+  }
+}
+
+function sessionHasActiveMedia(state: WatchState | null) {
+  return Boolean(state?.current && state.playback?.status !== 'idle');
 }
 
 export default function OverlayPage() {
   const params = useParams<{ roomId: string }>();
+  const searchParams = useSearchParams();
   const roomId = params.roomId;
-  const { data: room, isLoading } = useDoc<RoomData>('rooms', roomId, 2000);
+  const requestedLane = (searchParams.get('media') || searchParams.get('lane') || 'auto').toLowerCase();
+  const lane: MediaLane = requestedLane === 'music' || requestedLane === 'movie' ? requestedLane : 'auto';
+  const { popouts, openPopout, closePopout } = usePopout();
+
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const iframeRef = useRef<HTMLIFrameElement | null>(null);
+  const hlsRef = useRef<any>(null);
+  const currentRequestIdRef = useRef<string | null>(null);
+  const applyingRemoteState = useRef(false);
+  const embeddedCurrentTimeRef = useRef(0);
+  const lastEmbeddedPlaybackKeyRef = useRef('');
+  const volumeRef = useRef(0.5);
+  const mutedRef = useRef(false);
+
+  const [movieState, setMovieState] = useState<WatchState | null>(null);
+  const [musicState, setMusicState] = useState<WatchState | null>(null);
+  const [connected, setConnected] = useState(false);
   const [volume, setVolume] = useState(0.5);
   const [isMuted, setIsMuted] = useState(false);
   const [audioReady, setAudioReady] = useState(false);
-  const { popouts, openPopout, closePopout } = usePopout();
-  const audioRef = useRef<HTMLAudioElement | null>(null);
-  const musicRoomRef = useRef<LKRoom | null>(null);
-  const volumeRef = useRef(volume);
-  const mutedRef = useRef(isMuted);
-  const overlayIdentityRef = useRef<string>('');
-  const peerListenerRef = useRef<PeerAudioListener | null>(null);
+  const [mediaStatus, setMediaStatus] = useState('Waiting for media');
+  const [musicPlaybackMode, setMusicPlaybackMode] = useState<'video' | 'audio'>('video');
 
   useEffect(() => { volumeRef.current = volume; }, [volume]);
   useEffect(() => { mutedRef.current = isMuted; }, [isMuted]);
 
-  // Sync volume changes to the audio element
-  useEffect(() => {
-    if (audioRef.current) {
-      audioRef.current.volume = isMuted ? 0 : volume;
+  const activeBundle = useMemo(() => {
+    if (lane === 'music') return { lane: 'music' as const, sessionId: MUSIC_WATCH_SESSION_ID, state: musicState };
+    if (lane === 'movie') return { lane: 'movie' as const, sessionId: GLOBAL_WATCH_SESSION_ID, state: movieState };
+
+    if (sessionHasActiveMedia(musicState)) return { lane: 'music' as const, sessionId: MUSIC_WATCH_SESSION_ID, state: musicState };
+    if (sessionHasActiveMedia(movieState)) return { lane: 'movie' as const, sessionId: GLOBAL_WATCH_SESSION_ID, state: movieState };
+    if (musicState?.current) return { lane: 'music' as const, sessionId: MUSIC_WATCH_SESSION_ID, state: musicState };
+    return { lane: 'movie' as const, sessionId: GLOBAL_WATCH_SESSION_ID, state: movieState };
+  }, [lane, movieState, musicState]);
+
+  const activeState = activeBundle.state;
+  const currentItem = activeState?.current?.item || null;
+  const currentPlaybackUrl = currentItem
+    ? hlsFallbackUrlFor(currentItem, currentItem?.type === 'music' ? musicPlaybackMode : 'video')
+    : '';
+  const embeddedMode = Boolean(currentPlaybackUrl && isEmbeddedVideoUrl(currentPlaybackUrl));
+
+  const youtubeCommand = useCallback((func: string, args: unknown[] = []) => {
+    const frame = iframeRef.current;
+    if (!frame?.contentWindow) return false;
+    try {
+      frame.contentWindow.postMessage(JSON.stringify({ event: 'command', func, args }), '*');
+      return true;
+    } catch (error) {
+      console.warn('[Overlay] YouTube command failed', func, error);
+      return false;
     }
-  }, [volume, isMuted]);
+  }, []);
+
+  const applyVolume = useCallback(() => {
+    const nextVolume = Math.max(0, Math.min(1, volumeRef.current));
+    const muted = mutedRef.current || nextVolume === 0;
+    if (embeddedMode) {
+      youtubeCommand('setVolume', [Math.round(nextVolume * 100)]);
+      youtubeCommand(muted ? 'mute' : 'unMute');
+      return;
+    }
+    const video = videoRef.current;
+    if (!video) return;
+    video.volume = nextVolume;
+    video.muted = muted;
+  }, [embeddedMode, youtubeCommand]);
+
+  const registerYouTubeListeners = useCallback(() => {
+    const frame = iframeRef.current;
+    if (!frame?.contentWindow) return;
+    try {
+      frame.contentWindow.postMessage(JSON.stringify({ event: 'listening' }), '*');
+    } catch (error) {
+      console.warn('[Overlay] YouTube listener registration failed', error);
+    }
+  }, []);
+
+  const applyPlaybackState = useCallback((nextState = activeState) => {
+    if (!nextState?.current) return;
+
+    if (embeddedMode) {
+      const remotePosition = playbackPosition(nextState.playback);
+      const playbackKey = [
+        nextState.current.requestId,
+        nextState.playback.status,
+        Math.round(Number(nextState.playback.position || 0)),
+        Number(nextState.playback.updatedAt || 0),
+      ].join(':');
+
+      if (playbackKey !== lastEmbeddedPlaybackKeyRef.current && Number.isFinite(remotePosition)) {
+        lastEmbeddedPlaybackKeyRef.current = playbackKey;
+        youtubeCommand('seekTo', [Math.max(0, remotePosition), true]);
+      }
+      youtubeCommand(nextState.playback.status === 'playing' ? 'playVideo' : 'pauseVideo');
+      applyVolume();
+      setMediaStatus(nextState.playback.status === 'playing' ? 'Overlay media playing' : 'Overlay media paused');
+      return;
+    }
+
+    const video = videoRef.current;
+    if (!video) return;
+    const remotePosition = playbackPosition(nextState.playback);
+    const drift = Math.abs((video.currentTime || 0) - remotePosition);
+    applyingRemoteState.current = true;
+
+    if (drift > 2.5 && Number.isFinite(remotePosition)) {
+      video.currentTime = remotePosition;
+    }
+
+    if (nextState.playback.status === 'playing' && video.paused) {
+      video.play()
+        .then(() => setAudioReady(true))
+        .catch((error) => {
+          const message = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+          setMediaStatus(`Overlay autoplay blocked: ${message}`);
+          console.warn('[Overlay] media.play() failed', message);
+        });
+    }
+
+    if (nextState.playback.status !== 'playing' && !video.paused) {
+      video.pause();
+    }
+
+    window.setTimeout(() => {
+      applyingRemoteState.current = false;
+    }, 100);
+  }, [activeState, applyVolume, embeddedMode, youtubeCommand]);
+
+  const startOverlayAudio = useCallback(async () => {
+    mutedRef.current = false;
+    setIsMuted(false);
+    applyVolume();
+
+    if (embeddedMode) {
+      youtubeCommand('unMute');
+      youtubeCommand('playVideo');
+      setAudioReady(true);
+      setMediaStatus('Overlay media unlocked');
+      return;
+    }
+
+    const video = videoRef.current;
+    if (!video) return;
+    video.muted = false;
+    video.volume = volumeRef.current;
+    await video.play();
+    setAudioReady(true);
+    setMediaStatus('Overlay media unlocked');
+  }, [applyVolume, embeddedMode, youtubeCommand]);
+
+  useEffect(() => {
+    const refresh = async () => {
+      try {
+        const [movie, music] = await Promise.all([
+          api(`/api/watch/sessions/${GLOBAL_WATCH_SESSION_ID}/state`),
+          api(`/api/watch/sessions/${MUSIC_WATCH_SESSION_ID}/state`),
+        ]);
+        setMovieState(movie);
+        setMusicState(music);
+        setConnected(true);
+      } catch (error) {
+        setConnected(false);
+        console.warn('[Overlay] watch-session refresh failed', error);
+      }
+    };
+
+    refresh();
+    const interval = window.setInterval(refresh, 1000);
+    return () => window.clearInterval(interval);
+  }, []);
 
   useEffect(() => {
     const unlockOverlayAudio = () => {
-      void startOverlayAudio();
+      void startOverlayAudio().catch((error) => console.warn('[Overlay] start audio failed:', error));
     };
     window.addEventListener('pointerdown', unlockOverlayAudio, { passive: true });
     window.addEventListener('keydown', unlockOverlayAudio);
@@ -65,121 +311,157 @@ export default function OverlayPage() {
       window.removeEventListener('keydown', unlockOverlayAudio);
       window.removeEventListener('touchstart', unlockOverlayAudio);
     };
-  }, []);
-
-  const startOverlayAudio = useCallback(async () => {
-    const lkRoom = musicRoomRef.current;
-    await lkRoom?.startAudio();
-    const audio = audioRef.current;
-    if (!audio || !audio.srcObject) return;
-    audio.volume = mutedRef.current ? 0 : volumeRef.current;
-    await audio.play();
-    setAudioReady(true);
-  }, []);
-
-  // Connect to LiveKit Music Room and play audio through this overlay.
-  // Falls back to PeerJS if LiveKit fails.
-  const connectToMusicRoom = useCallback(async () => {
-    if (musicRoomRef.current || !roomId) return;
-
-    try {
-      if (!overlayIdentityRef.current) {
-        const tabId = (() => {
-          try {
-            const key = 'hmo_overlay_tab_id';
-            const existing = sessionStorage.getItem(key);
-            if (existing) return existing;
-            const generated = Math.random().toString(36).slice(2, 8);
-            sessionStorage.setItem(key, generated);
-            return generated;
-          } catch {
-            return Math.random().toString(36).slice(2, 8);
-          }
-        })();
-        overlayIdentityRef.current = `overlay-${roomId}-${tabId}`;
-      }
-      const token = await generateMusicRoomToken(roomId, overlayIdentityRef.current, 'Overlay', false);
-      const livekitUrl = process.env.NEXT_PUBLIC_LIVEKIT_URL;
-      if (!livekitUrl || !token) throw new Error('LiveKit config missing');
-
-      const lkRoom = new LKRoom();
-      await lkRoom.connect(livekitUrl, token);
-      musicRoomRef.current = lkRoom;
-      console.log('[Overlay] Connected to music room');
-
-      const attachTrack = (track: RemoteTrack) => {
-        if (track.kind === Track.Kind.Audio) {
-          console.log('[Overlay] Audio track received — attaching');
-          if (!audioRef.current) audioRef.current = new Audio();
-          track.attach(audioRef.current);
-          audioRef.current.volume = mutedRef.current ? 0 : volumeRef.current;
-          audioRef.current.play()
-            .then(() => setAudioReady(true))
-            .catch(e => console.warn('[Overlay] Autoplay blocked:', e));
-        }
-      };
-
-      lkRoom.remoteParticipants.forEach(p => {
-        p.trackPublications.forEach(pub => {
-          if (pub.track && pub.isSubscribed) attachTrack(pub.track as RemoteTrack);
-        });
-      });
-
-      lkRoom.on(RoomEvent.TrackSubscribed, (track) => attachTrack(track));
-      lkRoom.on(RoomEvent.TrackUnsubscribed, () => {
-        if (audioRef.current) audioRef.current.srcObject = null;
-      });
-      lkRoom.on(RoomEvent.Disconnected, (reason) => {
-        console.warn('[Overlay] Music room disconnected:', reason);
-      });
-      lkRoom.on(RoomEvent.Reconnecting, () => {
-        console.warn('[Overlay] Music room reconnecting...');
-      });
-      lkRoom.on(RoomEvent.Reconnected, () => {
-        console.log('[Overlay] Music room reconnected');
-      });
-    } catch (err) {
-      console.warn('[Overlay] LiveKit failed, trying PeerJS fallback:', err);
-      try {
-        const listener = new PeerAudioListener();
-        await listener.connect(
-          roomId,
-          (stream) => {
-            if (!audioRef.current) audioRef.current = new Audio();
-            audioRef.current.srcObject = stream;
-            audioRef.current.volume = mutedRef.current ? 0 : volumeRef.current;
-            audioRef.current.play()
-              .then(() => setAudioReady(true))
-              .catch(e => console.warn('[Overlay] P2P autoplay blocked:', e));
-          },
-          () => console.warn('[Overlay] P2P disconnected'),
-        );
-        peerListenerRef.current = listener;
-        console.log('[Overlay] PeerJS fallback connected');
-      } catch (peerErr) {
-        console.error('[Overlay] PeerJS fallback also failed:', peerErr);
-      }
-    }
-  }, [roomId]);
+  }, [startOverlayAudio]);
 
   useEffect(() => {
-    connectToMusicRoom();
-    return () => {
-      musicRoomRef.current?.disconnect();
-      musicRoomRef.current = null;
-      peerListenerRef.current?.disconnect();
-      peerListenerRef.current = null;
-      if (audioRef.current) {
-        audioRef.current.pause();
-        audioRef.current.srcObject = null;
+    const requestId = activeState?.current?.requestId || null;
+    const item = activeState?.current?.item;
+    if (!item || !requestId) {
+      currentRequestIdRef.current = null;
+      videoRef.current?.pause();
+      if (videoRef.current) {
+        videoRef.current.removeAttribute('src');
+        videoRef.current.load();
+      }
+      if (iframeRef.current) iframeRef.current.removeAttribute('src');
+      setMediaStatus('Waiting for media');
+      return;
+    }
+
+    if (currentRequestIdRef.current === `${activeBundle.sessionId}:${requestId}:${currentPlaybackUrl}`) {
+      applyPlaybackState(activeState);
+      return;
+    }
+
+    currentRequestIdRef.current = `${activeBundle.sessionId}:${requestId}:${currentPlaybackUrl}`;
+    embeddedCurrentTimeRef.current = 0;
+    lastEmbeddedPlaybackKeyRef.current = '';
+
+    if (hlsRef.current) {
+      hlsRef.current.destroy();
+      hlsRef.current = null;
+    }
+
+    const video = videoRef.current;
+    if (video) {
+      video.pause();
+      video.removeAttribute('src');
+      video.load();
+    }
+
+    setMediaStatus(`Loading ${item.title || 'media'}`);
+
+    if (embeddedMode) {
+      if (iframeRef.current) iframeRef.current.src = iframeUrlFor(currentPlaybackUrl);
+      window.setTimeout(() => {
+        registerYouTubeListeners();
+        applyPlaybackState(activeState);
+      }, 600);
+      return;
+    }
+
+    if (!video || !currentPlaybackUrl) return;
+
+    if (isHlsPlaybackUrl(currentPlaybackUrl)) {
+      import('hls.js')
+        .then(({ default: Hls }) => {
+          if (!videoRef.current || currentRequestIdRef.current !== `${activeBundle.sessionId}:${requestId}:${currentPlaybackUrl}`) return;
+          if (Hls.isSupported()) {
+            hlsRef.current = new Hls({
+              enableWorker: false,
+              lowLatencyMode: false,
+              backBufferLength: 30,
+              manifestLoadingTimeOut: 60000,
+              manifestLoadingMaxRetry: 4,
+              manifestLoadingRetryDelay: 1000,
+              manifestLoadingMaxRetryTimeout: 8000,
+              fragLoadingTimeOut: 60000,
+              fragLoadingMaxRetry: 4,
+              fragLoadingRetryDelay: 1000,
+              fragLoadingMaxRetryTimeout: 8000,
+            });
+            hlsRef.current.on(Hls.Events.MANIFEST_PARSED, () => {
+              setMediaStatus('Overlay media ready');
+              applyPlaybackState(activeState);
+            });
+            hlsRef.current.on(Hls.Events.ERROR, (_event: unknown, data: any) => {
+              const detail = data?.details || data?.type || 'HLS playback error';
+              setMediaStatus(`Overlay HLS error: ${detail}`);
+              console.error('[Overlay] HLS error', data);
+            });
+            hlsRef.current.loadSource(currentPlaybackUrl);
+            hlsRef.current.attachMedia(videoRef.current);
+            return;
+          }
+
+          if (videoRef.current.canPlayType('application/vnd.apple.mpegurl')) {
+            videoRef.current.src = currentPlaybackUrl;
+          } else {
+            setMediaStatus('HLS is not supported in this browser');
+          }
+        })
+        .catch((error) => {
+          setMediaStatus('Failed to load HLS player');
+          console.error('[Overlay] Failed to load HLS player', error);
+        });
+    } else {
+      video.src = currentPlaybackUrl;
+      video.load();
+      applyVolume();
+    }
+  }, [
+    activeBundle.sessionId,
+    activeState?.current?.requestId,
+    currentPlaybackUrl,
+    embeddedMode,
+    registerYouTubeListeners,
+    applyPlaybackState,
+    applyVolume,
+    activeState,
+  ]);
+
+  useEffect(() => {
+    applyPlaybackState(activeState);
+  }, [activeState?.playback.status, activeState?.playback.position, activeState?.playback.updatedAt, applyPlaybackState, activeState]);
+
+  useEffect(() => {
+    applyVolume();
+  }, [applyVolume, volume, isMuted]);
+
+  useEffect(() => {
+    const onMessage = (event: MessageEvent) => {
+      const frame = iframeRef.current;
+      if (!frame || event.source !== frame.contentWindow) return;
+      let payload: any = event.data;
+      if (typeof payload === 'string') {
+        try {
+          payload = JSON.parse(payload);
+        } catch {
+          return;
+        }
+      }
+      if (!payload || typeof payload !== 'object') return;
+
+      if (payload.event === 'infoDelivery' && typeof payload.info?.currentTime === 'number') {
+        embeddedCurrentTimeRef.current = payload.info.currentTime;
+      }
+
+      if (payload.event !== 'onStateChange') return;
+      const code = Number(payload.info);
+      if (code === 1) {
+        setAudioReady(true);
+        setMediaStatus('Overlay media playing');
+      } else if (code === 2) {
+        setMediaStatus('Overlay media paused');
+      } else if (code === 0) {
+        setMediaStatus('Overlay media ended');
+      } else if (code === 3) {
+        setMediaStatus('Overlay media buffering');
       }
     };
-  }, [connectToMusicRoom]);
-
-  if (isLoading) return <div className="min-h-screen bg-transparent" />;
-  if (!room) return <div className="min-h-screen bg-transparent" />;
-
-  const track = room.playlist?.find(t => t.id === room.currentTrackId);
+    window.addEventListener('message', onMessage);
+    return () => window.removeEventListener('message', onMessage);
+  }, []);
 
   const hasPopout = (source: string) => popouts.some((p) => p.type === 'chat' && p.customSettings?.source === source);
   const hasQueue = popouts.some((p) => p.type === 'queue');
@@ -192,43 +474,88 @@ export default function OverlayPage() {
     else openPopout(kind, size, { source });
   };
 
+  const mediaTitle = currentItem?.title || 'Waiting for media';
+  const mediaSubtitle = currentItem?.artist || currentItem?.source || activeBundle.sessionId;
+  const mediaImage = currentItem?.thumbnail || currentItem?.poster || currentItem?.image;
+  const queueLength = activeState?.queue?.length || 0;
+  const laneLabel = activeBundle.lane === 'music' ? 'Music Videos' : 'Watch Party';
+
   return (
-    <div className="min-h-screen bg-transparent text-white relative">
-      {/* Now Playing — bottom left, designed for OBS browser source */}
-      {track && room.isPlaying && (
+    <div className="relative min-h-screen overflow-hidden bg-transparent text-white">
+      <div className="absolute inset-0 bg-transparent">
+        {embeddedMode && currentPlaybackUrl && (
+          <iframe
+            ref={iframeRef}
+            className="h-full w-full border-0 bg-black"
+            title="Overlay media player"
+            src={iframeUrlFor(currentPlaybackUrl)}
+            allow="autoplay; fullscreen; encrypted-media; picture-in-picture"
+            allowFullScreen
+            onLoad={() => {
+              registerYouTubeListeners();
+              applyPlaybackState(activeState);
+            }}
+          />
+        )}
+        <video
+          ref={videoRef}
+          className={`h-full w-full bg-black object-contain ${embeddedMode ? 'hidden' : ''}`}
+          muted={isMuted}
+          playsInline
+          onCanPlay={() => {
+            setMediaStatus('Overlay media ready');
+            applyPlaybackState(activeState);
+          }}
+          onPlaying={() => {
+            setAudioReady(true);
+            setMediaStatus('Overlay media playing');
+          }}
+          onPause={() => {
+            if (!applyingRemoteState.current) setMediaStatus('Overlay media paused');
+          }}
+          onError={() => {
+            const error = videoRef.current?.error;
+            setMediaStatus(error ? `Overlay media error ${error.code}` : 'Overlay media error');
+            console.error('[Overlay] media error', error);
+          }}
+        />
+      </div>
+
+      {currentItem && (
         <div style={{ position: 'absolute', left: 20, bottom: 20 }}>
-          <div className="rounded-lg bg-black/80 backdrop-blur-md p-4 shadow-2xl min-w-[300px] flex items-center gap-4">
-            {track.thumbnail ? (
-              <Image src={track.thumbnail} alt="" width={64} height={64} className="rounded-md" unoptimized />
+          <div className="flex min-w-[320px] max-w-[520px] items-center gap-4 rounded-lg bg-black/80 p-4 shadow-2xl backdrop-blur-md">
+            {mediaImage ? (
+              <Image src={mediaImage} alt="" width={64} height={64} className="rounded-md object-cover" unoptimized />
             ) : (
-              <div className="w-16 h-16 bg-white/10 rounded-md flex items-center justify-center">
-                <Music className="w-8 h-8 text-white/80" />
+              <div className="flex h-16 w-16 items-center justify-center rounded-md bg-white/10">
+                {activeBundle.lane === 'music' ? <Music className="h-8 w-8 text-white/80" /> : <Film className="h-8 w-8 text-white/80" />}
               </div>
             )}
-            <div className="flex-1 overflow-hidden">
-              <h2 className="text-lg font-bold truncate">{track.title}</h2>
-              <p className="text-sm text-gray-400 truncate">{track.artist}</p>
+            <div className="min-w-0 flex-1">
+              <p className="text-xs font-semibold uppercase tracking-normal text-emerald-300">{laneLabel}</p>
+              <h2 className="truncate text-lg font-bold">{mediaTitle}</h2>
+              <p className="truncate text-sm text-gray-300">{mediaSubtitle}</p>
+              <p className="truncate text-xs text-gray-400">{mediaStatus} · queue {queueLength}</p>
             </div>
-            {room.djActive && <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse shrink-0" />}
+            {connected && activeState?.playback.status === 'playing' && <div className="h-2 w-2 shrink-0 animate-pulse rounded-full bg-green-500" />}
           </div>
         </div>
       )}
 
-      {/* Volume Controls — top right, only visible when hovering (for streamer monitoring) */}
-      <div style={{ position: 'absolute', right: 20, top: 20 }} className="opacity-20 hover:opacity-100 transition-opacity">
-        <div className="rounded-lg bg-black/80 backdrop-blur-md p-3 shadow-2xl flex items-center gap-2">
+      <div style={{ position: 'absolute', right: 20, top: 20 }} className="opacity-20 transition-opacity hover:opacity-100">
+        <div className="flex items-center gap-2 rounded-lg bg-black/80 p-3 shadow-2xl backdrop-blur-md">
           <Tooltip>
             <TooltipTrigger asChild>
               <Button
                 variant="ghost"
                 size="icon"
                 className="h-8 w-8 text-white hover:bg-white/20"
-                onClick={() => startOverlayAudio().catch(e => console.warn('[Overlay] start audio failed:', e))}
+                onClick={() => startOverlayAudio().catch((error) => console.warn('[Overlay] start audio failed:', error))}
               >
                 <Play className="h-4 w-4" />
               </Button>
             </TooltipTrigger>
-            <TooltipContent><p>{audioReady ? 'Audio ready' : 'Start overlay audio'}</p></TooltipContent>
+            <TooltipContent><p>{audioReady ? 'Overlay audio ready' : 'Start overlay audio'}</p></TooltipContent>
           </Tooltip>
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
@@ -290,26 +617,72 @@ export default function OverlayPage() {
               >
                 Screen Share
               </DropdownMenuCheckboxItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuCheckboxItem
+                checked={lane === 'music'}
+                onCheckedChange={() => { window.location.search = '?media=music'; }}
+              >
+                Lock to Music
+              </DropdownMenuCheckboxItem>
+              <DropdownMenuCheckboxItem
+                checked={lane === 'movie'}
+                onCheckedChange={() => { window.location.search = '?media=movie'; }}
+              >
+                Lock to Movies
+              </DropdownMenuCheckboxItem>
+              <DropdownMenuCheckboxItem
+                checked={lane === 'auto'}
+                onCheckedChange={() => { window.location.search = '?media=auto'; }}
+              >
+                Auto Media Lane
+              </DropdownMenuCheckboxItem>
             </DropdownMenuContent>
           </DropdownMenu>
+          {currentItem?.type === 'music' && hasMusicModeToggle(currentItem) && (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-8 text-white hover:bg-white/20"
+                  onClick={() => {
+                    setMusicPlaybackMode((current) => current === 'audio' ? 'video' : 'audio');
+                    currentRequestIdRef.current = null;
+                  }}
+                >
+                  {musicPlaybackMode === 'audio' ? 'Audio' : 'Video'}
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent><p>Switch music playback mode</p></TooltipContent>
+            </Tooltip>
+          )}
           <Tooltip>
             <TooltipTrigger asChild>
               <Button
                 variant="ghost"
                 size="icon"
                 className="h-8 w-8 text-white hover:bg-white/20"
-                onClick={() => setIsMuted(!isMuted)}
+                onClick={() => {
+                  const nextMuted = !isMuted;
+                  mutedRef.current = nextMuted;
+                  setIsMuted(nextMuted);
+                }}
               >
                 {isMuted ? <VolumeX className="h-4 w-4" /> : <Volume2 className="h-4 w-4" />}
               </Button>
             </TooltipTrigger>
-            <TooltipContent><p>{isMuted ? 'Unmute' : 'Mute'} monitor</p></TooltipContent>
+            <TooltipContent><p>{isMuted ? 'Unmute overlay media' : 'Mute overlay media'}</p></TooltipContent>
           </Tooltip>
           <Slider
             value={[isMuted ? 0 : volume]}
-            onValueChange={(v) => {
-              setVolume(v[0]);
-              if (isMuted) setIsMuted(false);
+            onValueChange={(nextValue) => {
+              const nextVolume = nextValue[0];
+              volumeRef.current = nextVolume;
+              setVolume(nextVolume);
+              if (isMuted) {
+                mutedRef.current = false;
+                setIsMuted(false);
+              }
             }}
             max={1}
             step={0.05}
