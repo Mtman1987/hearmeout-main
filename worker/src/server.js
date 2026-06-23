@@ -250,8 +250,8 @@ async function extractFromUpstream(videoId, mode = 'audio') {
   }
 }
 
-async function extractAudioInfo(videoId) {
-  const cached = getCachedExtractedInfo(videoId, 'audio');
+async function extractAudioInfo(videoId, forceRefresh = false) {
+  const cached = forceRefresh ? null : getCachedExtractedInfo(videoId, 'audio');
   if (cached) return cached;
 
   const upstreamInfo = await extractFromUpstream(videoId, 'audio');
@@ -367,8 +367,8 @@ async function extractAudioInfo(videoId) {
   }
 }
 
-async function extractVideoInfo(videoId) {
-  const cached = getCachedExtractedInfo(videoId, 'video');
+async function extractVideoInfo(videoId, forceRefresh = false) {
+  const cached = forceRefresh ? null : getCachedExtractedInfo(videoId, 'video');
   if (cached) return cached;
 
   const upstreamInfo = await extractFromUpstream(videoId, 'video');
@@ -500,9 +500,10 @@ app.get('/music/:videoId', authorizeWorker, (req, res) => {
 app.get('/extract', authorizeWorker, async (req, res) => {
   const { videoId } = req.query;
   const mode = String(req.query.mode || 'audio').toLowerCase() === 'video' ? 'video' : 'audio';
+  const forceRefresh = ['1', 'true', 'yes'].includes(String(req.query.refresh || '').toLowerCase());
   if (!isValidVideoId(videoId)) return res.status(400).json({ error: 'Invalid videoId' });
   try {
-    const info = mode === 'video' ? await extractVideoInfo(videoId) : await extractAudioInfo(videoId);
+    const info = mode === 'video' ? await extractVideoInfo(videoId, forceRefresh) : await extractAudioInfo(videoId, forceRefresh);
     if (!info?.url) return res.status(503).json({ error: 'Browser extraction failed' });
     return res.json({ ...info, mode });
   } catch (err) {

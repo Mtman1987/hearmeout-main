@@ -13,6 +13,15 @@ const ALLOWED_BASE_HOSTS = ['googlevideo.com', 'youtube.com', 'ytimg.com'];
 const RESPONSE_CHUNK_SIZE = 512 * 1024;
 const UPSTREAM_QUERY_CHUNK_SIZE = 64 * 1024;
 
+class UpstreamChunkFetchError extends Error {
+  status: number;
+
+  constructor(status: number) {
+    super(`CDN chunk fetch failed (${status})`);
+    this.status = status;
+  }
+}
+
 function cacheKey(videoId: string, media: 'audio' | 'video') {
   return `${media}:${videoId}`;
 }
@@ -89,10 +98,10 @@ function parseContentRange(value: string | null): { total: number | null } | nul
   return total && Number.isSafeInteger(total) ? { total } : { total: null };
 }
 
-async function extract(videoId: string, media: 'audio' | 'video'): Promise<ExtractedMedia | null> {
+async function extract(videoId: string, media: 'audio' | 'video', forceRefresh = false): Promise<ExtractedMedia | null> {
   const key = cacheKey(videoId, media);
   const cached = extractedUrls.get(key);
-  if (cached && cached.expires > Date.now() && isAllowedYoutubeMediaUrl(cached.url)) return cached;
+  if (!forceRefresh && cached && cached.expires > Date.now() && isAllowedYoutubeMediaUrl(cached.url)) return cached;
   extractedUrls.delete(key);
 
   const workerUrl = getDjWorkerUrl();
@@ -100,7 +109,8 @@ async function extract(videoId: string, media: 'audio' | 'video'): Promise<Extra
 
   let data: any = null;
   try {
-    const res = await fetch(`${workerUrl}/extract?videoId=${encodeURIComponent(videoId)}&mode=${media}`, { cache: 'no-store' });
+    const refreshQuery = forceRefresh ? '&refresh=1' : '';
+    const res = await fetch(`${workerUrl}/extract?videoId=${encodeURIComponent(videoId)}&mode=${media}${refreshQuery}`, { cache: 'no-store' });
     data = await res.json().catch(() => null);
     if (!res.ok || !data?.url || !isAllowedYoutubeMediaUrl(data.url)) return null;
   } catch (error: any) {
@@ -141,7 +151,7 @@ async function fetchMediaRange(
     const chunkUrl = new URL(upstreamUrl);
     chunkUrl.searchParams.set('range', `${offset}-${chunkEnd}`);
     const res = await fetch(chunkUrl, { headers });
-    if (!res.ok) throw new Error(`CDN chunk fetch failed (${res.status})`);
+    if (!res.ok) throw new UpstreamChunkFetchError(res.status);
     contentType ||= res.headers.get('content-type');
     const contentRange = parseContentRange(res.headers.get('content-range'));
     if (!totalLength && contentRange?.total) totalLength = contentRange.total;
@@ -164,13 +174,28 @@ export async function GET(req: NextRequest) {
   const media = req.nextUrl.searchParams.get('media') === 'audio' ? 'audio' : 'video';
   if (!isValidVideoId(videoId)) return new NextResponse('invalid videoId', { status: 400 });
 
-  const extracted = await extract(videoId, media);
+  let extracted = await extract(videoId, media);
   if (!extracted?.url) return new NextResponse(`No ${media} URL resolved for this video`, { status: 404 });
 
   try {
     const totalLength = getContentLengthFromUrl(extracted.url);
     const { start, end } = parseRequestedRange(req.headers.get('range'), totalLength);
-    const { body, contentType: cdnContentType, totalLength: resolvedTotalLength } = await fetchMediaRange(extracted.url, start, end);
+    let mediaRange;
+    try {
+      mediaRange = await fetchMediaRange(extracted.url, start, end);
+    } catch (error) {
+      if (!(error instanceof UpstreamChunkFetchError) || ![403, 404, 410].includes(error.status)) {
+        throw error;
+      }
+      console.warn(`[YouTube ${media} proxy] Refreshing expired CDN URL for ${videoId} after ${error.status}`);
+      extractedUrls.delete(cacheKey(videoId, media));
+      const refreshed = await extract(videoId, media, true);
+      if (!refreshed?.url) throw error;
+      extracted = refreshed;
+      mediaRange = await fetchMediaRange(refreshed.url, start, end);
+    }
+
+    const { body, contentType: cdnContentType, totalLength: resolvedTotalLength } = mediaRange;
     const queryMimeType = getMimeFromUrl(extracted.url);
     if (media === 'video' && isAudioMime(cdnContentType || queryMimeType)) {
       extractedUrls.delete(cacheKey(videoId, media));
