@@ -122,11 +122,8 @@ function html(request: Request) {
         <button class="room-tab" data-session-switch="${MUSIC_WATCH_SESSION_ID}" type="button">Music</button>
       </nav>
       <div class="toolbar" aria-label="Watch controls">
-        <button data-action="play" title="Play">Play</button>
-        <button data-action="pause" title="Pause">Pause</button>
-        <button data-action="seek" title="Sync">Sync</button>
-        <button data-action="next" title="Next">Next</button>
-        <button data-action="clear" title="Clear queue">Clear Queue</button>
+        <button data-action="local-play" title="Play locally">Play</button>
+        <button data-action="sync-local" title="Sync to live position">Sync</button>
         <button id="popout" type="button" disabled>Pop Out</button>
         <button id="fullscreen" type="button">Fullscreen</button>
         <button class="panel-btn" data-panel="request" type="button">Request</button>

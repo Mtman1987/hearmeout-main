@@ -1,5 +1,5 @@
 import { controlWatchSession, extractWatchRoomAlias, getActivityUrl, getResolvedWatchSession, requestWatchMusicItem } from '@/lib/watch-request-service';
-import { getMusicWatchSessionId, getRoomWatchSessionId, getScopedWatchSessionId } from '@/lib/watch-session';
+import { getMusicWatchSessionId } from '@/lib/watch-session';
 
 export function parseMusicCommand(message: string) {
   const trimmed = message.trim();
@@ -36,11 +36,9 @@ export async function handleMusicCommand(params: {
   if (!parsed) return false;
 
   const parsedSessionId = 'sessionId' in parsed && parsed.sessionId ? parsed.sessionId : getMusicWatchSessionId();
-  const sessionId = params.roomId && parsedSessionId === getMusicWatchSessionId()
-    ? getRoomWatchSessionId(params.roomId, 'music')
-    : params.platform === 'discord' && params.guildId && params.channelId && parsedSessionId === getMusicWatchSessionId()
-      ? getScopedWatchSessionId(params.guildId, params.channelId, 'music')
-      : parsedSessionId;
+  const sessionId = parsedSessionId === getMusicWatchSessionId()
+    ? getMusicWatchSessionId()
+    : parsedSessionId;
   const reply = params.reply || (() => undefined);
 
   if (parsed.action === 'request') {

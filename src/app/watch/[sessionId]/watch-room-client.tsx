@@ -248,7 +248,7 @@ export default function WatchRoomClient({ sessionId, activityMode = false, canPa
     const nextMuted = !muted;
     setMuted(nextMuted);
     if (embeddedMode) youtubeCommand(nextMuted ? 'mute' : 'unMute');
-    if (state?.current) sendControl(nextMuted ? 'mute' : 'unmute').catch(() => {});
+    if (canPause && state?.current) sendControl(nextMuted ? 'mute' : 'unmute').catch(() => {});
   }
 
   async function enableSound() {
@@ -278,7 +278,7 @@ export default function WatchRoomClient({ sessionId, activityMode = false, canPa
   async function playLocalAndRemote() {
     if (embeddedMode) {
       youtubeCommand('playVideo');
-      await sendControl('play', embeddedCurrentTimeRef.current || playbackPosition(state?.playback)).catch(() => {});
+      if (canPause) await sendControl('play', embeddedCurrentTimeRef.current || playbackPosition(state?.playback)).catch(() => {});
       return;
     }
     const video = videoRef.current;
@@ -290,7 +290,7 @@ export default function WatchRoomClient({ sessionId, activityMode = false, canPa
         setMediaStatus(`Play blocked: ${message}`);
       }
     }
-    await sendControl('play').catch(() => {});
+    if (canPause) await sendControl('play').catch(() => {});
   }
 
   async function pauseLocalAndRemote() {
@@ -306,6 +306,7 @@ export default function WatchRoomClient({ sessionId, activityMode = false, canPa
   async function syncNativePlay() {
     const video = videoRef.current;
     if (!video || !state?.current || applyingRemoteState.current || syncingNativePlayback.current) return;
+    if (!canPause) return;
     if (state.playback.status === 'playing') return;
 
     syncingNativePlayback.current = true;
@@ -674,13 +675,13 @@ export default function WatchRoomClient({ sessionId, activityMode = false, canPa
       const code = Number(payload.info);
       if (code === 1) {
         setMediaStatus('Embedded video playing');
-        if (state?.playback?.status !== 'playing') sendControl('play', embeddedCurrentTimeRef.current).catch(() => {});
+        if (canPause && state?.playback?.status !== 'playing') sendControl('play', embeddedCurrentTimeRef.current).catch(() => {});
       } else if (code === 2) {
         setMediaStatus('Embedded video paused');
         if (canPause && state?.playback?.status === 'playing') sendControl('pause', embeddedCurrentTimeRef.current).catch(() => {});
       } else if (code === 0) {
         setMediaStatus('Embedded video ended');
-        nextItem().catch(() => {});
+        if (canPause) nextItem().catch(() => {});
       } else if (code === 3) {
         setMediaStatus('Embedded video buffering');
       }
@@ -746,7 +747,7 @@ export default function WatchRoomClient({ sessionId, activityMode = false, canPa
               autoPlay={activityMode}
               playsInline
               onSeeked={() => {
-                if (!applyingRemoteState.current && state?.current) sendControl('seek');
+                if (canPause && !applyingRemoteState.current && state?.current) sendControl('seek');
               }}
               onCanPlay={() => {
                 setMediaStatus('Ready to play');
@@ -775,7 +776,7 @@ export default function WatchRoomClient({ sessionId, activityMode = false, canPa
               }}
               onEnded={() => {
                 setMediaStatus('ended');
-                nextItem();
+                if (canPause) nextItem();
               }}
             />
             {!state?.current && (
@@ -811,8 +812,12 @@ export default function WatchRoomClient({ sessionId, activityMode = false, canPa
               <button type="button" className="rounded-md border border-slate-700 bg-slate-800 px-3 py-2 hover:border-emerald-400" onClick={pauseLocalAndRemote}>Pause</button>
             )}
             <button type="button" className="rounded-md border border-slate-700 bg-slate-800 px-3 py-2 hover:border-emerald-400" onClick={syncPlayback}>Sync</button>
-            <button type="button" className="rounded-md border border-slate-700 bg-slate-800 px-3 py-2 hover:border-emerald-400" onClick={nextItem}>Next</button>
-            <button type="button" className="rounded-md border border-slate-700 bg-slate-800 px-3 py-2 hover:border-emerald-400" onClick={clearQueue}>Clear Queue</button>
+            {canPause && (
+              <>
+                <button type="button" className="rounded-md border border-slate-700 bg-slate-800 px-3 py-2 hover:border-emerald-400" onClick={nextItem}>Next</button>
+                <button type="button" className="rounded-md border border-slate-700 bg-slate-800 px-3 py-2 hover:border-emerald-400" onClick={clearQueue}>Clear Queue</button>
+              </>
+            )}
             <button type="button" className="rounded-md border border-slate-700 bg-slate-800 px-3 py-2 hover:border-emerald-400 disabled:opacity-50" onClick={openPopout} disabled={!state?.current}>Pop Out</button>
             <button type="button" className="rounded-md border border-slate-700 bg-slate-800 px-3 py-2 hover:border-emerald-400 disabled:opacity-50" onClick={openFullscreen} disabled={!state?.current}>Fullscreen</button>
             <button type="button" className="rounded-md border border-slate-700 bg-slate-800 px-3 py-2 hover:border-emerald-400 disabled:opacity-50" onClick={enableSound} disabled={!state?.current}>Enable Sound</button>
@@ -826,7 +831,7 @@ export default function WatchRoomClient({ sessionId, activityMode = false, canPa
                   const position = embeddedMode ? embeddedCurrentTimeRef.current : videoRef.current?.currentTime || playbackPosition(state.playback);
                   setMusicPlaybackMode(nextMode);
                   setCurrentRequestId(null);
-                  if (Number.isFinite(position)) sendControl('seek', position).catch(() => {});
+                  if (canPause && Number.isFinite(position)) sendControl('seek', position).catch(() => {});
                   if (wasPlaying) window.setTimeout(() => playLocalAndRemote(), 300);
                 }}
               >

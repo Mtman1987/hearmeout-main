@@ -3,7 +3,7 @@ import { findInternetArchiveRecommendation } from './internet-archive-provider';
 import { findWatchmodeRecommendation } from './watchmode-provider';
 import { resolveSongRequest } from '@/lib/bot-actions';
 import { DISCORD_CLIENT_ID } from '@/lib/public-config';
-import { getGlobalWatchSessionId, getMusicWatchSessionId, getRoomWatchSessionId, getScopedWatchSessionId, normalizeWatchSessionAlias, type WatchMediaKind } from '@/lib/watch-session';
+import { getGlobalWatchSessionId, getMusicWatchSessionId, getScopedWatchSessionId, normalizeWatchSessionAlias, type WatchMediaKind } from '@/lib/watch-session';
 import type { PlaylistItem } from '@/types/playlist';
 import { dirname } from 'path';
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'fs';
@@ -659,10 +659,7 @@ export function getWatchSession(sessionId: string, guildId?: string, channelId?:
   loadWatchStateFromDisk();
   const legacyFallback = mediaKind === 'music' ? getMusicWatchSessionId() : getGlobalWatchSessionId();
   const normalizedSessionId = normalizeWatchSessionAlias(sessionId, legacyFallback);
-  const shouldUseDiscordScope = guildId && channelId && (!sessionId || normalizedSessionId === getGlobalWatchSessionId() || normalizedSessionId === getMusicWatchSessionId());
-  const resolvedSessionId = shouldUseDiscordScope
-    ? getScopedWatchSessionId(guildId, channelId, mediaKind)
-    : normalizedSessionId;
+  const resolvedSessionId = normalizedSessionId;
   const session = sessions.get(resolvedSessionId) || createSession(resolvedSessionId, guildId, channelId, mediaKind);
   if (!session.metadata) session.metadata = inferSessionMetadata(resolvedSessionId, guildId, channelId, mediaKind);
   return session;
@@ -788,7 +785,6 @@ function assertCanControlWatchSession(session: WatchSession, action: string, act
   const scopeType = metadata.scopeType;
   if (scopeType === 'legacy' && !actor) return;
   if (actor?.isHost || actor?.isAdmin || actor?.platform === 'admin') return;
-  if (['play', 'mute', 'unmute', 'seek'].includes(action)) return;
   if (actor?.platform === 'discord' && action === 'next') return;
   throw new Error('Only the room host or an admin can use that watch control.');
 }
@@ -1013,7 +1009,7 @@ export async function handleWatchRequestCommand(params: {
   const reply = params.reply || ((content: string) => sendDiscordReply(params.channelId, content, params.userMessageId));
 
   if (parseWatchAcceptCommand(params.message)) {
-    const sessionId = params.roomId ? getRoomWatchSessionId(params.roomId, 'movie') : getWatchSessionId(params.guildId, params.channelId, 'movie');
+    const sessionId = getGlobalWatchSessionId();
     const accepted = acceptWatchRecommendation({
       sessionId,
       guildId: params.guildId,
@@ -1039,7 +1035,7 @@ export async function handleWatchRequestCommand(params: {
     return true;
   }
 
-  const defaultSessionId = params.roomId ? getRoomWatchSessionId(params.roomId, 'movie') : getWatchSessionId(params.guildId, params.channelId, 'movie');
+  const defaultSessionId = getGlobalWatchSessionId();
   const sessionId = parsed.sessionId === getGlobalWatchSessionId()
     ? defaultSessionId
     : (parsed.sessionId || defaultSessionId);

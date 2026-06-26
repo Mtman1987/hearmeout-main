@@ -46,6 +46,8 @@ export function getOverlayWatchSessionId(roomId: string, kind: WatchMediaKind = 
 export function normalizeWatchSessionAlias(value?: string | null, fallback = GLOBAL_WATCH_SESSION_ID) {
   const raw = String(value || '').trim().toLowerCase();
   if (!raw) return fallback;
+  const discordScopedMatch = raw.match(/^watch-discord-[a-z0-9_]+-[a-z0-9_]+-(movie|music)$/);
+  if (discordScopedMatch) return discordScopedMatch[1] === 'music' ? MUSIC_WATCH_SESSION_ID : GLOBAL_WATCH_SESSION_ID;
   if (raw === GLOBAL_WATCH_SESSION_ID || raw === MUSIC_WATCH_SESSION_ID || raw.startsWith('watch-')) return raw;
   if (['watch', 'movie', 'movies', 'video', 'videos', 'main', 'default', 'global'].includes(raw)) return GLOBAL_WATCH_SESSION_ID;
   if (['music', 'song', 'songs', 'radio', 'dj'].includes(raw)) return MUSIC_WATCH_SESSION_ID;

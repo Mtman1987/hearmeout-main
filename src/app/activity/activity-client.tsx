@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { DiscordSDK } from '@discord/embedded-app-sdk';
 import { DISCORD_CLIENT_ID } from '@/lib/public-config';
-import { GLOBAL_WATCH_SESSION_ID } from '@/lib/watch-session';
+import { GLOBAL_WATCH_SESSION_ID, normalizeWatchSessionAlias } from '@/lib/watch-session';
 import WatchRoomClient from '../watch/[sessionId]/watch-room-client';
 
 type ActivityState = {
@@ -27,7 +27,9 @@ export default function ActivityClient() {
   const clientId = DISCORD_CLIENT_ID;
 
   const fallbackSessionId = useMemo(() => {
-    return GLOBAL_WATCH_SESSION_ID;
+    if (typeof window === 'undefined') return GLOBAL_WATCH_SESSION_ID;
+    const params = new URLSearchParams(window.location.search);
+    return normalizeWatchSessionAlias(params.get('sessionId') || params.get('session_id'), GLOBAL_WATCH_SESSION_ID);
   }, []);
 
   useEffect(() => {
@@ -50,7 +52,7 @@ export default function ActivityClient() {
 
         setStatus('Opening watch room...');
         setActivity({
-          sessionId: GLOBAL_WATCH_SESSION_ID,
+          sessionId: fallbackSessionId,
           status: 'Connected',
         });
       } catch (sdkError: any) {

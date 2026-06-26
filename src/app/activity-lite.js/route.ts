@@ -17,6 +17,8 @@ function cleanScopePart(value) {
 function normalizeSessionAlias(value, fallback) {
   const raw = String(value || '').trim().toLowerCase();
   if (!raw) return fallback;
+  const discordScopedMatch = raw.match(/^watch-discord-[a-z0-9_]+-[a-z0-9_]+-(movie|music)$/);
+  if (discordScopedMatch) return discordScopedMatch[1] === 'music' ? MUSIC_SESSION_ID : MOVIE_SESSION_ID;
   if (raw === 'discord-watch-room' || raw === 'discord-music-room' || raw.startsWith('watch-')) return cleanScopePart(raw) || fallback;
   if (['watch', 'movie', 'movies', 'video', 'videos', 'main', 'default', 'global'].includes(raw)) return 'discord-watch-room';
   if (['music', 'song', 'songs', 'radio', 'dj'].includes(raw)) return 'discord-music-room';
@@ -229,15 +231,7 @@ function registerYouTubeListeners() {
 }
 
 function syncEmbeddedNativePlayback(action) {
-  if (!embeddedMode || !state || !state.current || applying || syncingNativeControl) return;
-  if (state.playback && state.playback.status === action) return;
-  const now = Date.now();
-  if (now - lastEmbeddedNativeSyncAt < 750) return;
-  lastEmbeddedNativeSyncAt = now;
-  syncingNativeControl = true;
-  control(action, embeddedCurrentTime || position(state.playback))
-    .catch((err) => console.warn('Embedded native playback sync failed', err))
-    .finally(() => { syncingNativeControl = false; });
+  return;
 }
 
 function isHlsPlaybackUrl(value) {
@@ -367,10 +361,6 @@ function applyPlayback() {
   const now = Date.now();
   const isLive = state.current.item.type === 'live' || state.current.item.runtime === 'live';
   if (!isLive && Number.isFinite(media.duration) && media.duration > 0 && remote >= media.duration - 0.5) {
-    if (!syncingCompletedPlayback) {
-      syncingCompletedPlayback = true;
-      control('next').finally(() => { syncingCompletedPlayback = false; });
-    }
     setTimeout(() => { applying = false; }, 100);
     return;
   }
@@ -413,22 +403,7 @@ function startVideoPlayback() {
 }
 
 function syncNativePlayback(action) {
-  if (embeddedMode) return;
-  if (!state || !state.current || applying || syncingCompletedPlayback || syncingNativeControl) return;
-  if (pendingPlay && action === 'play') return;
-  if (action === 'play') {
-    lastNativePlayAt = Date.now();
-    state.playback = {
-      ...state.playback,
-      status: 'playing',
-      position: media.currentTime || state.playback.position || 0,
-      updatedAt: Date.now(),
-    };
-  }
-  syncingNativeControl = true;
-  control(action)
-    .catch((err) => console.warn('Native playback sync failed', err))
-    .finally(() => { syncingNativeControl = false; });
+  return;
 }
 
 function loadMedia(item) {
@@ -516,7 +491,6 @@ function render(nextState) {
   setActiveSessionTab();
   empty.classList.toggle('hidden', Boolean(state.current));
   empty.style.display = state.current ? 'none' : 'grid';
-  document.querySelectorAll('[data-action="next"]').forEach((button) => { button.disabled = !state.queue.length; });
   popoutBtn.disabled = !state.current;
   if (mediaModeBtn) {
     const canToggleMode = Boolean(state.current && hasMusicModeToggle(state.current.item));
@@ -552,7 +526,7 @@ function render(nextState) {
     queueRows.push('<li><strong>Now playing:</strong> ' + escapeHtml(state.current.item.title) + '</li>');
   }
   if (state.queue.length) {
-    queueRows.push(...state.queue.map((request, index) => '<li><button type="button" class="queue-item" data-queue-index="' + index + '" title="Play ' + escapeHtml(request.item.title) + '"><span class="queue-index">' + (index + 1) + '</span><strong>' + escapeHtml(request.item.title) + '</strong></button></li>'));
+    queueRows.push(...state.queue.map((request, index) => '<li class="queue-item"><span class="queue-index">' + (index + 1) + '</span><strong>' + escapeHtml(request.item.title) + '</strong></li>'));
   }
   queueEl.innerHTML = queueRows.length ? queueRows.join('') : '<li>Queue is empty.</li>';
   eventsEl.innerHTML = state.events.length
@@ -622,47 +596,18 @@ async function control(action, positionOverride) {
   }
 }
 
-async function jumpToQueueIndex(index) {
-  if (!Number.isInteger(index) || index < 0) return;
-  mediaEl.textContent = 'Media: loading selected';
-  try {
-    const controlUrl = '/api/watch/sessions/' + sessionId + '/quick-control?action=jump&targetIndex=' + encodeURIComponent(String(index)) + '&position=0&format=json';
-    const result = await api(controlUrl);
-    render(result.session);
-    if (!state || !state.current) {
-      mediaEl.textContent = 'Media: queue ended';
-      return;
-    }
-    pendingPlay = true;
-    await control('play', 0);
-    await startVideoPlayback();
-  } catch (err) {
-    errorEl.textContent = err && err.message ? err.message : String(err);
-    console.warn('Queue jump failed', err);
-  }
-}
-
 function handleAction(action) {
-  if (action === 'play') {
+  if (action === 'local-play') {
     mediaEl.textContent = 'Media: starting';
     pendingPlay = true;
-    control('play')
-      .then(() => startVideoPlayback())
-      .catch((err) => console.warn('Control failed', err));
+    startVideoPlayback().catch((err) => console.warn('Local playback failed', err));
     return;
   }
-  if (action === 'next') {
-    mediaEl.textContent = 'Media: loading next';
-    control('next')
-      .then(() => {
-        if (!state || !state.current) return false;
-        pendingPlay = true;
-        return control('play', 0).then(() => startVideoPlayback());
-      })
-      .catch((err) => console.warn('Control failed', err));
+  if (action === 'sync-local') {
+    applyPlayback();
+    mediaEl.textContent = 'Media: synced to live position';
     return;
   }
-  control(action).catch((err) => console.warn('Control failed', err));
 }
 
 document.querySelectorAll('[data-panel]').forEach((button) => {
@@ -678,13 +623,6 @@ document.querySelectorAll('[data-action]').forEach((button) => {
     if (button.disabled) return;
     handleAction(button.dataset.action);
   });
-});
-
-queueEl.addEventListener('click', (event) => {
-  const button = event.target && event.target.closest ? event.target.closest('[data-queue-index]') : null;
-  if (!button) return;
-  event.preventDefault();
-  jumpToQueueIndex(Number(button.dataset.queueIndex));
 });
 
 fullscreenBtn.addEventListener('click', () => {
@@ -757,8 +695,9 @@ downloadLink.addEventListener('click', () => {
 });
 
 muteBtn.addEventListener('click', () => {
-  control(muted ? 'unmute' : 'mute')
-    .catch((err) => console.warn('Mute control failed', err));
+  muted = !muted;
+  applyVolume();
+  mediaEl.textContent = muted ? 'Media: muted locally' : 'Media: unmuted locally';
 });
 
 async function switchSession(nextSessionId) {
@@ -799,7 +738,6 @@ if (mediaModeBtn) {
     loadMedia(state.current.item);
     if (Number.isFinite(positionBeforeSwap) && positionBeforeSwap > 0) {
       media.currentTime = positionBeforeSwap;
-      control('seek', positionBeforeSwap).catch((err) => console.warn('Mode switch seek failed', err));
     }
     if (wasPlaying) {
       pendingPlay = true;
@@ -875,13 +813,10 @@ function onMediaPause(event) {
     mediaEl.textContent = 'Media: paused';
   }
 }
-function onMediaSeeked(event) { if (event.currentTarget === media && !applying && state && state.current) control('seek'); }
+function onMediaSeeked(event) { if (event.currentTarget === media && !applying && state && state.current) mediaEl.textContent = 'Media: sync will restore live position'; }
 function onMediaEnded(event) {
   if (event.currentTarget !== media) return;
   mediaEl.textContent = 'Media: ended';
-  if (!state || syncingCompletedPlayback || !isCurrentMediaActuallyEnded()) return;
-  syncingCompletedPlayback = true;
-  control('next').finally(() => { syncingCompletedPlayback = false; });
 }
 function onMediaError(event) {
   if (event.currentTarget !== media) return;
@@ -960,10 +895,6 @@ window.addEventListener('message', (event) => {
     syncEmbeddedNativePlayback('pause');
   } else if (info === 0) {
     mediaEl.textContent = 'Media: embedded video ended';
-    if (!syncingCompletedPlayback) {
-      syncingCompletedPlayback = true;
-      control('next').finally(() => { syncingCompletedPlayback = false; });
-    }
   } else if (info === 3) {
     mediaEl.textContent = 'Media: embedded video buffering';
   }

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { handleMusicCommand } from '@/lib/music-command-service';
-import { GLOBAL_WATCH_SESSION_ID, MUSIC_WATCH_SESSION_ID, getScopedWatchSessionId, normalizeWatchSessionAlias } from '@/lib/watch-session';
+import { GLOBAL_WATCH_SESSION_ID, MUSIC_WATCH_SESSION_ID, normalizeWatchSessionAlias } from '@/lib/watch-session';
 import {
   buildWatchJoinMessage,
   getActivityUrl,
@@ -265,13 +265,13 @@ export async function POST(request: NextRequest) {
     if (watchControlsCommand) {
       const baseUrl = getRequestBaseUrl(request);
       if (watchControlsCommand.allSessions) {
-        replies.push(buildWatchControlsReply(baseUrl, getScopedWatchSessionId(guildId, channelId, 'movie')));
-        replies.push(buildWatchControlsReply(baseUrl, getScopedWatchSessionId(guildId, channelId, 'music')));
+        replies.push(buildWatchControlsReply(baseUrl, GLOBAL_WATCH_SESSION_ID));
+        replies.push(buildWatchControlsReply(baseUrl, MUSIC_WATCH_SESSION_ID));
       } else {
         const requestedSession = watchControlsCommand.sessionId === GLOBAL_WATCH_SESSION_ID
-          ? getScopedWatchSessionId(guildId, channelId, 'movie')
+          ? GLOBAL_WATCH_SESSION_ID
           : watchControlsCommand.sessionId === MUSIC_WATCH_SESSION_ID
-            ? getScopedWatchSessionId(guildId, channelId, 'music')
+            ? MUSIC_WATCH_SESSION_ID
             : watchControlsCommand.sessionId;
         replies.push(buildWatchControlsReply(baseUrl, requestedSession));
       }
@@ -310,7 +310,7 @@ export async function POST(request: NextRequest) {
         },
       });
       if (handled && /^!(sr|song)\b/i.test(message)) {
-        replies.push(buildWatchControlsReply(getRequestBaseUrl(request), getScopedWatchSessionId(guildId, channelId, 'music')));
+        replies.push(buildWatchControlsReply(getRequestBaseUrl(request), MUSIC_WATCH_SESSION_ID));
       }
     }
 
