@@ -35,7 +35,9 @@ function html(request: Request) {
   const current = session.current;
   const title = current ? `${current.item.title} (${current.item.year})` : 'Waiting for a request';
   const media = current ? `${current.item.source} - requested by ${current.requestedBy.username}` : 'Media: idle';
-  const src = current?.item.playbackUrl || '';
+  const src = current?.item.type === 'music' && current.item.metadata?.videoPlaybackUrl && current.item.metadata.playbackMode !== 'audio'
+    ? current.item.metadata.videoPlaybackUrl
+    : current?.item.playbackUrl || '';
   const isEmbeddedVideo = src.includes('youtube.com/embed/') || src.includes('youtube-nocookie.com/embed/');
   const isAudioOnly = current?.item.type === 'tts' || current?.item.metadata?.provider === 'tts' || (current?.item.type === 'music' && src.includes('/api/youtube-audio/'));
   const nativeSrc = src && !isAudioOnly && !isEmbeddedVideo && !isHlsPlaybackUrl(src) ? src : '';
