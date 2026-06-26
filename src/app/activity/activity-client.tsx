@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { DiscordSDK } from '@discord/embedded-app-sdk';
 import { DISCORD_CLIENT_ID } from '@/lib/public-config';
-import { GLOBAL_WATCH_SESSION_ID, normalizeWatchSessionAlias } from '@/lib/watch-session';
+import { GLOBAL_WATCH_SESSION_ID, MUSIC_WATCH_SESSION_ID, normalizeWatchSessionAlias } from '@/lib/watch-session';
 import WatchRoomClient from '../watch/[sessionId]/watch-room-client';
 
 type ActivityState = {
@@ -20,17 +20,39 @@ function withTimeout<T>(promise: Promise<T>, milliseconds: number) {
   ]);
 }
 
+function getExplicitSessionId() {
+  if (typeof window === 'undefined') return null;
+  const params = new URLSearchParams(window.location.search);
+  return params.get('sessionId') || params.get('session_id');
+}
+
+async function resolveFallbackSessionId() {
+  const explicitSessionId = getExplicitSessionId();
+  if (explicitSessionId) return normalizeWatchSessionAlias(explicitSessionId, GLOBAL_WATCH_SESSION_ID);
+
+  try {
+    const [movieResponse, musicResponse] = await Promise.all([
+      fetch(`/api/watch/sessions/${GLOBAL_WATCH_SESSION_ID}/state`, { cache: 'no-store' }),
+      fetch(`/api/watch/sessions/${MUSIC_WATCH_SESSION_ID}/state`, { cache: 'no-store' }),
+    ]);
+    const [movieSession, musicSession] = await Promise.all([
+      movieResponse.ok ? movieResponse.json() : null,
+      musicResponse.ok ? musicResponse.json() : null,
+    ]);
+    return !movieSession?.current && musicSession?.current ? MUSIC_WATCH_SESSION_ID : GLOBAL_WATCH_SESSION_ID;
+  } catch (error) {
+    console.warn('[Activity] Failed to resolve active activity room, using movie room:', error);
+    return GLOBAL_WATCH_SESSION_ID;
+  }
+}
+
 export default function ActivityClient() {
   const [activity, setActivity] = useState<ActivityState | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [status, setStatus] = useState('Starting Discord Activity...');
   const clientId = DISCORD_CLIENT_ID;
 
-  const fallbackSessionId = useMemo(() => {
-    if (typeof window === 'undefined') return GLOBAL_WATCH_SESSION_ID;
-    const params = new URLSearchParams(window.location.search);
-    return normalizeWatchSessionAlias(params.get('sessionId') || params.get('session_id'), GLOBAL_WATCH_SESSION_ID);
-  }, []);
+  const fallbackSessionId = useMemo(() => normalizeWatchSessionAlias(getExplicitSessionId(), GLOBAL_WATCH_SESSION_ID), []);
 
   useEffect(() => {
     let cancelled = false;
@@ -38,11 +60,12 @@ export default function ActivityClient() {
     async function startActivity() {
       if (!clientId) {
         setError('Discord client id is not configured.');
-        setActivity({ sessionId: fallbackSessionId, status: 'Fallback room' });
+        setActivity({ sessionId: await resolveFallbackSessionId(), status: 'Fallback room' });
         return;
       }
 
       try {
+        const resolvedSessionId = await resolveFallbackSessionId();
         setStatus('Connecting to Discord...');
         const discordSdk = new DiscordSDK(clientId);
         setStatus('Waiting for Discord ready...');
@@ -52,7 +75,7 @@ export default function ActivityClient() {
 
         setStatus('Opening watch room...');
         setActivity({
-          sessionId: fallbackSessionId,
+          sessionId: resolvedSessionId,
           status: 'Connected',
         });
       } catch (sdkError: any) {
@@ -60,7 +83,7 @@ export default function ActivityClient() {
         console.warn('[Activity] Discord SDK failed, using fallback session:', sdkError);
         setError(sdkError?.message || 'Discord Activity SDK failed.');
         setStatus('Opening fallback watch room...');
-        setActivity({ sessionId: fallbackSessionId, status: 'Fallback room' });
+        setActivity({ sessionId: await resolveFallbackSessionId(), status: 'Fallback room' });
       }
     }
 

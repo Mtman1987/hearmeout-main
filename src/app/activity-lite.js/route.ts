@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { DISCORD_CLIENT_ID } from '@/lib/public-config';
-import { GLOBAL_WATCH_SESSION_ID } from '@/lib/watch-session';
+import { getDefaultActivitySessionId } from '@/lib/watch/watch-request-service';
 
 export function js(clientId: string, sessionId: string) {
   const appBaseUrl = process.env.NEXT_PUBLIC_BASE_URL || process.env.NEXT_PUBLIC_APP_URL || 'https://hearmeout-main.fly.dev';
@@ -922,8 +922,10 @@ try {
 `;
 }
 
-export async function GET() {
-  return new NextResponse(js(DISCORD_CLIENT_ID, GLOBAL_WATCH_SESSION_ID), {
+export async function GET(request: Request) {
+  const requestUrl = new URL(request.url);
+  const sessionId = getDefaultActivitySessionId(requestUrl.searchParams.get('sessionId') || requestUrl.searchParams.get('session_id'));
+  return new NextResponse(js(DISCORD_CLIENT_ID, sessionId), {
     headers: {
       'content-type': 'application/javascript; charset=utf-8',
       'cache-control': 'no-store',

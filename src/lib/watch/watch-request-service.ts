@@ -714,6 +714,16 @@ export function getActivityUrl(preferredBaseUrl?: string, sessionId?: string) {
   return url.toString();
 }
 
+export function getDefaultActivitySessionId(rawSessionId?: string | null) {
+  if (rawSessionId) return normalizeWatchSessionAlias(rawSessionId, getGlobalWatchSessionId());
+
+  const movieSession = getResolvedWatchSession(getGlobalWatchSessionId());
+  const musicSession = getResolvedWatchSession(getMusicWatchSessionId());
+  return !movieSession.current && musicSession.current
+    ? getMusicWatchSessionId()
+    : getGlobalWatchSessionId();
+}
+
 export function getPublicWatchSession(session: WatchSession, preferredBaseUrl?: string) {
   return {
     ...session,

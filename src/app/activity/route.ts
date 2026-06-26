@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { DISCORD_CLIENT_ID } from '@/lib/public-config';
-import { GLOBAL_WATCH_SESSION_ID, MUSIC_WATCH_SESSION_ID, normalizeWatchSessionAlias } from '@/lib/watch-session';
-import { getPublicWatchSession, getResolvedWatchSession } from '@/lib/watch/watch-request-service';
+import { GLOBAL_WATCH_SESSION_ID, MUSIC_WATCH_SESSION_ID } from '@/lib/watch-session';
+import { getDefaultActivitySessionId, getPublicWatchSession, getResolvedWatchSession } from '@/lib/watch/watch-request-service';
 import { js as activityJs } from '../activity-lite.js/route';
 
 function escapeHtml(value: unknown) {
@@ -30,14 +30,7 @@ function html(request: Request) {
   const baseUrl = (configuredBaseUrl || new URL(request.url).origin).replace(/\/$/, '');
   const requestUrl = new URL(request.url);
   const rawSessionId = requestUrl.searchParams.get('sessionId') || requestUrl.searchParams.get('session_id');
-  const explicitSessionId = Boolean(rawSessionId);
-  const movieSession = getPublicWatchSession(getResolvedWatchSession(GLOBAL_WATCH_SESSION_ID), baseUrl);
-  const musicSession = getPublicWatchSession(getResolvedWatchSession(MUSIC_WATCH_SESSION_ID), baseUrl);
-  const requestedSessionId = explicitSessionId
-    ? normalizeWatchSessionAlias(rawSessionId, GLOBAL_WATCH_SESSION_ID)
-    : !movieSession.current && musicSession.current
-      ? MUSIC_WATCH_SESSION_ID
-      : GLOBAL_WATCH_SESSION_ID;
+  const requestedSessionId = getDefaultActivitySessionId(rawSessionId);
   const session = getPublicWatchSession(getResolvedWatchSession(requestedSessionId), baseUrl);
   const current = session.current;
   const title = current ? `${current.item.title} (${current.item.year})` : 'Waiting for a request';
