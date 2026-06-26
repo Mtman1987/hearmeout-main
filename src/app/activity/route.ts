@@ -29,10 +29,15 @@ function html(request: Request) {
   const configuredBaseUrl = process.env.NEXT_PUBLIC_BASE_URL || process.env.NEXT_PUBLIC_APP_URL;
   const baseUrl = (configuredBaseUrl || new URL(request.url).origin).replace(/\/$/, '');
   const requestUrl = new URL(request.url);
-  const requestedSessionId = normalizeWatchSessionAlias(
-    requestUrl.searchParams.get('sessionId') || requestUrl.searchParams.get('session_id'),
-    GLOBAL_WATCH_SESSION_ID,
-  );
+  const rawSessionId = requestUrl.searchParams.get('sessionId') || requestUrl.searchParams.get('session_id');
+  const explicitSessionId = Boolean(rawSessionId);
+  const movieSession = getPublicWatchSession(getResolvedWatchSession(GLOBAL_WATCH_SESSION_ID), baseUrl);
+  const musicSession = getPublicWatchSession(getResolvedWatchSession(MUSIC_WATCH_SESSION_ID), baseUrl);
+  const requestedSessionId = explicitSessionId
+    ? normalizeWatchSessionAlias(rawSessionId, GLOBAL_WATCH_SESSION_ID)
+    : !movieSession.current && musicSession.current
+      ? MUSIC_WATCH_SESSION_ID
+      : GLOBAL_WATCH_SESSION_ID;
   const session = getPublicWatchSession(getResolvedWatchSession(requestedSessionId), baseUrl);
   const current = session.current;
   const title = current ? `${current.item.title} (${current.item.year})` : 'Waiting for a request';
