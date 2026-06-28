@@ -1,8 +1,6 @@
 import { NextResponse } from 'next/server';
 import { DISCORD_CLIENT_ID } from '@/lib/public-config';
-import { getDefaultActivitySessionId, getResolvedWatchSession } from '@/lib/watch/watch-request-service';
-import { getGlobalMusicWatchSession } from '@/lib/music-session-service';
-import { GLOBAL_WATCH_SESSION_ID, MUSIC_WATCH_SESSION_ID } from '@/lib/watch-session';
+import { getDefaultActivitySessionId } from '@/lib/watch/watch-request-service';
 
 export function js(clientId: string, sessionId: string) {
   const appBaseUrl = process.env.NEXT_PUBLIC_BASE_URL || process.env.NEXT_PUBLIC_APP_URL || 'https://hearmeout-main.fly.dev';
@@ -27,6 +25,17 @@ function normalizeSessionAlias(value, fallback) {
   const clean = cleanScopePart(raw.replace(/[^a-z0-9_-]+/g, '-').replace(/^-+|-+$/g, ''));
   return clean ? 'watch-' + clean : fallback;
 }
+function pairedSessionIds(value) {
+  const raw = String(value || '');
+  const roomMatch = raw.match(/^watch-room-(.+)-(movie|music)$/);
+  if (roomMatch) {
+    return {
+      movie: 'watch-room-' + roomMatch[1] + '-movie',
+      music: 'watch-room-' + roomMatch[1] + '-music',
+    };
+  }
+  return { movie: MOVIE_SESSION_ID, music: MUSIC_SESSION_ID };
+}
 let sessionId = normalizeSessionAlias(params.get('sessionId') || params.get('session_id') || '', GLOBAL_SESSION_ID);
 const video = document.getElementById('video');
 const youtube = document.getElementById('youtube');
@@ -43,6 +52,7 @@ const fullscreenBtn = document.getElementById('fullscreen');
 const popoutBtn = document.getElementById('popout');
 const downloadLink = document.getElementById('download');
 const mediaModeBtn = document.getElementById('media-mode');
+const ttsToggleBtn = document.getElementById('tts-toggle');
 const muteBtn = document.getElementById('mute');
 const volumeInput = document.getElementById('volume');
 const volumeLabel = document.getElementById('volume-label');
@@ -72,9 +82,77 @@ let musicPlaybackMode = 'video';
 let activeMediaErrorKey = '';
 const mediaErrorCounts = {};
 const MEDIA_ERROR_FALLBACK_THRESHOLD = 1;
+let ttsEnabled = false;
+let ttsAudio = null;
+let ttsPlaying = false;
+const ttsQueue = [];
+const seenTtsIds = new Set();
+
+try {
+  ttsEnabled = localStorage.getItem('hmo_activity_tts_overlay') === '1';
+  JSON.parse(localStorage.getItem('hmo_activity_tts_seen') || '[]').forEach((id) => seenTtsIds.add(String(id)));
+} catch {}
+
+function saveSeenTtsIds() {
+  try {
+    localStorage.setItem('hmo_activity_tts_seen', JSON.stringify(Array.from(seenTtsIds).slice(-200)));
+  } catch {}
+}
+
+function updateTtsToggle() {
+  if (!ttsToggleBtn) return;
+  ttsToggleBtn.textContent = ttsEnabled ? 'TTS On' : 'TTS Off';
+  ttsToggleBtn.classList.toggle('active', ttsEnabled);
+}
+
+function playNextTts() {
+  if (!ttsEnabled || ttsPlaying || !ttsQueue.length) return;
+  const request = ttsQueue.shift();
+  const audioUrl = request && request.item && request.item.playbackUrl;
+  if (!audioUrl) {
+    playNextTts();
+    return;
+  }
+  ttsPlaying = true;
+  ttsAudio = new Audio(appUrl(audioUrl));
+  ttsAudio.volume = Math.max(0.15, Number(volumeInput.value || 85) / 100);
+  ttsAudio.addEventListener('ended', () => {
+    ttsPlaying = false;
+    playNextTts();
+  }, { once: true });
+  ttsAudio.addEventListener('error', () => {
+    ttsPlaying = false;
+    playNextTts();
+  }, { once: true });
+  ttsAudio.play().catch((err) => {
+    ttsPlaying = false;
+    errorEl.textContent = 'TTS blocked until you click in the Activity.';
+    console.warn('TTS overlay blocked', err);
+  });
+}
+
+function handleTtsOverlay(nextState) {
+  const incoming = Array.isArray(nextState && nextState.ttsQueue) ? nextState.ttsQueue : [];
+  incoming.forEach((request) => {
+    const id = String(request && request.requestId || '');
+    if (!id || seenTtsIds.has(id)) return;
+    seenTtsIds.add(id);
+    if (ttsEnabled) ttsQueue.push(request);
+  });
+  if (seenTtsIds.size > 220) {
+    const ids = Array.from(seenTtsIds).slice(-200);
+    seenTtsIds.clear();
+    ids.forEach((id) => seenTtsIds.add(id));
+  }
+  saveSeenTtsIds();
+  playNextTts();
+}
 
 function setActiveSessionTab() {
+  const paired = pairedSessionIds(sessionId);
   sessionSwitchButtons.forEach((button) => {
+    if (button.dataset.sessionKind === 'movie') button.dataset.sessionSwitch = paired.movie;
+    if (button.dataset.sessionKind === 'music') button.dataset.sessionSwitch = paired.music;
     button.classList.toggle('active', button.dataset.sessionSwitch === sessionId);
   });
 }
@@ -482,6 +560,7 @@ function loadMedia(item) {
 
 function render(nextState) {
   state = nextState;
+  handleTtsOverlay(state);
   if (state.playback && typeof state.playback.muted === 'boolean' && muted !== state.playback.muted) {
     muted = state.playback.muted;
     applyVolume();
@@ -585,7 +664,8 @@ async function control(action, positionOverride) {
         : (media.currentTime || 0),
   };
   try {
-    const controlUrl = '/api/watch/sessions/' + sessionId + '/quick-control?action=' + encodeURIComponent(action) + '&position=' + encodeURIComponent(String(body.position || 0)) + '&format=json';
+    const actorParams = action === 'next' ? '&platform=discord' : '';
+    const controlUrl = '/api/watch/sessions/' + sessionId + '/quick-control?action=' + encodeURIComponent(action) + '&position=' + encodeURIComponent(String(body.position || 0)) + '&format=json' + actorParams;
     const result = await api(controlUrl);
     render(result.session);
     if (action === 'seek') mediaEl.textContent = 'Media: synced at ' + Math.round(body.position) + 's';
@@ -608,6 +688,12 @@ function handleAction(action) {
   if (action === 'sync-local') {
     applyPlayback();
     mediaEl.textContent = 'Media: synced to live position';
+    return;
+  }
+  if (action === 'next') {
+    control('next').catch((err) => {
+      errorEl.textContent = err && err.message ? err.message : String(err);
+    });
     return;
   }
 }
@@ -745,6 +831,18 @@ if (mediaModeBtn) {
       pendingPlay = true;
       setTimeout(() => startVideoPlayback(), 250);
     }
+  });
+}
+
+if (ttsToggleBtn) {
+  updateTtsToggle();
+  ttsToggleBtn.addEventListener('click', () => {
+    ttsEnabled = !ttsEnabled;
+    try {
+      localStorage.setItem('hmo_activity_tts_overlay', ttsEnabled ? '1' : '0');
+    } catch {}
+    updateTtsToggle();
+    if (ttsEnabled) playNextTts();
   });
 }
 
@@ -927,13 +1025,7 @@ try {
 export async function GET(request: Request) {
   const requestUrl = new URL(request.url);
   const rawSessionId = requestUrl.searchParams.get('sessionId') || requestUrl.searchParams.get('session_id');
-  const musicSession = await getGlobalMusicWatchSession();
-  const movieSession = getResolvedWatchSession(GLOBAL_WATCH_SESSION_ID);
-  const sessionId = rawSessionId
-    ? getDefaultActivitySessionId(rawSessionId)
-    : !movieSession.current && musicSession.current
-      ? MUSIC_WATCH_SESSION_ID
-      : GLOBAL_WATCH_SESSION_ID;
+  const sessionId = getDefaultActivitySessionId(rawSessionId);
   return new NextResponse(js(DISCORD_CLIENT_ID, sessionId), {
     headers: {
       'content-type': 'application/javascript; charset=utf-8',

@@ -32,12 +32,7 @@ async function html(request: Request) {
   const requestUrl = new URL(request.url);
   const rawSessionId = requestUrl.searchParams.get('sessionId') || requestUrl.searchParams.get('session_id');
   const musicSession = await getGlobalMusicWatchSession(baseUrl);
-  const movieSession = getPublicWatchSession(getResolvedWatchSession(GLOBAL_WATCH_SESSION_ID), baseUrl);
-  const requestedSessionId = rawSessionId
-    ? getDefaultActivitySessionId(rawSessionId)
-    : !movieSession.current && musicSession.current
-      ? MUSIC_WATCH_SESSION_ID
-      : GLOBAL_WATCH_SESSION_ID;
+  const requestedSessionId = getDefaultActivitySessionId(rawSessionId);
   const session = requestedSessionId === MUSIC_WATCH_SESSION_ID
     ? musicSession
     : getPublicWatchSession(getResolvedWatchSession(requestedSessionId), baseUrl);
@@ -127,18 +122,20 @@ async function html(request: Request) {
         <div class="empty ${current ? 'hidden' : ''}" id="empty"><strong>No video loaded</strong><span>Use the request panel or type !wr in Discord.</span></div>
       </div>
       <nav class="room-tabs" aria-label="Watch rooms">
-        <button class="room-tab" data-session-switch="${GLOBAL_WATCH_SESSION_ID}" type="button">Movies</button>
-        <button class="room-tab" data-session-switch="${MUSIC_WATCH_SESSION_ID}" type="button">Music</button>
+        <button class="room-tab" data-session-kind="movie" data-session-switch="${GLOBAL_WATCH_SESSION_ID}" type="button">Movies</button>
+        <button class="room-tab" data-session-kind="music" data-session-switch="${MUSIC_WATCH_SESSION_ID}" type="button">Music</button>
       </nav>
       <div class="toolbar" aria-label="Watch controls">
         <button data-action="local-play" title="Play locally">Play</button>
         <button data-action="sync-local" title="Sync to live position">Sync</button>
+        <button data-action="next" title="Skip to next queued video">Next</button>
         <button id="popout" type="button" disabled>Pop Out</button>
         <button id="fullscreen" type="button">Fullscreen</button>
         <button class="panel-btn" data-panel="request" type="button">Request</button>
         <button class="panel-btn" data-panel="queue" type="button">Queue</button>
         <button class="panel-btn" data-panel="events" type="button">Activity</button>
         <button id="media-mode" type="button" hidden>Video</button>
+        <button id="tts-toggle" type="button" title="Play TTS over media on this device">TTS Off</button>
         <button class="icon-btn" id="mute" type="button" title="Mute" aria-label="Mute">🔊</button>
         <div class="volume" title="Volume">
           <input id="volume" type="range" min="0" max="100" value="85" aria-label="Video volume" />

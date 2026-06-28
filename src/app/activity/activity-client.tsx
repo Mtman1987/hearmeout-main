@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { DiscordSDK } from '@discord/embedded-app-sdk';
 import { DISCORD_CLIENT_ID } from '@/lib/public-config';
-import { GLOBAL_WATCH_SESSION_ID, MUSIC_WATCH_SESSION_ID, normalizeWatchSessionAlias } from '@/lib/watch-session';
+import { GLOBAL_WATCH_SESSION_ID, normalizeWatchSessionAlias } from '@/lib/watch-session';
 import WatchRoomClient from '../watch/[sessionId]/watch-room-client';
 
 type ActivityState = {
@@ -31,15 +31,9 @@ async function resolveFallbackSessionId() {
   if (explicitSessionId) return normalizeWatchSessionAlias(explicitSessionId, GLOBAL_WATCH_SESSION_ID);
 
   try {
-    const [movieResponse, musicResponse] = await Promise.all([
-      fetch(`/api/watch/sessions/${GLOBAL_WATCH_SESSION_ID}/state`, { cache: 'no-store' }),
-      fetch(`/api/watch/sessions/${MUSIC_WATCH_SESSION_ID}/state`, { cache: 'no-store' }),
-    ]);
-    const [movieSession, musicSession] = await Promise.all([
-      movieResponse.ok ? movieResponse.json() : null,
-      musicResponse.ok ? musicResponse.json() : null,
-    ]);
-    return !movieSession?.current && musicSession?.current ? MUSIC_WATCH_SESSION_ID : GLOBAL_WATCH_SESSION_ID;
+    const response = await fetch('/api/watch/activity-default', { cache: 'no-store' });
+    const payload = response.ok ? await response.json() : null;
+    return normalizeWatchSessionAlias(payload?.sessionId, GLOBAL_WATCH_SESSION_ID);
   } catch (error) {
     console.warn('[Activity] Failed to resolve active activity room, using movie room:', error);
     return GLOBAL_WATCH_SESSION_ID;

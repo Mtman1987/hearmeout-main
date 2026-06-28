@@ -6,6 +6,7 @@ type WatchState = {
   id: string;
   roomUrl: string;
   queue: Array<any>;
+  ttsQueue?: Array<any>;
   current: any | null;
   playback: {
     status: 'idle' | 'paused' | 'playing';
@@ -156,6 +157,9 @@ export default function WatchRoomClient({ sessionId, activityMode = false, canPa
   const syncingNativePlayback = useRef(false);
   const embeddedCurrentTimeRef = useRef(0);
   const lastEmbeddedPlaybackKeyRef = useRef('');
+  const ttsSeenRef = useRef<Set<string>>(new Set());
+  const ttsQueueRef = useRef<any[]>([]);
+  const ttsPlayingRef = useRef(false);
   const [state, setState] = useState<WatchState | null>(null);
   const [query, setQuery] = useState('');
   const [connected, setConnected] = useState(false);
@@ -167,6 +171,7 @@ export default function WatchRoomClient({ sessionId, activityMode = false, canPa
   const [muted, setMuted] = useState(activityMode);
   const [dismissedMkvNoticeFor, setDismissedMkvNoticeFor] = useState<string | null>(null);
   const [musicPlaybackMode, setMusicPlaybackMode] = useState<'audio' | 'video'>('video');
+  const [ttsOverlayEnabled, setTtsOverlayEnabled] = useState(false);
 
   const currentItem = state?.current?.item;
   const currentPlaybackUrl = currentItem ? playbackUrlForItem(currentItem, musicPlaybackMode) : '';
@@ -249,6 +254,37 @@ export default function WatchRoomClient({ sessionId, activityMode = false, canPa
     setMuted(nextMuted);
     if (embeddedMode) youtubeCommand(nextMuted ? 'mute' : 'unMute');
     if (canPause && state?.current) sendControl(nextMuted ? 'mute' : 'unmute').catch(() => {});
+  }
+
+  function saveSeenTtsIds() {
+    try {
+      window.localStorage.setItem('hmo_watch_tts_seen', JSON.stringify(Array.from(ttsSeenRef.current).slice(-200)));
+    } catch {}
+  }
+
+  function playNextTtsOverlay() {
+    if (!ttsOverlayEnabled || ttsPlayingRef.current || !ttsQueueRef.current.length) return;
+    const request = ttsQueueRef.current.shift();
+    const audioUrl = request?.item?.playbackUrl;
+    if (!audioUrl) {
+      playNextTtsOverlay();
+      return;
+    }
+    ttsPlayingRef.current = true;
+    const audio = new Audio(audioUrl);
+    audio.volume = Math.max(0.15, volume);
+    audio.addEventListener('ended', () => {
+      ttsPlayingRef.current = false;
+      playNextTtsOverlay();
+    }, { once: true });
+    audio.addEventListener('error', () => {
+      ttsPlayingRef.current = false;
+      playNextTtsOverlay();
+    }, { once: true });
+    audio.play().catch((error) => {
+      ttsPlayingRef.current = false;
+      setMediaStatus(`TTS blocked: ${error?.message || 'click Enable Sound first'}`);
+    });
   }
 
   async function enableSound() {
@@ -368,8 +404,11 @@ export default function WatchRoomClient({ sessionId, activityMode = false, canPa
 
   async function nextItem() {
     try {
-      const nextState = await sendControl('next', 0);
+      const nextState = activityMode
+        ? (await api(`/api/watch/sessions/${sessionId}/quick-control?action=next&position=0&format=json&platform=discord`)).session
+        : await sendControl('next', 0);
       setCurrentRequestId(null);
+      setState(nextState);
       if (!nextState.current) {
         videoRef.current?.pause();
         if (videoRef.current) videoRef.current.removeAttribute('src');
@@ -545,6 +584,29 @@ export default function WatchRoomClient({ sessionId, activityMode = false, canPa
     const interval = window.setInterval(refresh, 1000);
     return () => window.clearInterval(interval);
   }, [sessionId]);
+
+  useEffect(() => {
+    try {
+      setTtsOverlayEnabled(window.localStorage.getItem('hmo_watch_tts_overlay') === '1');
+      const seen = JSON.parse(window.localStorage.getItem('hmo_watch_tts_seen') || '[]');
+      ttsSeenRef.current = new Set(Array.isArray(seen) ? seen.map(String) : []);
+    } catch {}
+  }, []);
+
+  useEffect(() => {
+    const incoming = Array.isArray(state?.ttsQueue) ? state.ttsQueue : [];
+    incoming.forEach((request) => {
+      const id = String(request?.requestId || '');
+      if (!id || ttsSeenRef.current.has(id)) return;
+      ttsSeenRef.current.add(id);
+      if (ttsOverlayEnabled) ttsQueueRef.current.push(request);
+    });
+    if (ttsSeenRef.current.size > 220) {
+      ttsSeenRef.current = new Set(Array.from(ttsSeenRef.current).slice(-200));
+    }
+    saveSeenTtsIds();
+    playNextTtsOverlay();
+  }, [state?.ttsQueue, ttsOverlayEnabled]);
 
   useEffect(() => {
     const video = videoRef.current;
@@ -812,15 +874,30 @@ export default function WatchRoomClient({ sessionId, activityMode = false, canPa
               <button type="button" className="rounded-md border border-slate-700 bg-slate-800 px-3 py-2 hover:border-emerald-400" onClick={pauseLocalAndRemote}>Pause</button>
             )}
             <button type="button" className="rounded-md border border-slate-700 bg-slate-800 px-3 py-2 hover:border-emerald-400" onClick={syncPlayback}>Sync</button>
-            {canPause && (
+            {(canPause || activityMode) && (
               <>
                 <button type="button" className="rounded-md border border-slate-700 bg-slate-800 px-3 py-2 hover:border-emerald-400" onClick={nextItem}>Next</button>
+                {canPause && (
                 <button type="button" className="rounded-md border border-slate-700 bg-slate-800 px-3 py-2 hover:border-emerald-400" onClick={clearQueue}>Clear Queue</button>
+                )}
               </>
             )}
             <button type="button" className="rounded-md border border-slate-700 bg-slate-800 px-3 py-2 hover:border-emerald-400 disabled:opacity-50" onClick={openPopout} disabled={!state?.current}>Pop Out</button>
             <button type="button" className="rounded-md border border-slate-700 bg-slate-800 px-3 py-2 hover:border-emerald-400 disabled:opacity-50" onClick={openFullscreen} disabled={!state?.current}>Fullscreen</button>
             <button type="button" className="rounded-md border border-slate-700 bg-slate-800 px-3 py-2 hover:border-emerald-400 disabled:opacity-50" onClick={enableSound} disabled={!state?.current}>Enable Sound</button>
+            <button
+              type="button"
+              className={`rounded-md border px-3 py-2 ${ttsOverlayEnabled ? 'border-emerald-400 bg-emerald-950/40 text-emerald-100' : 'border-slate-700 bg-slate-800 hover:border-emerald-400'}`}
+              onClick={() => {
+                const next = !ttsOverlayEnabled;
+                setTtsOverlayEnabled(next);
+                try {
+                  window.localStorage.setItem('hmo_watch_tts_overlay', next ? '1' : '0');
+                } catch {}
+              }}
+            >
+              {ttsOverlayEnabled ? 'TTS On' : 'TTS Off'}
+            </button>
             {state?.current?.item && hasMusicModeToggle(state.current.item) && (
               <button
                 type="button"
