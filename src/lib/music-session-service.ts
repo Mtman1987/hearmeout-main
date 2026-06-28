@@ -22,7 +22,7 @@ export async function ensureGlobalMusicRoom() {
   await ensureDb();
   const preferredRoomId = getGlobalMusicRoomId();
   const activeRoomId = findActiveMusicRoomId(preferredRoomId);
-  return activeRoomId || findPrimaryHearMeOutRoomId(preferredRoomId) || preferredRoomId || null;
+  return activeRoomId || preferredRoomId || null;
 }
 
 function getRoomActivityTimestamp(room: any) {
@@ -48,31 +48,6 @@ function findActiveMusicRoomId(preferredRoomId: string) {
       const timeDelta = getRoomActivityTimestamp(b.data) - getRoomActivityTimestamp(a.data);
       if (timeDelta) return timeDelta;
       return Number(b.data?.playlist?.length || 0) - Number(a.data?.playlist?.length || 0);
-    });
-
-  return candidates[0]?.id || null;
-}
-
-function getRoomUserCount(roomId: string, room: any) {
-  return Math.max(
-    Number(room?.occupantCount || 0),
-    Number(room?.userCount || 0),
-    db.list(`rooms/${roomId}/users`).length,
-  );
-}
-
-function findPrimaryHearMeOutRoomId(preferredRoomId: string) {
-  const preferredRoom = preferredRoomId ? db.get('rooms', preferredRoomId) : null;
-  if (preferredRoom) return preferredRoomId;
-
-  const candidates = db.list('rooms')
-    .filter((room) => room.id !== 'default')
-    .sort((a, b) => {
-      const userDelta = getRoomUserCount(b.id, b.data) - getRoomUserCount(a.id, a.data);
-      if (userDelta) return userDelta;
-      const djDelta = Number(Boolean(b.data?.djActive)) - Number(Boolean(a.data?.djActive));
-      if (djDelta) return djDelta;
-      return getRoomActivityTimestamp(b.data) - getRoomActivityTimestamp(a.data);
     });
 
   return candidates[0]?.id || null;
