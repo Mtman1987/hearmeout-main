@@ -2,7 +2,6 @@
 
 import { useState } from 'react';
 import { useSession } from '@/hooks/use-session';
-import { dbAdd } from '@/lib/db-helpers';
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter, DialogTrigger,
 } from '@/components/ui/dialog';
@@ -13,6 +12,15 @@ import { Switch } from '@/components/ui/switch';
 import { PlusCircle, LoaderCircle } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 import { useRouter } from 'next/navigation';
+
+function roomIdFromName(name: string) {
+  return name
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 64);
+}
 
 export function CreateRoomDialog() {
   const { user } = useSession();
@@ -37,7 +45,19 @@ export function CreateRoomDialog() {
 
     setIsCreating(true);
     try {
-      const newId = await dbAdd('rooms', {
+      const newId = roomIdFromName(roomName);
+      if (!newId) {
+        toast({ variant: 'destructive', title: 'Error', description: 'Please use letters or numbers in the room name.' });
+        return;
+      }
+
+      const createRes = await fetch('/api/db', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          collection: 'rooms',
+          id: newId,
+          data: {
         name: roomName,
         description,
         ownerId: user.uid,
@@ -47,7 +67,13 @@ export function CreateRoomDialog() {
         expiresAt: new Date(Date.now() + 12 * 60 * 60 * 1000).toISOString(),
         playlist: [],
         isPlaying: false,
+          },
+        }),
       });
+      const createResult = await createRes.json().catch(() => null);
+      if (!createRes.ok || createResult?.error) {
+        throw new Error(createResult?.error || `Could not create room (${createRes.status})`);
+      }
 
       setRoomName(''); setDescription(''); setIsPrivate(false); setPassword('');
       setOpen(false);

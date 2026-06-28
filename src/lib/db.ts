@@ -17,11 +17,6 @@ if (!existsSync(dbDir)) {
 let _db: SqlJsDatabase | null = null;
 let _initPromise: Promise<SqlJsDatabase> | null = null;
 
-function getDbSync(): SqlJsDatabase {
-  if (_db) return _db;
-  throw new Error('Database not initialized. Call ensureDb() first or use the auto-init path.');
-}
-
 async function ensureDb(): Promise<SqlJsDatabase> {
   if (_db) return _db;
   if (_initPromise) return _initPromise;
@@ -267,11 +262,14 @@ export const db = {
           })),
           empty: docs.length === 0,
           size: docs.length,
-          forEach(cb: (doc: any) => void) { this.docs.forEach(cb); },
+          forEach(cb: Function) { this.docs.forEach((doc) => cb(doc)); },
         };
       },
       async add(data: any) {
         await ensureDb();
+        if (name === 'rooms') {
+          throw new Error('Room id is required. Rooms are not auto-generated.');
+        }
         const id = `auto_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
         self.set(name, id, data);
         return { id };

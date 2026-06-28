@@ -66,13 +66,6 @@ function wantsJoin(text: string) {
   return /\b(join|enter|go to|put me in|take me to)\b/i.test(text);
 }
 
-function extractQuotedName(text: string) {
-  const quoted = text.match(/"([^"]{1,80})"/) || text.match(/'([^']{1,80})'/);
-  if (quoted?.[1]) return quoted[1].trim();
-  const named = text.match(/\b(?:called|named|name it)\s+(.{1,80})$/i);
-  return named?.[1]?.trim();
-}
-
 function roomPayload(room: OpenRoom) {
   return {
     roomId: room.id,
@@ -121,36 +114,9 @@ function listOpenRooms(baseUrl: string): OpenRoom[] {
 }
 
 function roomsSpeakText(rooms: OpenRoom[]) {
-  if (rooms.length === 0) return 'I do not see any open HearMeOut rooms. Say new to make one.';
+  if (rooms.length === 0) return 'I do not see any open HearMeOut rooms.';
   const roomList = rooms.map((room) => `Room ${room.index}: ${room.name}${room.activeCount ? ` with ${room.activeCount} online` : ''}`).join('. ');
-  return `${roomList}. Say a room number to join, or say new to make a new room.`;
-}
-
-function createRoom(baseUrl: string, username: string, requestedName?: string) {
-  const id = `auto_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-  const safeName = normalizeText(requestedName).slice(0, 80) || `${username || 'Guest'}'s room`;
-  const now = new Date();
-  db.set('rooms', id, {
-    name: safeName,
-    description: 'Created by HearMeOut voice command.',
-    ownerId: username || 'voice-user',
-    isPrivate: false,
-    password: null,
-    createdAt: now.toISOString(),
-    expiresAt: new Date(now.getTime() + 12 * 60 * 60 * 1000).toISOString(),
-    playlist: [],
-    isPlaying: false,
-  });
-
-  return {
-    index: 1,
-    id,
-    name: safeName,
-    description: 'Created by HearMeOut voice command.',
-    activeCount: 0,
-    roomUrl: `${baseUrl}/rooms/${id}`,
-    overlayUrl: `${baseUrl}/overlay/${id}`,
-  };
+  return `${roomList}. Say a room number to join.`;
 }
 
 function findRoomByName(rooms: OpenRoom[], text: string) {
@@ -193,12 +159,10 @@ export async function POST(request: NextRequest) {
   if (hasPending) {
     if (wantsNewRoom(text)) {
       pendingChoices.delete(key);
-      const room = createRoom(baseUrl, username, extractQuotedName(text));
       return NextResponse.json({
         handled: true,
-        action: 'create_room',
-        speakText: `Created ${room.name}. Joining now.`,
-        ...roomPayload(room),
+        action: 'cannot_create_room',
+        speakText: 'I cannot create rooms by voice. Create a named room in HearMeOut first.',
       }, { headers: CORS_HEADERS });
     }
 
@@ -231,12 +195,10 @@ export async function POST(request: NextRequest) {
 
   if (wantsNewRoom(text) || /\bcreate\b/i.test(text)) {
     pendingChoices.delete(key);
-    const room = createRoom(baseUrl, username, extractQuotedName(text));
     return NextResponse.json({
       handled: true,
-      action: 'create_room',
-      speakText: `Created ${room.name}. Joining now.`,
-      ...roomPayload(room),
+      action: 'cannot_create_room',
+      speakText: 'I cannot create rooms by voice. Create a named room in HearMeOut first.',
     }, { headers: CORS_HEADERS });
   }
 
@@ -247,7 +209,7 @@ export async function POST(request: NextRequest) {
       action: rooms.length > 0 ? 'choose_room' : 'no_rooms',
       speakText: roomsSpeakText(rooms),
       rooms,
-      pending: rooms.length > 0 ? 'room_choice' : 'new_room',
+      pending: rooms.length > 0 ? 'room_choice' : undefined,
     }, { headers: CORS_HEADERS });
   }
 

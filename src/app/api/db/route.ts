@@ -120,6 +120,10 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'Missing collection or data' }, { status: 400 });
   }
 
+  if (collection === 'rooms' && !id) {
+    return NextResponse.json({ error: 'Room id is required. Rooms are not auto-generated.' }, { status: 400 });
+  }
+
   const access = isAllowedCollection(collection);
   if (access === 'denied') return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
   if (access === 'admin' && (!session || !(await isAdmin(session.uid)))) return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
