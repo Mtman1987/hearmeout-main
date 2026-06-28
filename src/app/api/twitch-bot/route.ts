@@ -231,28 +231,14 @@ function syncChannels(serverId: string, instance: BotInstance) {
     const rooms = db.list('rooms');
     const newChannels = new Map<string, string>();
 
-    // Find or create a default room
-    let defaultRoomId = 'default';
-    if (rooms.length > 0) {
-      defaultRoomId = rooms[0].id;
-    } else {
-      db.set('rooms', 'default', {
-        name: 'Main Room',
-        ownerId: 'admin',
-        playlist: [],
-        currentTrackId: '',
-        isPlaying: false,
-        createdAt: new Date().toISOString(),
-      });
-      console.log('[Twitch Bot] Auto-created default room');
-    }
+    const primaryRoomId = rooms[0]?.id;
 
-    // Always join these channels
-    newChannels.set('mtman1987', defaultRoomId);
+    // Only attach global Twitch channels to an existing HearMeOut room.
+    if (primaryRoomId) newChannels.set('mtman1987', primaryRoomId);
 
     // Join the bot user's own channel if different
-    if (tokens.username && tokens.username.toLowerCase() !== 'mtman1987') {
-      newChannels.set(tokens.username.toLowerCase(), defaultRoomId);
+    if (primaryRoomId && tokens.username && tokens.username.toLowerCase() !== 'mtman1987') {
+      newChannels.set(tokens.username.toLowerCase(), primaryRoomId);
     }
 
     // Also join channels from room user settings
