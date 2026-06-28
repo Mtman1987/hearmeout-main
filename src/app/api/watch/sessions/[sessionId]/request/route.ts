@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getPublicWatchSession, requestWatchItem, requestWatchMusicItem, requestWatchTtsItem } from '@/lib/watch-request-service';
+import { getGlobalMusicWatchSession, requestMusicItem } from '@/lib/music-session-service';
+import { MUSIC_WATCH_SESSION_ID } from '@/lib/watch-session';
 
 const CORS_HEADERS = {
   'access-control-allow-origin': '*',
@@ -38,6 +40,23 @@ export async function POST(request: NextRequest, context: { params: Promise<{ se
   const { sessionId } = await context.params;
   const body = await request.json();
   const requestKind = body.mediaType || body.type || body.kind;
+  if (sessionId === MUSIC_WATCH_SESSION_ID && isMusicRequest(requestKind)) {
+    const result = await requestMusicItem({
+      query: body.query,
+      username: body.username || 'local tester',
+      platform: body.platform || 'web',
+    });
+    if (!result.result.success) {
+      return NextResponse.json({ error: 'No matching music item', result: result.result }, { status: 404, headers: CORS_HEADERS });
+    }
+    return NextResponse.json({
+      result: result.result,
+      session: await getGlobalMusicWatchSession(getRequestBaseUrl(request)),
+    }, {
+      headers: CORS_HEADERS,
+    });
+  }
+
   const result = isTtsRequest(requestKind) ? await requestWatchTtsItem({
     sessionId,
     guildId: body.guildId,
@@ -81,6 +100,23 @@ export async function POST(request: NextRequest, context: { params: Promise<{ se
 export async function GET(request: NextRequest, context: { params: Promise<{ sessionId: string }> }) {
   const { sessionId } = await context.params;
   const requestKind = request.nextUrl.searchParams.get('mediaType') || request.nextUrl.searchParams.get('type') || request.nextUrl.searchParams.get('kind');
+  if (sessionId === MUSIC_WATCH_SESSION_ID && isMusicRequest(requestKind)) {
+    const result = await requestMusicItem({
+      query: request.nextUrl.searchParams.get('query') || request.nextUrl.searchParams.get('q') || '',
+      username: request.nextUrl.searchParams.get('username') || 'local tester',
+      platform: 'web',
+    });
+    if (!result.result.success) {
+      return NextResponse.json({ error: 'No matching music item', result: result.result }, { status: 404, headers: CORS_HEADERS });
+    }
+    return NextResponse.json({
+      result: result.result,
+      session: await getGlobalMusicWatchSession(getRequestBaseUrl(request)),
+    }, {
+      headers: CORS_HEADERS,
+    });
+  }
+
   const result = isTtsRequest(requestKind) ? await requestWatchTtsItem({
     sessionId,
     guildId: request.nextUrl.searchParams.get('guildId') || undefined,

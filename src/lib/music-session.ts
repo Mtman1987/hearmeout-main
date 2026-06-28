@@ -1,4 +1,4 @@
-export const DEFAULT_GLOBAL_MUSIC_ROOM_ID = 'default';
+export const DEFAULT_GLOBAL_MUSIC_ROOM_ID = '';
 
 export function getGlobalMusicRoomId() {
   return (

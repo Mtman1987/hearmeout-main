@@ -1,5 +1,7 @@
 import { NextResponse } from 'next/server';
 import { getPublicWatchSession, getResolvedWatchSession } from '@/lib/watch-request-service';
+import { getGlobalMusicWatchSession } from '@/lib/music-session-service';
+import { MUSIC_WATCH_SESSION_ID } from '@/lib/watch-session';
 
 const CORS_HEADERS = {
   'access-control-allow-origin': '*',
@@ -18,6 +20,11 @@ function getRequestBaseUrl(request: Request) {
 
 export async function GET(request: Request, context: { params: Promise<{ sessionId: string }> }) {
   const { sessionId } = await context.params;
+  if (sessionId === MUSIC_WATCH_SESSION_ID) {
+    return NextResponse.json(await getGlobalMusicWatchSession(getRequestBaseUrl(request)), {
+      headers: CORS_HEADERS,
+    });
+  }
   return NextResponse.json(getPublicWatchSession(getResolvedWatchSession(sessionId), getRequestBaseUrl(request)), {
     headers: CORS_HEADERS,
   });

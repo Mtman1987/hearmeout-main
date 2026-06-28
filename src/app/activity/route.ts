@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { DISCORD_CLIENT_ID } from '@/lib/public-config';
 import { GLOBAL_WATCH_SESSION_ID, MUSIC_WATCH_SESSION_ID } from '@/lib/watch-session';
 import { getDefaultActivitySessionId, getPublicWatchSession, getResolvedWatchSession } from '@/lib/watch/watch-request-service';
+import { getGlobalMusicWatchSession } from '@/lib/music-session-service';
 import { js as activityJs } from '../activity-lite.js/route';
 
 function escapeHtml(value: unknown) {
@@ -25,13 +26,21 @@ function isHlsPlaybackUrl(value: string) {
   }
 }
 
-function html(request: Request) {
+async function html(request: Request) {
   const configuredBaseUrl = process.env.NEXT_PUBLIC_BASE_URL || process.env.NEXT_PUBLIC_APP_URL;
   const baseUrl = (configuredBaseUrl || new URL(request.url).origin).replace(/\/$/, '');
   const requestUrl = new URL(request.url);
   const rawSessionId = requestUrl.searchParams.get('sessionId') || requestUrl.searchParams.get('session_id');
-  const requestedSessionId = getDefaultActivitySessionId(rawSessionId);
-  const session = getPublicWatchSession(getResolvedWatchSession(requestedSessionId), baseUrl);
+  const musicSession = await getGlobalMusicWatchSession(baseUrl);
+  const movieSession = getPublicWatchSession(getResolvedWatchSession(GLOBAL_WATCH_SESSION_ID), baseUrl);
+  const requestedSessionId = rawSessionId
+    ? getDefaultActivitySessionId(rawSessionId)
+    : !movieSession.current && musicSession.current
+      ? MUSIC_WATCH_SESSION_ID
+      : GLOBAL_WATCH_SESSION_ID;
+  const session = requestedSessionId === MUSIC_WATCH_SESSION_ID
+    ? musicSession
+    : getPublicWatchSession(getResolvedWatchSession(requestedSessionId), baseUrl);
   const current = session.current;
   const title = current ? `${current.item.title} (${current.item.year})` : 'Waiting for a request';
   const media = current ? `${current.item.source} - requested by ${current.requestedBy.username}` : 'Media: idle';
@@ -170,7 +179,7 @@ ${activityJs(DISCORD_CLIENT_ID, requestedSessionId)}
 }
 
 export async function GET(request: Request) {
-  return new NextResponse(html(request), {
+  return new NextResponse(await html(request), {
     headers: {
       'content-type': 'text/html; charset=utf-8',
       'cache-control': 'no-store',

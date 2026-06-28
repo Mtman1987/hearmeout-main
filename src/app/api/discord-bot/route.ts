@@ -99,6 +99,7 @@ function startListener(target: DiscordBotTarget) {
             userId: message.authorId,
             username: message.author,
             platform: 'discord',
+            roomId: target.roomId,
             guildId: target.guildId,
             channelId: target.channelId,
             publicBaseUrl: getPublicBaseUrl(),
