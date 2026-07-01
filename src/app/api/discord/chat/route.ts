@@ -64,12 +64,14 @@ async function sendDiscordMessage(channelId: string, reply: string | DiscordMess
   const botToken = process.env.DISCORD_BOT_TOKEN;
   if (!botToken) return { ok: false, error: 'DISCORD_BOT_TOKEN is not configured' };
 
+  const hasComponents = Boolean(components?.length || (typeof reply !== 'string' && reply.components?.length));
+
   // DMs don't support webhooks — send directly via Bot API
-  if (isDM) {
+  if (isDM || hasComponents) {
     try {
       return await sendDiscordMessageDirect(channelId, reply, botToken, components);
     } catch (error: any) {
-      return { ok: false, error: error?.message || 'Discord DM send failed' };
+      return { ok: false, error: error?.message || 'Discord bot message send failed' };
     }
   }
 

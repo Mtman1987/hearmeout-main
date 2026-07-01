@@ -160,6 +160,7 @@ export default function WatchRoomClient({ sessionId, activityMode = false, canPa
   const ttsSeenRef = useRef<Set<string>>(new Set());
   const ttsQueueRef = useRef<any[]>([]);
   const ttsPlayingRef = useRef(false);
+  const localAudioUnlockedRef = useRef(false);
   const [state, setState] = useState<WatchState | null>(null);
   const [query, setQuery] = useState('');
   const [connected, setConnected] = useState(false);
@@ -251,6 +252,7 @@ export default function WatchRoomClient({ sessionId, activityMode = false, canPa
 
   function toggleMute() {
     const nextMuted = !muted;
+    localAudioUnlockedRef.current = true;
     setMuted(nextMuted);
     if (embeddedMode) youtubeCommand(nextMuted ? 'mute' : 'unMute');
     if (canPause && state?.current) sendControl(nextMuted ? 'mute' : 'unmute').catch(() => {});
@@ -288,6 +290,7 @@ export default function WatchRoomClient({ sessionId, activityMode = false, canPa
   }
 
   async function enableSound() {
+    localAudioUnlockedRef.current = true;
     if (embeddedMode) {
       setMuted(false);
       setVolume(1);
@@ -710,7 +713,7 @@ export default function WatchRoomClient({ sessionId, activityMode = false, canPa
   }, [volume, muted, embeddedMode]);
 
   useEffect(() => {
-    if (typeof state?.playback?.muted === 'boolean') {
+    if (!localAudioUnlockedRef.current && typeof state?.playback?.muted === 'boolean') {
       setMuted(state.playback.muted);
     }
   }, [state?.playback?.muted]);
@@ -827,6 +830,7 @@ export default function WatchRoomClient({ sessionId, activityMode = false, canPa
               onVolumeChange={() => {
                 const video = videoRef.current;
                 if (!video) return;
+                localAudioUnlockedRef.current = true;
                 setMuted(video.muted);
                 setVolume(video.volume);
               }}
