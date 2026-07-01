@@ -338,7 +338,7 @@ export function watchControlComponents(joinUrl?: string, sessionId = sessionIdFr
   ];
 }
 
-export function buildWatchJoinMessage(title: string, position: string, joinUrl: string, item?: WatchCatalogItem): DiscordMessagePayload {
+export function buildWatchJoinMessage(title: string, position: string, joinUrl: string, item?: WatchCatalogItem, sessionId = sessionIdFromJoinUrl(joinUrl)): DiscordMessagePayload {
   const fields = [
     { name: 'Status', value: position, inline: true },
     { name: 'Source', value: item?.source || 'Watch room', inline: true },
@@ -355,7 +355,7 @@ export function buildWatchJoinMessage(title: string, position: string, joinUrl: 
       thumbnail: item?.poster ? { url: item.poster } : undefined,
       footer: { text: 'Use the buttons below to keep everyone synced.' },
     }],
-    components: watchControlComponents(joinUrl),
+    components: watchControlComponents(joinUrl, sessionId),
     allowed_mentions: { parse: [] },
   };
 }
@@ -815,7 +815,11 @@ function assertCanControlWatchSession(session: WatchSession, action: string, act
   const scopeType = metadata.scopeType;
   if (scopeType === 'legacy' && !actor) return;
   if (actor?.isHost || actor?.isAdmin || actor?.platform === 'admin') return;
-  if (actor?.platform === 'discord' && action === 'next') return;
+  if (actor?.platform === 'discord') {
+    const sameChannel = (!metadata.guildId || metadata.guildId === actor.guildId) && (!metadata.channelId || metadata.channelId === actor.channelId);
+    const actorOwnsRequest = Boolean(actor.actorUserId) && [session.current, ...session.queue].some((request) => request?.requestedBy.userId === actor.actorUserId);
+    if (sameChannel && (action === 'next' || action === 'clear' || actorOwnsRequest)) return;
+  }
   throw new Error('Only the room host or an admin can use that watch control.');
 }
 
@@ -1113,7 +1117,7 @@ export async function handleWatchRequestCommand(params: {
   const joinUrl = activityInviteUrl || getActivityUrl(params.publicBaseUrl, sessionId);
 
   if (params.richReply) {
-    await params.richReply(buildWatchJoinMessage(result.request.item.title, position, joinUrl, result.request.item));
+    await params.richReply(buildWatchJoinMessage(result.request.item.title, position, joinUrl, result.request.item, result.session.id));
   } else {
     await reply(`Added "${result.request.item.title}" (${position}). Join the Activity: ${joinUrl}`);
   }

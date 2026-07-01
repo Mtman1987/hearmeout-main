@@ -842,24 +842,29 @@ function pruneWatchHlsRoot() {
   if (!Number.isFinite(WATCH_HLS_BUDGET_BYTES) || WATCH_HLS_BUDGET_BYTES <= 0) return;
   mkdirSync(WATCH_HLS_DIR, { recursive: true });
 
-  const files = [];
+  const dirs = [];
   for (const entry of readdirSync(WATCH_HLS_DIR, { withFileTypes: true })) {
     if (!entry.isDirectory()) continue;
     const dir = join(WATCH_HLS_DIR, entry.name);
+    let size = 0;
+    let mtimeMs = 0;
     for (const name of readdirSync(dir)) {
       const filePath = join(dir, name);
       let stats;
       try { stats = statSync(filePath); } catch { continue; }
-      if (stats.isFile()) files.push({ filePath, size: stats.size, mtimeMs: stats.mtimeMs });
+      if (!stats.isFile()) continue;
+      size += stats.size;
+      mtimeMs = Math.max(mtimeMs, stats.mtimeMs);
     }
+    dirs.push({ dir, size, mtimeMs });
   }
 
-  let total = files.reduce((sum, file) => sum + file.size, 0);
-  for (const file of files.sort((left, right) => left.mtimeMs - right.mtimeMs)) {
+  let total = dirs.reduce((sum, dir) => sum + dir.size, 0);
+  for (const hlsDir of dirs.sort((left, right) => left.mtimeMs - right.mtimeMs)) {
     if (total <= WATCH_HLS_BUDGET_BYTES) break;
     try {
-      unlinkSync(file.filePath);
-      total -= file.size;
+      rmSync(hlsDir.dir, { recursive: true, force: true });
+      total -= hlsDir.size;
     } catch {}
   }
 }
@@ -914,6 +919,7 @@ function ensureWatchHls(streamId, sourceUrl) {
   const promise = runWatchHlsFfmpeg(clean, sourceUrl, dir, indexPath)
     .catch((error) => {
       console.error(`[WatchHLS] Conversion failed for VOD ${clean}:`, error.message || error);
+      try { rmSync(dir, { recursive: true, force: true }); } catch {}
       throw error;
     })
     .finally(() => {
@@ -922,6 +928,12 @@ function ensureWatchHls(streamId, sourceUrl) {
 
   watchHlsJobs.set(clean, promise);
   return promise;
+}
+
+try {
+  pruneWatchHlsRoot();
+} catch (error) {
+  console.error('[WatchHLS] Startup prune failed:', error?.message || error);
 }
 
 function runWatchHlsFfmpeg(streamId, sourceUrl, dir, indexPath) {

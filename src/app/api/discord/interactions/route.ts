@@ -99,7 +99,7 @@ async function buildWatchControlUpdate(request: NextRequest, action: string, ses
     : session.playback.status === 'paused'
       ? 'paused'
       : 'ready';
-  return buildWatchJoinMessage(session.current.item.title, status, joinUrl, session.current.item);
+  return buildWatchJoinMessage(session.current.item.title, status, joinUrl, session.current.item, resolvedSessionId);
 }
 
 export async function POST(req: NextRequest) {

@@ -211,7 +211,7 @@ function buildWatchControlsReply(publicBaseUrl: string, sessionId = GLOBAL_WATCH
       : session.playback.status === 'paused'
         ? 'paused'
         : 'ready';
-    const payload = buildWatchJoinMessage(session.current.item.title, status, joinUrl, session.current.item);
+    const payload = buildWatchJoinMessage(session.current.item.title, status, joinUrl, session.current.item, session.id);
     return {
       ...payload,
       content: `${label} controls: ${joinUrl}`,
