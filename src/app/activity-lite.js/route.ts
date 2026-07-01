@@ -678,8 +678,7 @@ async function control(action, positionOverride) {
         : (media.currentTime || 0),
   };
   try {
-    const actorParams = action === 'next' ? '&platform=discord' : '';
-    const controlUrl = '/api/watch/sessions/' + sessionId + '/quick-control?action=' + encodeURIComponent(action) + '&position=' + encodeURIComponent(String(body.position || 0)) + '&format=json' + actorParams;
+    const controlUrl = '/api/watch/sessions/' + sessionId + '/quick-control?action=' + encodeURIComponent(action) + '&position=' + encodeURIComponent(String(body.position || 0)) + '&format=json&platform=activity&isHost=true';
     const result = await api(controlUrl);
     render(result.session);
     if (action === 'seek') mediaEl.textContent = 'Media: synced at ' + Math.round(body.position) + 's';
