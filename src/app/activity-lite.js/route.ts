@@ -819,6 +819,8 @@ async function switchSession(nextSessionId) {
   } catch {}
   mediaEl.textContent = sessionId === MUSIC_SESSION_ID ? 'Media: music room' : 'Media: movie room';
   await refresh();
+  setDrawer('request');
+  queryInput.focus();
 }
 
 sessionSwitchButtons.forEach((button) => {
