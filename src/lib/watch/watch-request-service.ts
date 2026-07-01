@@ -831,7 +831,7 @@ function assertCanControlWatchSession(session: WatchSession, action: string, act
   if (actor?.platform === 'discord') {
     const sameChannel = (!metadata.guildId || metadata.guildId === actor.guildId) && (!metadata.channelId || metadata.channelId === actor.channelId);
     const actorOwnsRequest = Boolean(actor.actorUserId) && [session.current, ...session.queue].some((request) => request?.requestedBy.userId === actor.actorUserId);
-    if (sameChannel || actorOwnsRequest) return;
+    if (sameChannel && (action === 'next' || action === 'clear' || actorOwnsRequest)) return;
   }
   throw new Error('Only the room host or an admin can use that watch control.');
 }
