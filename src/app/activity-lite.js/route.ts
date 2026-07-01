@@ -244,8 +244,8 @@ function isBrowserLimitedVideo(item) {
 
 function hlsFallbackUrlForItem(item) {
   const playbackUrl = String(playbackUrlForItem(item) || '');
-  const match = playbackUrl.match(/^\/activity-provider\/xtream\/(vod|series)\/(\d+)$/i);
-  const episodeMatch = playbackUrl.match(/^\/activity-provider\/xtream\/episode\/(\d+-[a-z0-9]+)$/i);
+  const match = playbackUrl.match(/^\\/activity-provider\\/xtream\\/(vod|series)\\/(\\d+)$/i);
+  const episodeMatch = playbackUrl.match(/^\\/activity-provider\\/xtream\\/episode\\/(\\d+-[a-z0-9]+)$/i);
   if (episodeMatch) return '/api/watch/xtream/hls/episode-' + episodeMatch[1].toLowerCase() + '/index.m3u8';
   if (!match || !isBrowserLimitedVideo(item)) return playbackUrl;
   return '/api/watch/xtream/hls/' + match[1].toLowerCase() + '-' + match[2] + '/index.m3u8';
