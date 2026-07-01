@@ -6,7 +6,7 @@ import {
   getActivityUrl,
   getResolvedWatchSession,
   handleWatchRequestCommand,
-  watchControlComponents,
+  watchControlsPromptComponents,
 } from '@/lib/watch/watch-request-service';
 
 type DiscordMessagePayload = {
@@ -214,13 +214,13 @@ function buildWatchControlsReply(publicBaseUrl: string, sessionId = GLOBAL_WATCH
     const payload = buildWatchJoinMessage(session.current.item.title, status, joinUrl, session.current.item, session.id);
     return {
       ...payload,
-      content: `${label} controls: ${joinUrl}`,
+      content: `${label}: click Controls for your private panel.`,
     };
   }
 
   return {
-    content: `${label} controls: ${joinUrl}`,
-    components: watchControlComponents(joinUrl),
+    content: `${label}: click Controls for your private panel. ${joinUrl}`,
+    components: watchControlsPromptComponents(joinUrl, sessionId),
     allowed_mentions: { parse: [] },
   };
 }

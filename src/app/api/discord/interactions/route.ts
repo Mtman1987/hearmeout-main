@@ -102,6 +102,16 @@ async function buildWatchControlUpdate(request: NextRequest, action: string, ses
   return buildWatchJoinMessage(session.current.item.title, status, joinUrl, session.current.item, resolvedSessionId);
 }
 
+function buildEphemeralWatchControls(request: NextRequest, sessionId = GLOBAL_WATCH_SESSION_ID) {
+  const resolvedSessionId = normalizeWatchSessionAlias(sessionId, GLOBAL_WATCH_SESSION_ID);
+  const joinUrl = getActivityUrl(getRequestBaseUrl(request), resolvedSessionId);
+  return {
+    content: 'Your watch controls are private to you.',
+    components: watchControlComponents(joinUrl, resolvedSessionId),
+    flags: 64,
+  };
+}
+
 export async function POST(req: NextRequest) {
   const rawBody = await req.text();
   const signature = req.headers.get('x-signature-ed25519') || '';
@@ -149,6 +159,15 @@ export async function POST(req: NextRequest) {
           data: { content: error?.message || 'Unable to update watch controls.', flags: 64 },
         });
       }
+    }
+
+    if (custom_id.startsWith('hmo_watch_controls:')) {
+      const parts = String(custom_id).split(':');
+      const sessionId = normalizeWatchSessionAlias(parts[1], GLOBAL_WATCH_SESSION_ID);
+      return NextResponse.json({
+        type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
+        data: buildEphemeralWatchControls(req, sessionId),
+      });
     }
 
     if (custom_id.startsWith('room_settings:')) {

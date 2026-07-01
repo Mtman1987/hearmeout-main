@@ -338,6 +338,19 @@ export function watchControlComponents(joinUrl?: string, sessionId = sessionIdFr
   ];
 }
 
+export function watchControlsPromptComponents(joinUrl?: string, sessionId = sessionIdFromJoinUrl(joinUrl)) {
+  const controlId = `hmo_watch_controls:${sessionId}`;
+  return [
+    {
+      type: 1,
+      components: [
+        { type: 2, style: 1, label: 'Controls', custom_id: controlId, emoji: { name: '🎛️' } },
+        ...(joinUrl ? [{ type: 2, style: 5, label: 'Join Activity', url: joinUrl, emoji: { name: '🎬' } }] : []),
+      ],
+    },
+  ];
+}
+
 export function buildWatchJoinMessage(title: string, position: string, joinUrl: string, item?: WatchCatalogItem, sessionId = sessionIdFromJoinUrl(joinUrl)): DiscordMessagePayload {
   const fields = [
     { name: 'Status', value: position, inline: true },
@@ -353,9 +366,9 @@ export function buildWatchJoinMessage(title: string, position: string, joinUrl: 
       color: 0x22c55e,
       fields,
       thumbnail: item?.poster ? { url: item.poster } : undefined,
-      footer: { text: 'Use the buttons below to keep everyone synced.' },
+      footer: { text: 'Click Controls for a private control panel.' },
     }],
-    components: watchControlComponents(joinUrl, sessionId),
+    components: watchControlsPromptComponents(joinUrl, sessionId),
     allowed_mentions: { parse: [] },
   };
 }
