@@ -800,6 +800,9 @@ muteBtn.addEventListener('click', () => {
   muted = !muted;
   applyVolume();
   mediaEl.textContent = muted ? 'Media: muted locally' : 'Media: unmuted locally';
+  control(muted ? 'mute' : 'unmute').catch((err) => {
+    errorEl.textContent = err && err.message ? err.message : String(err);
+  });
 });
 
 async function switchSession(nextSessionId) {
@@ -863,9 +866,15 @@ if (ttsToggleBtn) {
 }
 
 volumeInput.addEventListener('input', () => {
-  if (Number(volumeInput.value || 0) > 0) muted = false;
+  const shouldUnmute = Number(volumeInput.value || 0) > 0 && muted;
+  if (shouldUnmute) muted = false;
   applyVolume();
   mediaEl.textContent = 'Media: volume ' + volumeLabel.textContent;
+  if (shouldUnmute) {
+    control('unmute').catch((err) => {
+      errorEl.textContent = err && err.message ? err.message : String(err);
+    });
+  }
 });
 
 requestForm.addEventListener('submit', async (event) => {
