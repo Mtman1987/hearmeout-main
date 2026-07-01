@@ -3,6 +3,7 @@ import { handleMusicCommand } from '@/lib/music-command-service';
 import { GLOBAL_WATCH_SESSION_ID, MUSIC_WATCH_SESSION_ID, normalizeWatchSessionAlias } from '@/lib/watch-session';
 import {
   buildWatchJoinMessage,
+  getDefaultActivitySessionId,
   getActivityUrl,
   getResolvedWatchSession,
   handleWatchRequestCommand,
@@ -267,8 +268,7 @@ export async function POST(request: NextRequest) {
     if (watchControlsCommand) {
       const baseUrl = getRequestBaseUrl(request);
       if (watchControlsCommand.allSessions) {
-        replies.push(buildWatchControlsReply(baseUrl, GLOBAL_WATCH_SESSION_ID));
-        replies.push(buildWatchControlsReply(baseUrl, MUSIC_WATCH_SESSION_ID));
+        replies.push(buildWatchControlsReply(baseUrl, getDefaultActivitySessionId()));
       } else {
         const requestedSession = watchControlsCommand.sessionId === GLOBAL_WATCH_SESSION_ID
           ? GLOBAL_WATCH_SESSION_ID
