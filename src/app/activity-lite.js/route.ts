@@ -238,6 +238,19 @@ function playbackUrlForItem(item) {
   return item?.playbackUrl || '';
 }
 
+function isBrowserLimitedVideo(item) {
+  return String((item && item.overview) || '').toLowerCase().includes('(mkv)');
+}
+
+function hlsFallbackUrlForItem(item) {
+  const playbackUrl = String(playbackUrlForItem(item) || '');
+  const match = playbackUrl.match(/^\/activity-provider\/xtream\/(vod|series)\/(\d+)$/i);
+  const episodeMatch = playbackUrl.match(/^\/activity-provider\/xtream\/episode\/(\d+-[a-z0-9]+)$/i);
+  if (episodeMatch) return '/api/watch/xtream/hls/episode-' + episodeMatch[1].toLowerCase() + '/index.m3u8';
+  if (!match || !isBrowserLimitedVideo(item)) return playbackUrl;
+  return '/api/watch/xtream/hls/' + match[1].toLowerCase() + '-' + match[2] + '/index.m3u8';
+}
+
 function isCurrentMediaActuallyEnded() {
   if (!state || !state.current) return false;
   if (embeddedMode) return false;
@@ -504,7 +517,8 @@ function loadMedia(item) {
   mediaIsBuffering = true;
   pendingPlay = false;
   mediaEl.textContent = 'Media: loading ' + item.title;
-  const playbackUrl = appUrl(playbackUrlForItem(item));
+  const selectedPlaybackUrl = hlsFallbackUrlForItem(item);
+  const playbackUrl = appUrl(selectedPlaybackUrl);
   if (embeddedMode) {
     if (youtube) {
       youtube.src = iframeUrlFor(playbackUrl);
@@ -523,7 +537,7 @@ function loadMedia(item) {
   } else if (media === audio) {
     audio.src = playbackUrl;
     audio.load();
-  } else if (isHlsPlaybackUrl(item.playbackUrl) && window.Hls && window.Hls.isSupported()) {
+  } else if (isHlsPlaybackUrl(playbackUrl) && window.Hls && window.Hls.isSupported()) {
     hls = new window.Hls({
       enableWorker: false,
       lowLatencyMode: false,
