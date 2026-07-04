@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth';
 import { config } from '@/lib/config';
+import { publishSpmtEvent } from '@/lib/spmt-client';
 
 // Audit S5: previously this route accepted any roomUrl and DM'd it from the
 // HearMeOut bot to any Discord user, turning the bot into a spam/phishing
@@ -83,6 +84,28 @@ export async function POST(req: NextRequest) {
     if (!messageRes.ok) {
       throw new Error('Failed to send DM');
     }
+
+    await publishSpmtEvent({
+      type: 'voice.room.invite_sent',
+      actor: {
+        userId: session.uid,
+        username: session.user?.email || session.user?.username || undefined,
+        displayName: session.user?.displayName || session.user?.name || undefined,
+      },
+      payload: {
+        invitedDiscordUserId: userId,
+        roomUrl,
+        expiresAt: typeof expiresAt === 'string' ? expiresAt : null,
+        delivery: 'discord_dm',
+      },
+      links: [
+        {
+          label: 'Open room',
+          url: roomUrl,
+          kind: 'launch',
+        },
+      ],
+    });
 
     return NextResponse.json({ success: true });
   } catch (error) {
