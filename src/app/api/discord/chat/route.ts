@@ -122,7 +122,11 @@ async function sendDiscordMessage(channelId: string, reply: string | DiscordMess
 
 function parseJsonText(raw: string) {
   if (!raw.trim()) return {};
-  return JSON.parse(raw);
+  try {
+    return JSON.parse(raw);
+  } catch {}
+
+  return JSON.parse(escapeControlCharactersInsideStrings(raw));
 }
 
 function parseNestedJsonValue(value: unknown) {
@@ -130,6 +134,46 @@ function parseNestedJsonValue(value: unknown) {
   const trimmed = value.trim();
   if (!trimmed || (!trimmed.startsWith('{') && !trimmed.startsWith('['))) return value;
   return JSON.parse(trimmed);
+}
+
+function escapeControlCharactersInsideStrings(source: string) {
+  let output = '';
+  let inString = false;
+  let escaped = false;
+
+  for (const char of source) {
+    if (!inString) {
+      output += char;
+      if (char === '"') inString = true;
+      continue;
+    }
+
+    if (escaped) {
+      output += char;
+      escaped = false;
+      continue;
+    }
+
+    if (char === '\\') {
+      output += char;
+      escaped = true;
+      continue;
+    }
+
+    if (char === '"') {
+      output += char;
+      inString = false;
+      continue;
+    }
+
+    if (char === '\n') output += '\\n';
+    else if (char === '\r') output += '\\r';
+    else if (char === '\t') output += '\\t';
+    else if (char < ' ' || char === '\u007F') output += ' ';
+    else output += char;
+  }
+
+  return output;
 }
 
 function unwrapDiscordChatRoot(body: any): any {

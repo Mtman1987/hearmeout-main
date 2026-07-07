@@ -961,7 +961,7 @@ function runWatchHlsFfmpeg(streamId, sourceUrl, dir, indexPath) {
       '-hls_time', String(WATCH_HLS_SEGMENT_SECONDS),
       '-hls_list_size', String(WATCH_HLS_LIST_SIZE),
       ...(WATCH_HLS_LIST_SIZE > 0 ? ['-hls_delete_threshold', String(WATCH_HLS_DELETE_THRESHOLD)] : []),
-      '-hls_flags', WATCH_HLS_LIST_SIZE > 0 ? 'delete_segments+independent_segments+temp_file' : 'independent_segments+temp_file',
+      '-hls_flags', WATCH_HLS_LIST_SIZE > 0 ? 'delete_segments+independent_segments' : 'independent_segments',
       '-hls_segment_filename', segmentPattern,
       indexPath,
     ];

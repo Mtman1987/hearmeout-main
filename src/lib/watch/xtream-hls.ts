@@ -181,7 +181,7 @@ async function runFfmpegHls(streamId: string, dir: string, indexPath: string) {
       '-hls_delete_threshold',
       String(HLS_DELETE_THRESHOLD),
       '-hls_flags',
-      'delete_segments+independent_segments+temp_file',
+      'delete_segments+independent_segments',
       '-hls_segment_filename',
       segmentPattern,
       indexPath,
