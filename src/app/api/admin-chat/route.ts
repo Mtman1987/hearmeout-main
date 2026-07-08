@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth';
 import { handleMusicCommand } from '@/lib/music-command-service';
-import { handleWatchRequestCommand } from '@/lib/watch-request-service';
+import { controlWatchSession, handleWatchRequestCommand } from '@/lib/watch-request-service';
+import { GLOBAL_WATCH_SESSION_ID, MUSIC_WATCH_SESSION_ID } from '@/lib/watch-session';
 import { DSH_URL, HARDCODED_GUILD_ID } from '@/lib/constants';
 
 const DB_API_KEY = process.env.DB_API_KEY || '';
@@ -18,6 +19,62 @@ function getRequestBaseUrl(request: NextRequest) {
   const proto = forwardedProto || request.nextUrl.protocol.replace(':', '');
   const host = forwardedHost || request.headers.get('host') || request.nextUrl.host;
   return `${proto}://${host}`;
+}
+
+function parseAdminControlCommand(message: string) {
+  const trimmed = String(message || '').trim();
+  if (/^!(controls?|watch-controls)$/i.test(trimmed)) {
+    return { action: 'help' as const, target: 'all' as const };
+  }
+
+  const clearMatch = trimmed.match(/^!(?:clear|reset)(?:\s+(movie|movies|music|song|songs|all))?$/i);
+  if (clearMatch) {
+    const rawTarget = String(clearMatch[1] || 'all').toLowerCase();
+    return {
+      action: 'clear' as const,
+      target: rawTarget.startsWith('music') || rawTarget.startsWith('song') ? 'music' as const : rawTarget === 'all' ? 'all' as const : 'movie' as const,
+    };
+  }
+
+  const laneActionMatch = trimmed.match(/^!(movie|movies|music|song|songs)\s+(play|pause|next|clear|mute|unmute)$/i);
+  if (laneActionMatch) {
+    const lane = String(laneActionMatch[1]).toLowerCase();
+    return {
+      action: String(laneActionMatch[2]).toLowerCase() as 'play' | 'pause' | 'next' | 'clear' | 'mute' | 'unmute',
+      target: lane.startsWith('music') || lane.startsWith('song') ? 'music' as const : 'movie' as const,
+    };
+  }
+
+  return null;
+}
+
+// eslint-disable-next-line no-unused-vars
+async function handleAdminControlCommand(message: string, reply: (text: string) => void) {
+  const command = parseAdminControlCommand(message);
+  if (!command) return false;
+
+  if (command.action === 'help') {
+    reply('Controls: `!clear all`, `!clear movie`, `!clear music`, `!movie play|pause|next|clear|mute|unmute`, `!music play|pause|next|clear|mute|unmute`.');
+    return true;
+  }
+
+  const targets = command.target === 'all'
+    ? [
+        { label: 'movie', sessionId: GLOBAL_WATCH_SESSION_ID },
+        { label: 'music', sessionId: MUSIC_WATCH_SESSION_ID },
+      ]
+    : [{ label: command.target, sessionId: command.target === 'music' ? MUSIC_WATCH_SESSION_ID : GLOBAL_WATCH_SESSION_ID }];
+
+  const results: string[] = [];
+  for (const target of targets) {
+    const session = await controlWatchSession(target.sessionId, command.action, 0, undefined, {
+      isAdmin: true,
+      platform: 'admin',
+    });
+    results.push(`${target.label}: ${command.action === 'clear' ? 'cleared' : session.playback.status}${session.current?.item?.title ? ` (${session.current.item.title})` : ''}`);
+  }
+  reply(results.join(' | '));
+  return true;
 }
 
 export async function GET(req: NextRequest) {
@@ -53,7 +110,9 @@ export async function POST(req: NextRequest) {
       });
     };
 
-    let handledCommand = await handleWatchRequestCommand({
+    let handledCommand = await handleAdminControlCommand(message.text, addCommandReply);
+
+    if (!handledCommand) handledCommand = await handleWatchRequestCommand({
       message: message.text,
       discordUserId: session.uid,
       discordUserName: message.username || session.user?.displayName || 'Admin',

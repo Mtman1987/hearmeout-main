@@ -6,7 +6,10 @@ import {
   buildWatchJoinMessage,
   controlWatchSession,
   getActivityUrl,
+  getResolvedWatchSession,
+  watchLaneComponents,
   watchControlComponents,
+  watchVolumeComponents,
 } from '@/lib/watch-request-service';
 import nacl from 'tweetnacl';
 
@@ -74,9 +77,17 @@ function discordMemberCanManageWatch(member: any) {
   return Boolean(permissions & ADMINISTRATOR || permissions & MANAGE_MESSAGES || permissions & MANAGE_GUILD);
 }
 
-async function buildWatchControlUpdate(request: NextRequest, action: string, sessionId = GLOBAL_WATCH_SESSION_ID, actor?: any) {
+function resolveToggleAction(action: string, sessionId: string) {
+  if (action !== 'play-pause' && action !== 'mute-unmute') return action;
+  const session = getResolvedWatchSession(sessionId);
+  if (action === 'play-pause') return session.playback.status === 'playing' ? 'pause' : 'play';
+  return session.playback.muted === true ? 'unmute' : 'mute';
+}
+
+async function buildWatchControlUpdate(request: NextRequest, action: string, sessionId = GLOBAL_WATCH_SESSION_ID, actor?: any, position?: number) {
   const resolvedSessionId = normalizeWatchSessionAlias(sessionId, GLOBAL_WATCH_SESSION_ID);
-  const session = await controlWatchSession(resolvedSessionId, action, undefined, undefined, {
+  const resolvedAction = resolveToggleAction(action, resolvedSessionId);
+  const session = await controlWatchSession(resolvedSessionId, resolvedAction, position, undefined, {
     actorUserId: actor?.userId,
     guildId: actor?.guildId,
     channelId: actor?.channelId,
@@ -112,6 +123,53 @@ function buildEphemeralWatchControls(request: NextRequest, sessionId = GLOBAL_WA
   };
 }
 
+function buildEphemeralLanePicker(request: NextRequest) {
+  return {
+    content: 'Choose which HearMeOut lane to open or control.',
+    components: watchLaneComponents(getRequestBaseUrl(request)),
+    flags: 64,
+  };
+}
+
+function buildEphemeralVolumeControls(sessionId = GLOBAL_WATCH_SESSION_ID) {
+  const resolvedSessionId = normalizeWatchSessionAlias(sessionId, GLOBAL_WATCH_SESSION_ID);
+  return {
+    content: 'Volume controls update the shared HearMeOut session.',
+    components: watchVolumeComponents(resolvedSessionId),
+    flags: 64,
+  };
+}
+
+function buildVolumeModal(sessionId = GLOBAL_WATCH_SESSION_ID) {
+  const resolvedSessionId = normalizeWatchSessionAlias(sessionId, GLOBAL_WATCH_SESSION_ID);
+  return {
+    custom_id: `hmo_watch_volume_submit:${resolvedSessionId}`,
+    title: 'Set HearMeOut Volume',
+    components: [{
+      type: 1,
+      components: [{
+        type: 4,
+        custom_id: 'volume_value',
+        label: 'Volume 0-100',
+        style: 1,
+        required: true,
+        min_length: 1,
+        max_length: 3,
+        placeholder: '85',
+      }],
+    }],
+  };
+}
+
+function readModalValue(data: any, customId: string) {
+  for (const row of data?.components || []) {
+    for (const component of row.components || []) {
+      if (component.custom_id === customId) return component.value;
+    }
+  }
+  return '';
+}
+
 export async function POST(req: NextRequest) {
   const rawBody = await req.text();
   const signature = req.headers.get('x-signature-ed25519') || '';
@@ -137,7 +195,7 @@ export async function POST(req: NextRequest) {
       const parts = String(custom_id).split(':');
       const action = String(parts[1] || '').toLowerCase();
       const sessionId = normalizeWatchSessionAlias(parts[2], GLOBAL_WATCH_SESSION_ID);
-      const allowedActions = new Set(['play', 'pause', 'mute', 'unmute', 'next', 'clear']);
+      const allowedActions = new Set(['play', 'pause', 'play-pause', 'mute', 'unmute', 'mute-unmute', 'next', 'clear']);
       if (!allowedActions.has(action)) {
         return NextResponse.json({
           type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
@@ -167,6 +225,29 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({
         type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
         data: buildEphemeralWatchControls(req, sessionId),
+      });
+    }
+
+    if (custom_id.startsWith('hmo_watch_lane:')) {
+      return NextResponse.json({
+        type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
+        data: buildEphemeralLanePicker(req),
+      });
+    }
+
+    if (custom_id.startsWith('hmo_watch_volume_modal:')) {
+      const parts = String(custom_id).split(':');
+      return NextResponse.json({
+        type: InteractionResponseType.MODAL,
+        data: buildVolumeModal(parts[1] || GLOBAL_WATCH_SESSION_ID),
+      });
+    }
+
+    if (custom_id.startsWith('hmo_watch_volume:')) {
+      const parts = String(custom_id).split(':');
+      return NextResponse.json({
+        type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
+        data: buildEphemeralVolumeControls(parts[1] || GLOBAL_WATCH_SESSION_ID),
       });
     }
 
@@ -251,6 +332,28 @@ export async function POST(req: NextRequest) {
 
   if (type === InteractionType.MODAL_SUBMIT) {
     const { custom_id } = data;
+    if (String(custom_id || '').startsWith('hmo_watch_volume_submit:')) {
+      const sessionId = normalizeWatchSessionAlias(String(custom_id).split(':').slice(1).join(':'), GLOBAL_WATCH_SESSION_ID);
+      const rawVolume = readModalValue(data, 'volume_value');
+      const volume = Math.max(0, Math.min(100, Math.round(Number(rawVolume))));
+      if (!Number.isFinite(volume)) {
+        return NextResponse.json({
+          type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
+          data: { content: 'Volume must be a number from 0 to 100.', flags: 64 },
+        });
+      }
+      const update = await buildWatchControlUpdate(req, 'volume', sessionId, {
+        userId: member?.user?.id || body.user?.id,
+        guildId: guild_id,
+        channelId: channel_id,
+        isAdmin: discordMemberCanManageWatch(member),
+      }, volume);
+      return NextResponse.json({
+        type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
+        data: { content: `Set volume to ${volume}%.`, components: update.components, flags: 64 },
+      });
+    }
+
     const songQuery = data.components[0].components[0].value;
     const requester = member?.user?.global_name || member?.user?.username || 'Discord User';
     const clientId = process.env.NEXT_PUBLIC_DISCORD_CLIENT_ID;

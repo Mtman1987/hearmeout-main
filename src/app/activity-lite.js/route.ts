@@ -489,7 +489,7 @@ function startVideoPlayback() {
     })
     .catch((err) => {
       pendingPlay = false;
-      mediaEl.textContent = 'Media: press the video play control';
+      mediaEl.textContent = 'Media: autoplay blocked; use Discord controls after opening Activity';
       console.warn(err);
       return false;
     });
@@ -578,6 +578,13 @@ function render(nextState) {
   if (state.playback && typeof state.playback.muted === 'boolean' && muted !== state.playback.muted) {
     muted = state.playback.muted;
     applyVolume();
+  }
+  if (state.playback && typeof state.playback.volume === 'number' && volumeInput) {
+    const nextVolume = Math.max(0, Math.min(100, Math.round(Number(state.playback.volume || 0))));
+    if (String(volumeInput.value) !== String(nextVolume)) {
+      volumeInput.value = String(nextVolume);
+      applyVolume();
+    }
   }
   if (state.id && state.id !== sessionId) {
     sessionId = state.id;

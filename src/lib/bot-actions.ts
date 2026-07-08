@@ -282,11 +282,19 @@ export async function resolveSongRequest(
         };
       }
 
-      const results = await YouTube.search(trimmedQuery, { limit: 1, type: 'video' });
-      if (!results.length || !results[0]?.id) {
+      const results = await YouTube.search(trimmedQuery, { limit: 8, type: 'video' });
+      const scoredResults = results
+        .filter((result) => result?.id)
+        .map((result) => ({ result, score: scoreSongSearchResult(trimmedQuery, result) }))
+        .sort((a, b) => b.score - a.score);
+      const bestResult = scoredResults[0];
+      if (!bestResult?.result?.id) {
         return { success: false, message: `No results for "${trimmedQuery}". Try a different search.` };
       }
-      const video = results[0];
+      if (!isConfidentSongMatch(trimmedQuery, bestResult.score)) {
+        return { success: false, message: `No confident song match for "${trimmedQuery}". Try "artist - title" or paste a YouTube URL.` };
+      }
+      const video = bestResult.result;
       videoId = String(video.id);
       title = video.title || 'Untitled';
       artist = video.channel?.name || 'Unknown Artist';
@@ -327,6 +335,73 @@ export async function resolveSongRequest(
     console.error(`[!sr] Error:`, error);
     return { success: false, message: 'An internal error occurred.' };
   }
+}
+
+function tokenizeSongText(value: unknown) {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/&/g, ' and ')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .split(/\s+/)
+    .filter((token) => token.length >= 2 && !['the', 'and', 'feat', 'ft', 'official', 'music', 'video', 'audio', 'lyrics', 'lyric'].includes(token));
+}
+
+function parseSongQueryTokens(query: string) {
+  const normalized = String(query || '').trim();
+  const byMatch = normalized.match(/^(.+?)\s+by\s+(.+)$/i);
+  const dashMatch = normalized.match(/^(.+?)\s+-\s+(.+)$/);
+  if (byMatch) {
+    return {
+      titleTokens: tokenizeSongText(byMatch[1]),
+      artistTokens: tokenizeSongText(byMatch[2]),
+      queryTokens: tokenizeSongText(normalized),
+    };
+  }
+  if (dashMatch) {
+    return {
+      artistTokens: tokenizeSongText(dashMatch[1]),
+      titleTokens: tokenizeSongText(dashMatch[2]),
+      queryTokens: tokenizeSongText(normalized),
+    };
+  }
+  return {
+    titleTokens: tokenizeSongText(normalized),
+    artistTokens: [] as string[],
+    queryTokens: tokenizeSongText(normalized),
+  };
+}
+
+function countMatches(tokens: string[], haystack: string) {
+  return tokens.filter((token) => haystack.includes(token)).length;
+}
+
+function scoreSongSearchResult(query: string, video: any) {
+  const title = tokenizeSongText(video?.title).join(' ');
+  const channel = tokenizeSongText(video?.channel?.name).join(' ');
+  const combined = `${title} ${channel}`;
+  const { titleTokens, artistTokens, queryTokens } = parseSongQueryTokens(query);
+  if (!queryTokens.length) return 0;
+
+  let score = 0;
+  const titleMatches = countMatches(titleTokens, title);
+  const artistMatches = countMatches(artistTokens, combined);
+  const queryMatches = countMatches(queryTokens, combined);
+
+  score += queryMatches * 12;
+  score += titleMatches * 20;
+  score += artistMatches * 24;
+  if (titleTokens.length && titleMatches === titleTokens.length) score += 35;
+  if (artistTokens.length && artistMatches === artistTokens.length) score += 35;
+  if (artistTokens.length && artistMatches === 0) score -= 45;
+  if (titleTokens.length && titleMatches === 0) score -= 45;
+
+  return score;
+}
+
+function isConfidentSongMatch(query: string, score: number) {
+  const parsed = parseSongQueryTokens(query);
+  const hasArtistHint = parsed.artistTokens.length > 0;
+  return score >= (hasArtistHint ? 70 : 45);
 }
 
 export async function updateRoomPlayState(roomId: string, isPlaying: boolean): Promise<{ success: boolean; message: string }> {

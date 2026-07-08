@@ -7,7 +7,9 @@ import { DSH_URL } from '@/lib/constants';
 
 interface ChatWidgetProps {
   id: string; position: { x: number; y: number }; size: { width: number; height: number };
+  // eslint-disable-next-line no-unused-vars
   onPositionChange: (pos: { x: number; y: number }) => void; onSizeChange: (size: { width: number; height: number }) => void;
+  // eslint-disable-next-line no-unused-vars
   opacity?: number; onOpacityChange?: (opacity: number) => void;
   onSaveLayout?: () => void; onClose: () => void; roomId: string; source?: 'space' | 'twitch' | 'discord';
 }
@@ -46,8 +48,8 @@ export function ChatWidget({ id, position, size, onPositionChange, onSizeChange,
   const channelId = firestoreUser?.discordSelectedChannel?.trim();
   const twitchChannel = firestoreUser?.twitchChannel?.trim().toLowerCase();
   const iframeUrl = source === 'discord'
-    ? `${DSH_URL}/headless/forwarding?embed=1&mode=discord&serverId=${encodeURIComponent(serverId)}${channelId ? `&discordChannelId=${encodeURIComponent(channelId)}` : ''}`
-    : `${DSH_URL}/headless/forwarding?embed=1&mode=twitch&serverId=${encodeURIComponent(serverId)}${twitchChannel ? `&twitchChannel=${encodeURIComponent(twitchChannel)}` : ''}`;
+    ? `${DSH_URL}/forwarding?embed=1&mode=discord&serverId=${encodeURIComponent(serverId)}${channelId ? `&discordChannelId=${encodeURIComponent(channelId)}` : ''}`
+    : `${DSH_URL}/forwarding?embed=1&mode=twitch&serverId=${encodeURIComponent(serverId)}${twitchChannel ? `&twitchChannel=${encodeURIComponent(twitchChannel)}` : ''}`;
 
   return (
     <DraggableContainer id={id} position={position} size={size} opacity={opacity} onOpacityChange={onOpacityChange} onSaveLayout={onSaveLayout} onPositionChange={onPositionChange} onSizeChange={onSizeChange} onClose={onClose} title={title} minimalChrome>

@@ -71,6 +71,7 @@ type WatchSession = {
     position: number;
     updatedAt: number;
     muted?: boolean;
+    volume?: number;
   };
   events: Array<{
     id: string;
@@ -315,37 +316,78 @@ function sessionIdFromJoinUrl(joinUrl?: string) {
   }
 }
 
+function getActivityJoinUrl(preferredBaseUrl: string | undefined, sessionId: string) {
+  return getActivityUrl(preferredBaseUrl, sessionId);
+}
+
 export function watchControlComponents(joinUrl?: string, sessionId = sessionIdFromJoinUrl(joinUrl)) {
   const controlId = (action: string) => `hmo_watch_control:${action}:${sessionId}`;
+  const resolvedJoinUrl = joinUrl || getActivityJoinUrl(undefined, sessionId);
   return [
     {
       type: 1,
       components: [
-        { type: 2, style: 3, label: 'Play', custom_id: controlId('play'), emoji: { name: '▶️' } },
-        { type: 2, style: 2, label: 'Pause', custom_id: controlId('pause'), emoji: { name: '⏸️' } },
-        { type: 2, style: 2, label: 'Mute', custom_id: controlId('mute'), emoji: { name: '🔇' } },
-        { type: 2, style: 2, label: 'Unmute', custom_id: controlId('unmute'), emoji: { name: '🔊' } },
+        { type: 2, style: 3, label: 'Play/Pause', custom_id: controlId('play-pause'), emoji: { name: '⏯️' } },
         { type: 2, style: 1, label: 'Next', custom_id: controlId('next'), emoji: { name: '⏭️' } },
+        { type: 2, style: 4, label: 'Clear', custom_id: controlId('clear'), emoji: { name: '🧹' } },
+        { type: 2, style: 2, label: 'Volume', custom_id: `hmo_watch_volume:${sessionId}`, emoji: { name: '🔊' } },
       ],
     },
     {
       type: 1,
       components: [
-        ...(joinUrl ? [{ type: 2, style: 5, label: 'Join Activity', url: joinUrl, emoji: { name: '🎬' } }] : []),
-        { type: 2, style: 4, label: 'Clear Queue', custom_id: controlId('clear'), emoji: { name: '🧹' } },
+        { type: 2, style: 5, label: 'Open Activity', url: resolvedJoinUrl, emoji: { name: '🎬' } },
       ],
     },
   ];
 }
 
 export function watchControlsPromptComponents(joinUrl?: string, sessionId = sessionIdFromJoinUrl(joinUrl)) {
-  const controlId = `hmo_watch_controls:${sessionId}`;
+  const preferredSessionId = sessionId || getGlobalWatchSessionId();
+  const otherSessionId = preferredSessionId === getMusicWatchSessionId() ? getGlobalWatchSessionId() : getMusicWatchSessionId();
+  const preferredLabel = preferredSessionId === getMusicWatchSessionId() ? 'Music Controls' : 'Movie Controls';
+  const otherLabel = otherSessionId === getMusicWatchSessionId() ? 'Music Controls' : 'Movie Controls';
   return [
     {
       type: 1,
       components: [
-        { type: 2, style: 1, label: 'Controls', custom_id: controlId, emoji: { name: '🎛️' } },
+        { type: 2, style: 1, label: preferredLabel, custom_id: `hmo_watch_controls:${preferredSessionId}`, emoji: { name: '🎛️' } },
+        { type: 2, style: 2, label: otherLabel, custom_id: `hmo_watch_controls:${otherSessionId}`, emoji: { name: '🎚️' } },
+        { type: 2, style: 2, label: 'Switch Lane', custom_id: `hmo_watch_lane:${preferredSessionId}`, emoji: { name: '🔀' } },
+        { type: 2, style: 2, label: 'Volume', custom_id: `hmo_watch_volume:${preferredSessionId}`, emoji: { name: '🔊' } },
         ...(joinUrl ? [{ type: 2, style: 5, label: 'Join Activity', url: joinUrl, emoji: { name: '🎬' } }] : []),
+      ],
+    },
+  ];
+}
+
+export function watchLaneComponents(preferredBaseUrl?: string) {
+  return [
+    {
+      type: 1,
+      components: [
+        { type: 2, style: 5, label: 'Open Movies', url: getActivityJoinUrl(preferredBaseUrl, getGlobalWatchSessionId()), emoji: { name: '🎬' } },
+        { type: 2, style: 5, label: 'Open Music', url: getActivityJoinUrl(preferredBaseUrl, getMusicWatchSessionId()), emoji: { name: '🎵' } },
+      ],
+    },
+    {
+      type: 1,
+      components: [
+        { type: 2, style: 1, label: 'Movie Controls', custom_id: `hmo_watch_controls:${getGlobalWatchSessionId()}`, emoji: { name: '🎛️' } },
+        { type: 2, style: 1, label: 'Music Controls', custom_id: `hmo_watch_controls:${getMusicWatchSessionId()}`, emoji: { name: '🎚️' } },
+      ],
+    },
+  ];
+}
+
+export function watchVolumeComponents(sessionId = getGlobalWatchSessionId()) {
+  return [
+    {
+      type: 1,
+      components: [
+        { type: 2, style: 2, label: 'Mute', custom_id: `hmo_watch_control:mute:${sessionId}`, emoji: { name: '🔇' } },
+        { type: 2, style: 2, label: 'Unmute', custom_id: `hmo_watch_control:unmute:${sessionId}`, emoji: { name: '🔊' } },
+        { type: 2, style: 1, label: 'Set Volume', custom_id: `hmo_watch_volume_modal:${sessionId}`, emoji: { name: '🎚️' } },
       ],
     },
   ];
@@ -435,6 +477,7 @@ function createSession(id: string, guildId = 'local', channelId = 'watch', media
       position: 0,
       updatedAt: Date.now(),
       muted: true,
+      volume: 85,
     },
     events: [],
   };
@@ -454,7 +497,7 @@ function enqueue(session: WatchSession, item: WatchCatalogItem, requestedBy: Wat
 
   if (!session.current) {
     session.current = request;
-    session.playback = { status: 'playing', position: 0, updatedAt: Date.now(), muted: session.playback.muted ?? true };
+    session.playback = { status: 'playing', position: 0, updatedAt: Date.now(), muted: session.playback.muted ?? true, volume: session.playback.volume ?? 85 };
     addEvent(session, `${requestedBy.username} loaded ${item.title}`);
   } else {
     session.queue.push(request);
@@ -826,7 +869,7 @@ function assertCanControlWatchSession(session: WatchSession, action: string, act
   const metadata = session.metadata || inferSessionMetadata(session.id, session.guildId, session.channelId);
   session.metadata = metadata;
   const scopeType = metadata.scopeType;
-  if (scopeType === 'legacy' && !actor) return;
+  if (scopeType === 'legacy' && (!actor || actor.platform === 'discord' || actor.platform === 'activity')) return;
   if (actor?.isHost || actor?.isAdmin || actor?.platform === 'admin') return;
   if (actor?.platform === 'discord') {
     const sameChannel = (!metadata.guildId || metadata.guildId === actor.guildId) && (!metadata.channelId || metadata.channelId === actor.channelId);
@@ -981,6 +1024,7 @@ export async function controlWatchSession(sessionId: string, action: string, pos
   assertCanControlWatchSession(session, action, actor);
 
   if (session.playback.muted === undefined) session.playback.muted = true;
+  if (session.playback.volume === undefined) session.playback.volume = 85;
 
   if (action === 'play' || action === 'pause') {
     const now = Date.now();
@@ -1004,6 +1048,18 @@ export async function controlWatchSession(sessionId: string, action: string, pos
     return session;
   }
 
+  if (action === 'volume') {
+    const now = Date.now();
+    const volume = Math.max(0, Math.min(100, Math.round(Number(position ?? session.playback.volume ?? 85))));
+    session.playback.position = getEffectivePlaybackPosition(session, now);
+    session.playback.volume = volume;
+    session.playback.muted = volume <= 0 ? true : false;
+    session.playback.updatedAt = now;
+    addEvent(session, `Set volume to ${volume}% for ${session.current?.item.title || 'session'}`);
+    saveWatchStateToDisk();
+    return session;
+  }
+
   if (action === 'seek') {
     session.playback.position = Math.max(0, Number(position ?? 0));
     session.playback.updatedAt = Date.now();
@@ -1016,7 +1072,7 @@ export async function controlWatchSession(sessionId: string, action: string, pos
     session.current = session.queue.shift() || await getAutoNextEpisodeRequest(session);
     if (session.current) maybePrepareSharedHls(session.current.item);
     if (session.current) await updateSeriesProgress(session.current.requestedBy.userId, session.current.item);
-    session.playback = { status: session.current ? 'playing' : 'idle', position: 0, updatedAt: Date.now(), muted: session.playback.muted ?? true };
+    session.playback = { status: session.current ? 'playing' : 'idle', position: 0, updatedAt: Date.now(), muted: session.playback.muted ?? true, volume: session.playback.volume ?? 85 };
     addEvent(session, session.current ? `Loaded ${session.current.item.title}` : 'Queue ended');
     saveWatchStateToDisk();
     return session;
@@ -1029,7 +1085,7 @@ export async function controlWatchSession(sessionId: string, action: string, pos
     session.queue = session.queue.slice(index);
     session.current = request;
     maybePrepareSharedHls(request.item);
-    session.playback = { status: 'paused', position: 0, updatedAt: Date.now(), muted: session.playback.muted ?? true };
+    session.playback = { status: 'paused', position: 0, updatedAt: Date.now(), muted: session.playback.muted ?? true, volume: session.playback.volume ?? 85 };
     addEvent(session, `Loaded ${request.item.title}`);
     saveWatchStateToDisk();
     return session;
@@ -1038,7 +1094,7 @@ export async function controlWatchSession(sessionId: string, action: string, pos
   if (action === 'clear') {
     session.queue = [];
     session.current = null;
-    session.playback = { status: 'idle', position: 0, updatedAt: Date.now(), muted: true };
+    session.playback = { status: 'idle', position: 0, updatedAt: Date.now(), muted: true, volume: session.playback.volume ?? 85 };
     addEvent(session, 'Cleared queue');
     saveWatchStateToDisk();
     return session;

@@ -1,7 +1,5 @@
 import { NextResponse } from 'next/server';
 import { controlWatchSession, getPublicWatchSession } from '@/lib/watch-request-service';
-import { controlGlobalMusicSession, getGlobalMusicWatchSession } from '@/lib/music-session-service';
-import { MUSIC_WATCH_SESSION_ID } from '@/lib/watch-session';
 
 const CORS_HEADERS = {
   'access-control-allow-origin': '*',
@@ -9,7 +7,7 @@ const CORS_HEADERS = {
   'access-control-allow-headers': 'content-type',
 };
 
-const ACTIONS = new Set(['play', 'pause', 'seek', 'next', 'jump', 'clear', 'mute', 'unmute']);
+const ACTIONS = new Set(['play', 'pause', 'seek', 'next', 'jump', 'clear', 'mute', 'unmute', 'volume']);
 
 export async function GET(request: Request, context: { params: Promise<{ sessionId: string }> }) {
   const { sessionId } = await context.params;
@@ -21,25 +19,6 @@ export async function GET(request: Request, context: { params: Promise<{ session
 
   if (!ACTIONS.has(action)) {
     return NextResponse.json({ error: 'Unsupported control action' }, { status: 400, headers: CORS_HEADERS });
-  }
-
-  if (sessionId === MUSIC_WATCH_SESSION_ID) {
-    const session = await controlGlobalMusicSession(action, position);
-    const watchSession = await getGlobalMusicWatchSession();
-    const title = session.current?.title || 'music room';
-    const label = action === 'seek' ? 'Synced' : action === 'clear' ? 'Cleared' : action[0].toUpperCase() + action.slice(1);
-
-    if (url.searchParams.get('format') === 'json') {
-      return NextResponse.json({ success: true, action, session: watchSession }, { headers: CORS_HEADERS });
-    }
-
-    return new NextResponse(`<!doctype html><html><head><meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" /><title>${label}</title></head><body><main><h1>${label}</h1><p>${title}</p></main></body></html>`, {
-      headers: {
-        ...CORS_HEADERS,
-        'content-type': 'text/html; charset=utf-8',
-        'cache-control': 'no-store',
-      },
-    });
   }
 
   let session;
