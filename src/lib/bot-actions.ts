@@ -237,52 +237,68 @@ export async function resolveSongRequest(
     } else {
       const offlineTrack = await findOfflineMusicTrack(trimmedQuery);
       if (offlineTrack) {
-        console.log(`[!sr] Found offline backup: "${offlineTrack.title}" (${offlineTrack.id})`);
-        return {
-          success: true,
-          message: `Queued offline backup: "${offlineTrack.title}"`,
-          track: {
-            id: offlineTrack.id,
-            title: offlineTrack.title,
-            artist: offlineTrack.artist,
-            url: offlineTrack.playbackUrl,
-            playbackUrl: offlineTrack.playbackUrl,
-            thumbnail: undefined,
-            artId: selectArtId(offlineTrack.id),
-            duration: offlineTrack.duration,
-            addedBy: requester,
-            addedAt: new Date(),
-            plays: 0,
-            source: 'offline' as const,
-            playbackStrategy: 'offline',
-          },
-        };
+        if (isConfidentStoredSongMatch(trimmedQuery, offlineTrack.title, offlineTrack.artist)) {
+          console.log(`[!sr] Found offline backup: "${offlineTrack.title}" (${offlineTrack.id})`);
+          return {
+            success: true,
+            message: `Queued offline backup: "${offlineTrack.title}"`,
+            track: {
+              id: offlineTrack.id,
+              title: offlineTrack.title,
+              artist: offlineTrack.artist,
+              url: offlineTrack.playbackUrl,
+              playbackUrl: offlineTrack.playbackUrl,
+              thumbnail: undefined,
+              artId: selectArtId(offlineTrack.id),
+              duration: offlineTrack.duration,
+              addedBy: requester,
+              addedAt: new Date(),
+              plays: 0,
+              source: 'offline' as const,
+              playbackStrategy: 'offline',
+            },
+          };
+        }
+        console.warn(`[!sr] Ignoring weak offline song match for "${trimmedQuery}": "${offlineTrack.title}" by ${offlineTrack.artist}`);
       }
 
       const savedTrack = await findSavedMusicTrack(trimmedQuery);
       if (savedTrack) {
-        console.log(`[!sr] Found saved song metadata: "${savedTrack.title}" (${savedTrack.id})`);
-        return {
-          success: true,
-          message: `Queued saved song: "${savedTrack.title}"`,
-          track: {
-            id: savedTrack.id,
-            title: savedTrack.title,
-            artist: savedTrack.artist,
-            url: savedTrack.url,
-            thumbnail: savedTrack.thumbnail,
-            artId: selectArtId(savedTrack.id),
-            duration: savedTrack.duration,
-            addedBy: requester,
-            addedAt: new Date(),
-            plays: 0,
-            source: 'web' as const,
-            playbackStrategy: 'proxy',
-          },
-        };
+        if (isConfidentStoredSongMatch(trimmedQuery, savedTrack.title, savedTrack.artist)) {
+          console.log(`[!sr] Found saved song metadata: "${savedTrack.title}" (${savedTrack.id})`);
+          return {
+            success: true,
+            message: `Queued saved song: "${savedTrack.title}"`,
+            track: {
+              id: savedTrack.id,
+              title: savedTrack.title,
+              artist: savedTrack.artist,
+              url: savedTrack.url,
+              thumbnail: savedTrack.thumbnail,
+              artId: selectArtId(savedTrack.id),
+              duration: savedTrack.duration,
+              addedBy: requester,
+              addedAt: new Date(),
+              plays: 0,
+              source: 'web' as const,
+              playbackStrategy: 'proxy',
+            },
+          };
+        }
+        console.warn(`[!sr] Ignoring weak saved song match for "${trimmedQuery}": "${savedTrack.title}" by ${savedTrack.artist}`);
       }
 
-      const results = await YouTube.search(trimmedQuery, { limit: 8, type: 'video' });
+      const results: any[] = [];
+      const seenVideoIds = new Set<string>();
+      for (const searchQuery of buildSongSearchQueries(trimmedQuery)) {
+        const queryResults = await YouTube.search(searchQuery, { limit: 8, type: 'video' }).catch(() => []);
+        for (const result of queryResults || []) {
+          const id = String(result?.id || '');
+          if (!id || seenVideoIds.has(id)) continue;
+          seenVideoIds.add(id);
+          results.push(result);
+        }
+      }
       const scoredResults = results
         .filter((result) => result?.id)
         .map((result) => ({ result, score: scoreSongSearchResult(trimmedQuery, result) }))
@@ -371,6 +387,26 @@ function parseSongQueryTokens(query: string) {
   };
 }
 
+function buildSongSearchQueries(query: string) {
+  const normalized = String(query || '').trim();
+  const byMatch = normalized.match(/^(.+?)\s+by\s+(.+)$/i);
+  const dashMatch = normalized.match(/^(.+?)\s+-\s+(.+)$/);
+  const candidates: string[] = [];
+
+  if (byMatch) {
+    const title = byMatch[1].trim();
+    const artist = byMatch[2].trim();
+    candidates.push(`${artist} ${title}`, `${artist} - ${title}`, `${title} ${artist}`);
+  } else if (dashMatch) {
+    const artist = dashMatch[1].trim();
+    const title = dashMatch[2].trim();
+    candidates.push(`${artist} ${title}`, `${artist} - ${title}`, `${title} ${artist}`);
+  }
+
+  candidates.push(normalized);
+  return Array.from(new Set(candidates.map((candidate) => candidate.trim()).filter(Boolean))).slice(0, 4);
+}
+
 function countMatches(tokens: string[], haystack: string) {
   return tokens.filter((token) => haystack.includes(token)).length;
 }
@@ -402,6 +438,11 @@ function isConfidentSongMatch(query: string, score: number) {
   const parsed = parseSongQueryTokens(query);
   const hasArtistHint = parsed.artistTokens.length > 0;
   return score >= (hasArtistHint ? 70 : 45);
+}
+
+function isConfidentStoredSongMatch(query: string, title: string, artist: string) {
+  const score = scoreSongSearchResult(query, { title, channel: { name: artist } });
+  return isConfidentSongMatch(query, score);
 }
 
 export async function updateRoomPlayState(roomId: string, isPlaying: boolean): Promise<{ success: boolean; message: string }> {
