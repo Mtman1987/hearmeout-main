@@ -306,6 +306,22 @@ function sendDiscordReply(channelId: string, content: string, userMessageId?: st
   }).catch((error) => console.error('[WatchRequest] Discord reply failed:', error));
 }
 
+async function sendDiscordPayload(channelId: string, payload: DiscordMessagePayload) {
+  const botToken = process.env.DISCORD_BOT_TOKEN;
+  if (!botToken || !channelId || channelId === 'watch') return { ok: false, skipped: 'missing-discord-channel' };
+
+  const response = await fetch(`https://discord.com/api/v10/channels/${channelId}/messages`, {
+    method: 'POST',
+    headers: { Authorization: `Bot ${botToken}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) {
+    const body = await response.text().catch(() => '');
+    return { ok: false, status: response.status, error: body.slice(0, 500) };
+  }
+  return { ok: true, status: response.status };
+}
+
 function sessionIdFromJoinUrl(joinUrl?: string) {
   if (!joinUrl) return getGlobalWatchSessionId();
   try {
@@ -713,7 +729,36 @@ export function getWatchSession(sessionId: string, guildId?: string, channelId?:
   const resolvedSessionId = normalizedSessionId;
   const session = sessions.get(resolvedSessionId) || createSession(resolvedSessionId, guildId, channelId, mediaKind);
   if (!session.metadata) session.metadata = inferSessionMetadata(resolvedSessionId, guildId, channelId, mediaKind);
+  const metadata = session.metadata;
+  const hasRealGuild = Boolean(guildId && guildId !== 'local');
+  const hasRealChannel = Boolean(channelId && channelId !== 'watch');
+  if ((metadata.scopeType === 'legacy' || metadata.scopeType === 'discord') && (hasRealGuild || hasRealChannel)) {
+    if (hasRealGuild) {
+      session.guildId = guildId!;
+      metadata.guildId = guildId!;
+    }
+    if (hasRealChannel) {
+      session.channelId = channelId!;
+      metadata.channelId = channelId!;
+    }
+  }
   return session;
+}
+
+export async function announceWatchRequestToDiscord(params: {
+  session: WatchSession;
+  request: WatchRequest;
+  publicBaseUrl?: string;
+}) {
+  const metadata = params.session.metadata || inferSessionMetadata(params.session.id, params.session.guildId, params.session.channelId);
+  const channelId = metadata.channelId && metadata.channelId !== 'watch' ? metadata.channelId : params.session.channelId;
+  if (!channelId || channelId === 'watch') return { ok: false, skipped: 'missing-discord-channel' };
+  const position = params.session.current?.requestId === params.request.requestId
+    ? 'now playing'
+    : `queue position ${params.session.queue.length}`;
+  const activityInviteUrl = await createDiscordActivityInvite(channelId);
+  const joinUrl = activityInviteUrl || getActivityUrl(params.publicBaseUrl, params.session.id);
+  return sendDiscordPayload(channelId, buildWatchJoinMessage(params.request.item.title, position, joinUrl, params.request.item, params.session.id));
 }
 
 async function createDiscordActivityInvite(channelId: string) {

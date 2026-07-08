@@ -3,7 +3,7 @@
 import React from 'react';
 import { DraggableContainer } from './DraggableContainer';
 import AddMusicPanel from '@/app/rooms/[roomId]/_components/AddMusicPanel';
-import { getRoomWatchSessionId } from '@/lib/watch-session';
+import { getRoomWatchSessionId, isActivityRoomId } from '@/lib/watch-session';
 import type { PlaylistItem } from '@/types/playlist';
 
 type DraggableWidgetProps = Pick<React.ComponentProps<typeof DraggableContainer>,
@@ -41,6 +41,7 @@ export function AddSongWidget({
           mediaType: 'music',
           platform: item.source || 'web',
           roomId,
+          announceDiscord: isActivityRoomId(roomId),
         }),
       });
       if (!res.ok) {

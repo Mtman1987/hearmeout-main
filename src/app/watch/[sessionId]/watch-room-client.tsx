@@ -685,6 +685,7 @@ export default function WatchRoomClient({ sessionId, activityMode = false, canPa
           query: trimmed,
           username: 'local tester',
           mediaType: sessionId === 'discord-music-room' || sessionId.toLowerCase().includes('music') ? 'music' : 'video',
+          announceDiscord: sessionId === 'discord-watch-room' || sessionId === 'discord-music-room',
         }),
       });
       setQuery('');

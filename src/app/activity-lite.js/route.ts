@@ -884,7 +884,7 @@ requestForm.addEventListener('submit', async (event) => {
   if (!query) return;
   try {
     const isMusicSession = sessionId === MUSIC_SESSION_ID || String(sessionId || '').toLowerCase().includes('music');
-    const requestUrl = '/api/watch/sessions/' + sessionId + '/request?query=' + encodeURIComponent(query) + '&username=' + encodeURIComponent('activity tester') + '&userId=activity' + (isMusicSession ? '&mediaType=music' : '');
+    const requestUrl = '/api/watch/sessions/' + sessionId + '/request?query=' + encodeURIComponent(query) + '&username=' + encodeURIComponent('activity tester') + '&userId=activity&announceDiscord=1' + (isMusicSession ? '&mediaType=music' : '');
     const result = await api(requestUrl);
     queryInput.value = '';
     render(result.session);

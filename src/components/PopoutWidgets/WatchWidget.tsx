@@ -5,7 +5,7 @@ import { DraggableContainer } from './DraggableContainer';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Film, Music, Play, SkipForward, Trash2, Search, ExternalLink, LoaderCircle } from 'lucide-react';
-import { getRoomWatchSessionId } from '@/lib/watch-session';
+import { getRoomWatchSessionId, isActivityRoomId } from '@/lib/watch-session';
 
 type DraggableWidgetProps = Pick<React.ComponentProps<typeof DraggableContainer>,
   'id' | 'position' | 'size' | 'opacity' | 'onPositionChange' | 'onSizeChange' | 'onOpacityChange' | 'onSaveLayout' | 'onClose'
@@ -94,7 +94,13 @@ export function WatchWidget({
       const res = await fetch(`/api/watch/sessions/${sessionId}/request`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ query: query.trim(), username: 'local viewer', mediaType: tab === 'music' ? 'music' : 'video', roomId }),
+        body: JSON.stringify({
+          query: query.trim(),
+          username: 'local viewer',
+          mediaType: tab === 'music' ? 'music' : 'video',
+          roomId,
+          announceDiscord: isActivityRoomId(roomId),
+        }),
       });
       const data = await res.json();
       if (!res.ok) {

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getPublicWatchSession, requestWatchItem, requestWatchMusicItem, requestWatchTtsItem } from '@/lib/watch-request-service';
+import { announceWatchRequestToDiscord, getPublicWatchSession, requestWatchItem, requestWatchMusicItem, requestWatchTtsItem } from '@/lib/watch-request-service';
 
 const CORS_HEADERS = {
   'access-control-allow-origin': '*',
@@ -70,9 +70,18 @@ export async function POST(request: NextRequest, context: { params: Promise<{ se
     return NextResponse.json(watchRequestErrorPayload(result), { status: 404, headers: CORS_HEADERS });
   }
 
+  const discordAnnouncement = body.announceDiscord
+    ? await announceWatchRequestToDiscord({
+        request: result.request,
+        session: result.session,
+        publicBaseUrl: getRequestBaseUrl(request),
+      }).catch((error) => ({ ok: false, error: error?.message || 'Discord announcement failed' }))
+    : null;
+
   return NextResponse.json({
     request: result.request,
     session: getPublicWatchSession(result.session, getRequestBaseUrl(request)),
+    discordAnnouncement,
   }, {
     headers: CORS_HEADERS,
   });
@@ -113,9 +122,18 @@ export async function GET(request: NextRequest, context: { params: Promise<{ ses
     return NextResponse.json(watchRequestErrorPayload(result), { status: 404, headers: CORS_HEADERS });
   }
 
+  const discordAnnouncement = ['1', 'true', 'yes'].includes(String(request.nextUrl.searchParams.get('announceDiscord') || '').toLowerCase())
+    ? await announceWatchRequestToDiscord({
+        request: result.request,
+        session: result.session,
+        publicBaseUrl: getRequestBaseUrl(request),
+      }).catch((error) => ({ ok: false, error: error?.message || 'Discord announcement failed' }))
+    : null;
+
   return NextResponse.json({
     request: result.request,
     session: getPublicWatchSession(result.session, getRequestBaseUrl(request)),
+    discordAnnouncement,
   }, {
     headers: CORS_HEADERS,
   });
