@@ -424,22 +424,6 @@ export default function WatchRoomClient({ sessionId, activityMode = false, canPa
     }
   }
 
-  async function clearQueue() {
-    try {
-      const nextState = await sendControl('clear', 0);
-      setCurrentRequestId(null);
-      if (videoRef.current) {
-        videoRef.current.pause();
-        videoRef.current.removeAttribute('src');
-        videoRef.current.load();
-      }
-      setState(nextState);
-      setMediaStatus('Cleared');
-    } catch {
-      // sendControl already surfaces the error in the UI.
-    }
-  }
-
   function downloadCurrent() {
     const item = state?.current?.item;
     if (!item) return;
@@ -459,79 +443,13 @@ export default function WatchRoomClient({ sessionId, activityMode = false, canPa
   function openPopout() {
     const item = state?.current?.item;
     if (!item?.playbackUrl) return;
-    const popout = window.open('', `watch-popout-${sessionId}`, 'popup=yes,width=1100,height=680');
+    const popoutUrl = `/watch/${encodeURIComponent(sessionId)}?canPause=${canPause || activityMode ? '1' : '0'}`;
+    const popout = window.open(popoutUrl, `watch-popout-${sessionId}`, 'popup=yes,width=1100,height=680');
     if (!popout) {
       setMediaStatus('Popout blocked by browser');
       return;
     }
-    const mediaUrl = hlsFallbackUrlFor(item);
-    const playbackUrl = JSON.stringify(mediaUrl);
-    const title = String(item.title || 'Watch video').replace(/[<>&"]/g, (char) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;' })[char] || char);
-    if (isEmbeddedVideoUrl(mediaUrl)) {
-      const iframeSrc = JSON.stringify(iframeUrlFor(mediaUrl));
-      popout.document.write(`<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>${title}</title>
-  <style>
-    html, body { height: 100%; margin: 0; background: #000; color: #e5edf5; font-family: Arial, system-ui, sans-serif; }
-    body { display: grid; grid-template-rows: auto 1fr; }
-    header { padding: 10px 12px; background: #111827; border-bottom: 1px solid #334155; }
-    strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: block; }
-    iframe { width: 100%; height: 100%; border: 0; background: #000; display: block; }
-  </style>
-</head>
-<body>
-  <header><strong>${title}</strong></header>
-  <iframe src=${iframeSrc} allow="autoplay; fullscreen; encrypted-media; picture-in-picture" allowfullscreen></iframe>
-</body>
-</html>`);
-      popout.document.close();
-      return;
-    }
-    popout.document.write(`<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>${title}</title>
-  <style>
-    html, body { height: 100%; margin: 0; background: #000; color: #e5edf5; font-family: Arial, system-ui, sans-serif; }
-    body { display: grid; grid-template-rows: auto 1fr; }
-    header { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 10px 12px; background: #111827; border-bottom: 1px solid #334155; }
-    strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    button { border: 1px solid #475569; background: #1e293b; color: #e5edf5; border-radius: 6px; padding: 7px 10px; cursor: pointer; }
-    video { width: 100%; height: 100%; background: #000; display: block; }
-  </style>
-</head>
-<body>
-  <header><strong>${title}</strong><button onclick="document.querySelector('video').requestFullscreen()">Fullscreen</button></header>
-  <video id="video" controls autoplay playsinline></video>
-  <script>
-    const src = ${playbackUrl};
-    const video = document.getElementById('video');
-    if (src.endsWith('.m3u8')) {
-      const script = document.createElement('script');
-      script.src = 'https://cdn.jsdelivr.net/npm/hls.js@latest';
-      script.onload = () => {
-        if (window.Hls && window.Hls.isSupported()) {
-          const hls = new window.Hls();
-          hls.loadSource(src);
-          hls.attachMedia(video);
-        } else {
-          video.src = src;
-        }
-      };
-      document.head.appendChild(script);
-    } else {
-      video.src = src;
-    }
-  </script>
-</body>
-</html>`);
-    popout.document.close();
+    popout.focus();
   }
 
   function applyPlaybackState(nextState = state) {
@@ -795,9 +713,10 @@ export default function WatchRoomClient({ sessionId, activityMode = false, canPa
               <iframe
                 ref={iframeRef}
                 className="absolute inset-0 h-full w-full border-0 bg-black"
-                src={iframeUrlFor(currentPlaybackUrl, canPause)}
+                src={iframeUrlFor(currentPlaybackUrl, false)}
                 allow="autoplay; fullscreen; encrypted-media; picture-in-picture"
                 allowFullScreen
+                style={{ pointerEvents: 'none' }}
                 onLoad={() => {
                   registerYouTubeListeners();
                   applyPlaybackState();
@@ -807,7 +726,8 @@ export default function WatchRoomClient({ sessionId, activityMode = false, canPa
             <video
               ref={videoRef}
               className={`h-full w-full bg-black ${embeddedMode ? 'hidden' : ''}`}
-              controls={canPause}
+              controls={false}
+              style={{ pointerEvents: 'none' }}
               muted={muted}
               autoPlay={activityMode}
               playsInline

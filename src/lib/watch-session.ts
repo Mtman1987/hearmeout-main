@@ -1,5 +1,6 @@
 export const GLOBAL_WATCH_SESSION_ID = 'discord-watch-room';
 export const MUSIC_WATCH_SESSION_ID = 'discord-music-room';
+export const ACTIVITY_ROOM_ID = 'discord-activity';
 export type WatchMediaKind = 'movie' | 'music';
 
 export function getGlobalWatchSessionId() {
@@ -8,6 +9,10 @@ export function getGlobalWatchSessionId() {
 
 export function getMusicWatchSessionId() {
   return MUSIC_WATCH_SESSION_ID;
+}
+
+export function isActivityRoomId(roomId: string | null | undefined) {
+  return cleanScopePart(roomId, '', 64) === ACTIVITY_ROOM_ID;
 }
 
 function cleanScopePart(value: string | null | undefined, fallback: string, maxLength = 64) {
@@ -29,6 +34,7 @@ function cleanDiscordScopePart(value: string | null | undefined, fallback: strin
 }
 
 export function getRoomWatchSessionId(roomId: string, kind: WatchMediaKind = 'movie') {
+  if (isActivityRoomId(roomId)) return kind === 'music' ? MUSIC_WATCH_SESSION_ID : GLOBAL_WATCH_SESSION_ID;
   return `watch-room-${cleanScopePart(roomId, 'room', 48)}-${kind}`;
 }
 

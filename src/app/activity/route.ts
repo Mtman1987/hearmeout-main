@@ -122,7 +122,7 @@ async function html(request: Request) {
         <button class="room-tab" data-session-kind="music" data-session-switch="${MUSIC_WATCH_SESSION_ID}" type="button">Music</button>
       </nav>
       <div class="toolbar" aria-label="Watch controls">
-        <button data-action="local-play" title="Play locally">Play</button>
+        <button data-action="play-pause" title="Play or pause the shared session">Play/Pause</button>
         <button data-action="sync-local" title="Sync to live position">Sync</button>
         <button data-action="next" title="Skip to next queued video">Next</button>
         <button id="popout" type="button" disabled>Pop Out</button>

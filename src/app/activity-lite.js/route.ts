@@ -293,6 +293,7 @@ function iframeUrlFor(path) {
     const url = new URL(resolved, window.location.href);
     url.searchParams.set('enablejsapi', '1');
     url.searchParams.set('origin', window.location.origin);
+    url.searchParams.set('controls', '0');
     return url.toString();
   } catch (err) {
     return resolved;
@@ -699,10 +700,11 @@ async function control(action, positionOverride) {
 }
 
 function handleAction(action) {
-  if (action === 'local-play') {
-    mediaEl.textContent = 'Media: starting';
-    pendingPlay = true;
-    startVideoPlayback().catch((err) => console.warn('Local playback failed', err));
+  if (action === 'play-pause') {
+    const nextAction = state && state.playback && state.playback.status === 'playing' ? 'pause' : 'play';
+    control(nextAction).catch((err) => {
+      errorEl.textContent = err && err.message ? err.message : String(err);
+    });
     return;
   }
   if (action === 'sync-local') {
@@ -767,22 +769,13 @@ popoutBtn.addEventListener('click', () => {
     errorEl.textContent = 'No media is available to pop out yet.';
     return;
   }
-  const item = state.current.item;
-  const popup = window.open('', 'watch-popout-' + sessionId, 'popup=yes,width=1100,height=680');
+  const popupUrl = '/watch/' + encodeURIComponent(sessionId) + '?canPause=1';
+  const popup = window.open(popupUrl, 'watch-popout-' + sessionId, 'popup=yes,width=1100,height=680');
   if (!popup) {
     errorEl.textContent = 'Discord blocked the popout window.';
     return;
   }
-  const title = String(item.title || 'Watch video').replace(/[<>&"]/g, (char) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;' }[char] || char));
-  const selectedPlaybackUrl = playbackUrlForItem(item);
-  const selectedItem = { ...item, playbackUrl: selectedPlaybackUrl, metadata: { ...(item.metadata || {}), videoPlaybackUrl: selectedPlaybackUrl, audioPlaybackUrl: '' } };
-  const src = JSON.stringify(selectedPlaybackUrl);
-  if (isEmbeddedVideoItem(selectedItem)) {
-    popup.document.write('<!doctype html><html><head><title>' + title + '</title><style>html,body{height:100%;margin:0;background:#000;color:#e5edf5;font-family:Arial,sans-serif}body{display:grid;grid-template-rows:auto 1fr}header{display:flex;justify-content:space-between;gap:12px;align-items:center;padding:10px 12px;background:#111827}iframe{width:100%;height:100%;border:0;background:#000}</style></head><body><header><strong>' + title + '</strong></header><iframe src=' + src + ' allow="autoplay; fullscreen; encrypted-media; picture-in-picture" allowfullscreen></iframe></body></html>');
-  } else {
-    popup.document.write('<!doctype html><html><head><title>' + title + '</title><style>html,body{height:100%;margin:0;background:#000;color:#e5edf5;font-family:Arial,sans-serif}body{display:grid;grid-template-rows:auto 1fr}header{display:flex;justify-content:space-between;gap:12px;align-items:center;padding:10px 12px;background:#111827}button{border:1px solid #475569;background:#1e293b;color:#e5edf5;border-radius:6px;padding:7px 10px}video{width:100%;height:100%;background:#000;display:block}</style></head><body><header><strong>' + title + '</strong><button onclick="document.querySelector(\\'video\\').requestFullscreen()">Fullscreen</button></header><video id="video" controls autoplay playsinline></video><script>const src=' + src + ';const video=document.getElementById("video");const hlsConfig={enableWorker:false,lowLatencyMode:false,backBufferLength:30,manifestLoadingTimeOut:60000,manifestLoadingMaxRetry:4,manifestLoadingRetryDelay:1000,manifestLoadingMaxRetryTimeout:8000,fragLoadingTimeOut:60000,fragLoadingMaxRetry:4,fragLoadingRetryDelay:1000,fragLoadingMaxRetryTimeout:8000};if(src.endsWith(".m3u8")){const s=document.createElement("script");s.src="https://cdn.jsdelivr.net/npm/hls.js@latest";s.onload=()=>{if(window.Hls&&window.Hls.isSupported()){const hls=new window.Hls(hlsConfig);hls.loadSource(src);hls.attachMedia(video)}else{video.src=src}};document.head.appendChild(s)}else{video.src=src}<\\/script></body></html>');
-  }
-  popup.document.close();
+  popup.focus();
   errorEl.textContent = '';
 });
 

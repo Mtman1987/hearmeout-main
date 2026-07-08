@@ -104,7 +104,7 @@ export default function ActivityClient() {
         Discord Activity: {activity.status}
         {error ? <span className="ml-2 text-amber-300">{error}</span> : null}
       </div>
-      <WatchRoomClient sessionId={activity.sessionId} activityMode />
+      <WatchRoomClient sessionId={activity.sessionId} activityMode canPause />
     </div>
   );
 }

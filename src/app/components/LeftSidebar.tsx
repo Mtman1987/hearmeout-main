@@ -16,6 +16,7 @@ import { useCollection } from '@/hooks/use-db';
 import { Skeleton } from '@/components/ui/skeleton';
 import { CreateRoomDialog } from '@/app/rooms/_components/CreateRoomDialog';
 import { useEffect, useState } from 'react';
+import { ACTIVITY_ROOM_ID } from '@/lib/watch-session';
 
 interface Room {
     id: string;
@@ -169,6 +170,11 @@ export default function LeftSidebar({ roomId }: { roomId?: string }) {
         <SidebarGroup>
           <SidebarGroupLabel>Public Rooms</SidebarGroupLabel>
           <SidebarMenu>
+            <SidebarMenuItem>
+              <SidebarMenuButton asChild isActive={roomId === ACTIVITY_ROOM_ID}>
+                <Link href={`/rooms/${ACTIVITY_ROOM_ID}`}><Music />Discord Activity</Link>
+              </SidebarMenuButton>
+            </SidebarMenuItem>
             {roomsLoading && (
                 <>
                     <Skeleton className="h-8 w-full" />

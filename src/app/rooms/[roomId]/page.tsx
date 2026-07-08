@@ -24,7 +24,7 @@ import { Room as LKRoom, RoomEvent, Track, RemoteTrack } from 'livekit-client';
 import { generateLiveKitToken, generateMusicRoomToken } from '@/app/actions';
 import { PlaylistItem } from "@/types/playlist";
 import { getScreenPeerId, PeerAudioListener, PeerScreenViewer, PeerVoiceMesh } from '@/lib/peer-audio-service';
-import { getRoomWatchSessionId } from '@/lib/watch-session';
+import { ACTIVITY_ROOM_ID, getRoomWatchSessionId, isActivityRoomId } from '@/lib/watch-session';
 
 interface RoomData {
   id: string;
@@ -987,8 +987,21 @@ function RoomPageContent() {
     const [passwordInput, setPasswordInput] = React.useState('');
     const [passwordUnlocked, setPasswordUnlocked] = React.useState(false);
     const [passwordError, setPasswordError] = React.useState(false);
+    const isActivityRoom = isActivityRoomId(params.roomId);
+    const effectiveRoom: RoomData | null = isActivityRoom ? {
+        id: ACTIVITY_ROOM_ID,
+        name: 'Discord Activity',
+        ownerId: user?.uid || ACTIVITY_ROOM_ID,
+        playlist: [],
+        isPlaying: false,
+        djActive: false,
+        djStatus: 'Discord Activity watch room',
+        autoRadio: false,
+        playHistory: [],
+        isPrivate: false,
+    } : room;
 
-    if (isRoomLoading) {
+    if (!isActivityRoom && isRoomLoading) {
         return (
             <div className="flex flex-col h-screen">
                 <LeftSidebar roomId={params.roomId} />
@@ -1002,7 +1015,7 @@ function RoomPageContent() {
         );
     }
 
-    if (roomError || !room) {
+    if (!effectiveRoom || (!isActivityRoom && roomError)) {
         return (
             <div className="flex flex-col h-screen">
                 <LeftSidebar roomId={params.roomId} />
@@ -1016,13 +1029,13 @@ function RoomPageContent() {
     }
 
     // Password gate for private rooms
-    const isOwner = !!user && (user.uid === room.ownerId || !!(user as any).isAdmin);
-    if (room.isPrivate && room.password && !passwordUnlocked && !isOwner) {
+    const isOwner = !!user && (user.uid === effectiveRoom.ownerId || !!(user as any).isAdmin);
+    if (effectiveRoom.isPrivate && effectiveRoom.password && !passwordUnlocked && !isOwner) {
         return (
             <div className="flex flex-col h-screen">
                 <LeftSidebar roomId={params.roomId} />
                 <div className="bg-secondary/30 md:peer-data-[state=collapsed]:peer-data-[variant=inset]:ml-[calc(var(--sidebar-width-icon)_+_1rem)] md:peer-data-[variant=inset]:ml-[calc(var(--sidebar-width)_+_1rem)] duration-200 transition-[margin-left,margin-right] flex-1 flex flex-col items-center justify-center gap-4 text-center p-4">
-                    <h2 className="text-2xl font-bold">🔒 {room.name}</h2>
+                    <h2 className="text-2xl font-bold">🔒 {effectiveRoom.name}</h2>
                     <p className="text-muted-foreground">This room requires a password to join.</p>
                     <div className="flex gap-2 w-full max-w-xs">
                         <input
@@ -1031,9 +1044,9 @@ function RoomPageContent() {
                             placeholder="Enter password"
                             value={passwordInput}
                             onChange={(e) => { setPasswordInput(e.target.value); setPasswordError(false); }}
-                            onKeyDown={(e) => { if (e.key === 'Enter') { if (passwordInput === room.password) setPasswordUnlocked(true); else setPasswordError(true); } }}
+                            onKeyDown={(e) => { if (e.key === 'Enter') { if (passwordInput === effectiveRoom.password) setPasswordUnlocked(true); else setPasswordError(true); } }}
                         />
-                        <Button onClick={() => { if (passwordInput === room.password) setPasswordUnlocked(true); else setPasswordError(true); }}>Join</Button>
+                        <Button onClick={() => { if (passwordInput === effectiveRoom.password) setPasswordUnlocked(true); else setPasswordError(true); }}>Join</Button>
                     </div>
                     {passwordError && <p className="text-sm text-destructive">Incorrect password</p>}
                     <Button variant="ghost" asChild><a href="/">Back to Dashboard</a></Button>
@@ -1045,7 +1058,7 @@ function RoomPageContent() {
     return (
         <>
             <LeftSidebar roomId={params.roomId} />
-            <RoomContent room={room} roomId={params.roomId} />
+            <RoomContent room={effectiveRoom} roomId={params.roomId} />
         </>
     );
 }

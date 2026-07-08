@@ -751,20 +751,6 @@ export function getResolvedWatchSession(sessionId: string, guildId?: string, cha
   return getWatchSession(sessionId, guildId, channelId);
 }
 
-function getMostRecentActiveRoomSession(mediaKind?: WatchMediaKind) {
-  loadWatchStateFromDisk();
-  const candidates = Array.from(sessions.values())
-    .filter((session) => {
-      const metadata = session.metadata || inferSessionMetadata(session.id, session.guildId, session.channelId);
-      session.metadata = metadata;
-      return metadata.scopeType === 'room'
-        && Boolean(session.current)
-        && (!mediaKind || metadata.mediaKind === mediaKind);
-    })
-    .sort((a, b) => Number(b.metadata?.lastActiveAt || 0) - Number(a.metadata?.lastActiveAt || 0));
-  return candidates[0] || null;
-}
-
 export function getWatchSessionId(guildId: string, channelId: string, kind: WatchMediaKind = 'movie') {
   return getScopedWatchSessionId(guildId, channelId, kind);
 }
@@ -781,9 +767,6 @@ export function getActivityUrl(preferredBaseUrl?: string, sessionId?: string) {
 
 export function getDefaultActivitySessionId(rawSessionId?: string | null) {
   if (rawSessionId) return normalizeWatchSessionAlias(rawSessionId, getGlobalWatchSessionId());
-
-  const activeRoomSession = getMostRecentActiveRoomSession();
-  if (activeRoomSession) return activeRoomSession.id;
 
   const movieSession = getResolvedWatchSession(getGlobalWatchSessionId());
   const musicSession = getResolvedWatchSession(getMusicWatchSessionId());
