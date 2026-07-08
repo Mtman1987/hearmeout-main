@@ -1019,6 +1019,18 @@ export async function controlWatchSession(sessionId: string, action: string, pos
   if (session.playback.muted === undefined) session.playback.muted = true;
   if (session.playback.volume === undefined) session.playback.volume = 85;
 
+  if (!session.current && (action === 'play' || action === 'pause' || action === 'seek')) {
+    session.playback = {
+      status: 'idle',
+      position: 0,
+      updatedAt: Date.now(),
+      muted: session.playback.muted ?? true,
+      volume: session.playback.volume ?? 85,
+    };
+    saveWatchStateToDisk();
+    return session;
+  }
+
   if (action === 'play' || action === 'pause') {
     const now = Date.now();
     const currentPosition = getEffectivePlaybackPosition(session, now);
