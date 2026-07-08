@@ -353,7 +353,7 @@ export function watchControlsPromptComponents(joinUrl?: string, sessionId = sess
       components: [
         { type: 2, style: 1, label: preferredLabel, custom_id: `hmo_watch_controls:${preferredSessionId}`, emoji: { name: '🎛️' } },
         { type: 2, style: 2, label: otherLabel, custom_id: `hmo_watch_controls:${otherSessionId}`, emoji: { name: '🎚️' } },
-        { type: 2, style: 2, label: 'Switch Lane', custom_id: `hmo_watch_lane:${preferredSessionId}`, emoji: { name: '🔀' } },
+      { type: 2, style: 2, label: 'Choose Lane', custom_id: `hmo_watch_lane:${preferredSessionId}`, emoji: { name: '🔀' } },
         { type: 2, style: 2, label: 'Volume', custom_id: `hmo_watch_volume:${preferredSessionId}`, emoji: { name: '🔊' } },
         ...(joinUrl ? [{ type: 2, style: 5, label: 'Join Activity', url: joinUrl, emoji: { name: '🎬' } }] : []),
       ],
@@ -361,15 +361,8 @@ export function watchControlsPromptComponents(joinUrl?: string, sessionId = sess
   ];
 }
 
-export function watchLaneComponents(preferredBaseUrl?: string) {
+export function watchLaneComponents() {
   return [
-    {
-      type: 1,
-      components: [
-        { type: 2, style: 5, label: 'Open Movies', url: getActivityJoinUrl(preferredBaseUrl, getGlobalWatchSessionId()), emoji: { name: '🎬' } },
-        { type: 2, style: 5, label: 'Open Music', url: getActivityJoinUrl(preferredBaseUrl, getMusicWatchSessionId()), emoji: { name: '🎵' } },
-      ],
-    },
     {
       type: 1,
       components: [

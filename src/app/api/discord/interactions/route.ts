@@ -123,10 +123,10 @@ function buildEphemeralWatchControls(request: NextRequest, sessionId = GLOBAL_WA
   };
 }
 
-function buildEphemeralLanePicker(request: NextRequest) {
+function buildEphemeralLanePicker() {
   return {
-    content: 'Choose which HearMeOut lane to open or control.',
-    components: watchLaneComponents(getRequestBaseUrl(request)),
+    content: 'Choose which HearMeOut lane to control.',
+    components: watchLaneComponents(),
     flags: 64,
   };
 }
@@ -231,7 +231,7 @@ export async function POST(req: NextRequest) {
     if (custom_id.startsWith('hmo_watch_lane:')) {
       return NextResponse.json({
         type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
-        data: buildEphemeralLanePicker(req),
+        data: buildEphemeralLanePicker(),
       });
     }
 
