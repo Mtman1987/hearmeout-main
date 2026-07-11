@@ -277,6 +277,7 @@ function getPublicWatchItem(item: WatchCatalogItem): WatchCatalogItem {
   }
 
   const videoPlaybackUrl = getYoutubeHlsUrl(videoId);
+  const embedPlaybackUrl = getYoutubeEmbedUrl(videoId);
   return {
     ...item,
     source: item.source.replace(/^YouTube Video/i, 'YouTube Music'),
@@ -288,6 +289,7 @@ function getPublicWatchItem(item: WatchCatalogItem): WatchCatalogItem {
       videoId,
       audioPlaybackUrl: undefined,
       videoPlaybackUrl,
+      embedPlaybackUrl,
       playbackMode: 'video',
       playbackStrategy: 'proxy',
     },
