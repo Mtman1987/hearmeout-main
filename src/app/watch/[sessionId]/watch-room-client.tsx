@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { resolveYoutubeStream, submitResolvedStream } from '@/lib/youtube-client-resolver';
 
 type WatchState = {
   id: string;
@@ -570,6 +571,14 @@ export default function WatchRoomClient({ sessionId, activityMode = false, canPa
       requestId: state.current.requestId,
     });
 
+    // Client-side YouTube URL resolution - uses user's real IP
+    // so age-restricted/datacenter-blocked videos work via HLS proxy
+    const ytVideoId = item.metadata?.videoId;
+    if (ytVideoId && item.metadata?.playbackStrategy === 'proxy') {
+      resolveYoutubeStream(ytVideoId).then((stream) => {
+        if (stream) submitResolvedStream(ytVideoId, stream);
+      }).catch(() => {});
+    }
     const mediaUrl = hlsFallbackUrlFor(item);
     const usesHlsFallback = mediaUrl !== item.playbackUrl;
     const loadingRequestId = state.current.requestId;

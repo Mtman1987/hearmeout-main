@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { getDjWorkerUrl } from '@/lib/dj-worker-config';
 import { isValidVideoId } from '@/lib/validate-video-id';
+import { getResolvedYoutubeUrls } from '@/app/api/watch/youtube/resolve/route';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -40,6 +41,16 @@ export async function GET(request: Request, context: { params: Promise<{ videoId
     const pinnedMachine = cleanMachineId(requestUrl.searchParams.get('machine'));
     const remoteUrl = new URL(`${workerUrl}/watch/youtube/hls/${encodeURIComponent(videoId)}/${encodeURIComponent(cleanFile)}`);
     if (pinnedMachine) remoteUrl.searchParams.set('machine', pinnedMachine);
+
+    // If a client already resolved the stream URLs, pass them to the DJ worker
+    // so it can skip yt-dlp and use the client-provided URLs directly
+    if (cleanFile === 'index.m3u8') {
+      const resolved = getResolvedYoutubeUrls(videoId);
+      if (resolved) {
+        remoteUrl.searchParams.set('source', resolved.videoUrl);
+        remoteUrl.searchParams.set('audioSource', resolved.audioUrl);
+      }
+    }
 
     const workerHeaders: Record<string, string> = {
       'user-agent': 'HearMeOut/1.0',

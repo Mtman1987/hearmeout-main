@@ -1244,9 +1244,16 @@ app.get('/watch/youtube/hls/:videoId/:file', authorizeWorker, async (req, res) =
     const { dir } = watchHlsPaths(streamId);
 
     if (file === 'index.m3u8') {
-      const priorFailure = getRecentWatchHlsFailure(streamId);
+      const sourceUrl = String(req.query.source || '');
+      if (sourceUrl && !/^https?:\/\//i.test(sourceUrl)) return res.status(400).json({ error: 'Invalid source URL' });
+      const priorFailure = sourceUrl ? null : getRecentWatchHlsFailure(streamId);
       if (priorFailure) return res.status(502).json({ error: priorFailure.message });
-      ensureYoutubeWatchHls(videoId).catch(() => {});
+      if (sourceUrl) {
+        watchHlsFailures.delete(cleanWatchStreamId(streamId));
+        ensureWatchHls(streamId, sourceUrl).catch(() => {});
+      } else {
+        ensureYoutubeWatchHls(videoId).catch(() => {});
+      }
       const ready = await waitForWatchHlsIndex(streamId);
       const failure = getRecentWatchHlsFailure(streamId);
       if (failure) return res.status(502).json({ error: failure.message });
