@@ -185,6 +185,7 @@ async function doRip(videoId) {
 }
 
 const urlCache = new Map();
+let youtubeAuthRequiredUntil = 0;
 function mediaCacheKey(videoId, mode = 'audio') {
   return `${mode}:${videoId}`;
 }
@@ -229,6 +230,22 @@ function ensureYoutubeCookiesFile() {
 function ytDlpCookieArgs() {
   ensureYoutubeCookiesFile();
   return existsSync(YOUTUBE_COOKIES_FILE) ? ['--cookies', YOUTUBE_COOKIES_FILE] : [];
+}
+
+function hasYoutubeCookies() {
+  ensureYoutubeCookiesFile();
+  return existsSync(YOUTUBE_COOKIES_FILE);
+}
+
+function markYoutubeAuthRequired(message) {
+  if (hasYoutubeCookies()) return;
+  youtubeAuthRequiredUntil = Date.now() + 5 * 60 * 1000;
+  console.warn(`[Extract] YouTube auth required: ${String(message || '').slice(0, 220)}`);
+}
+
+function youtubeAuthRequiredError() {
+  if (hasYoutubeCookies() || Date.now() > youtubeAuthRequiredUntil) return null;
+  return new Error('YouTube auth required: add a Netscape cookies.txt file at /data/youtube-cookies.txt or set YOUTUBE_COOKIES_B64 as a Fly secret.');
 }
 
 function mimeFromYtDlpInfo(info, mode) {
@@ -286,6 +303,7 @@ async function extractWithYtDlp(videoId, mode = 'audio') {
     };
   } catch (err) {
     const message = err?.stderr || err?.message || String(err);
+    if (/sign in to confirm/i.test(String(message))) markYoutubeAuthRequired(message);
     console.warn(`[Extract] yt-dlp ${mode} lookup failed for ${videoId}: ${String(message).slice(0, 220)}`);
     return null;
   }
@@ -459,6 +477,8 @@ async function extractAudioInfo(videoId, forceRefresh = false) {
     setCachedExtractedInfo(videoId, ytDlpInfo, 'audio');
     return ytDlpInfo;
   }
+  const authError = youtubeAuthRequiredError();
+  if (authError) throw authError;
 
   const upstreamInfo = await extractFromUpstream(videoId, 'audio');
   if (upstreamInfo?.url) {
@@ -589,6 +609,8 @@ async function extractVideoInfo(videoId, forceRefresh = false) {
     setCachedExtractedInfo(videoId, ytDlpInfo, 'video');
     return ytDlpInfo;
   }
+  const authError = youtubeAuthRequiredError();
+  if (authError) throw authError;
 
   const upstreamInfo = await extractFromUpstream(videoId, 'video');
   if (upstreamInfo?.url) {
