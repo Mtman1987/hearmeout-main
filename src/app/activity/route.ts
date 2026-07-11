@@ -26,6 +26,11 @@ function isHlsPlaybackUrl(value: string) {
   }
 }
 
+function clientUrl(value: string, baseUrl: string) {
+  if (!value || /^https?:\/\//i.test(value)) return value;
+  return `${baseUrl}${value.startsWith('/') ? value : `/${value}`}`;
+}
+
 async function html(request: Request) {
   await ensureDiscordActivityRoom();
   const configuredBaseUrl = process.env.NEXT_PUBLIC_BASE_URL || process.env.NEXT_PUBLIC_APP_URL;
@@ -37,15 +42,15 @@ async function html(request: Request) {
   const current = session.current;
   const title = current ? `${current.item.title} (${current.item.year})` : 'Waiting for a request';
   const media = current ? `${current.item.source} - requested by ${current.requestedBy.username}` : 'Media: idle';
-  const src = current?.item.type === 'music' && current.item.metadata?.audioPlaybackUrl
-    ? current.item.metadata.audioPlaybackUrl
-    : current?.item.type === 'music' && current.item.metadata?.videoPlaybackUrl && current.item.metadata.playbackMode !== 'audio'
+  const src = current?.item.type === 'music' && current.item.metadata?.videoPlaybackUrl
     ? current.item.metadata.videoPlaybackUrl
+    : current?.item.type === 'music' && current.item.metadata?.audioPlaybackUrl
+    ? current.item.metadata.audioPlaybackUrl
     : current?.item.playbackUrl || '';
   const isEmbeddedVideo = src.includes('youtube.com/embed/') || src.includes('youtube-nocookie.com/embed/');
   const isAudioOnly = current?.item.type === 'tts' || current?.item.metadata?.provider === 'tts' || (current?.item.type === 'music' && src.includes('/api/youtube-audio/'));
-  const nativeSrc = src && !isAudioOnly && !isEmbeddedVideo && !isHlsPlaybackUrl(src) ? src : '';
-  const audioSrc = src && isAudioOnly ? src : '';
+  const nativeSrc = src && !isAudioOnly && !isEmbeddedVideo && !isHlsPlaybackUrl(src) ? clientUrl(src, baseUrl) : '';
+  const audioSrc = src && isAudioOnly ? clientUrl(src, baseUrl) : '';
   const iframeSrc = src && isEmbeddedVideo ? src : '';
 
   return `<!doctype html>
@@ -84,6 +89,9 @@ async function html(request: Request) {
     .panel-btn.active { border-color: #34d399; color: #bbf7d0; }
     .volume { min-width: 220px; flex: 1; display: flex; align-items: center; gap: 8px; border: 1px solid #475569; border-radius: 6px; background: #0f172a; padding: 7px 9px; }
     .volume input { min-height: 0; padding: 0; accent-color: #34d399; }
+    .seekbar { min-width: 260px; flex: 2; display: flex; align-items: center; gap: 8px; border: 1px solid #475569; border-radius: 6px; background: #0f172a; padding: 7px 9px; }
+    .seekbar input { min-height: 0; padding: 0; accent-color: #34d399; }
+    .seekbar span { min-width: 84px; color: #cbd5e1; font-size: 12px; font-variant-numeric: tabular-nums; }
     .meta { position: fixed; left: 10px; right: 10px; bottom: 64px; z-index: 9; display: grid; justify-items: center; gap: 4px; text-align: center; pointer-events: none; text-shadow: 0 1px 4px #000; }
     aside { display: none; }
     aside.open { position: fixed; right: 10px; top: 58px; bottom: 76px; z-index: 12; display: block; width: min(360px, calc(100vw - 20px)); overflow: auto; padding: 0; color: #e5edf5; background: rgba(2,6,23,.92); border: 1px solid rgba(148,163,184,.35); border-radius: 8px; }
@@ -103,7 +111,7 @@ async function html(request: Request) {
     body.focus-mode .room-tabs, body.focus-mode .meta { opacity: .18; transition: opacity .15s ease; }
     body.focus-mode .room-tabs:hover, body.focus-mode .meta:hover { opacity: 1; }
   </style>
-  <script src="/api/activity/hls"></script>
+  <script src="${escapeHtml(clientUrl('/api/activity/hls', baseUrl))}"></script>
 </head>
 <body>
   <main>
@@ -118,7 +126,7 @@ async function html(request: Request) {
       <div class="video-wrap">
         <video id="video" class="${isAudioOnly || isEmbeddedVideo ? 'hidden' : ''}" autoplay muted playsinline ${nativeSrc ? `src="${escapeHtml(nativeSrc)}"` : ''}></video>
         <iframe id="youtube" class="youtube-player ${isEmbeddedVideo ? '' : 'hidden'}" ${iframeSrc ? `src="${escapeHtml(iframeSrc)}"` : ''} allow="autoplay; fullscreen; encrypted-media; picture-in-picture" allowfullscreen></iframe>
-        <audio id="audio" class="audio-player ${isAudioOnly ? '' : 'hidden'}" autoplay ${audioSrc ? `src="${escapeHtml(audioSrc)}"` : ''}></audio>
+        <audio id="audio" class="audio-player ${isAudioOnly ? '' : 'hidden'}" autoplay controls ${audioSrc ? `src="${escapeHtml(audioSrc)}"` : ''}></audio>
         <div class="empty ${current ? 'hidden' : ''}" id="empty"><strong>No media loaded</strong><span>Use Discord controls to request and control playback.</span></div>
       </div>
       <nav class="room-tabs" aria-label="Watch rooms">
@@ -128,7 +136,12 @@ async function html(request: Request) {
       <div class="toolbar" aria-label="Watch controls">
         <button data-action="play-pause" title="Play or pause the shared session">Play/Pause</button>
         <button data-action="sync-local" title="Sync to live position">Sync</button>
+        <div class="seekbar" title="Seek">
+          <span id="position-label">0:00 / --:--</span>
+          <input id="seek" type="range" min="0" max="1" value="0" step="1" disabled aria-label="Seek position" />
+        </div>
         <button data-action="next" title="Skip to next queued video">Next</button>
+        <button id="visual-test" type="button" title="Try native video sources until a frame renders">Visual Test</button>
         <button id="popout" type="button" disabled>Pop Out</button>
         <button id="fullscreen" type="button">Fullscreen</button>
         <button class="panel-btn" data-panel="request" type="button">Request</button>
@@ -168,8 +181,8 @@ async function html(request: Request) {
       </section>
     </aside>
   </main>
-  <script>
-${activityJs(DISCORD_CLIENT_ID, requestedSessionId)}
+          <script>
+${activityJs(DISCORD_CLIENT_ID, requestedSessionId, baseUrl)}
   </script>
 </body>
 </html>`;

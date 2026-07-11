@@ -17,7 +17,8 @@ export async function POST(request: NextRequest, context: { params: Promise<{ se
   });
 
   if ('error' in result) {
-    return NextResponse.json({ error: result.error }, { status: 404, headers: CORS_HEADERS });
+    const status = String(body.platform || '').trim().toLowerCase() === 'activity' ? 200 : 404;
+    return NextResponse.json({ success: false, error: result.error }, { status, headers: CORS_HEADERS });
   }
 
   return NextResponse.json({

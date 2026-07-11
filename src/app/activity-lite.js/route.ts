@@ -2,8 +2,8 @@ import { NextResponse } from 'next/server';
 import { DISCORD_CLIENT_ID } from '@/lib/public-config';
 import { getDefaultActivitySessionId } from '@/lib/watch/watch-request-service';
 
-export function js(clientId: string, sessionId: string) {
-  const appBaseUrl = process.env.NEXT_PUBLIC_BASE_URL || process.env.NEXT_PUBLIC_APP_URL || 'https://hearmeout-main.fly.dev';
+export function js(clientId: string, sessionId: string, appBaseUrlOverride?: string) {
+  const appBaseUrl = appBaseUrlOverride || process.env.NEXT_PUBLIC_BASE_URL || process.env.NEXT_PUBLIC_APP_URL || '';
   return `
 const CLIENT_ID = ${JSON.stringify(clientId)};
 const GLOBAL_SESSION_ID = ${JSON.stringify(sessionId)};
@@ -52,14 +52,22 @@ const fullscreenBtn = document.getElementById('fullscreen');
 const popoutBtn = document.getElementById('popout');
 const downloadLink = document.getElementById('download');
 const mediaModeBtn = document.getElementById('media-mode');
+const visualTestBtn = document.getElementById('visual-test');
 const ttsToggleBtn = document.getElementById('tts-toggle');
 const muteBtn = document.getElementById('mute');
 const volumeInput = document.getElementById('volume');
 const volumeLabel = document.getElementById('volume-label');
+const seekInput = document.getElementById('seek');
+const positionLabel = document.getElementById('position-label');
 const requestForm = document.getElementById('request-form');
 const queryInput = document.getElementById('query');
 const acceptRecommendationBtn = document.getElementById('accept-recommendation');
 const sessionSwitchButtons = Array.from(document.querySelectorAll('[data-session-switch]'));
+const VISUAL_TESTS = [
+  { itemId: 'bbb', label: 'Big Buck Bunny MP4' },
+  { itemId: 'sintel', label: 'Sintel HLS' },
+  { itemId: 'tears-of-steel', label: 'Tears of Steel HLS' },
+];
 let state = null;
 let currentRequestId = null;
 let hls = null;
@@ -78,13 +86,14 @@ let embeddedMode = false;
 let lastEmbeddedPlaybackKey = '';
 let embeddedCurrentTime = 0;
 let lastEmbeddedNativeSyncAt = 0;
-let musicPlaybackMode = 'audio';
+let musicPlaybackMode = 'video';
 let activeMediaErrorKey = '';
 const mediaErrorCounts = {};
 const MEDIA_ERROR_FALLBACK_THRESHOLD = 1;
 let ttsEnabled = false;
 let ttsAudio = null;
 let ttsPlaying = false;
+let seekingLocally = false;
 const ttsQueue = [];
 const seenTtsIds = new Set();
 
@@ -221,6 +230,12 @@ function hasMusicModeToggle(item) {
   return item?.type === 'music' && Boolean(options.video && options.audio);
 }
 
+function preferredMusicPlaybackMode(item) {
+  if (musicModeOptions(item).video) return 'video';
+  if (musicModeOptions(item).audio) return 'audio';
+  return item?.metadata?.playbackMode || 'video';
+}
+
 function isYoutubeAudioMusicItem(item) {
   return item?.type === 'music' && String(playbackUrlForItem(item) || '').toLowerCase().includes('/api/youtube-audio/');
 }
@@ -283,7 +298,24 @@ function appUrl(path) {
   if (nextPath.startsWith('/api/watch/xtream/hls/')) nextPath = nextPath.replace('/api/watch/xtream/hls/', '/activity-provider/xtream/hls/');
   if (nextPath.startsWith('/activity/watch/xtream/hls/')) nextPath = nextPath.replace('/activity/watch/xtream/hls/', '/api/watch/xtream/hls/');
   if (nextPath.startsWith('/activity/proxy')) nextPath = nextPath.replace('/activity/proxy', '/activity-proxy');
+  if (APP_BASE_URL) {
+    try {
+      const base = new URL(APP_BASE_URL, window.location.href);
+      if (base.origin && base.origin !== window.location.origin) return new URL(nextPath, base).toString();
+    } catch {}
+  }
   return nextPath;
+}
+
+function apiUrls(path) {
+  const urls = [appUrl(path)];
+  if (path && !/^https?:\\/\\//i.test(path) && APP_BASE_URL) {
+    try {
+      urls.push(new URL(path.startsWith('/') ? path : '/' + path, APP_BASE_URL).toString());
+    } catch {}
+  }
+  if (path && !/^https?:\\/\\//i.test(path)) urls.push(path.startsWith('/') ? path : '/' + path);
+  return Array.from(new Set(urls.filter(Boolean)));
 }
 
 function iframeUrlFor(path) {
@@ -394,18 +426,24 @@ async function api(path, options) {
   const requestOptions = options || {};
   const headers = { ...((requestOptions && requestOptions.headers) || {}) };
   if (requestOptions.body && !headers['content-type']) headers['content-type'] = 'application/json';
-  const response = await fetch(appUrl(path), {
-    ...requestOptions,
-    cache: 'no-store',
-    headers,
-  });
-  if (!response.ok) {
+  const urls = apiUrls(path);
+  let lastError = null;
+  for (const url of urls) {
+    const response = await fetch(url, {
+      ...requestOptions,
+      cache: 'no-store',
+      headers,
+    });
+    if (response.ok) return response.json();
     const payload = await response.json().catch(() => null);
     const error = new Error((payload && payload.error) || 'Request failed: ' + response.status);
     error.payload = payload;
-    throw error;
+    error.status = response.status;
+    error.url = response.url || url;
+    lastError = error;
+    if (response.status !== 404) break;
   }
-  return response.json();
+  throw lastError || new Error('Request failed');
 }
 
 function escapeHtml(value) {
@@ -422,6 +460,31 @@ function position(playback) {
   if (!playback) return 0;
   if (playback.status !== 'playing') return playback.position || 0;
   return (playback.position || 0) + (Date.now() - playback.updatedAt) / 1000;
+}
+
+function formatClock(totalSeconds) {
+  const safeSeconds = Math.max(0, Math.floor(Number(totalSeconds || 0)));
+  const minutes = Math.floor(safeSeconds / 60);
+  const seconds = safeSeconds % 60;
+  return minutes + ':' + String(seconds).padStart(2, '0');
+}
+
+function currentMediaDuration() {
+  if (!state?.current || embeddedMode || (media !== video && media !== audio)) return 0;
+  const duration = Number(media.duration || 0);
+  return Number.isFinite(duration) && duration > 0 ? duration : 0;
+}
+
+function updateSeekUi() {
+  if (!seekInput || !positionLabel) return;
+  const duration = currentMediaDuration();
+  const currentPosition = state?.playback ? position(state.playback) : Number(media?.currentTime || 0);
+  const canSeek = Boolean(state?.current && duration > 0);
+  seekInput.disabled = !canSeek;
+  seekInput.max = String(Math.max(1, Math.round(duration || 1)));
+  if (!seekingLocally) seekInput.value = String(Math.max(0, Math.min(Number(seekInput.max || 1), Math.round(currentPosition || 0))));
+  const labelPosition = seekingLocally ? Number(seekInput.value || 0) : currentPosition;
+  positionLabel.textContent = formatClock(labelPosition) + ' / ' + (duration ? formatClock(duration) : '--:--');
 }
 
 function applyPlayback() {
@@ -446,9 +509,13 @@ function applyPlayback() {
       mediaEl.textContent = 'Media: embedded video paused';
     }
     applyVolume();
+    updateSeekUi();
     return;
   }
-  if (mediaIsBuffering || media.readyState < 2) return;
+  if (mediaIsBuffering || media.readyState < 2) {
+    updateSeekUi();
+    return;
+  }
   const remote = position(state.playback);
   const drift = Math.abs((media.currentTime || 0) - remote);
   applying = true;
@@ -465,6 +532,7 @@ function applyPlayback() {
   const playSyncInFlight = syncingNativeControl && Date.now() - lastNativePlayAt < 5000;
   if (state.playback.status === 'paused' && !media.paused && !playSyncInFlight) media.pause();
   if (state.playback.status === 'playing' && media.paused && !pendingPlay) startVideoPlayback();
+  updateSeekUi();
   setTimeout(() => { applying = false; }, 100);
 }
 
@@ -612,7 +680,7 @@ function render(nextState) {
     }
     if (state.current.requestId !== currentRequestId) {
       currentRequestId = state.current.requestId;
-      musicPlaybackMode = state.current.item?.metadata?.playbackMode || 'video';
+      musicPlaybackMode = preferredMusicPlaybackMode(state.current.item);
       loadMedia(state.current.item);
     }
     applyPlayback();
@@ -635,6 +703,7 @@ function render(nextState) {
   eventsEl.innerHTML = state.events.length
     ? state.events.slice(0, 8).map((event) => '<li>' + new Date(event.at).toLocaleTimeString() + ' - ' + escapeHtml(event.message) + '</li>').join('')
     : '<li>No events yet.</li>';
+  updateSeekUi();
 }
 
 function setPendingRecommendation(recommendation) {
@@ -720,6 +789,129 @@ function handleAction(action) {
   }
 }
 
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function requestVisualTestItem(test) {
+  const result = await api('/api/watch/sessions/' + sessionId + '/request', {
+    method: 'POST',
+    body: JSON.stringify({
+      itemId: test.itemId,
+      username: 'activity visual test',
+      userId: 'activity-visual-test',
+      platform: 'activity',
+      announceDiscord: false,
+    }),
+  });
+  render(result.session);
+  return result.session;
+}
+
+function sampleVideoFrame() {
+  if (!state?.current) return { ok: false, reason: 'no current item' };
+  if (embeddedMode || media !== video) return { ok: false, reason: 'not native video' };
+  if (video.readyState < 2 || !video.videoWidth || !video.videoHeight) {
+    return { ok: false, reason: 'video not ready', readyState: video.readyState };
+  }
+
+  const width = 64;
+  const height = Math.max(1, Math.round(width * video.videoHeight / video.videoWidth));
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  const context = canvas.getContext('2d', { willReadFrequently: true });
+  if (!context) return { ok: false, reason: 'canvas unavailable' };
+
+  try {
+    context.drawImage(video, 0, 0, width, height);
+    const data = context.getImageData(0, 0, width, height).data;
+    let bright = 0;
+    let sum = 0;
+    let sumSq = 0;
+    let samples = 0;
+    for (let i = 0; i < data.length; i += 4) {
+      const luminance = (data[i] + data[i + 1] + data[i + 2]) / 3;
+      sum += luminance;
+      sumSq += luminance * luminance;
+      if (luminance > 12) bright += 1;
+      samples += 1;
+    }
+    const average = samples ? sum / samples : 0;
+    const variance = samples ? (sumSq / samples) - (average * average) : 0;
+    const brightRatio = samples ? bright / samples : 0;
+    return {
+      ok: brightRatio > 0.02 && (average > 8 || variance > 8),
+      reason: 'frame still dark',
+      average,
+      variance,
+      brightRatio,
+      width: video.videoWidth,
+      height: video.videoHeight,
+    };
+  } catch (err) {
+    return {
+      ok: false,
+      reason: 'canvas blocked: ' + (err && err.message ? err.message : String(err)),
+      readyState: video.readyState,
+      width: video.videoWidth,
+      height: video.videoHeight,
+    };
+  }
+}
+
+async function waitForVisibleNativeFrame(label, timeoutMs) {
+  const startedAt = Date.now();
+  let playRequested = false;
+  let lastSample = null;
+  while (Date.now() - startedAt < timeoutMs) {
+    if (!playRequested) {
+      playRequested = true;
+      await control('play', 0).catch(() => null);
+      pendingPlay = true;
+      startVideoPlayback();
+    }
+    await sleep(500);
+    applyPlayback();
+    lastSample = sampleVideoFrame();
+    if (lastSample.ok) return { ok: true, detail: lastSample };
+    mediaEl.textContent = 'Visual test: checking ' + label + ' (' + (lastSample.reason || 'waiting') + ')';
+  }
+  return { ok: false, detail: lastSample };
+}
+
+async function runVisualTest() {
+  if (!visualTestBtn) return;
+  visualTestBtn.disabled = true;
+  const originalLabel = visualTestBtn.textContent || 'Visual Test';
+  try {
+    errorEl.textContent = '';
+    visualTestBtn.textContent = 'Testing...';
+    await switchSession(MOVIE_SESSION_ID);
+    setDrawer('queue');
+    for (const test of VISUAL_TESTS) {
+      mediaEl.textContent = 'Visual test: loading ' + test.label;
+      await control('clear', 0).catch(() => null);
+      await requestVisualTestItem(test);
+      const result = await waitForVisibleNativeFrame(test.label, 9000);
+      if (result.ok) {
+        const detail = result.detail || {};
+        mediaEl.textContent = 'Visual test passed: ' + test.label;
+        errorEl.textContent = 'Native frame detected in Activity video' + (detail.width && detail.height ? ' at ' + detail.width + 'x' + detail.height : '') + '.';
+        return;
+      }
+      errorEl.textContent = 'Visual test failed for ' + test.label + ': ' + ((result.detail && result.detail.reason) || 'no visible frame');
+    }
+    mediaEl.textContent = 'Visual test failed';
+    errorEl.textContent = 'No native test source produced a measurable frame in this Activity instance.';
+  } catch (err) {
+    errorEl.textContent = err && err.message ? err.message : String(err);
+  } finally {
+    visualTestBtn.disabled = false;
+    visualTestBtn.textContent = originalLabel;
+  }
+}
+
 document.querySelectorAll('[data-panel]').forEach((button) => {
   button.addEventListener('click', (event) => {
     event.preventDefault();
@@ -734,6 +926,13 @@ document.querySelectorAll('[data-action]').forEach((button) => {
     handleAction(button.dataset.action);
   });
 });
+
+if (visualTestBtn) {
+  visualTestBtn.addEventListener('click', (event) => {
+    event.preventDefault();
+    runVisualTest();
+  });
+}
 
 fullscreenBtn.addEventListener('click', () => {
   const focusMode = !document.body.classList.contains('focus-mode');
@@ -876,6 +1075,20 @@ volumeInput.addEventListener('input', () => {
   }
 });
 
+if (seekInput) {
+  seekInput.addEventListener('input', () => {
+    seekingLocally = true;
+    updateSeekUi();
+  });
+  seekInput.addEventListener('change', () => {
+    const nextPosition = Number(seekInput.value || 0);
+    seekingLocally = false;
+    control('seek', nextPosition).catch((err) => {
+      errorEl.textContent = err && err.message ? err.message : String(err);
+    });
+  });
+}
+
 requestForm.addEventListener('submit', async (event) => {
   event.preventDefault();
   errorEl.textContent = '';
@@ -884,8 +1097,18 @@ requestForm.addEventListener('submit', async (event) => {
   if (!query) return;
   try {
     const isMusicSession = sessionId === MUSIC_SESSION_ID || String(sessionId || '').toLowerCase().includes('music');
-    const requestUrl = '/api/watch/sessions/' + sessionId + '/request?query=' + encodeURIComponent(query) + '&username=' + encodeURIComponent('activity tester') + '&userId=activity&announceDiscord=1' + (isMusicSession ? '&mediaType=music' : '');
+    const requestUrl = '/api/watch/sessions/' + sessionId + '/request?query=' + encodeURIComponent(query) + '&username=' + encodeURIComponent('activity tester') + '&userId=activity&platform=activity&announceDiscord=1' + (isMusicSession ? '&mediaType=music' : '');
     const result = await api(requestUrl);
+    if (result && result.success === false) {
+      if (result.recommendation) {
+        setPendingRecommendation(result.recommendation);
+        mediaEl.textContent = 'Media: recommendation ready';
+        errorEl.textContent = 'No direct playable match. Use Add Recommended Match.';
+        return;
+      }
+      errorEl.textContent = result.error || 'No playable match found.';
+      return;
+    }
     queryInput.value = '';
     render(result.session);
     setDrawer('queue');
@@ -904,8 +1127,12 @@ acceptRecommendationBtn.addEventListener('click', async () => {
   try {
     const result = await api('/api/watch/sessions/' + sessionId + '/accept', {
       method: 'POST',
-      body: JSON.stringify({ username: 'activity tester' }),
+      body: JSON.stringify({ username: 'activity tester', userId: 'activity', platform: 'activity' }),
     });
+    if (result && result.success === false) {
+      errorEl.textContent = result.error || 'No pending recommendation';
+      return;
+    }
     setPendingRecommendation(null);
     render(result.session);
   } catch (err) {
@@ -1050,7 +1277,8 @@ export async function GET(request: Request) {
   const requestUrl = new URL(request.url);
   const rawSessionId = requestUrl.searchParams.get('sessionId') || requestUrl.searchParams.get('session_id');
   const sessionId = getDefaultActivitySessionId(rawSessionId);
-  return new NextResponse(js(DISCORD_CLIENT_ID, sessionId), {
+  const appBaseUrl = process.env.NEXT_PUBLIC_BASE_URL || process.env.NEXT_PUBLIC_APP_URL || requestUrl.origin;
+  return new NextResponse(js(DISCORD_CLIENT_ID, sessionId, appBaseUrl), {
     headers: {
       'content-type': 'application/javascript; charset=utf-8',
       'cache-control': 'no-store',

@@ -27,11 +27,20 @@ function isTtsRequest(value: unknown) {
 function watchRequestErrorPayload(result: unknown) {
   const payload = result as { error?: unknown; recommendation?: unknown; discovery?: unknown; result?: unknown };
   return {
+    success: false,
     error: payload.error,
     recommendation: payload.recommendation || null,
     discovery: payload.discovery || null,
     result: payload.result || null,
   };
+}
+
+function isActivityPlatform(value: unknown) {
+  return String(value || '').trim().toLowerCase() === 'activity';
+}
+
+function softMissStatus(payload: ReturnType<typeof watchRequestErrorPayload>, platform: unknown) {
+  return isActivityPlatform(platform) && (payload.recommendation || payload.discovery || payload.result) ? 200 : 404;
 }
 
 export async function POST(request: NextRequest, context: { params: Promise<{ sessionId: string }> }) {
@@ -67,7 +76,8 @@ export async function POST(request: NextRequest, context: { params: Promise<{ se
   });
 
   if ('error' in result) {
-    return NextResponse.json(watchRequestErrorPayload(result), { status: 404, headers: CORS_HEADERS });
+    const payload = watchRequestErrorPayload(result);
+    return NextResponse.json(payload, { status: softMissStatus(payload, body.platform), headers: CORS_HEADERS });
   }
 
   const discordAnnouncement = body.announceDiscord
@@ -90,6 +100,7 @@ export async function POST(request: NextRequest, context: { params: Promise<{ se
 export async function GET(request: NextRequest, context: { params: Promise<{ sessionId: string }> }) {
   const { sessionId } = await context.params;
   const requestKind = request.nextUrl.searchParams.get('mediaType') || request.nextUrl.searchParams.get('type') || request.nextUrl.searchParams.get('kind');
+  const platform = request.nextUrl.searchParams.get('platform') || undefined;
   const result = isTtsRequest(requestKind) ? await requestWatchTtsItem({
     sessionId,
     guildId: request.nextUrl.searchParams.get('guildId') || undefined,
@@ -107,7 +118,7 @@ export async function GET(request: NextRequest, context: { params: Promise<{ ses
     query: request.nextUrl.searchParams.get('query') || request.nextUrl.searchParams.get('q') || undefined,
     userId: request.nextUrl.searchParams.get('userId') || 'local',
     username: request.nextUrl.searchParams.get('username') || 'local tester',
-    platform: 'web',
+    platform: (platform as any) || 'web',
   }) : await requestWatchItem({
     sessionId,
     guildId: request.nextUrl.searchParams.get('guildId') || undefined,
@@ -119,7 +130,8 @@ export async function GET(request: NextRequest, context: { params: Promise<{ ses
   });
 
   if ('error' in result) {
-    return NextResponse.json(watchRequestErrorPayload(result), { status: 404, headers: CORS_HEADERS });
+    const payload = watchRequestErrorPayload(result);
+    return NextResponse.json(payload, { status: softMissStatus(payload, platform), headers: CORS_HEADERS });
   }
 
   const discordAnnouncement = ['1', 'true', 'yes'].includes(String(request.nextUrl.searchParams.get('announceDiscord') || '').toLowerCase())

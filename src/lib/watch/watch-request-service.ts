@@ -34,6 +34,7 @@ type WatchCatalogItem = {
     originalUrl?: string;
     audioPlaybackUrl?: string;
     videoPlaybackUrl?: string;
+    embedPlaybackUrl?: string;
     playbackMode?: 'audio' | 'video';
     playbackStrategy?: 'proxy' | 'embed' | 'offline';
   };
@@ -251,6 +252,14 @@ function getYoutubeMusicVideoId(item: WatchCatalogItem) {
   }
 }
 
+function getYoutubeVideoProxyUrl(videoId: string) {
+  return `/api/youtube-video/proxy?videoId=${encodeURIComponent(videoId)}&media=video`;
+}
+
+function getYoutubeEmbedUrl(videoId: string) {
+  return `https://www.youtube.com/embed/${encodeURIComponent(videoId)}`;
+}
+
 function getPublicWatchItem(item: WatchCatalogItem): WatchCatalogItem {
   if (item.type !== 'music') {
     return {
@@ -267,19 +276,20 @@ function getPublicWatchItem(item: WatchCatalogItem): WatchCatalogItem {
     };
   }
 
-  const audioPlaybackUrl = `/api/youtube-audio/stream?videoId=${encodeURIComponent(videoId)}`;
-  const videoPlaybackUrl = `https://www.youtube.com/embed/${encodeURIComponent(videoId)}`;
+  const videoPlaybackUrl = getYoutubeVideoProxyUrl(videoId);
+  const embedPlaybackUrl = getYoutubeEmbedUrl(videoId);
   return {
     ...item,
     source: item.source.replace(/^YouTube Video/i, 'YouTube Music'),
-    playbackUrl: audioPlaybackUrl,
+    playbackUrl: videoPlaybackUrl,
     metadata: {
       ...(item.metadata || {}),
       provider: 'youtube',
       kind: 'song',
       videoId,
-      audioPlaybackUrl,
+      audioPlaybackUrl: undefined,
       videoPlaybackUrl,
+      embedPlaybackUrl,
       playbackMode: 'video',
       playbackStrategy: 'proxy',
     },
@@ -550,10 +560,8 @@ function musicTrackToWatchItem(track: PlaylistItem): WatchCatalogItem {
     };
   }
 
-  const videoId = encodeURIComponent(track.id);
-  const audioPlaybackUrl = `/api/youtube-audio/stream?videoId=${videoId}`;
-  const embedPlaybackUrl = `https://www.youtube.com/embed/${videoId}`;
-  const useEmbed = track.playbackStrategy === 'embed';
+  const videoPlaybackUrl = getYoutubeVideoProxyUrl(track.id);
+  const embedPlaybackUrl = getYoutubeEmbedUrl(track.id);
   return {
     id: `youtube-${track.id}`,
     type: 'music',
@@ -562,20 +570,18 @@ function musicTrackToWatchItem(track: PlaylistItem): WatchCatalogItem {
     runtime: formatDurationMs(track.duration),
     source: track.artist ? `YouTube Music: ${track.artist}` : 'YouTube Music',
     poster: track.thumbnail || '',
-    playbackUrl: useEmbed ? embedPlaybackUrl : audioPlaybackUrl,
-    overview: useEmbed
-      ? `Song request from ${track.addedBy || 'unknown user'}. Using YouTube embed fallback because direct extraction was not playable.`
-      : `Song request from ${track.addedBy || 'unknown user'}.`,
+    playbackUrl: videoPlaybackUrl,
+    overview: `Song request from ${track.addedBy || 'unknown user'}.`,
     metadata: {
       provider: 'youtube',
       kind: 'song',
       videoId: track.id,
       artist: track.artist,
       originalUrl: track.url,
-      audioPlaybackUrl: useEmbed ? undefined : audioPlaybackUrl,
-      videoPlaybackUrl: useEmbed ? embedPlaybackUrl : undefined,
+      videoPlaybackUrl,
+      embedPlaybackUrl,
       playbackMode: 'video',
-      playbackStrategy: track.playbackStrategy || 'proxy',
+      playbackStrategy: 'proxy',
     },
   };
 }

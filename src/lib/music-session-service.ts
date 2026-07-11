@@ -208,8 +208,8 @@ function playlistItemToWatchItem(track: PlaylistItem) {
   }
 
   const videoId = encodeURIComponent(track.id);
-  const audioPlaybackUrl = `/api/youtube-audio/stream?videoId=${videoId}`;
-  const videoPlaybackUrl = `https://www.youtube.com/embed/${videoId}`;
+  const videoPlaybackUrl = `/api/youtube-video/proxy?videoId=${videoId}&media=video`;
+  const embedPlaybackUrl = `https://www.youtube.com/embed/${videoId}`;
   return {
     id: `youtube-${track.id}`,
     type: 'music',
@@ -218,7 +218,7 @@ function playlistItemToWatchItem(track: PlaylistItem) {
     runtime: formatDurationMs(track.duration),
     source: track.artist ? `YouTube Music: ${track.artist}` : 'YouTube Music',
     poster: track.thumbnail || '',
-    playbackUrl: audioPlaybackUrl,
+    playbackUrl: videoPlaybackUrl,
     overview: `Song request from ${track.addedBy || 'unknown user'}.`,
     metadata: {
       provider: 'youtube',
@@ -226,10 +226,10 @@ function playlistItemToWatchItem(track: PlaylistItem) {
       videoId: track.id,
       artist: track.artist,
       originalUrl: track.url,
-      audioPlaybackUrl,
       videoPlaybackUrl,
+      embedPlaybackUrl,
       playbackMode: 'video',
-      playbackStrategy: track.playbackStrategy || 'proxy',
+      playbackStrategy: 'proxy',
     },
   };
 }
