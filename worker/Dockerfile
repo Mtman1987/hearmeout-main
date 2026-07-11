@@ -3,6 +3,9 @@ FROM node:22-slim
 RUN apt-get update && apt-get install -y \
     ffmpeg \
     chromium \
+    python3 \
+    python3-pip \
+    && python3 -m pip install --no-cache-dir --break-system-packages -U yt-dlp \
     && rm -rf /var/lib/apt/lists/*
 
 ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true

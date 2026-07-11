@@ -210,6 +210,63 @@ function setCachedExtractedInfo(videoId, info, mode = 'audio') {
   urlCache.set(mediaCacheKey(videoId, mode), { info, expires: Date.now() + 5 * 60 * 60 * 1000 });
 }
 
+function mimeFromYtDlpInfo(info, mode) {
+  const ext = String(info?.ext || '').toLowerCase();
+  if (mode === 'audio') {
+    if (ext === 'm4a' || ext === 'mp4') return 'audio/mp4';
+    if (ext === 'webm') return 'audio/webm';
+    if (ext === 'opus') return 'audio/opus';
+    return getMimeFromUrl(info?.url || '') || 'audio/mp4';
+  }
+  if (ext === 'mp4' || ext === 'm4v') return 'video/mp4';
+  if (ext === 'webm') return 'video/webm';
+  return getMimeFromUrl(info?.url || '') || 'video/mp4';
+}
+
+function extractYtDlpUrl(info) {
+  if (typeof info?.url === 'string' && /^https?:\/\//i.test(info.url)) return info.url;
+  const requested = Array.isArray(info?.requested_downloads) ? info.requested_downloads : [];
+  for (const item of requested) {
+    if (typeof item?.url === 'string' && /^https?:\/\//i.test(item.url)) return item.url;
+  }
+  return null;
+}
+
+async function extractWithYtDlp(videoId, mode = 'audio') {
+  const format = mode === 'video'
+    ? 'bestvideo[ext=mp4][height<=720][vcodec^=avc1]/bestvideo[ext=mp4][height<=720]/bestvideo[height<=720]/bestvideo'
+    : 'bestaudio[ext=m4a]/bestaudio[ext=mp4]/bestaudio';
+  const args = [
+    '--no-playlist',
+    '--no-warnings',
+    '--dump-json',
+    '--format',
+    format,
+    `https://www.youtube.com/watch?v=${videoId}`,
+  ];
+
+  try {
+    const { stdout } = await execFileAsync('yt-dlp', args, {
+      timeout: 60000,
+      maxBuffer: 12 * 1024 * 1024,
+    });
+    const info = JSON.parse(stdout);
+    const url = extractYtDlpUrl(info);
+    if (!url) return null;
+    return {
+      url,
+      mimeType: mimeFromYtDlpInfo(info, mode),
+      duration: Number(info.duration || 0),
+      title: info.title || 'Unknown',
+      artist: info.uploader || info.channel || 'Unknown',
+    };
+  } catch (err) {
+    const message = err?.stderr || err?.message || String(err);
+    console.warn(`[Extract] yt-dlp ${mode} lookup failed for ${videoId}: ${String(message).slice(0, 220)}`);
+    return null;
+  }
+}
+
 function getMimeFromUrl(rawUrl) {
   try {
     const parsed = new URL(rawUrl);
@@ -373,6 +430,12 @@ async function extractAudioInfo(videoId, forceRefresh = false) {
   const cached = forceRefresh ? null : getCachedExtractedInfo(videoId, 'audio');
   if (cached) return cached;
 
+  const ytDlpInfo = await extractWithYtDlp(videoId, 'audio');
+  if (ytDlpInfo?.url) {
+    setCachedExtractedInfo(videoId, ytDlpInfo, 'audio');
+    return ytDlpInfo;
+  }
+
   const upstreamInfo = await extractFromUpstream(videoId, 'audio');
   if (upstreamInfo?.url) {
     setCachedExtractedInfo(videoId, upstreamInfo, 'audio');
@@ -496,6 +559,12 @@ async function extractAudioInfo(videoId, forceRefresh = false) {
 async function extractVideoInfo(videoId, forceRefresh = false) {
   const cached = forceRefresh ? null : getCachedExtractedInfo(videoId, 'video');
   if (cached) return cached;
+
+  const ytDlpInfo = await extractWithYtDlp(videoId, 'video');
+  if (ytDlpInfo?.url) {
+    setCachedExtractedInfo(videoId, ytDlpInfo, 'video');
+    return ytDlpInfo;
+  }
 
   const upstreamInfo = await extractFromUpstream(videoId, 'video');
   if (upstreamInfo?.url) {
