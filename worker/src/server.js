@@ -1,4 +1,4 @@
-const { resolve, join } = require('path');
+const { resolve, join, dirname } = require('path');
 const { tmpdir } = require('os');
 const rootDir = resolve(__dirname, '..', '..');
 
@@ -46,6 +46,11 @@ const UPSTREAM_EXTRACTOR_URL = (process.env.UPSTREAM_EXTRACTOR_URL || process.en
 const UPSTREAM_EXTRACTOR_SECRET = process.env.UPSTREAM_EXTRACTOR_SECRET || process.env.LOCAL_EXTRACTOR_SECRET || '';
 const CACHE_DIR = process.env.MUSIC_CACHE_DIR || (process.env.NODE_ENV === 'production' ? '/tmp/music' : join(__dirname, '..', '.cache', 'music'));
 const WATCH_HLS_DIR = process.env.WATCH_HLS_DIR || (process.env.NODE_ENV === 'production' ? '/tmp/watch-hls' : join(__dirname, '..', '.cache', 'watch-hls'));
+const YOUTUBE_COOKIES_FILE =
+  process.env.YTDLP_COOKIES_FILE ||
+  process.env.YOUTUBE_COOKIES_FILE ||
+  (process.env.NODE_ENV === 'production' ? '/data/youtube-cookies.txt' : join(rootDir, 'youtube-cookies.txt'));
+const YOUTUBE_COOKIES_B64 = process.env.YTDLP_COOKIES_B64 || process.env.YOUTUBE_COOKIES_B64 || '';
 const MUSIC_CATALOG_FILE = join(CACHE_DIR, 'search-index.json');
 const DIRECT_VOD_CHUNK_BYTES = Number(process.env.DIRECT_VOD_CHUNK_BYTES || 8 * 1024 * 1024);
 const WATCH_HLS_SEGMENT_SECONDS = Number(process.env.WATCH_HLS_SEGMENT_SECONDS || 6);
@@ -210,6 +215,22 @@ function setCachedExtractedInfo(videoId, info, mode = 'audio') {
   urlCache.set(mediaCacheKey(videoId, mode), { info, expires: Date.now() + 5 * 60 * 60 * 1000 });
 }
 
+function ensureYoutubeCookiesFile() {
+  if (!YOUTUBE_COOKIES_B64 || existsSync(YOUTUBE_COOKIES_FILE)) return;
+  try {
+    mkdirSync(dirname(YOUTUBE_COOKIES_FILE), { recursive: true });
+    writeFileSync(YOUTUBE_COOKIES_FILE, Buffer.from(YOUTUBE_COOKIES_B64, 'base64'));
+    console.log(`[Extract] Wrote YouTube cookies file to ${YOUTUBE_COOKIES_FILE}`);
+  } catch (err) {
+    console.warn(`[Extract] Could not write YouTube cookies file: ${err?.message || err}`);
+  }
+}
+
+function ytDlpCookieArgs() {
+  ensureYoutubeCookiesFile();
+  return existsSync(YOUTUBE_COOKIES_FILE) ? ['--cookies', YOUTUBE_COOKIES_FILE] : [];
+}
+
 function mimeFromYtDlpInfo(info, mode) {
   const ext = String(info?.ext || '').toLowerCase();
   if (mode === 'audio') {
@@ -239,9 +260,12 @@ async function extractWithYtDlp(videoId, mode = 'audio') {
   const args = [
     '--no-playlist',
     '--no-warnings',
+    '--extractor-args',
+    'youtube:player_client=android,ios,tv,web',
     '--dump-json',
     '--format',
     format,
+    ...ytDlpCookieArgs(),
     `https://www.youtube.com/watch?v=${videoId}`,
   ];
 
@@ -860,6 +884,8 @@ app.get('/cache-stats', authorizeWorker, (req, res) => {
 
 // ── Watch HLS Transcoder ────────────────────────────────────────────────
 const watchHlsJobs = new Map();
+const watchHlsFailures = new Map();
+const WATCH_HLS_FAILURE_TTL_MS = 2 * 60 * 1000;
 
 function cleanWatchStreamId(streamId) {
   const raw = String(streamId || '').trim();
@@ -1025,6 +1051,7 @@ function ensureYoutubeWatchHls(videoId) {
   const { clean, dir, indexPath } = watchHlsPaths(streamId);
   if (hasUsableWatchHlsIndex(dir, indexPath)) return Promise.resolve();
   if (watchHlsJobs.has(clean)) return watchHlsJobs.get(clean);
+  watchHlsFailures.delete(clean);
 
   mkdirSync(dir, { recursive: true });
   pruneWatchHlsRoot();
@@ -1042,6 +1069,7 @@ function ensureYoutubeWatchHls(videoId) {
   })()
     .catch((error) => {
       console.error(`[WatchHLS] YouTube conversion failed for ${clean}:`, error.message || error);
+      watchHlsFailures.set(clean, { at: Date.now(), message: error?.message || String(error) || 'YouTube HLS conversion failed' });
       try { rmSync(dir, { recursive: true, force: true }); } catch {}
       throw error;
     })
@@ -1051,6 +1079,17 @@ function ensureYoutubeWatchHls(videoId) {
 
   watchHlsJobs.set(clean, promise);
   return promise;
+}
+
+function getRecentWatchHlsFailure(streamId) {
+  const clean = cleanWatchStreamId(streamId);
+  const failure = watchHlsFailures.get(clean);
+  if (!failure) return null;
+  if (Date.now() - failure.at > WATCH_HLS_FAILURE_TTL_MS) {
+    watchHlsFailures.delete(clean);
+    return null;
+  }
+  return failure;
 }
 
 try {
@@ -1183,8 +1222,12 @@ app.get('/watch/youtube/hls/:videoId/:file', authorizeWorker, async (req, res) =
     const { dir } = watchHlsPaths(streamId);
 
     if (file === 'index.m3u8') {
+      const priorFailure = getRecentWatchHlsFailure(streamId);
+      if (priorFailure) return res.status(502).json({ error: priorFailure.message });
       ensureYoutubeWatchHls(videoId).catch(() => {});
       const ready = await waitForWatchHlsIndex(streamId);
+      const failure = getRecentWatchHlsFailure(streamId);
+      if (failure) return res.status(502).json({ error: failure.message });
       if (!ready) return res.status(202).json({ error: 'YouTube HLS stream is still preparing. Try again in a few seconds.' });
     }
 
