@@ -37,7 +37,9 @@ async function html(request: Request) {
   const current = session.current;
   const title = current ? `${current.item.title} (${current.item.year})` : 'Waiting for a request';
   const media = current ? `${current.item.source} - requested by ${current.requestedBy.username}` : 'Media: idle';
-  const src = current?.item.type === 'music' && current.item.metadata?.videoPlaybackUrl && current.item.metadata.playbackMode !== 'audio'
+  const src = current?.item.type === 'music' && current.item.metadata?.audioPlaybackUrl
+    ? current.item.metadata.audioPlaybackUrl
+    : current?.item.type === 'music' && current.item.metadata?.videoPlaybackUrl && current.item.metadata.playbackMode !== 'audio'
     ? current.item.metadata.videoPlaybackUrl
     : current?.item.playbackUrl || '';
   const isEmbeddedVideo = src.includes('youtube.com/embed/') || src.includes('youtube-nocookie.com/embed/');
@@ -67,13 +69,13 @@ async function html(request: Request) {
     .video-wrap { position: relative; min-height: 0; background: #000; }
     video, iframe.youtube-player { width: 100%; height: 100%; background: #000; display: block; object-fit: contain; border: 0; pointer-events: none; user-select: none; }
     video.hidden, audio.hidden, iframe.hidden { display: none !important; }
-    audio.audio-player { position: absolute; left: 50%; top: 50%; width: min(720px, calc(100vw - 32px)); transform: translate(-50%, -50%); z-index: 2; pointer-events: none; }
+    audio.audio-player { position: absolute; left: 50%; top: 50%; width: min(720px, calc(100vw - 32px)); transform: translate(-50%, -50%); z-index: 2; pointer-events: auto; }
     .empty { position: absolute; inset: 0; display: grid; place-content: center; gap: 8px; text-align: center; color: #cbd5e1; background: rgba(0,0,0,.55); }
     .empty.hidden { display: none !important; }
-    .room-tabs { display: none !important; }
+    .room-tabs { position: fixed; left: 10px; top: 10px; z-index: 11; display: flex; gap: 6px; padding: 6px; border: 1px solid rgba(148,163,184,.35); border-radius: 8px; background: rgba(2,6,23,.76); backdrop-filter: blur(8px); }
     .room-tab { min-height: 34px; border-color: transparent; background: transparent; padding: 6px 10px; }
     .room-tab.active { border-color: rgba(52,211,153,.85); background: rgba(16,185,129,.18); color: #bbf7d0; }
-    .toolbar { display: none !important; }
+    .toolbar { position: fixed; left: 10px; right: 10px; bottom: 10px; z-index: 11; display: flex; align-items: center; gap: 6px; overflow-x: auto; padding: 8px; border: 1px solid rgba(148,163,184,.35); border-radius: 8px; background: rgba(2,6,23,.82); backdrop-filter: blur(8px); }
     button, input { min-height: 38px; border-radius: 6px; border: 1px solid #475569; background: #172033; color: #e5edf5; padding: 8px 10px; font: inherit; }
     button { cursor: pointer; }
     button:disabled { opacity: .45; cursor: not-allowed; }
@@ -83,7 +85,7 @@ async function html(request: Request) {
     .volume { min-width: 220px; flex: 1; display: flex; align-items: center; gap: 8px; border: 1px solid #475569; border-radius: 6px; background: #0f172a; padding: 7px 9px; }
     .volume input { min-height: 0; padding: 0; accent-color: #34d399; }
     .meta { position: fixed; left: 10px; right: 10px; bottom: 64px; z-index: 9; display: grid; justify-items: center; gap: 4px; text-align: center; pointer-events: none; text-shadow: 0 1px 4px #000; }
-    aside { display: none !important; }
+    aside { display: none; }
     aside.open { position: fixed; right: 10px; top: 58px; bottom: 76px; z-index: 12; display: block; width: min(360px, calc(100vw - 20px)); overflow: auto; padding: 0; color: #e5edf5; background: rgba(2,6,23,.92); border: 1px solid rgba(148,163,184,.35); border-radius: 8px; }
     aside section { margin-bottom: 12px; padding: 12px; background: #151b25; border: 1px solid #283447; border-radius: 8px; }
     form { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; }
