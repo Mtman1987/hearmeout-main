@@ -34,7 +34,6 @@ type WatchCatalogItem = {
     originalUrl?: string;
     audioPlaybackUrl?: string;
     videoPlaybackUrl?: string;
-    embedPlaybackUrl?: string;
     playbackMode?: 'audio' | 'video';
     playbackStrategy?: 'proxy' | 'embed' | 'offline';
   };
@@ -252,12 +251,8 @@ function getYoutubeMusicVideoId(item: WatchCatalogItem) {
   }
 }
 
-function getYoutubeVideoProxyUrl(videoId: string) {
-  return `/api/youtube-video/proxy?videoId=${encodeURIComponent(videoId)}&media=video`;
-}
-
-function getYoutubeEmbedUrl(videoId: string) {
-  return `https://www.youtube.com/embed/${encodeURIComponent(videoId)}`;
+function getYoutubeHlsUrl(videoId: string) {
+  return `/api/watch/youtube/hls/${encodeURIComponent(videoId)}/index.m3u8`;
 }
 
 function getPublicWatchItem(item: WatchCatalogItem): WatchCatalogItem {
@@ -276,8 +271,7 @@ function getPublicWatchItem(item: WatchCatalogItem): WatchCatalogItem {
     };
   }
 
-  const videoPlaybackUrl = getYoutubeVideoProxyUrl(videoId);
-  const embedPlaybackUrl = getYoutubeEmbedUrl(videoId);
+  const videoPlaybackUrl = getYoutubeHlsUrl(videoId);
   return {
     ...item,
     source: item.source.replace(/^YouTube Video/i, 'YouTube Music'),
@@ -289,7 +283,6 @@ function getPublicWatchItem(item: WatchCatalogItem): WatchCatalogItem {
       videoId,
       audioPlaybackUrl: undefined,
       videoPlaybackUrl,
-      embedPlaybackUrl,
       playbackMode: 'video',
       playbackStrategy: 'proxy',
     },
@@ -560,8 +553,7 @@ function musicTrackToWatchItem(track: PlaylistItem): WatchCatalogItem {
     };
   }
 
-  const videoPlaybackUrl = getYoutubeVideoProxyUrl(track.id);
-  const embedPlaybackUrl = getYoutubeEmbedUrl(track.id);
+  const videoPlaybackUrl = getYoutubeHlsUrl(track.id);
   return {
     id: `youtube-${track.id}`,
     type: 'music',
@@ -579,7 +571,6 @@ function musicTrackToWatchItem(track: PlaylistItem): WatchCatalogItem {
       artist: track.artist,
       originalUrl: track.url,
       videoPlaybackUrl,
-      embedPlaybackUrl,
       playbackMode: 'video',
       playbackStrategy: 'proxy',
     },
@@ -933,6 +924,7 @@ export async function requestWatchMusicItem(params: {
     userId: params.userId,
     username: params.username,
   });
+  maybePrepareSharedHls(item);
   saveWatchStateToDisk();
 
   return {
@@ -1013,6 +1005,14 @@ export function acceptWatchRecommendation(params: {
 }
 
 function maybePrepareSharedHls(item: WatchCatalogItem) {
+  const youtubeMatch = item.playbackUrl.match(/^\/api\/watch\/youtube\/hls\/([A-Za-z0-9_-]{11})\/index\.m3u8$/);
+  if (youtubeMatch) {
+    fetch(`${getPublicBaseUrl()}/api/watch/youtube/hls/${youtubeMatch[1]}/index.m3u8`).catch((error) => {
+      console.error('[WatchRequest] YouTube shared HLS start failed:', error?.message || error);
+    });
+    return;
+  }
+
   const match = item.playbackUrl.match(/^\/activity-provider\/xtream\/(vod|series)\/(\d+)$/);
   const episodeMatch = item.playbackUrl.match(/^\/activity-provider\/xtream\/episode\/(\d+-[a-z0-9]+)$/i);
   if (episodeMatch) {

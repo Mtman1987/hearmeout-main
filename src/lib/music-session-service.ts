@@ -208,8 +208,7 @@ function playlistItemToWatchItem(track: PlaylistItem) {
   }
 
   const videoId = encodeURIComponent(track.id);
-  const videoPlaybackUrl = `/api/youtube-video/proxy?videoId=${videoId}&media=video`;
-  const embedPlaybackUrl = `https://www.youtube.com/embed/${videoId}`;
+  const videoPlaybackUrl = `/api/watch/youtube/hls/${videoId}/index.m3u8`;
   return {
     id: `youtube-${track.id}`,
     type: 'music',
@@ -227,7 +226,6 @@ function playlistItemToWatchItem(track: PlaylistItem) {
       artist: track.artist,
       originalUrl: track.url,
       videoPlaybackUrl,
-      embedPlaybackUrl,
       playbackMode: 'video',
       playbackStrategy: 'proxy',
     },

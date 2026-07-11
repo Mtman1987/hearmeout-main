@@ -26,9 +26,9 @@ function isHlsPlaybackUrl(value: string) {
   }
 }
 
-function clientUrl(value: string, baseUrl: string) {
+function clientUrl(value: string) {
   if (!value || /^https?:\/\//i.test(value)) return value;
-  return `${baseUrl}${value.startsWith('/') ? value : `/${value}`}`;
+  return value.startsWith('/') ? value : `/${value}`;
 }
 
 async function html(request: Request) {
@@ -49,8 +49,8 @@ async function html(request: Request) {
     : current?.item.playbackUrl || '';
   const isEmbeddedVideo = src.includes('youtube.com/embed/') || src.includes('youtube-nocookie.com/embed/');
   const isAudioOnly = current?.item.type === 'tts' || current?.item.metadata?.provider === 'tts' || (current?.item.type === 'music' && src.includes('/api/youtube-audio/'));
-  const nativeSrc = src && !isAudioOnly && !isEmbeddedVideo && !isHlsPlaybackUrl(src) ? clientUrl(src, baseUrl) : '';
-  const audioSrc = src && isAudioOnly ? clientUrl(src, baseUrl) : '';
+  const nativeSrc = src && !isAudioOnly && !isEmbeddedVideo && !isHlsPlaybackUrl(src) ? clientUrl(src) : '';
+  const audioSrc = src && isAudioOnly ? clientUrl(src) : '';
   const iframeSrc = src && isEmbeddedVideo ? src : '';
 
   return `<!doctype html>
@@ -111,7 +111,7 @@ async function html(request: Request) {
     body.focus-mode .room-tabs, body.focus-mode .meta { opacity: .18; transition: opacity .15s ease; }
     body.focus-mode .room-tabs:hover, body.focus-mode .meta:hover { opacity: 1; }
   </style>
-  <script src="${escapeHtml(clientUrl('/api/activity/hls', baseUrl))}"></script>
+  <script src="${escapeHtml(clientUrl('/api/activity/hls'))}"></script>
 </head>
 <body>
   <main>

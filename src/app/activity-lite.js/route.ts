@@ -296,14 +296,10 @@ function appUrl(path) {
   if (!path || /^https?:\\/\\//i.test(path)) return path;
   let nextPath = path.startsWith('/') ? path : '/' + path;
   if (nextPath.startsWith('/api/watch/xtream/hls/')) nextPath = nextPath.replace('/api/watch/xtream/hls/', '/activity-provider/xtream/hls/');
+  if (nextPath.startsWith('/api/watch/youtube/hls/')) nextPath = nextPath.replace('/api/watch/youtube/hls/', '/activity-provider/youtube/hls/');
   if (nextPath.startsWith('/activity/watch/xtream/hls/')) nextPath = nextPath.replace('/activity/watch/xtream/hls/', '/api/watch/xtream/hls/');
+  if (nextPath.startsWith('/activity/watch/youtube/hls/')) nextPath = nextPath.replace('/activity/watch/youtube/hls/', '/api/watch/youtube/hls/');
   if (nextPath.startsWith('/activity/proxy')) nextPath = nextPath.replace('/activity/proxy', '/activity-proxy');
-  if (APP_BASE_URL) {
-    try {
-      const base = new URL(APP_BASE_URL, window.location.href);
-      if (base.origin && base.origin !== window.location.origin) return new URL(nextPath, base).toString();
-    } catch {}
-  }
   return nextPath;
 }
 
@@ -311,7 +307,10 @@ function apiUrls(path) {
   const urls = [appUrl(path)];
   if (path && !/^https?:\\/\\//i.test(path) && APP_BASE_URL) {
     try {
-      urls.push(new URL(path.startsWith('/') ? path : '/' + path, APP_BASE_URL).toString());
+      const base = new URL(APP_BASE_URL, window.location.href);
+      if (base.origin === window.location.origin || !/discordsays\\.com$/i.test(window.location.hostname)) {
+        urls.push(new URL(path.startsWith('/') ? path : '/' + path, APP_BASE_URL).toString());
+      }
     } catch {}
   }
   if (path && !/^https?:\\/\\//i.test(path)) urls.push(path.startsWith('/') ? path : '/' + path);

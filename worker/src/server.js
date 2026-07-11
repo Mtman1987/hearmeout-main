@@ -61,6 +61,11 @@ function isValidVideoId(id) {
   return typeof id === 'string' && VIDEO_ID_RE.test(id);
 }
 
+function youtubeWatchHlsId(videoId) {
+  if (!isValidVideoId(videoId)) throw new Error('Invalid YouTube video id');
+  return `yt-${videoId}`;
+}
+
 function offlineMusicId(relativePath) {
   return Buffer.from(relativePath, 'utf8').toString('base64url');
 }
@@ -302,18 +307,19 @@ async function extractDirectVideoFormat(videoId) {
       const videoFormats = formats
         .filter((format) => {
           const mimeType = String(format.mime_type || format.mimeType || '');
-          const hasAudio = format.has_audio || format.audio_quality || format.audioQuality;
           const hasVideo = format.has_video || format.width || format.height || mimeType.startsWith('video/');
-          return mimeType.startsWith('video/') && hasAudio && hasVideo;
+          return mimeType.startsWith('video/') && hasVideo;
         })
         .sort((a, b) => {
           const aMime = String(a.mime_type || a.mimeType || '');
           const bMime = String(b.mime_type || b.mimeType || '');
           const aMp4 = aMime.includes('video/mp4') ? 1 : 0;
           const bMp4 = bMime.includes('video/mp4') ? 1 : 0;
-          return (bMp4 - aMp4) || ((Number(b.height) || 0) - (Number(a.height) || 0)) || ((Number(b.bitrate) || 0) - (Number(a.bitrate) || 0));
+          const aH264 = /avc1|h264/i.test(aMime) ? 1 : 0;
+          const bH264 = /avc1|h264/i.test(bMime) ? 1 : 0;
+          return (bMp4 - aMp4) || (bH264 - aH264) || ((Number(b.height) || 0) - (Number(a.height) || 0)) || ((Number(b.bitrate) || 0) - (Number(a.bitrate) || 0));
         });
-      console.log(`[Extract] ${client} direct lookup returned ${videoFormats.length} progressive video formats for ${videoId}`);
+      console.log(`[Extract] ${client} direct lookup returned ${videoFormats.length} video formats for ${videoId}`);
 
       for (const format of videoFormats) {
         let url = format.url;
@@ -558,9 +564,20 @@ async function extractVideoInfo(videoId, forceRefresh = false) {
     const extracted = await page.evaluate(() => {
       const yip = window.ytInitialPlayerResponse || JSON.parse(window.ytplayer?.config?.args?.player_response || 'null');
       const details = yip?.videoDetails || {};
-      const videoFormats = (yip?.streamingData?.formats || [])
+      const videoFormats = [
+        ...(yip?.streamingData?.formats || []),
+        ...(yip?.streamingData?.adaptiveFormats || []),
+      ]
         .filter((format) => typeof format.url === 'string' && /^video\//i.test(format.mimeType || ''))
-        .sort((a, b) => (Number(b.height) || 0) - (Number(a.height) || 0) || (Number(b.bitrate) || 0) - (Number(a.bitrate) || 0));
+        .sort((a, b) => {
+          const aMime = String(a.mimeType || '');
+          const bMime = String(b.mimeType || '');
+          const aMp4 = aMime.includes('video/mp4') ? 1 : 0;
+          const bMp4 = bMime.includes('video/mp4') ? 1 : 0;
+          const aH264 = /avc1|h264/i.test(aMime) ? 1 : 0;
+          const bH264 = /avc1|h264/i.test(bMime) ? 1 : 0;
+          return (bMp4 - aMp4) || (bH264 - aH264) || (Number(b.height) || 0) - (Number(a.height) || 0) || (Number(b.bitrate) || 0) - (Number(a.bitrate) || 0);
+        });
       return {
         metadata: {
           title: details.title || document.title || 'Unknown',
@@ -776,7 +793,10 @@ app.get('/cache-stats', authorizeWorker, (req, res) => {
 const watchHlsJobs = new Map();
 
 function cleanWatchStreamId(streamId) {
-  const clean = String(streamId || '').replace(/[^0-9]/g, '');
+  const raw = String(streamId || '').trim();
+  const youtubeMatch = raw.match(/^yt-([A-Za-z0-9_-]{11})$/) || raw.match(/^youtube-([A-Za-z0-9_-]{11})$/);
+  if (youtubeMatch) return youtubeWatchHlsId(youtubeMatch[1]);
+  const clean = raw.replace(/[^0-9]/g, '');
   if (!clean) throw new Error('Invalid stream id');
   return clean;
 }
@@ -930,6 +950,40 @@ function ensureWatchHls(streamId, sourceUrl) {
   return promise;
 }
 
+function ensureYoutubeWatchHls(videoId) {
+  if (!isValidVideoId(videoId)) return Promise.reject(new Error('Invalid YouTube video id'));
+  const streamId = youtubeWatchHlsId(videoId);
+  const { clean, dir, indexPath } = watchHlsPaths(streamId);
+  if (hasUsableWatchHlsIndex(dir, indexPath)) return Promise.resolve();
+  if (watchHlsJobs.has(clean)) return watchHlsJobs.get(clean);
+
+  mkdirSync(dir, { recursive: true });
+  pruneWatchHlsRoot();
+  try { if (existsSync(indexPath)) unlinkSync(indexPath); } catch {}
+
+  const promise = (async () => {
+    const [videoInfo, audioInfo] = await Promise.all([
+      extractVideoInfo(videoId),
+      extractAudioInfo(videoId),
+    ]);
+
+    if (!videoInfo?.url) throw new Error('No YouTube video stream resolved');
+    if (!audioInfo?.url) throw new Error('No YouTube audio stream resolved');
+    await runYoutubeHlsFfmpeg(clean, videoInfo.url, audioInfo.url, dir, indexPath);
+  })()
+    .catch((error) => {
+      console.error(`[WatchHLS] YouTube conversion failed for ${clean}:`, error.message || error);
+      try { rmSync(dir, { recursive: true, force: true }); } catch {}
+      throw error;
+    })
+    .finally(() => {
+      watchHlsJobs.delete(clean);
+    });
+
+  watchHlsJobs.set(clean, promise);
+  return promise;
+}
+
 try {
   pruneWatchHlsRoot();
 } catch (error) {
@@ -984,6 +1038,113 @@ function runWatchHlsFfmpeg(streamId, sourceUrl, dir, indexPath) {
     });
   });
 }
+
+function runYoutubeHlsFfmpeg(streamId, videoUrl, audioUrl, dir, indexPath) {
+  const segmentPattern = join(dir, 'seg_%05d.ts');
+  const youtubeHeaders = 'Referer: https://www.youtube.com/\r\nOrigin: https://www.youtube.com\r\n';
+  const userAgent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
+  const inputArgs = (url) => [
+    '-user_agent', userAgent,
+    '-headers', youtubeHeaders,
+    '-reconnect', '1',
+    '-reconnect_streamed', '1',
+    '-reconnect_at_eof', '1',
+    '-reconnect_delay_max', '5',
+    '-i', url,
+  ];
+  console.log(`[WatchHLS] Starting YouTube HLS conversion for ${streamId}`);
+
+  return new Promise((resolve, reject) => {
+    const ffmpegArgs = [
+      '-hide_banner',
+      '-loglevel', 'warning',
+      '-threads', '2',
+      '-y',
+      ...inputArgs(videoUrl),
+      ...inputArgs(audioUrl),
+      '-map', '0:v:0',
+      '-map', '1:a:0',
+      '-c:v', 'libx264',
+      '-preset', 'veryfast',
+      '-pix_fmt', 'yuv420p',
+      '-c:a', 'aac',
+      '-b:a', '160k',
+      '-ac', '2',
+      '-shortest',
+      '-f', 'hls',
+      '-hls_time', String(WATCH_HLS_SEGMENT_SECONDS),
+      '-hls_list_size', String(WATCH_HLS_LIST_SIZE),
+      ...(WATCH_HLS_LIST_SIZE > 0 ? ['-hls_delete_threshold', String(WATCH_HLS_DELETE_THRESHOLD)] : []),
+      '-hls_flags', WATCH_HLS_LIST_SIZE > 0 ? 'delete_segments+independent_segments' : 'independent_segments',
+      '-hls_segment_filename', segmentPattern,
+      indexPath,
+    ];
+
+    const command = process.platform === 'win32' ? 'ffmpeg' : 'nice';
+    const args = process.platform === 'win32' ? ffmpegArgs : ['-n', '10', 'ffmpeg', ...ffmpegArgs];
+    const child = spawn(command, args, { stdio: ['ignore', 'ignore', 'pipe'] });
+    let stderr = '';
+
+    child.stderr?.on('data', (chunk) => {
+      stderr = `${stderr}${chunk}`.slice(-4000);
+    });
+    child.once('error', reject);
+    child.once('exit', (code) => {
+      if (code === 0) {
+        resolve();
+        return;
+      }
+      reject(new Error(stderr || `ffmpeg exited with ${code}`));
+    });
+  });
+}
+
+app.get('/watch/youtube/hls/:videoId/:file', authorizeWorker, async (req, res) => {
+  try {
+    const videoId = String(req.params.videoId || '');
+    if (!isValidVideoId(videoId)) return res.status(400).json({ error: 'Invalid YouTube video id' });
+    const file = cleanHlsFileName(req.params.file);
+    const requestedMachine = cleanFlyMachineId(req.query.machine);
+    if (requestedMachine && FLY_MACHINE_ID && requestedMachine !== FLY_MACHINE_ID) {
+      res.setHeader('fly-replay', `instance=${requestedMachine};app=${FLY_APP_NAME}`);
+      return res.status(409).send('Replaying to HLS owner');
+    }
+
+    const streamId = youtubeWatchHlsId(videoId);
+    const { dir } = watchHlsPaths(streamId);
+
+    if (file === 'index.m3u8') {
+      ensureYoutubeWatchHls(videoId).catch(() => {});
+      const ready = await waitForWatchHlsIndex(streamId);
+      if (!ready) return res.status(202).json({ error: 'YouTube HLS stream is still preparing. Try again in a few seconds.' });
+    }
+
+    const filePath = join(dir, file);
+    const resolvedPath = existsSync(filePath) ? filePath : await waitForWatchHlsFile(streamId, file);
+    if (!resolvedPath) return res.status(404).json({ error: 'HLS file not found' });
+
+    const stats = statSync(resolvedPath);
+    const contentType = file.endsWith('.m3u8')
+      ? 'application/vnd.apple.mpegurl'
+      : file.endsWith('.ts')
+        ? 'video/mp2t'
+        : 'application/octet-stream';
+
+    res.setHeader('Content-Type', contentType);
+    res.setHeader('Cache-Control', file.endsWith('.m3u8') ? 'no-store' : 'public, max-age=3600');
+
+    if (file.endsWith('.m3u8')) {
+      const manifest = pinManifestSegmentsToMachine(readFileSync(resolvedPath, 'utf8'));
+      res.setHeader('Content-Length', String(Buffer.byteLength(manifest)));
+      return res.send(manifest);
+    }
+
+    res.setHeader('Content-Length', String(stats.size));
+    createReadStream(resolvedPath).pipe(res);
+  } catch (err) {
+    res.status(502).json({ error: err.message || 'YouTube HLS conversion failed' });
+  }
+});
 
 app.get('/watch/xtream/hls/:streamId/:file', authorizeWorker, async (req, res) => {
   try {
