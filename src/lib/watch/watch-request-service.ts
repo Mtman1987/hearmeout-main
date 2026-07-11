@@ -34,6 +34,7 @@ type WatchCatalogItem = {
     originalUrl?: string;
     audioPlaybackUrl?: string;
     videoPlaybackUrl?: string;
+    embedPlaybackUrl?: string;
     playbackMode?: 'audio' | 'video';
     playbackStrategy?: 'proxy' | 'embed' | 'offline';
   };
@@ -255,6 +256,10 @@ function getYoutubeHlsUrl(videoId: string) {
   return `/api/watch/youtube/hls/${encodeURIComponent(videoId)}/index.m3u8`;
 }
 
+function getYoutubeEmbedUrl(videoId: string) {
+  return `https://www.youtube.com/embed/${encodeURIComponent(videoId)}`;
+}
+
 function getPublicWatchItem(item: WatchCatalogItem): WatchCatalogItem {
   if (item.type !== 'music') {
     return {
@@ -271,7 +276,7 @@ function getPublicWatchItem(item: WatchCatalogItem): WatchCatalogItem {
     };
   }
 
-  const videoPlaybackUrl = getYoutubeHlsUrl(videoId);
+  const videoPlaybackUrl = getYoutubeEmbedUrl(videoId);
   return {
     ...item,
     source: item.source.replace(/^YouTube Video/i, 'YouTube Music'),
@@ -283,8 +288,9 @@ function getPublicWatchItem(item: WatchCatalogItem): WatchCatalogItem {
       videoId,
       audioPlaybackUrl: undefined,
       videoPlaybackUrl,
+      embedPlaybackUrl: videoPlaybackUrl,
       playbackMode: 'video',
-      playbackStrategy: 'proxy',
+      playbackStrategy: 'embed',
     },
   };
 }
@@ -553,7 +559,7 @@ function musicTrackToWatchItem(track: PlaylistItem): WatchCatalogItem {
     };
   }
 
-  const videoPlaybackUrl = getYoutubeHlsUrl(track.id);
+  const videoPlaybackUrl = getYoutubeEmbedUrl(track.id);
   return {
     id: `youtube-${track.id}`,
     type: 'music',
@@ -571,8 +577,9 @@ function musicTrackToWatchItem(track: PlaylistItem): WatchCatalogItem {
       artist: track.artist,
       originalUrl: track.url,
       videoPlaybackUrl,
+      embedPlaybackUrl: videoPlaybackUrl,
       playbackMode: 'video',
-      playbackStrategy: 'proxy',
+      playbackStrategy: 'embed',
     },
   };
 }
