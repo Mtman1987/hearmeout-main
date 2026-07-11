@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getPublicWatchSession, requestWatchMusicItem } from '@/lib/watch-request-service';
-import { getGlobalWatchSessionId } from '@/lib/watch-session';
+import { getMusicWatchSessionId } from '@/lib/watch-session';
 
 function getRequestBaseUrl(request: Request) {
   const url = new URL(request.url);
@@ -17,7 +17,7 @@ export async function POST(request: NextRequest) {
   if (!query) return NextResponse.json({ error: 'Missing query' }, { status: 400 });
 
   const result = await requestWatchMusicItem({
-    sessionId: body.sessionId || getGlobalWatchSessionId(),
+    sessionId: body.sessionId || getMusicWatchSessionId(),
     query,
     username: body.username || 'web user',
     platform: body.platform || 'web',
