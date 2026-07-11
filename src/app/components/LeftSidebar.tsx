@@ -16,7 +16,7 @@ import { useCollection } from '@/hooks/use-db';
 import { Skeleton } from '@/components/ui/skeleton';
 import { CreateRoomDialog } from '@/app/rooms/_components/CreateRoomDialog';
 import { useEffect, useState } from 'react';
-import { ACTIVITY_ROOM_ID } from '@/lib/watch-session';
+import { ACTIVITY_ROOM_ID, ACTIVITY_ROOM_NAME } from '@/lib/watch-session';
 
 interface Room {
     id: string;
@@ -137,6 +137,7 @@ export default function LeftSidebar({ roomId }: { roomId?: string }) {
   const { data: publicRooms, isLoading: roomsLoading } = useCollection<Room>('rooms', {
     filters: [{ field: 'isPrivate', op: '==', value: false }],
   });
+  const visiblePublicRooms = publicRooms?.filter((room) => room.id !== ACTIVITY_ROOM_ID);
 
   useEffect(() => {
     const prune = () => {
@@ -172,7 +173,7 @@ export default function LeftSidebar({ roomId }: { roomId?: string }) {
           <SidebarMenu>
             <SidebarMenuItem>
               <SidebarMenuButton asChild isActive={roomId === ACTIVITY_ROOM_ID}>
-                <Link href={`/rooms/${ACTIVITY_ROOM_ID}`}><Music />Discord Activity</Link>
+                <Link href={`/rooms/${ACTIVITY_ROOM_ID}`}><Music />{ACTIVITY_ROOM_NAME}</Link>
               </SidebarMenuButton>
             </SidebarMenuItem>
             {roomsLoading && (
@@ -182,15 +183,15 @@ export default function LeftSidebar({ roomId }: { roomId?: string }) {
                     <Skeleton className="h-8 w-full" />
                 </>
             )}
-            {publicRooms && publicRooms.map(room => (
+            {visiblePublicRooms && visiblePublicRooms.map(room => (
               <SidebarMenuItem key={room.id}>
                 <SidebarMenuButton asChild isActive={room.id === roomId}>
                   <Link href={`/rooms/${room.id}`}><Music />{room.name}</Link>
                 </SidebarMenuButton>
               </SidebarMenuItem>
             ))}
-             {!roomsLoading && (!publicRooms || publicRooms.length === 0) && (
-              <p className="px-2 text-sm text-muted-foreground">No public rooms yet.</p>
+             {!roomsLoading && (!visiblePublicRooms || visiblePublicRooms.length === 0) && (
+              <p className="px-2 text-sm text-muted-foreground">No other public rooms yet.</p>
             )}
           </SidebarMenu>
         </SidebarGroup>

@@ -3,6 +3,7 @@ import { findInternetArchiveRecommendation } from './internet-archive-provider';
 import { findWatchmodeRecommendation } from './watchmode-provider';
 import { resolveSongRequest } from '@/lib/bot-actions';
 import { DISCORD_CLIENT_ID } from '@/lib/public-config';
+import { ensureDiscordActivityRoomForSession } from '@/lib/activity-room';
 import { getGlobalWatchSessionId, getMusicWatchSessionId, getScopedWatchSessionId, normalizeWatchSessionAlias, type WatchMediaKind } from '@/lib/watch-session';
 import type { PlaylistItem } from '@/types/playlist';
 import { dirname } from 'path';
@@ -840,6 +841,7 @@ export async function requestWatchItem(params: {
   username: string;
 }) {
   loadWatchStateFromDisk();
+  await ensureDiscordActivityRoomForSession(params.sessionId);
   const explicitEpisode = await findXtreamSeriesEpisode(params.query, (seriesId) => getProgressForUser(params.userId, seriesId)).catch((error) => {
     console.error('[WatchRequest] Xtream episode lookup failed:', error);
     return null;
@@ -910,6 +912,7 @@ export async function requestWatchMusicItem(params: {
   platform?: 'discord' | 'twitch' | 'admin' | 'activity' | 'web';
 }) {
   loadWatchStateFromDisk();
+  await ensureDiscordActivityRoomForSession(params.sessionId);
   const query = String(params.query || '').trim();
   if (!query) return { error: 'No matching music item' as const, result: { success: false, message: 'Missing song query.' } };
 
@@ -945,6 +948,7 @@ export async function requestWatchTtsItem(params: {
   username: string;
 }) {
   loadWatchStateFromDisk();
+  await ensureDiscordActivityRoomForSession(params.sessionId);
   if (!isPlayableClientUrl(params.audioUrl)) {
     return { error: 'No matching TTS item' as const, result: { success: false, message: 'Missing or invalid TTS audio URL.' } };
   }

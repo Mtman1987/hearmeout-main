@@ -24,7 +24,7 @@ import { Room as LKRoom, RoomEvent, Track, RemoteTrack } from 'livekit-client';
 import { generateLiveKitToken, generateMusicRoomToken } from '@/app/actions';
 import { PlaylistItem } from "@/types/playlist";
 import { getScreenPeerId, PeerAudioListener, PeerScreenViewer, PeerVoiceMesh } from '@/lib/peer-audio-service';
-import { ACTIVITY_ROOM_ID, getRoomWatchSessionId, isActivityRoomId } from '@/lib/watch-session';
+import { ACTIVITY_ROOM_ID, ACTIVITY_ROOM_NAME, getRoomWatchSessionId, isActivityRoomId, type WatchMediaKind } from '@/lib/watch-session';
 
 interface RoomData {
   id: string;
@@ -48,6 +48,7 @@ type WatchCardState = {
   roomUrl?: string;
   current: {
     requestId: string;
+    addedAt?: string;
     item: { title: string; year?: number; source?: string };
     requestedBy?: { username?: string };
   } | null;
@@ -138,6 +139,114 @@ function SharedWatchCard({ roomId, onOpenWatch, sessionScope = 'discord', canPau
                         {state.current.requestedBy?.username ? ` · by ${state.current.requestedBy.username}` : ''}
                     </p>
                 </div>
+            </CardContent>
+        </Card>
+    );
+}
+
+const ACTIVITY_WATCH_LANES: Array<{ kind: WatchMediaKind; label: string; sessionId: string }> = [
+    { kind: 'movie', label: 'Movies', sessionId: getRoomWatchSessionId(ACTIVITY_ROOM_ID, 'movie') },
+    { kind: 'music', label: 'Music', sessionId: getRoomWatchSessionId(ACTIVITY_ROOM_ID, 'music') },
+];
+
+function DiscordActivityEmbedCard({ canPause = false }: { canPause?: boolean }) {
+    const [states, setStates] = useState<Record<string, WatchCardState | null>>({});
+    const [selectedKind, setSelectedKind] = useState<WatchMediaKind>('movie');
+
+    useEffect(() => {
+        let cancelled = false;
+        const refresh = async () => {
+            const entries = await Promise.all(ACTIVITY_WATCH_LANES.map(async (lane) => {
+                try {
+                    const res = await fetch(`/api/watch/sessions/${lane.sessionId}/state`, { cache: 'no-store' });
+                    return [lane.sessionId, res.ok ? await res.json() : null] as const;
+                } catch {
+                    return [lane.sessionId, null] as const;
+                }
+            }));
+            if (!cancelled) setStates(Object.fromEntries(entries));
+        };
+
+        fetch('/api/activity-room/ensure', { method: 'POST' }).catch(() => {});
+        refresh();
+        const interval = setInterval(refresh, 3000);
+        return () => {
+            cancelled = true;
+            clearInterval(interval);
+        };
+    }, []);
+
+    useEffect(() => {
+        const selectedLane = ACTIVITY_WATCH_LANES.find((lane) => lane.kind === selectedKind) || ACTIVITY_WATCH_LANES[0];
+        if (states[selectedLane.sessionId]?.current) return;
+
+        const activeLane = ACTIVITY_WATCH_LANES.find((lane) => states[lane.sessionId]?.current);
+        if (activeLane && activeLane.kind !== selectedKind) setSelectedKind(activeLane.kind);
+    }, [selectedKind, states]);
+
+    const selectedLane = ACTIVITY_WATCH_LANES.find((lane) => lane.kind === selectedKind) || ACTIVITY_WATCH_LANES[0];
+    const selectedState = states[selectedLane.sessionId] || null;
+    const selectedUrl = watchUrlForRoom(selectedState?.roomUrl || `/watch/${selectedLane.sessionId}`, canPause);
+
+    return (
+        <Card>
+            <CardHeader className="flex flex-col gap-3 pb-3 md:flex-row md:items-center md:justify-between">
+                <CardTitle className="flex items-center gap-2 text-lg font-headline">
+                    <Film className="h-5 w-5" /> {ACTIVITY_ROOM_NAME}
+                </CardTitle>
+                <div className="flex flex-wrap gap-2">
+                    {ACTIVITY_WATCH_LANES.map((lane) => {
+                        const laneState = states[lane.sessionId];
+                        const active = selectedKind === lane.kind;
+                        const Icon = lane.kind === 'music' ? Music : Film;
+                        return (
+                            <Button
+                                key={lane.kind}
+                                variant={active ? 'secondary' : 'outline'}
+                                size="sm"
+                                onClick={() => setSelectedKind(lane.kind)}
+                            >
+                                <Icon className="mr-1 h-3.5 w-3.5" />
+                                {lane.label}
+                                {laneState?.current ? <span className="ml-1 h-1.5 w-1.5 rounded-full bg-emerald-400" /> : null}
+                            </Button>
+                        );
+                    })}
+                    <Button variant="outline" size="sm" asChild>
+                        <a href={selectedUrl} target="_blank" rel="noreferrer">
+                            <ExternalLink className="mr-1 h-3.5 w-3.5" /> Open
+                        </a>
+                    </Button>
+                </div>
+            </CardHeader>
+            <CardContent className="space-y-3">
+                <div className="aspect-video w-full overflow-hidden rounded-md border bg-black">
+                    {selectedState?.current ? (
+                        <iframe
+                            src={selectedUrl}
+                            title={`${selectedLane.label} Discord Activity playback`}
+                            className="h-full w-full"
+                            allow="autoplay; fullscreen; encrypted-media; picture-in-picture"
+                            sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-presentation"
+                        />
+                    ) : (
+                        <div className="flex h-full flex-col items-center justify-center gap-2 px-4 text-center text-sm text-muted-foreground">
+                            <Monitor className="h-7 w-7 text-muted-foreground/70" />
+                            <p>No {selectedLane.label.toLowerCase()} Activity media is loaded yet.</p>
+                        </div>
+                    )}
+                </div>
+                {selectedState?.current ? (
+                    <div className="min-w-0">
+                        <p className="truncate text-sm font-medium">
+                            {selectedState.current.item.title}{selectedState.current.item.year ? ` (${selectedState.current.item.year})` : ''}
+                        </p>
+                        <p className="truncate text-xs text-muted-foreground">
+                            {selectedState.current.item.source || selectedLane.label} · {selectedState.playback?.status || 'idle'}
+                            {selectedState.current.requestedBy?.username ? ` · by ${selectedState.current.requestedBy.username}` : ''}
+                        </p>
+                    </div>
+                ) : null}
             </CardContent>
         </Card>
     );
@@ -953,12 +1062,16 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
                           voiceEnabled={voiceReady || voiceFallbackActive}
                           voiceFallbackFailed={voiceFallbackFailed}
                         />
-                        <SharedWatchCard
-                          roomId={roomId}
-                          sessionScope={isStreamMode ? 'overlay' : 'discord'}
-                          canPause={isOwner}
-                          onOpenWatch={() => openPopout('watch', { width: 760, height: 700 }, { source: 'watch', sessionScope: isStreamMode ? 'overlay' : 'discord', roomId, canControl: isOwner })}
-                        />
+                        {isActivityRoomId(roomId) ? (
+                          <DiscordActivityEmbedCard canPause={isOwner} />
+                        ) : (
+                          <SharedWatchCard
+                            roomId={roomId}
+                            sessionScope={isStreamMode ? 'overlay' : 'discord'}
+                            canPause={isOwner}
+                            onOpenWatch={() => openPopout('watch', { width: 760, height: 700 }, { source: 'watch', sessionScope: isStreamMode ? 'overlay' : 'discord', roomId, canControl: isOwner })}
+                          />
+                        )}
                         <SharedScreenShareCard roomId={roomId} />
                         {isOwner && <VoiceQueue roomId={roomId} />}
                     </main>
@@ -988,9 +1101,14 @@ function RoomPageContent() {
     const [passwordUnlocked, setPasswordUnlocked] = React.useState(false);
     const [passwordError, setPasswordError] = React.useState(false);
     const isActivityRoom = isActivityRoomId(params.roomId);
+
+    React.useEffect(() => {
+        if (isActivityRoom) fetch('/api/activity-room/ensure', { method: 'POST' }).catch(() => {});
+    }, [isActivityRoom]);
+
     const effectiveRoom: RoomData | null = isActivityRoom ? {
         id: ACTIVITY_ROOM_ID,
-        name: 'Discord Activity',
+        name: ACTIVITY_ROOM_NAME,
         ownerId: user?.uid || ACTIVITY_ROOM_ID,
         playlist: [],
         isPlaying: false,

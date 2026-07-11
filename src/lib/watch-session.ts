@@ -1,6 +1,7 @@
 export const GLOBAL_WATCH_SESSION_ID = 'discord-watch-room';
 export const MUSIC_WATCH_SESSION_ID = 'discord-music-room';
 export const ACTIVITY_ROOM_ID = 'discord-activity';
+export const ACTIVITY_ROOM_NAME = 'Discord Activities';
 export type WatchMediaKind = 'movie' | 'music';
 
 export function getGlobalWatchSessionId() {

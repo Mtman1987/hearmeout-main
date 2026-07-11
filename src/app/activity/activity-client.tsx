@@ -52,6 +52,8 @@ export default function ActivityClient() {
     let cancelled = false;
 
     async function startActivity() {
+      fetch('/api/activity-room/ensure', { method: 'POST' }).catch(() => {});
+
       if (!clientId) {
         setError('Discord client id is not configured.');
         setActivity({ sessionId: await resolveFallbackSessionId(), status: 'Fallback room' });

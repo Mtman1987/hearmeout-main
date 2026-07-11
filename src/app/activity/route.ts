@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { DISCORD_CLIENT_ID } from '@/lib/public-config';
 import { GLOBAL_WATCH_SESSION_ID, MUSIC_WATCH_SESSION_ID } from '@/lib/watch-session';
 import { getDefaultActivitySessionId, getPublicWatchSession, getResolvedWatchSession } from '@/lib/watch/watch-request-service';
+import { ensureDiscordActivityRoom } from '@/lib/activity-room';
 import { js as activityJs } from '../activity-lite.js/route';
 
 function escapeHtml(value: unknown) {
@@ -26,6 +27,7 @@ function isHlsPlaybackUrl(value: string) {
 }
 
 async function html(request: Request) {
+  await ensureDiscordActivityRoom();
   const configuredBaseUrl = process.env.NEXT_PUBLIC_BASE_URL || process.env.NEXT_PUBLIC_APP_URL;
   const baseUrl = (configuredBaseUrl || new URL(request.url).origin).replace(/\/$/, '');
   const requestUrl = new URL(request.url);
