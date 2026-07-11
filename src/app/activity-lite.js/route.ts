@@ -3,7 +3,7 @@ import { DISCORD_CLIENT_ID } from '@/lib/public-config';
 import { getDefaultActivitySessionId } from '@/lib/watch/watch-request-service';
 
 export function js(clientId: string, sessionId: string, appBaseUrlOverride?: string) {
-  const appBaseUrl = appBaseUrlOverride || process.env.NEXT_PUBLIC_BASE_URL || process.env.NEXT_PUBLIC_APP_URL || '';
+  const appBaseUrl = appBaseUrlOverride || process.env.NEXT_PUBLIC_BASE_URL || process.env.NEXT_PUBLIC_APP_URL || 'https://hearmeout-main.fly.dev';
   return `
 const CLIENT_ID = ${JSON.stringify(clientId)};
 const GLOBAL_SESSION_ID = ${JSON.stringify(sessionId)};
@@ -300,6 +300,12 @@ function appUrl(path) {
   if (nextPath.startsWith('/activity/watch/xtream/hls/')) nextPath = nextPath.replace('/activity/watch/xtream/hls/', '/api/watch/xtream/hls/');
   if (nextPath.startsWith('/activity/watch/youtube/hls/')) nextPath = nextPath.replace('/activity/watch/youtube/hls/', '/api/watch/youtube/hls/');
   if (nextPath.startsWith('/activity/proxy')) nextPath = nextPath.replace('/activity/proxy', '/activity-proxy');
+  if (APP_BASE_URL) {
+    try {
+      const base = new URL(APP_BASE_URL, window.location.href);
+      if (base.origin && base.origin !== window.location.origin) return new URL(nextPath, base).toString();
+    } catch {}
+  }
   return nextPath;
 }
 
@@ -308,9 +314,7 @@ function apiUrls(path) {
   if (path && !/^https?:\\/\\//i.test(path) && APP_BASE_URL) {
     try {
       const base = new URL(APP_BASE_URL, window.location.href);
-      if (base.origin === window.location.origin || !/discordsays\\.com$/i.test(window.location.hostname)) {
-        urls.push(new URL(path.startsWith('/') ? path : '/' + path, APP_BASE_URL).toString());
-      }
+      urls.push(new URL(path.startsWith('/') ? path : '/' + path, base).toString());
     } catch {}
   }
   if (path && !/^https?:\\/\\//i.test(path)) urls.push(path.startsWith('/') ? path : '/' + path);

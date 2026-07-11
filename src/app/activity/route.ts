@@ -31,11 +31,19 @@ function clientUrl(value: string) {
   return value.startsWith('/') ? value : `/${value}`;
 }
 
+function activityAppBaseUrl(requestUrl: URL) {
+  const configuredBaseUrl = process.env.NEXT_PUBLIC_BASE_URL || process.env.NEXT_PUBLIC_APP_URL;
+  if (configuredBaseUrl) return configuredBaseUrl.replace(/\/$/, '');
+  if (requestUrl.hostname === 'localhost' || requestUrl.hostname === '127.0.0.1') return requestUrl.origin;
+  return 'https://hearmeout-main.fly.dev';
+}
+
 async function html(request: Request) {
   await ensureDiscordActivityRoom();
   const configuredBaseUrl = process.env.NEXT_PUBLIC_BASE_URL || process.env.NEXT_PUBLIC_APP_URL;
-  const baseUrl = (configuredBaseUrl || new URL(request.url).origin).replace(/\/$/, '');
   const requestUrl = new URL(request.url);
+  const baseUrl = (configuredBaseUrl || requestUrl.origin).replace(/\/$/, '');
+  const appBaseUrl = activityAppBaseUrl(requestUrl);
   const rawSessionId = requestUrl.searchParams.get('sessionId') || requestUrl.searchParams.get('session_id');
   const requestedSessionId = getDefaultActivitySessionId(rawSessionId);
   const session = getPublicWatchSession(getResolvedWatchSession(requestedSessionId), baseUrl);
@@ -182,7 +190,7 @@ async function html(request: Request) {
     </aside>
   </main>
           <script>
-${activityJs(DISCORD_CLIENT_ID, requestedSessionId, baseUrl)}
+${activityJs(DISCORD_CLIENT_ID, requestedSessionId, appBaseUrl)}
   </script>
 </body>
 </html>`;
