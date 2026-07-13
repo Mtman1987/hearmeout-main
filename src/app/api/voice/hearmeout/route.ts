@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db, ensureDb } from '@/lib/db';
 import { getOverlayWatchSessionId } from '@/lib/watch-session';
+import { publishSpmtEvent } from '@/lib/spmt-client';
 
 const CORS_HEADERS = {
   'access-control-allow-origin': '*',
@@ -124,6 +125,86 @@ function findRoomByName(rooms: OpenRoom[], text: string) {
   return rooms.find((room) => normalized.includes(room.name.toLowerCase()));
 }
 
+function roomIdFromName(name: string) {
+  return name
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 64);
+}
+
+function extractNewRoomName(text: string) {
+  const named = text.match(/\b(?:called|named|as)\s+["“]?(.+?)["”]?\s*$/i)?.[1]?.trim();
+  if (named) return named.replace(/\b(?:please|thanks|thank you)\b/ig, '').trim().slice(0, 80);
+
+  const roomAfter = text.match(/\b(?:create|make|start|open)\s+(?:a\s+)?(?:new\s+)?room\s+["“]?(.+?)["”]?\s*$/i)?.[1]?.trim();
+  if (roomAfter && !/^(please|for me|now)$/i.test(roomAfter)) {
+    return roomAfter.replace(/^(called|named|as)\s+/i, '').trim().slice(0, 80);
+  }
+
+  return 'Glasses';
+}
+
+function uniqueRoomId(baseName: string) {
+  const base = roomIdFromName(baseName) || `room-${Date.now()}`;
+  let candidate = base;
+  let suffix = 2;
+  while (db.get('rooms', candidate)) {
+    candidate = `${base}-${suffix}`;
+    suffix += 1;
+  }
+  return candidate;
+}
+
+function openRoomFromId(id: string, baseUrl: string, index = 1): OpenRoom {
+  const data = db.get('rooms', id) || {};
+  return {
+    index,
+    id,
+    name: data.name || id,
+    description: data.description || '',
+    activeCount: 0,
+    roomUrl: `${baseUrl}/rooms/${id}`,
+    overlayUrl: `${baseUrl}/overlay/${id}`,
+  };
+}
+
+async function createVoiceRoom(input: { text: string; baseUrl: string; userId: string; username: string }) {
+  const roomName = extractNewRoomName(input.text);
+  const roomId = uniqueRoomId(roomName);
+  const now = new Date();
+  const room = {
+    name: roomName,
+    description: `Created by MountainView voice command for ${input.username}.`,
+    ownerId: input.userId,
+    createdBy: input.userId,
+    isPrivate: false,
+    password: null,
+    createdAt: now.toISOString(),
+    expiresAt: new Date(now.getTime() + 12 * 60 * 60 * 1000).toISOString(),
+    playlist: [],
+    isPlaying: false,
+  };
+
+  db.set('rooms', roomId, room);
+  const openRoom = openRoomFromId(roomId, input.baseUrl);
+  await publishSpmtEvent({
+    type: 'voice.room.created',
+    visibility: 'creator',
+    actor: { userId: input.userId, username: input.username, displayName: input.username },
+    payload: {
+      summary: `${input.username} created HearMeOut room ${roomName} by voice.`,
+      roomId,
+      roomName,
+      roomUrl: openRoom.roomUrl,
+      source: 'mountainview-voice',
+    },
+    links: [{ label: 'Open room', url: openRoom.roomUrl, kind: 'launch' }],
+  });
+  return openRoom;
+}
+
 export async function GET(request: NextRequest) {
   await ensureDb();
   const baseUrl = getRequestBaseUrl(request);
@@ -142,6 +223,7 @@ export async function POST(request: NextRequest) {
   const body = await request.json().catch(() => ({}));
   const rawText = normalizeText(body.message || body.text || body.transcript || body.command);
   const username = normalizeText(body.username || body.displayName || 'Guest');
+  const userId = normalizeText(body.userId || body.uid || username || 'voice-guest');
   const key = normalizeKey(body.userId, username);
   const pending = pendingChoices.get(key);
   const hasPending = !!pending && pending.expiresAt > Date.now();
@@ -159,10 +241,12 @@ export async function POST(request: NextRequest) {
   if (hasPending) {
     if (wantsNewRoom(text)) {
       pendingChoices.delete(key);
+      const room = await createVoiceRoom({ text, baseUrl, userId, username });
       return NextResponse.json({
         handled: true,
-        action: 'cannot_create_room',
-        speakText: 'I cannot create rooms by voice. Create a named room in HearMeOut first.',
+        action: 'create_room',
+        speakText: `Created ${room.name}. Joining now.`,
+        ...roomPayload(room),
       }, { headers: CORS_HEADERS });
     }
 
@@ -171,6 +255,19 @@ export async function POST(request: NextRequest) {
       const room = pending.rooms.find((candidate) => candidate.index === choice);
       if (room) {
         pendingChoices.delete(key);
+        await publishSpmtEvent({
+          type: 'voice.room.join_requested',
+          visibility: 'creator',
+          actor: { userId, username, displayName: username },
+          payload: {
+            summary: `${username} selected HearMeOut room ${room.name} by voice.`,
+            roomId: room.id,
+            roomName: room.name,
+            roomUrl: room.roomUrl,
+            source: 'mountainview-voice',
+          },
+          links: [{ label: 'Open room', url: room.roomUrl, kind: 'launch' }],
+        });
         return NextResponse.json({
           handled: true,
           action: 'join_room',
@@ -185,6 +282,19 @@ export async function POST(request: NextRequest) {
   const namedRoom = findRoomByName(rooms, text);
   if (namedRoom && wantsJoin(text)) {
     pendingChoices.delete(key);
+    await publishSpmtEvent({
+      type: 'voice.room.join_requested',
+      visibility: 'creator',
+      actor: { userId, username, displayName: username },
+      payload: {
+        summary: `${username} asked to join HearMeOut room ${namedRoom.name} by voice.`,
+        roomId: namedRoom.id,
+        roomName: namedRoom.name,
+        roomUrl: namedRoom.roomUrl,
+        source: 'mountainview-voice',
+      },
+      links: [{ label: 'Open room', url: namedRoom.roomUrl, kind: 'launch' }],
+    });
     return NextResponse.json({
       handled: true,
       action: 'join_room',
@@ -195,10 +305,12 @@ export async function POST(request: NextRequest) {
 
   if (wantsNewRoom(text) || /\bcreate\b/i.test(text)) {
     pendingChoices.delete(key);
+    const room = await createVoiceRoom({ text, baseUrl, userId, username });
     return NextResponse.json({
       handled: true,
-      action: 'cannot_create_room',
-      speakText: 'I cannot create rooms by voice. Create a named room in HearMeOut first.',
+      action: 'create_room',
+      speakText: `Created ${room.name}. Joining now.`,
+      ...roomPayload(room),
     }, { headers: CORS_HEADERS });
   }
 

@@ -5,6 +5,7 @@ import { resolveSongRequest } from '@/lib/bot-actions';
 import { DISCORD_CLIENT_ID } from '@/lib/public-config';
 import { ensureDiscordActivityRoomForSession } from '@/lib/activity-room';
 import { getGlobalWatchSessionId, getMusicWatchSessionId, getScopedWatchSessionId, normalizeWatchSessionAlias, type WatchMediaKind } from '@/lib/watch-session';
+import { publishSpmtEvent } from '@/lib/spmt-client';
 import type { PlaylistItem } from '@/types/playlist';
 import { dirname } from 'path';
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'fs';
@@ -538,6 +539,31 @@ function enqueue(session: WatchSession, item: WatchCatalogItem, requestedBy: Wat
   return request;
 }
 
+function publishWatchQueueEvent(kind: 'movie' | 'music' | 'tts', session: WatchSession, request: WatchRequest) {
+  void publishSpmtEvent({
+    type: `media.${kind}.queued`,
+    visibility: 'creator',
+    actor: {
+      userId: request.requestedBy.userId,
+      username: request.requestedBy.username,
+      displayName: request.requestedBy.username,
+    },
+    payload: {
+      summary: `${request.requestedBy.username} queued ${request.item.title} in HearMeOut.`,
+      mediaKind: kind,
+      sessionId: session.id,
+      guildId: session.guildId,
+      channelId: session.channelId,
+      requestId: request.requestId,
+      title: request.item.title,
+      source: request.item.source,
+      provider: request.item.metadata?.provider,
+      queueLength: session.queue.length,
+      isNowPlaying: session.current?.requestId === request.requestId,
+    },
+  });
+}
+
 function formatDurationMs(durationMs: number | undefined) {
   const totalSeconds = Math.max(0, Math.round(Number(durationMs || 0) / 1000));
   if (!totalSeconds) return 'unknown';
@@ -903,6 +929,7 @@ export async function requestWatchItem(params: {
   maybePrepareSharedHls(item);
   await updateSeriesProgress(params.userId, item);
   saveWatchStateToDisk();
+  publishWatchQueueEvent('movie', session, request);
 
   return { request, session };
 }
@@ -948,6 +975,7 @@ export async function requestWatchMusicItem(params: {
   });
   maybePrepareSharedHls(item);
   saveWatchStateToDisk();
+  publishWatchQueueEvent('music', session, request);
 
   return {
     result: { success: true, message: `Queued up: "${item.title}"` },
@@ -993,6 +1021,7 @@ export async function requestWatchTtsItem(params: {
   session.ttsQueue = [...(session.ttsQueue || []), request].slice(-20);
   addEvent(session, `${params.username} sent TTS: ${item.title}`);
   saveWatchStateToDisk();
+  publishWatchQueueEvent('tts', session, request);
 
   return {
     result: { success: true, message: `Queued speech overlay: "${item.title}"` },
