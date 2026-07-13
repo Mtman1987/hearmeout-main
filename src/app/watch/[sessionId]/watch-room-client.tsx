@@ -611,6 +611,9 @@ export default function WatchRoomClient({ sessionId, activityMode = false, canPa
             });
             hlsRef.current.on(Hls.Events.MANIFEST_PARSED, () => {
               setMediaStatus(usesHlsFallback ? 'HLS fallback ready' : 'Ready to play');
+              // Force playback from server position (0 for new items) so VOD doesn't resume from end
+              const targetPos = playbackPosition(state?.playback);
+              if (video && Number.isFinite(targetPos)) video.currentTime = targetPos;
             });
             hlsRef.current.loadSource(mediaUrl);
             hlsRef.current.attachMedia(video);
@@ -658,7 +661,7 @@ export default function WatchRoomClient({ sessionId, activityMode = false, canPa
     if (!localAudioUnlockedRef.current && typeof state?.playback?.muted === 'boolean') {
       setMuted(state.playback.muted);
     }
-  }, [state?.playback?.muted]);
+  }, [state?.current?.requestId]);
 
   useEffect(() => {
     const onMessage = (event: MessageEvent) => {
