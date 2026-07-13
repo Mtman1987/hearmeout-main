@@ -1,4 +1,4 @@
-import { controlWatchSession, extractWatchRoomAlias, getActivityUrl, getResolvedWatchSession, requestWatchMusicItem } from '@/lib/watch-request-service';
+import { controlWatchSession, extractWatchRoomAlias, getActivityUrl, getResolvedWatchSession, getWatchActivityJoinUrl, requestWatchMusicItem } from '@/lib/watch-request-service';
 import { getMusicWatchSessionId } from '@/lib/watch-session';
 import { getMusicSessionForRoom, requestMusicItemForRoom } from '@/lib/music-session-service';
 import { skipTrack } from '@/lib/bot-actions';
@@ -30,6 +30,7 @@ export async function handleMusicCommand(params: {
   roomId?: string;
   guildId?: string;
   channelId?: string;
+  activityVoiceChannelId?: string;
   publicBaseUrl?: string;
   // eslint-disable-next-line no-unused-vars
   reply?: (content: string) => void | Promise<void>;
@@ -87,7 +88,13 @@ export async function handleMusicCommand(params: {
     const position = result.session.current?.requestId === result.request.requestId
       ? 'now playing'
       : `queue position ${result.session.queue.length}`;
-    await reply(`Queued in Music Videos: ${result.request.item.title} (${position}). Join: ${getActivityUrl(params.publicBaseUrl, sessionId)}`);
+    const joinUrl = await getWatchActivityJoinUrl({
+      publicBaseUrl: params.publicBaseUrl,
+      sessionId,
+      activityVoiceChannelId: params.activityVoiceChannelId,
+      fallbackChannelId: params.channelId,
+    });
+    await reply(`Queued in Music Videos: ${result.request.item.title} (${position}). Join: ${joinUrl}`);
     return true;
   }
 

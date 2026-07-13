@@ -388,6 +388,16 @@ export function watchControlsPromptComponents(joinUrl?: string, sessionId = sess
   ];
 }
 
+export async function getWatchActivityJoinUrl(params: {
+  publicBaseUrl?: string;
+  sessionId: string;
+  activityVoiceChannelId?: string;
+  fallbackChannelId?: string;
+}) {
+  const activityInviteUrl = await createDiscordActivityInvite(params.activityVoiceChannelId || params.fallbackChannelId);
+  return activityInviteUrl || getActivityUrl(params.publicBaseUrl, params.sessionId);
+}
+
 export function watchLaneComponents() {
   return [
     {
@@ -754,6 +764,7 @@ export async function announceWatchRequestToDiscord(params: {
   session: WatchSession;
   request: WatchRequest;
   publicBaseUrl?: string;
+  activityVoiceChannelId?: string;
 }) {
   const metadata = params.session.metadata || inferSessionMetadata(params.session.id, params.session.guildId, params.session.channelId);
   const channelId = metadata.channelId && metadata.channelId !== 'watch' ? metadata.channelId : params.session.channelId;
@@ -761,12 +772,16 @@ export async function announceWatchRequestToDiscord(params: {
   const position = params.session.current?.requestId === params.request.requestId
     ? 'now playing'
     : `queue position ${params.session.queue.length}`;
-  const activityInviteUrl = await createDiscordActivityInvite(channelId);
-  const joinUrl = activityInviteUrl || getActivityUrl(params.publicBaseUrl, params.session.id);
+  const joinUrl = await getWatchActivityJoinUrl({
+    publicBaseUrl: params.publicBaseUrl,
+    sessionId: params.session.id,
+    activityVoiceChannelId: params.activityVoiceChannelId,
+    fallbackChannelId: channelId,
+  });
   return sendDiscordPayload(channelId, buildWatchJoinMessage(params.request.item.title, position, joinUrl, params.request.item, params.session.id));
 }
 
-async function createDiscordActivityInvite(channelId: string) {
+async function createDiscordActivityInvite(channelId?: string) {
   const botToken = process.env.DISCORD_BOT_TOKEN;
   if (!botToken || !channelId || !DISCORD_CLIENT_ID) return null;
 
@@ -1162,6 +1177,7 @@ export async function handleWatchRequestCommand(params: {
   roomId?: string;
   userMessageId?: string;
   publicBaseUrl?: string;
+  activityVoiceChannelId?: string;
   // eslint-disable-next-line no-unused-vars
   reply?: (content: string) => void | Promise<void>;
   // eslint-disable-next-line no-unused-vars
@@ -1232,8 +1248,12 @@ export async function handleWatchRequestCommand(params: {
   const position = result.session.current?.requestId === result.request.requestId
     ? 'now playing'
     : `queue position ${result.session.queue.length}`;
-  const activityInviteUrl = await createDiscordActivityInvite(params.channelId);
-  const joinUrl = activityInviteUrl || getActivityUrl(params.publicBaseUrl, sessionId);
+  const joinUrl = await getWatchActivityJoinUrl({
+    publicBaseUrl: params.publicBaseUrl,
+    sessionId,
+    activityVoiceChannelId: params.activityVoiceChannelId,
+    fallbackChannelId: params.channelId,
+  });
 
   if (params.richReply) {
     await params.richReply(buildWatchJoinMessage(result.request.item.title, position, joinUrl, result.request.item, result.session.id));

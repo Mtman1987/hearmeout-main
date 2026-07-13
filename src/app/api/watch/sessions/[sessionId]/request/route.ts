@@ -85,6 +85,7 @@ export async function POST(request: NextRequest, context: { params: Promise<{ se
         request: result.request,
         session: result.session,
         publicBaseUrl: getRequestBaseUrl(request),
+        activityVoiceChannelId: body.activityVoiceChannelId || body.voiceChannelId || body.voice_channel_id,
       }).catch((error) => ({ ok: false, error: error?.message || 'Discord announcement failed' }))
     : null;
 
@@ -139,6 +140,7 @@ export async function GET(request: NextRequest, context: { params: Promise<{ ses
         request: result.request,
         session: result.session,
         publicBaseUrl: getRequestBaseUrl(request),
+        activityVoiceChannelId: request.nextUrl.searchParams.get('activityVoiceChannelId') || request.nextUrl.searchParams.get('voiceChannelId') || request.nextUrl.searchParams.get('voice_channel_id') || undefined,
       }).catch((error) => ({ ok: false, error: error?.message || 'Discord announcement failed' }))
     : null;
 

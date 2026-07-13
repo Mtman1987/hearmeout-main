@@ -237,6 +237,19 @@ function isDirectDiscordMessage(data: any) {
   return channelType === 'dm' || channelType === '1';
 }
 
+function getActivityVoiceChannelId(data: any) {
+  return String(
+    data.activityVoiceChannelId ||
+    data.voiceChannelId ||
+    data.voice_channel_id ||
+    data.voiceChannel?.id ||
+    data.voice?.channelId ||
+    data.voice?.channel_id ||
+    data.member?.voice?.channel_id ||
+    ''
+  ).trim();
+}
+
 function parseWatchControlsCommand(message: string) {
   const match = message.trim().match(/^!(controls?|watch-controls)(?:\s+(.+))?$/i);
   if (!match) return null;
@@ -291,6 +304,7 @@ export async function POST(request: NextRequest) {
     const userId = String(data.userId || data.authorId || 'discord').trim();
     const userName = String(data.userName || data.displayName || data.username || 'Discord User').trim();
     const isDM = isDirectDiscordMessage(data);
+    const activityVoiceChannelId = getActivityVoiceChannelId(data);
     const replies: Array<string | DiscordMessagePayload> = [];
     const watchControlsCommand = parseWatchControlsCommand(message);
 
@@ -331,6 +345,7 @@ export async function POST(request: NextRequest) {
         discordUserName: userName,
         guildId,
         channelId,
+        activityVoiceChannelId,
         userMessageId: data.messageId || data.id,
         publicBaseUrl: getRequestBaseUrl(request),
         reply: (content) => {
@@ -350,6 +365,7 @@ export async function POST(request: NextRequest) {
         platform: 'discord',
         guildId,
         channelId,
+        activityVoiceChannelId,
         publicBaseUrl: getRequestBaseUrl(request),
         reply: (content) => {
           replies.push(content);
