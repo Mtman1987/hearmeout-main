@@ -216,6 +216,7 @@ export default function WatchRoomClient({ sessionId, activityMode = false, canPa
     ? activeEmbedFallback.url
     : currentItem ? playbackUrlForItem(currentItem, musicPlaybackMode) : '';
   const embeddedMode = Boolean(currentPlaybackUrl && isEmbeddedVideoUrl(currentPlaybackUrl));
+  const canSkip = canPause || activityMode || sessionId === 'discord-music-room';
 
   function youtubeCommand(func: string, args: unknown[] = []) {
     const frame = iframeRef.current;
@@ -264,9 +265,10 @@ export default function WatchRoomClient({ sessionId, activityMode = false, canPa
 
   async function sendControl(action: string, position = videoRef.current?.currentTime || 0) {
     try {
+      const isHostControl = canPause || activityMode || (action === 'next' && sessionId === 'discord-music-room');
       const nextState = await api(`/api/watch/sessions/${sessionId}/control`, {
         method: 'POST',
-        body: JSON.stringify({ action, position, isHost: canPause || activityMode, isAdmin: canPause || activityMode, platform: activityMode ? 'activity' : 'web' }),
+        body: JSON.stringify({ action, position, isHost: isHostControl, isAdmin: canPause || activityMode, platform: activityMode ? 'activity' : 'web' }),
       });
       setControlError(null);
       setState(nextState);
@@ -919,12 +921,8 @@ export default function WatchRoomClient({ sessionId, activityMode = false, canPa
               <button type="button" className="rounded-md border border-slate-700 bg-slate-800 px-3 py-2 hover:border-emerald-400" onClick={pauseLocalAndRemote}>Pause</button>
             )}
             <button type="button" className="rounded-md border border-slate-700 bg-slate-800 px-3 py-2 hover:border-emerald-400" onClick={syncPlayback}>Sync</button>
-            {(canPause || activityMode) && (
-              <>
-                <button type="button" className="rounded-md border border-slate-700 bg-slate-800 px-3 py-2 hover:border-emerald-400" onClick={nextItem}>Next</button>
-                <button type="button" className="rounded-md border border-slate-700 bg-slate-800 px-3 py-2 hover:border-emerald-400" onClick={clearQueue}>Clear</button>
-              </>
-            )}
+            {canSkip && <button type="button" className="rounded-md border border-slate-700 bg-slate-800 px-3 py-2 hover:border-emerald-400" onClick={nextItem}>Next</button>}
+            {(canPause || activityMode) && <button type="button" className="rounded-md border border-slate-700 bg-slate-800 px-3 py-2 hover:border-emerald-400" onClick={clearQueue}>Clear</button>}
             <button type="button" className="rounded-md border border-slate-700 bg-slate-800 px-3 py-2 hover:border-emerald-400 disabled:opacity-50" onClick={openPopout} disabled={!state?.current}>Pop Out</button>
             <button type="button" className="rounded-md border border-slate-700 bg-slate-800 px-3 py-2 hover:border-emerald-400 disabled:opacity-50" onClick={openFullscreen} disabled={!state?.current}>Fullscreen</button>
             <button type="button" className="rounded-md border border-slate-700 bg-slate-800 px-3 py-2 hover:border-emerald-400 disabled:opacity-50" onClick={enableSound} disabled={!state?.current}>Enable Sound</button>
