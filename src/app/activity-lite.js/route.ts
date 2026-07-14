@@ -68,9 +68,14 @@ const VISUAL_TESTS = [
   { itemId: 'sintel', label: 'Sintel HLS' },
   { itemId: 'tears-of-steel', label: 'Tears of Steel HLS' },
 ];
+const YOUTUBE_CLIENT_RESOLVE_WAIT_MS = 4500;
+const YOUTUBE_VIDEO_ID_RE = /^[A-Za-z0-9_-]{11}$/;
+const INNERTUBE_API_KEY = 'AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8';
+const INNERTUBE_CLIENT_VERSION = '2.20240101.00.00';
 let state = null;
 let currentRequestId = null;
 let hls = null;
+let youtubeHlsFallbackTimer = null;
 let applying = false;
 let lastSeekApplyAt = 0;
 let mediaIsBuffering = false;
@@ -243,6 +248,62 @@ function isYoutubeAudioMusicItem(item) {
 function youtubeEmbedUrlForItem(item) {
   const videoId = item?.metadata?.videoId || String(item?.id || '').replace(/^youtube-/, '');
   return /^[A-Za-z0-9_-]{11}$/.test(videoId) ? 'https://www.youtube.com/embed/' + encodeURIComponent(videoId) : '';
+}
+
+function youtubeVideoIdForItem(item) {
+  const videoId = String(item?.metadata?.videoId || String(item?.id || '').replace(/^youtube-/, '') || '').trim();
+  return YOUTUBE_VIDEO_ID_RE.test(videoId) ? videoId : '';
+}
+
+function shouldResolveYoutubeInBrowser(item) {
+  return Boolean(youtubeVideoIdForItem(item) && item?.metadata?.playbackStrategy === 'proxy');
+}
+
+function pickBestYoutubeFormat(formats, type) {
+  if (!Array.isArray(formats)) return null;
+  const candidates = formats
+    .filter((format) => {
+      if (!format?.url) return false;
+      const mime = String(format.mimeType || '');
+      return type === 'video' ? mime.startsWith('video/') : mime.startsWith('audio/');
+    })
+    .sort((a, b) => Number(b.bitrate || 0) - Number(a.bitrate || 0));
+  return candidates[0]?.url || null;
+}
+
+async function resolveYoutubeInBrowser(videoId) {
+  let timedOut = false;
+  const lookup = (async () => {
+    const response = await fetch('https://www.youtube.com/youtubei/v1/player?key=' + encodeURIComponent(INNERTUBE_API_KEY), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        videoId,
+        context: { client: { clientName: 'WEB', clientVersion: INNERTUBE_CLIENT_VERSION, hl: 'en', gl: 'US' } },
+      }),
+    });
+    if (!response.ok) throw new Error('YouTube API returned ' + response.status);
+    const data = await response.json();
+    if (data?.playabilityStatus?.status !== 'OK') return null;
+    const formats = [...(data?.streamingData?.formats || []), ...(data?.streamingData?.adaptiveFormats || [])];
+    const videoUrl = pickBestYoutubeFormat(formats, 'video');
+    const audioUrl = pickBestYoutubeFormat(formats, 'audio');
+    return videoUrl && audioUrl ? { videoUrl, audioUrl } : null;
+  })();
+  const stream = await Promise.race([
+    lookup.catch(() => null),
+    new Promise((resolve) => setTimeout(() => { timedOut = true; resolve(null); }, YOUTUBE_CLIENT_RESOLVE_WAIT_MS)),
+  ]);
+  if (!stream) return { ok: false, reason: timedOut ? 'timed out' : 'unavailable' };
+  try {
+    await api('/api/watch/youtube/resolve', {
+      method: 'POST',
+      body: JSON.stringify({ videoId, videoUrl: stream.videoUrl, audioUrl: stream.audioUrl }),
+    });
+    return { ok: true, reason: 'submitted' };
+  } catch {
+    return { ok: false, reason: 'submit failed' };
+  }
 }
 
 function playbackUrlForItem(item) {
@@ -571,10 +632,40 @@ function syncNativePlayback(action) {
   return;
 }
 
-function loadMedia(item) {
+function switchToYoutubeEmbedFallback(item, reason) {
+  const embedUrl = item?.metadata?.embedPlaybackUrl || youtubeEmbedUrlForItem(item);
+  if (!embedUrl) return false;
+  if (youtubeHlsFallbackTimer) {
+    clearTimeout(youtubeHlsFallbackTimer);
+    youtubeHlsFallbackTimer = null;
+  }
   if (hls) {
     hls.destroy();
     hls = null;
+  }
+  const fallbackItem = {
+    ...item,
+    playbackUrl: embedUrl,
+    metadata: {
+      ...(item.metadata || {}),
+      videoPlaybackUrl: embedUrl,
+      playbackStrategy: 'embed',
+    },
+  };
+  if (state?.current) state.current.item = fallbackItem;
+  mediaEl.textContent = 'Media: ' + reason + '; using YouTube embed';
+  loadMedia(fallbackItem);
+  return true;
+}
+
+async function loadMedia(item) {
+  if (hls) {
+    hls.destroy();
+    hls = null;
+  }
+  if (youtubeHlsFallbackTimer) {
+    clearTimeout(youtubeHlsFallbackTimer);
+    youtubeHlsFallbackTimer = null;
   }
   setActiveMediaForItem(item);
   resetInactiveMedia();
@@ -589,6 +680,18 @@ function loadMedia(item) {
   mediaIsBuffering = true;
   pendingPlay = false;
   mediaEl.textContent = 'Media: loading ' + item.title;
+  const loadingRequestId = state?.current?.requestId || '';
+  if (shouldResolveYoutubeInBrowser(item)) {
+    const videoId = youtubeVideoIdForItem(item);
+    mediaEl.textContent = 'Media: resolving YouTube stream in this browser';
+    const resolved = await resolveYoutubeInBrowser(videoId);
+    if (state?.current?.requestId !== loadingRequestId) return;
+    if (!resolved.ok) {
+      switchToYoutubeEmbedFallback(item, 'browser stream ' + resolved.reason);
+      return;
+    }
+    mediaEl.textContent = 'Media: browser stream resolved; preparing video';
+  }
   const selectedPlaybackUrl = hlsFallbackUrlForItem(item);
   const playbackUrl = appUrl(selectedPlaybackUrl);
   if (embeddedMode) {
@@ -624,6 +727,10 @@ function loadMedia(item) {
       fragLoadingMaxRetryTimeout: 8000,
     });
     hls.on(window.Hls.Events.MANIFEST_PARSED, () => {
+      if (youtubeHlsFallbackTimer) {
+        clearTimeout(youtubeHlsFallbackTimer);
+        youtubeHlsFallbackTimer = null;
+      }
       mediaEl.textContent = 'Media: ready';
       mediaIsBuffering = false;
       if (state && state.playback && state.playback.status === 'playing') startVideoPlayback();
@@ -633,10 +740,18 @@ function loadMedia(item) {
       mediaEl.textContent = data && data.fatal
         ? 'Media: HLS error' + (details ? ' - ' + details : '')
         : 'Media: buffering' + (details ? ' - ' + details : '');
-      if (data && data.fatal) console.warn('HLS fatal error', data);
+      if (data && data.fatal) {
+        console.warn('HLS fatal error', data);
+        switchToYoutubeEmbedFallback(item, 'HLS failed');
+      }
     });
     hls.loadSource(playbackUrl);
     hls.attachMedia(video);
+    if (shouldResolveYoutubeInBrowser(item)) {
+      youtubeHlsFallbackTimer = setTimeout(() => {
+        if (state?.current?.requestId === loadingRequestId) switchToYoutubeEmbedFallback(item, 'HLS timed out');
+      }, 15000);
+    }
   } else {
     video.src = playbackUrl;
     video.load();

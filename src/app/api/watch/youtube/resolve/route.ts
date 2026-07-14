@@ -42,6 +42,7 @@ export async function POST(request: Request) {
     }
 
     resolvedUrls.set(videoId, { videoUrl, audioUrl, resolvedAt: Date.now() });
+    console.log(`[YouTube Resolve] Stored client-resolved streams for ${videoId}`);
 
     // Prune old entries
     if (resolvedUrls.size > 100) {
@@ -54,7 +55,7 @@ export async function POST(request: Request) {
     // Kick off HLS conversion on the DJ worker using the client-resolved URLs
     const workerUrl = getDjWorkerUrl();
     if (workerUrl) {
-      const hlsUrl = new URL(`${workerUrl}/watch/youtube/hls/yt-${videoId}/index.m3u8`);
+      const hlsUrl = new URL(`${workerUrl}/watch/youtube/hls/${videoId}/index.m3u8`);
       hlsUrl.searchParams.set('source', videoUrl);
       hlsUrl.searchParams.set('audioSource', audioUrl);
       fetch(hlsUrl.toString(), { headers: { 'user-agent': 'HearMeOut/1.0' } }).catch(() => {});

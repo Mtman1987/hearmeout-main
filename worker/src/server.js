@@ -1067,19 +1067,28 @@ function ensureWatchHls(streamId, sourceUrl) {
   return promise;
 }
 
-function ensureYoutubeWatchHls(videoId) {
+function ensureYoutubeWatchHls(videoId, clientResolved = null) {
   if (!isValidVideoId(videoId)) return Promise.reject(new Error('Invalid YouTube video id'));
   const streamId = youtubeWatchHlsId(videoId);
   const { clean, dir, indexPath } = watchHlsPaths(streamId);
   if (hasUsableWatchHlsIndex(dir, indexPath)) return Promise.resolve();
   if (watchHlsJobs.has(clean)) return watchHlsJobs.get(clean);
   watchHlsFailures.delete(clean);
+  const clientVideoUrl = String(clientResolved?.videoUrl || '');
+  const clientAudioUrl = String(clientResolved?.audioUrl || '');
+  const hasClientResolvedStreams = Boolean(clientVideoUrl && clientAudioUrl);
 
   mkdirSync(dir, { recursive: true });
   pruneWatchHlsRoot();
   try { if (existsSync(indexPath)) unlinkSync(indexPath); } catch {}
 
   const promise = (async () => {
+    if (hasClientResolvedStreams) {
+      console.log(`[WatchHLS] Using client-resolved YouTube streams for ${clean}`);
+      await runYoutubeHlsFfmpeg(clean, clientVideoUrl, clientAudioUrl, dir, indexPath);
+      return;
+    }
+
     const [videoInfo, audioInfo] = await Promise.all([
       extractVideoInfo(videoId),
       extractAudioInfo(videoId),
@@ -1245,10 +1254,16 @@ app.get('/watch/youtube/hls/:videoId/:file', authorizeWorker, async (req, res) =
 
     if (file === 'index.m3u8') {
       const sourceUrl = String(req.query.source || '');
+      const audioSourceUrl = String(req.query.audioSource || '');
       if (sourceUrl && !/^https?:\/\//i.test(sourceUrl)) return res.status(400).json({ error: 'Invalid source URL' });
-      const priorFailure = sourceUrl ? null : getRecentWatchHlsFailure(streamId);
+      if (audioSourceUrl && !/^https?:\/\//i.test(audioSourceUrl)) return res.status(400).json({ error: 'Invalid audio source URL' });
+      const hasClientResolvedStreams = Boolean(sourceUrl && audioSourceUrl);
+      const priorFailure = (sourceUrl || hasClientResolvedStreams) ? null : getRecentWatchHlsFailure(streamId);
       if (priorFailure) return res.status(502).json({ error: priorFailure.message });
-      if (sourceUrl) {
+      if (hasClientResolvedStreams) {
+        watchHlsFailures.delete(cleanWatchStreamId(streamId));
+        ensureYoutubeWatchHls(videoId, { videoUrl: sourceUrl, audioUrl: audioSourceUrl }).catch(() => {});
+      } else if (sourceUrl) {
         watchHlsFailures.delete(cleanWatchStreamId(streamId));
         ensureWatchHls(streamId, sourceUrl).catch(() => {});
       } else {

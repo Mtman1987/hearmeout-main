@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { resolveYoutubeStream, submitResolvedStream } from '@/lib/youtube-client-resolver';
+import { resolveYoutubeStream, submitResolvedStream, type ResolvedStream } from '@/lib/youtube-client-resolver';
 
 type WatchState = {
   id: string;
@@ -143,6 +143,40 @@ function mediaErrorMessage(error: MediaError | null | undefined) {
   return `Media error ${error.code}`;
 }
 
+const YOUTUBE_CLIENT_RESOLVE_WAIT_MS = 4500;
+const YOUTUBE_VIDEO_ID_RE = /^[A-Za-z0-9_-]{11}$/;
+
+function youtubeVideoIdForItem(item: any) {
+  const videoId = String(item?.metadata?.videoId || String(item?.id || '').replace(/^youtube-/, '') || '').trim();
+  return YOUTUBE_VIDEO_ID_RE.test(videoId) ? videoId : '';
+}
+
+function youtubeEmbedUrlForItem(item: any) {
+  const videoId = youtubeVideoIdForItem(item);
+  return videoId ? `https://www.youtube.com/embed/${encodeURIComponent(videoId)}` : '';
+}
+
+function shouldResolveYoutubeInBrowser(item: any) {
+  return Boolean(youtubeVideoIdForItem(item) && item?.metadata?.playbackStrategy === 'proxy');
+}
+
+async function resolveYoutubeInBrowser(videoId: string) {
+  let timedOut = false;
+  const stream = await Promise.race<ResolvedStream | null>([
+    resolveYoutubeStream(videoId),
+    new Promise<null>((resolve) => {
+      window.setTimeout(() => {
+        timedOut = true;
+        resolve(null);
+      }, YOUTUBE_CLIENT_RESOLVE_WAIT_MS);
+    }),
+  ]);
+
+  if (!stream) return { ok: false, reason: timedOut ? 'timed out' : 'no streams resolved' };
+  const submitted = await submitResolvedStream(videoId, stream);
+  return { ok: submitted, reason: submitted ? 'submitted' : 'submit failed' };
+}
+
 function shouldShowMkvFallbackNotice(item: any, mediaStatus: string) {
   if (!isBrowserLimitedVideo(item)) return false;
   const status = mediaStatus.toLowerCase();
@@ -174,9 +208,13 @@ export default function WatchRoomClient({ sessionId, activityMode = false, canPa
   const [dismissedMkvNoticeFor, setDismissedMkvNoticeFor] = useState<string | null>(null);
   const [musicPlaybackMode, setMusicPlaybackMode] = useState<'audio' | 'video'>('video');
   const [ttsOverlayEnabled, setTtsOverlayEnabled] = useState(false);
+  const [embedFallback, setEmbedFallback] = useState<{ requestId: string; url: string } | null>(null);
 
   const currentItem = state?.current?.item;
-  const currentPlaybackUrl = currentItem ? playbackUrlForItem(currentItem, musicPlaybackMode) : '';
+  const activeEmbedFallback = embedFallback?.requestId === state?.current?.requestId ? embedFallback : null;
+  const currentPlaybackUrl = activeEmbedFallback
+    ? activeEmbedFallback.url
+    : currentItem ? playbackUrlForItem(currentItem, musicPlaybackMode) : '';
   const embeddedMode = Boolean(currentPlaybackUrl && isEmbeddedVideoUrl(currentPlaybackUrl));
 
   function youtubeCommand(func: string, args: unknown[] = []) {
@@ -571,74 +609,129 @@ export default function WatchRoomClient({ sessionId, activityMode = false, canPa
       requestId: state.current.requestId,
     });
 
-    // Client-side YouTube URL resolution - uses user's real IP
-    // so age-restricted/datacenter-blocked videos work via HLS proxy
-    const ytVideoId = item.metadata?.videoId;
-    if (ytVideoId && item.metadata?.playbackStrategy === 'proxy') {
-      resolveYoutubeStream(ytVideoId).then((stream) => {
-        if (stream) submitResolvedStream(ytVideoId, stream);
-      }).catch(() => {});
-    }
-    const mediaUrl = hlsFallbackUrlFor(item);
-    const usesHlsFallback = mediaUrl !== item.playbackUrl;
     const loadingRequestId = state.current.requestId;
+    let cancelled = false;
+    let youtubeFallbackTimer: number | null = null;
+    setEmbedFallback(null);
 
-    if (isEmbeddedVideoUrl(mediaUrl)) {
-      if (video) {
-        video.pause();
-        video.removeAttribute('src');
-        video.load();
-      }
-      setMediaStatus('Embedded video ready');
-      window.setTimeout(() => {
-        registerYouTubeListeners();
-        applyPlaybackState(state);
-      }, 600);
-      return;
-    }
-
-    if (!video) return;
-
-    if (isHlsPlaybackUrl(mediaUrl)) {
-      import('hls.js')
-        .then(({ default: Hls }) => {
-          if (state.current?.requestId === loadingRequestId && Hls.isSupported()) {
-            hlsRef.current = new Hls();
-            hlsRef.current.on(Hls.Events.ERROR, (_event: unknown, data: any) => {
-              const detail = data?.details || data?.type || 'HLS playback error';
-              setMediaStatus(`HLS error: ${detail}`);
-              console.error('[WatchRoom] HLS error', data);
-            });
-            hlsRef.current.on(Hls.Events.MANIFEST_PARSED, () => {
-              setMediaStatus(usesHlsFallback ? 'HLS fallback ready' : 'Ready to play');
-              // Force playback from server position (0 for new items) so VOD doesn't resume from end
-              const targetPos = playbackPosition(state?.playback);
-              if (video && Number.isFinite(targetPos)) video.currentTime = targetPos;
-            });
-            hlsRef.current.loadSource(mediaUrl);
-            hlsRef.current.attachMedia(video);
-            setMediaStatus(usesHlsFallback ? 'Preparing browser-compatible HLS stream' : `Loading ${item.title}`);
+    async function loadMedia() {
+      if (shouldResolveYoutubeInBrowser(item)) {
+        const ytVideoId = youtubeVideoIdForItem(item);
+        setMediaStatus('Resolving YouTube stream in this browser');
+        const resolved = await resolveYoutubeInBrowser(ytVideoId);
+        if (cancelled) return;
+        console.log('[WatchRoom] Browser YouTube resolve result', {
+          videoId: ytVideoId,
+          ok: resolved.ok,
+          reason: resolved.reason,
+        });
+        if (resolved.ok) {
+          setMediaStatus('Browser stream resolved; preparing HLS');
+        } else {
+          const fallbackUrl = youtubeEmbedUrlForItem(item);
+          if (fallbackUrl) {
+            setMediaStatus(`Browser stream resolve ${resolved.reason}; using YouTube embed`);
+            setEmbedFallback({ requestId: loadingRequestId, url: fallbackUrl });
             return;
           }
-
-          if (video.canPlayType('application/vnd.apple.mpegurl')) {
-            video.src = mediaUrl;
-          } else if (!Hls.isSupported()) {
-            setMediaStatus('HLS is not supported in this browser');
-          }
-        })
-        .catch((error) => {
-          console.error('[WatchRoom] Failed to load HLS player', error);
-          setMediaStatus('Failed to load HLS player');
-        });
-    } else {
-      video.src = mediaUrl;
-      if (isBrowserLimitedVideo(item)) {
-        setMediaStatus('MKV stream loaded. Browser playback may not be supported; use Download if video stays black.');
+          setMediaStatus(`Browser stream resolve ${resolved.reason}; trying server fallback`);
+        }
       }
+
+      const mediaUrl = hlsFallbackUrlFor(item);
+      const usesHlsFallback = mediaUrl !== item.playbackUrl;
+
+      if (isEmbeddedVideoUrl(mediaUrl)) {
+        if (video) {
+          video.pause();
+          video.removeAttribute('src');
+          video.load();
+        }
+        setMediaStatus('Embedded video ready');
+        window.setTimeout(() => {
+          if (cancelled) return;
+          registerYouTubeListeners();
+          applyPlaybackState(state);
+        }, 600);
+        return;
+      }
+
+      if (!video) return;
+
+      if (isHlsPlaybackUrl(mediaUrl)) {
+        import('hls.js')
+          .then(({ default: Hls }) => {
+            if (cancelled) return;
+            if (state?.current?.requestId === loadingRequestId && Hls.isSupported()) {
+              hlsRef.current = new Hls();
+              hlsRef.current.on(Hls.Events.ERROR, (_event: unknown, data: any) => {
+                const detail = data?.details || data?.type || 'HLS playback error';
+                setMediaStatus(`HLS error: ${detail}`);
+                console.error('[WatchRoom] HLS error', data);
+                const fallbackUrl = youtubeEmbedUrlForItem(item);
+                if (data?.fatal && fallbackUrl) {
+                  hlsRef.current?.destroy();
+                  hlsRef.current = null;
+                  if (video) {
+                    video.pause();
+                    video.removeAttribute('src');
+                    video.load();
+                  }
+                  setMediaStatus('HLS failed; switching to YouTube embed fallback');
+                  setEmbedFallback({ requestId: loadingRequestId, url: fallbackUrl });
+                }
+              });
+              hlsRef.current.on(Hls.Events.MANIFEST_PARSED, () => {
+                if (youtubeFallbackTimer !== null) {
+                  window.clearTimeout(youtubeFallbackTimer);
+                  youtubeFallbackTimer = null;
+                }
+                setMediaStatus(usesHlsFallback ? 'HLS fallback ready' : 'Ready to play');
+                // Force playback from server position (0 for new items) so VOD doesn't resume from end
+                const targetPos = playbackPosition(state?.playback);
+                if (video && Number.isFinite(targetPos)) video.currentTime = targetPos;
+              });
+              hlsRef.current.loadSource(mediaUrl);
+              hlsRef.current.attachMedia(video);
+              const fallbackUrl = youtubeEmbedUrlForItem(item);
+              if (fallbackUrl && shouldResolveYoutubeInBrowser(item)) {
+                youtubeFallbackTimer = window.setTimeout(() => {
+                  if (cancelled) return;
+                  hlsRef.current?.destroy();
+                  hlsRef.current = null;
+                  setMediaStatus('HLS timed out; switching to YouTube embed fallback');
+                  setEmbedFallback({ requestId: loadingRequestId, url: fallbackUrl });
+                }, 15000);
+              }
+              setMediaStatus(usesHlsFallback ? 'Preparing browser-compatible HLS stream' : `Loading ${item.title}`);
+              return;
+            }
+
+            if (video.canPlayType('application/vnd.apple.mpegurl')) {
+              video.src = mediaUrl;
+            } else if (!Hls.isSupported()) {
+              setMediaStatus('HLS is not supported in this browser');
+            }
+          })
+          .catch((error) => {
+            console.error('[WatchRoom] Failed to load HLS player', error);
+            setMediaStatus('Failed to load HLS player');
+          });
+      } else {
+        video.src = mediaUrl;
+        if (isBrowserLimitedVideo(item)) {
+          setMediaStatus('MKV stream loaded. Browser playback may not be supported; use Download if video stays black.');
+        }
+      }
+
+      applyPlaybackState(state);
     }
 
-    applyPlaybackState(state);
+    loadMedia();
+    return () => {
+      cancelled = true;
+      if (youtubeFallbackTimer !== null) window.clearTimeout(youtubeFallbackTimer);
+    };
   }, [state?.current?.requestId, musicPlaybackMode]);
 
   useEffect(() => {
