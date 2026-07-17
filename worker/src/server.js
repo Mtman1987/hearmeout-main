@@ -278,6 +278,7 @@ async function extractWithYtDlp(videoId, mode = 'audio') {
   const format = mode === 'video'
     ? 'bestvideo[ext=mp4][height<=720][vcodec^=avc1]/bestvideo[ext=mp4][height<=720]/bestvideo[height<=720]/bestvideo'
     : 'bestaudio[ext=m4a]/bestaudio[ext=mp4]/bestaudio';
+  const cookieArgs = ytDlpCookieArgs();
   const args = [
     '--no-playlist',
     '--no-warnings',
@@ -289,15 +290,11 @@ async function extractWithYtDlp(videoId, mode = 'audio') {
     '--dump-json',
     '--format',
     format,
-    ...ytDlpCookieArgs(),
+    ...cookieArgs,
     `https://www.youtube.com/watch?v=${videoId}`,
   ];
 
-  try {
-    const { stdout } = await execFileAsync('yt-dlp', args, {
-      timeout: 40000,
-      maxBuffer: 12 * 1024 * 1024,
-    });
+  const parseResult = (stdout) => {
     const info = JSON.parse(stdout);
     const url = extractYtDlpUrl(info);
     if (!url) return null;
@@ -308,8 +305,31 @@ async function extractWithYtDlp(videoId, mode = 'audio') {
       title: info.title || 'Unknown',
       artist: info.uploader || info.channel || 'Unknown',
     };
+  };
+
+  try {
+    const { stdout } = await execFileAsync('yt-dlp', args, {
+      timeout: 40000,
+      maxBuffer: 12 * 1024 * 1024,
+    });
+    return parseResult(stdout);
   } catch (err) {
     const message = err?.stderr || err?.message || String(err);
+    if (/sign in to confirm/i.test(String(message)) && cookieArgs.length) {
+      try {
+        const cookieIndex = args.indexOf('--cookies');
+        const anonymousArgs = [...args.slice(0, cookieIndex), ...args.slice(cookieIndex + 2)];
+        const { stdout } = await execFileAsync('yt-dlp', anonymousArgs, {
+          timeout: 40000,
+          maxBuffer: 12 * 1024 * 1024,
+        });
+        console.log(`[Extract] yt-dlp ${mode} recovered without stale cookies for ${videoId}`);
+        return parseResult(stdout);
+      } catch (anonymousErr) {
+        const anonymousMessage = anonymousErr?.stderr || anonymousErr?.message || String(anonymousErr);
+        console.warn(`[Extract] yt-dlp anonymous ${mode} retry failed for ${videoId}: ${String(anonymousMessage).slice(0, 220)}`);
+      }
+    }
     if (/sign in to confirm/i.test(String(message))) markYoutubeAuthRequired(message);
     console.warn(`[Extract] yt-dlp ${mode} lookup failed for ${videoId}: ${String(message).slice(0, 220)}`);
     return null;
