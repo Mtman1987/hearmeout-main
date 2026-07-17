@@ -51,6 +51,7 @@ const YOUTUBE_COOKIES_FILE =
   process.env.YOUTUBE_COOKIES_FILE ||
   (process.env.NODE_ENV === 'production' ? '/data/youtube-cookies.txt' : join(rootDir, 'youtube-cookies.txt'));
 const YOUTUBE_COOKIES_B64 = process.env.YTDLP_COOKIES_B64 || process.env.YOUTUBE_COOKIES_B64 || '';
+const YTDLP_BGUTIL_SERVER_HOME = process.env.YTDLP_BGUTIL_SERVER_HOME || '';
 const MUSIC_CATALOG_FILE = join(CACHE_DIR, 'search-index.json');
 const DIRECT_VOD_CHUNK_BYTES = Number(process.env.DIRECT_VOD_CHUNK_BYTES || 8 * 1024 * 1024);
 const WATCH_HLS_SEGMENT_SECONDS = Number(process.env.WATCH_HLS_SEGMENT_SECONDS || 6);
@@ -216,11 +217,14 @@ function setCachedExtractedInfo(videoId, info, mode = 'audio') {
   urlCache.set(mediaCacheKey(videoId, mode), { info, expires: Date.now() + 5 * 60 * 60 * 1000 });
 }
 
+let youtubeCookiesInitialized = false;
 function ensureYoutubeCookiesFile() {
-  if (!YOUTUBE_COOKIES_B64 || existsSync(YOUTUBE_COOKIES_FILE)) return;
+  if (youtubeCookiesInitialized) return;
+  youtubeCookiesInitialized = true;
+  if (!YOUTUBE_COOKIES_B64) return;
   try {
     mkdirSync(dirname(YOUTUBE_COOKIES_FILE), { recursive: true });
-    writeFileSync(YOUTUBE_COOKIES_FILE, Buffer.from(YOUTUBE_COOKIES_B64, 'base64'));
+    writeFileSync(YOUTUBE_COOKIES_FILE, Buffer.from(YOUTUBE_COOKIES_B64, 'base64'), { mode: 0o600 });
     console.log(`[Extract] Wrote YouTube cookies file to ${YOUTUBE_COOKIES_FILE}`);
   } catch (err) {
     console.warn(`[Extract] Could not write YouTube cookies file: ${err?.message || err}`);
@@ -278,7 +282,10 @@ async function extractWithYtDlp(videoId, mode = 'audio') {
     '--no-playlist',
     '--no-warnings',
     '--extractor-args',
-    'youtube:player_client=android,ios,tv,web',
+    'youtube:player_client=mweb',
+    ...(YTDLP_BGUTIL_SERVER_HOME
+      ? ['--extractor-args', `youtubepot-bgutilscript:server_home=${YTDLP_BGUTIL_SERVER_HOME}`]
+      : []),
     '--dump-json',
     '--format',
     format,
@@ -288,7 +295,7 @@ async function extractWithYtDlp(videoId, mode = 'audio') {
 
   try {
     const { stdout } = await execFileAsync('yt-dlp', args, {
-      timeout: 60000,
+      timeout: 40000,
       maxBuffer: 12 * 1024 * 1024,
     });
     const info = JSON.parse(stdout);

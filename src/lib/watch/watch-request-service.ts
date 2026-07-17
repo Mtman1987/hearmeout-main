@@ -947,7 +947,7 @@ export async function requestWatchItem(params: {
     userId: params.userId,
     username: params.username,
   });
-  maybePrepareSharedHls(item);
+  if (session.current?.requestId === request.requestId) maybePrepareSharedHls(item);
   await updateSeriesProgress(params.userId, item);
   saveWatchStateToDisk();
   publishWatchQueueEvent('movie', session, request);
@@ -994,7 +994,7 @@ export async function requestWatchMusicItem(params: {
     userId: params.userId,
     username: params.username,
   });
-  maybePrepareSharedHls(item);
+  if (session.current?.requestId === request.requestId) maybePrepareSharedHls(item);
   saveWatchStateToDisk();
   publishWatchQueueEvent('music', session, request);
 
@@ -1069,7 +1069,7 @@ export function acceptWatchRecommendation(params: {
     userId: params.userId,
     username: params.username,
   });
-  maybePrepareSharedHls(item);
+  if (session.current?.requestId === request.requestId) maybePrepareSharedHls(item);
   updateSeriesProgress(params.userId, item).catch(() => {});
   saveWatchStateToDisk();
 
