@@ -301,7 +301,40 @@ async function resolveYoutubeWithClient(videoId, client) {
   return { videoUrl: videoUrl || audioUrl, audioUrl };
 }
 
+function getBrowserUserId() {
+  try {
+    let id = localStorage.getItem('hmo_user_id');
+    if (!id) { id = 'u_' + Math.random().toString(36).slice(2) + Date.now().toString(36); localStorage.setItem('hmo_user_id', id); }
+    return id;
+  } catch { return ''; }
+}
+
+async function isAudioCached(videoId, userId) {
+  try {
+    const query = '?videoId=' + encodeURIComponent(videoId) + (userId ? '&user=' + encodeURIComponent(userId) : '');
+    const data = await api('/api/watch/youtube/upload' + query);
+    return Boolean(data && data.cached);
+  } catch { return false; }
+}
+
+async function downloadAndCacheAudio(videoId, audioUrl, userId) {
+  try {
+    const download = await fetch(audioUrl);
+    if (!download.ok) { console.warn('[YT Cache] download failed:', download.status); return false; }
+    const blob = await download.blob();
+    if (!blob.size) return false;
+    const query = '?videoId=' + encodeURIComponent(videoId) + (userId ? '&user=' + encodeURIComponent(userId) : '');
+    await api('/api/watch/youtube/upload' + query, { method: 'POST', headers: { 'content-type': 'application/octet-stream' }, body: blob });
+    console.log('[YT Cache] Cached ' + videoId + ' on server (' + blob.size + ' bytes)');
+    return true;
+  } catch (err) { console.warn('[YT Cache] download/upload failed:', err); return false; }
+}
+
 async function resolveYoutubeInBrowser(videoId) {
+  const userId = getBrowserUserId();
+  // Favorites/most-played are already cached on the server.
+  if (await isAudioCached(videoId, userId)) return { ok: true, reason: 'cached' };
+
   let timedOut = false;
   const lookup = (async () => {
     for (const client of INNERTUBE_CLIENTS) {
@@ -319,15 +352,19 @@ async function resolveYoutubeInBrowser(videoId) {
     new Promise((resolve) => setTimeout(() => { timedOut = true; resolve(null); }, YOUTUBE_CLIENT_RESOLVE_WAIT_MS)),
   ]);
   if (!stream) return { ok: false, reason: timedOut ? 'timed out' : 'unavailable' };
+
+  // Preferred: download the audio in this browser and upload it so the server
+  // plays a cached file with no server-side extraction.
+  const cached = await downloadAndCacheAudio(videoId, stream.audioUrl, userId);
   try {
     await api('/api/watch/youtube/resolve', {
       method: 'POST',
       body: JSON.stringify({ videoId, videoUrl: stream.videoUrl, audioUrl: stream.audioUrl }),
     });
-    return { ok: true, reason: 'submitted' };
   } catch {
-    return { ok: false, reason: 'submit failed' };
+    if (!cached) return { ok: false, reason: 'submit failed' };
   }
+  return { ok: true, reason: cached ? 'cached' : 'submitted' };
 }
 
 function playbackUrlForItem(item) {

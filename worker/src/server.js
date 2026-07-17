@@ -185,6 +185,69 @@ async function doRip(videoId) {
   return false;
 }
 
+// ── Per-user client-uploaded music cache ───────────────────────────────
+const USER_MUSIC_CACHE_LIMIT = Number(process.env.USER_MUSIC_CACHE_LIMIT || 25);
+const USER_MUSIC_INDEX_FILE = join(CACHE_DIR, 'user-music-cache.json');
+
+function cachedAudioFilePath(videoId) {
+  const m4a = join(CACHE_DIR, `${videoId}.m4a`);
+  if (existsSync(m4a)) return m4a;
+  const mp3 = join(CACHE_DIR, `${videoId}.mp3`);
+  if (existsSync(mp3)) return mp3;
+  return null;
+}
+
+function sanitizeUserId(value) {
+  const clean = String(value || '').trim().replace(/[^A-Za-z0-9_.:-]/g, '').slice(0, 80);
+  return clean || 'anonymous';
+}
+
+function readUserMusicIndex() {
+  try {
+    if (!existsSync(USER_MUSIC_INDEX_FILE)) return {};
+    const parsed = JSON.parse(readFileSync(USER_MUSIC_INDEX_FILE, 'utf8'));
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function writeUserMusicIndex(index) {
+  try {
+    mkdirSync(CACHE_DIR, { recursive: true });
+    writeFileSync(USER_MUSIC_INDEX_FILE, JSON.stringify(index), 'utf8');
+  } catch (err) {
+    console.warn(`[Cache] Failed to persist user music index: ${err?.message || err}`);
+  }
+}
+
+function isVideoReferenced(index, videoId) {
+  return Object.values(index).some(
+    (entries) => Array.isArray(entries) && entries.some((e) => e?.videoId === videoId),
+  );
+}
+
+// Records a play (most-recent first), enforces the per-user limit, and deletes
+// evicted files that no other user still references.
+function recordUserMusicPlay(userId, videoId) {
+  const user = sanitizeUserId(userId);
+  const index = readUserMusicIndex();
+  const prior = Array.isArray(index[user]) ? index[user].filter((e) => e?.videoId !== videoId) : [];
+  const updated = [{ videoId, at: Date.now() }, ...prior];
+
+  index[user] = updated.slice(0, USER_MUSIC_CACHE_LIMIT);
+  const evicted = updated.slice(USER_MUSIC_CACHE_LIMIT);
+
+  for (const entry of evicted) {
+    if (!entry?.videoId || isVideoReferenced(index, entry.videoId)) continue;
+    const filePath = cachedAudioFilePath(entry.videoId);
+    if (filePath) {
+      try { unlinkSync(filePath); } catch {}
+    }
+  }
+  writeUserMusicIndex(index);
+}
+
 const urlCache = new Map();
 let youtubeAuthRequiredUntil = 0;
 function mediaCacheKey(videoId, mode = 'audio') {
@@ -1110,6 +1173,13 @@ function ensureYoutubeWatchHls(videoId, clientResolved = null) {
   try { if (existsSync(indexPath)) unlinkSync(indexPath); } catch {}
 
   const promise = (async () => {
+    const cachedAudio = cachedAudioFilePath(videoId);
+    if (cachedAudio) {
+      console.log(`[WatchHLS] Using cached audio file for ${clean}`);
+      await runYoutubeAudioHlsFromFile(clean, cachedAudio, dir, indexPath);
+      return;
+    }
+
     if (hasClientResolvedStreams) {
       console.log(`[WatchHLS] Using client-resolved YouTube streams for ${clean}`);
       await runYoutubeHlsFfmpeg(clean, clientVideoUrl, clientAudioUrl, dir, indexPath);
@@ -1265,6 +1335,51 @@ function runYoutubeHlsFfmpeg(streamId, videoUrl, audioUrl, dir, indexPath) {
   });
 }
 
+// Builds an audio-only HLS ladder from a locally cached file (no network).
+function runYoutubeAudioHlsFromFile(streamId, filePath, dir, indexPath) {
+  const segmentPattern = join(dir, 'seg_%05d.ts');
+  console.log(`[WatchHLS] Starting cached-audio HLS conversion for ${streamId}`);
+
+  return new Promise((resolve, reject) => {
+    const ffmpegArgs = [
+      '-hide_banner',
+      '-loglevel', 'warning',
+      '-threads', '2',
+      '-y',
+      '-i', filePath,
+      '-vn',
+      '-map', '0:a:0',
+      '-c:a', 'aac',
+      '-b:a', '160k',
+      '-ac', '2',
+      '-f', 'hls',
+      '-hls_time', String(WATCH_HLS_SEGMENT_SECONDS),
+      '-hls_list_size', String(WATCH_HLS_LIST_SIZE),
+      ...(WATCH_HLS_LIST_SIZE > 0 ? ['-hls_delete_threshold', String(WATCH_HLS_DELETE_THRESHOLD)] : []),
+      '-hls_flags', WATCH_HLS_LIST_SIZE > 0 ? 'delete_segments+independent_segments' : 'independent_segments',
+      '-hls_segment_filename', segmentPattern,
+      indexPath,
+    ];
+
+    const command = process.platform === 'win32' ? 'ffmpeg' : 'nice';
+    const args = process.platform === 'win32' ? ffmpegArgs : ['-n', '10', 'ffmpeg', ...ffmpegArgs];
+    const child = spawn(command, args, { stdio: ['ignore', 'ignore', 'pipe'] });
+    let stderr = '';
+
+    child.stderr?.on('data', (chunk) => {
+      stderr = `${stderr}${chunk}`.slice(-4000);
+    });
+    child.once('error', reject);
+    child.once('exit', (code) => {
+      if (code === 0) {
+        resolve();
+        return;
+      }
+      reject(new Error(stderr || `ffmpeg exited with ${code}`));
+    });
+  });
+}
+
 app.get('/watch/youtube/hls/:videoId/:file', authorizeWorker, async (req, res) => {
   try {
     const videoId = String(req.params.videoId || '');
@@ -1285,7 +1400,10 @@ app.get('/watch/youtube/hls/:videoId/:file', authorizeWorker, async (req, res) =
       if (sourceUrl && !/^https?:\/\//i.test(sourceUrl)) return res.status(400).json({ error: 'Invalid source URL' });
       if (audioSourceUrl && !/^https?:\/\//i.test(audioSourceUrl)) return res.status(400).json({ error: 'Invalid audio source URL' });
       const hasClientResolvedStreams = Boolean(sourceUrl && audioSourceUrl);
-      const priorFailure = (sourceUrl || hasClientResolvedStreams) ? null : getRecentWatchHlsFailure(streamId);
+      const hasCachedAudio = Boolean(cachedAudioFilePath(videoId));
+      const priorFailure = (sourceUrl || hasClientResolvedStreams || hasCachedAudio)
+        ? null
+        : getRecentWatchHlsFailure(streamId);
       if (priorFailure) return res.status(502).json({ error: priorFailure.message });
       if (hasClientResolvedStreams) {
         watchHlsFailures.delete(cleanWatchStreamId(streamId));
@@ -1328,6 +1446,47 @@ app.get('/watch/youtube/hls/:videoId/:file', authorizeWorker, async (req, res) =
     res.status(502).json({ error: err.message || 'YouTube HLS conversion failed' });
   }
 });
+
+// Report whether an audio file is already cached for this video.
+app.get('/watch/youtube/cache/:videoId', authorizeWorker, (req, res) => {
+  const videoId = String(req.params.videoId || '');
+  if (!isValidVideoId(videoId)) return res.status(400).json({ error: 'Invalid YouTube video id' });
+  const filePath = cachedAudioFilePath(videoId);
+  if (!filePath) return res.status(404).json({ cached: false });
+  if (req.query.user) recordUserMusicPlay(req.query.user, videoId);
+  return res.json({ cached: true, videoId, bytes: statSync(filePath).size });
+});
+
+// Store audio bytes the browser downloaded (from the user's IP/session) so
+// playback can stream a local file instead of extracting from YouTube.
+app.post(
+  '/watch/youtube/cache/:videoId',
+  express.raw({ type: () => true, limit: '75mb' }),
+  authorizeWorker,
+  (req, res) => {
+    try {
+      const videoId = String(req.params.videoId || '');
+      if (!isValidVideoId(videoId)) return res.status(400).json({ error: 'Invalid YouTube video id' });
+
+      const body = req.body;
+      if (!Buffer.isBuffer(body) || body.length === 0) {
+        return res.status(400).json({ error: 'Empty audio body' });
+      }
+
+      mkdirSync(CACHE_DIR, { recursive: true });
+      const filePath = join(CACHE_DIR, `${videoId}.m4a`);
+      writeFileSync(filePath, body);
+      recordUserMusicPlay(req.query.user, videoId);
+      // A fresh upload supersedes any prior extraction failure.
+      try { watchHlsFailures.delete(cleanWatchStreamId(youtubeWatchHlsId(videoId))); } catch {}
+
+      console.log(`[Cache] Stored client-uploaded audio for ${videoId} (${body.length} bytes)`);
+      return res.json({ ok: true, videoId, bytes: body.length });
+    } catch (err) {
+      return res.status(500).json({ error: err?.message || 'Failed to cache audio' });
+    }
+  },
+);
 
 app.get('/watch/xtream/hls/:streamId/:file', authorizeWorker, async (req, res) => {
   try {
