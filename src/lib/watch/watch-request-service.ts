@@ -8,7 +8,7 @@ import { getGlobalWatchSessionId, getMusicWatchSessionId, getScopedWatchSessionI
 import { publishSpmtEvent } from '@/lib/spmt-client';
 import type { PlaylistItem } from '@/types/playlist';
 import { dirname } from 'path';
-import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'fs';
+import { copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'fs';
 
 type WatchCatalogItem = {
   id: string;
@@ -166,6 +166,7 @@ globalThis.__watchRequestSessions = sessions;
 const pendingRecommendations = new Map<string, WatchCatalogItem>();
 const seriesProgress = new Map<string, SeriesProgress>();
 const WATCH_STATE_FILE = process.env.WATCH_STATE_FILE || (process.env.FLY_APP_NAME ? '/data/watch-state.json' : './data/watch-state.json');
+const WATCH_STATE_BACKUP_FILE = `${WATCH_STATE_FILE}.bak`;
 let lastLoadedStateMtime = 0;
 
 function ensureWatchStateDir() {
@@ -174,10 +175,12 @@ function ensureWatchStateDir() {
 }
 
 function loadWatchStateFromDisk() {
-  try {
-    if (!existsSync(WATCH_STATE_FILE)) return;
-    const raw = readFileSync(WATCH_STATE_FILE);
-    const mtime = statSync(WATCH_STATE_FILE).mtimeMs;
+  const candidates = [WATCH_STATE_FILE, WATCH_STATE_BACKUP_FILE];
+  for (const stateFile of candidates) {
+    try {
+      if (!existsSync(stateFile)) continue;
+      const raw = readFileSync(stateFile);
+      const mtime = statSync(stateFile).mtimeMs;
     if (mtime && mtime <= lastLoadedStateMtime) return;
     const payload = JSON.parse(raw.toString('utf8')) as {
       sessions?: Array<[string, WatchSession]>;
@@ -191,22 +194,35 @@ function loadWatchStateFromDisk() {
     seriesProgress.clear();
     for (const [key, progress] of payload.seriesProgress || []) seriesProgress.set(key, progress);
     lastLoadedStateMtime = mtime || Date.now();
-  } catch (error) {
-    console.error('[WatchRequest] Failed to load watch state:', error);
+      if (stateFile === WATCH_STATE_BACKUP_FILE) {
+        console.warn('[WatchRequest] Loaded last-known-good watch state backup.');
+      }
+      return;
+    } catch (error) {
+      console.error(`[WatchRequest] Failed to load watch state from ${stateFile}:`, error);
+    }
   }
 }
 
 function saveWatchStateToDisk() {
   try {
     ensureWatchStateDir();
-    writeFileSync(WATCH_STATE_FILE, JSON.stringify({
+    const tempFile = `${WATCH_STATE_FILE}.${process.pid}.tmp`;
+    const payload = JSON.stringify({
       sessions: Array.from(sessions.entries()),
       pendingRecommendations: Array.from(pendingRecommendations.entries()),
       seriesProgress: Array.from(seriesProgress.entries()),
-    }, null, 2));
+    }, null, 2);
+    writeFileSync(tempFile, payload, 'utf8');
+    if (existsSync(WATCH_STATE_FILE)) copyFileSync(WATCH_STATE_FILE, WATCH_STATE_BACKUP_FILE);
+    renameSync(tempFile, WATCH_STATE_FILE);
     lastLoadedStateMtime = statSync(WATCH_STATE_FILE).mtimeMs;
   } catch (error) {
     console.error('[WatchRequest] Failed to save watch state:', error);
+    const tempFile = `${WATCH_STATE_FILE}.${process.pid}.tmp`;
+    if (existsSync(tempFile)) {
+      try { unlinkSync(tempFile); } catch {}
+    }
   }
 }
 

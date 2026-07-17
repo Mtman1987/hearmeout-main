@@ -33,15 +33,9 @@ function LoginContent() {
     const discordAuth = searchParams?.get('discord_auth');
     const userId = searchParams?.get('user_id');
     const username = searchParams?.get('username');
-    const avatar = searchParams?.get('avatar');
-    
     if (discordAuth === 'success' && userId && username) {
-      // Store user data and redirect
-      localStorage.setItem('discord_user', JSON.stringify({
-        id: userId,
-        username: username,
-        avatar: avatar || ''
-      }));
+      // The signed hmo_session cookie is authoritative. Query parameters are
+      // only callback hints and must not become a second browser-only session.
       refresh().then(() => router.push('/'));
       return;
     }
