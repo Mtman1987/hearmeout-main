@@ -877,9 +877,14 @@ export function getDefaultActivitySessionId(rawSessionId?: string | null) {
 
   const movieSession = getResolvedWatchSession(getGlobalWatchSessionId());
   const musicSession = getResolvedWatchSession(getMusicWatchSessionId());
-  return !movieSession.current && musicSession.current
-    ? getMusicWatchSessionId()
-    : getGlobalWatchSessionId();
+  if (!movieSession.current && musicSession.current) return getMusicWatchSessionId();
+  if (movieSession.current && !musicSession.current) return getGlobalWatchSessionId();
+  if (movieSession.current && musicSession.current) {
+    const movieActiveAt = Math.max(Number(movieSession.metadata?.lastActiveAt || 0), Number(movieSession.playback.updatedAt || 0));
+    const musicActiveAt = Math.max(Number(musicSession.metadata?.lastActiveAt || 0), Number(musicSession.playback.updatedAt || 0));
+    return musicActiveAt > movieActiveAt ? getMusicWatchSessionId() : getGlobalWatchSessionId();
+  }
+  return getGlobalWatchSessionId();
 }
 
 export function getPublicWatchSession(session: WatchSession, preferredBaseUrl?: string) {

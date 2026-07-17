@@ -15,6 +15,7 @@ interface WatchWidgetProps extends DraggableWidgetProps {
   roomId: string;
   sessionScope?: 'discord' | 'overlay';
   canControl?: boolean;
+  initialTab?: 'movie' | 'music';
 }
 
 type WatchState = {
@@ -56,10 +57,11 @@ export function WatchWidget({
   onPositionChange, onSizeChange, onOpacityChange, onSaveLayout, onClose, roomId,
   sessionScope = 'discord',
   canControl = false,
+  initialTab = 'movie',
 }: WatchWidgetProps) {
   const [state, setState] = useState<WatchState | null>(null);
   const [query, setQuery] = useState('');
-  const [tab, setTab] = useState<'movie' | 'music'>('movie');
+  const [tab, setTab] = useState<'movie' | 'music'>(initialTab);
   const [searching, setSearching] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
