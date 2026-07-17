@@ -30,7 +30,7 @@ export const config = {
   twitchClientId: optional('NEXT_PUBLIC_TWITCH_CLIENT_ID', 'rxmohc28tthq0nudfd6iwx0sgy88dp'),
 
   // Secrets — never have a public fallback. Empty string in dev = feature disabled.
-  jwtSecret: optional('HEARMEOUT_JWT_SECRET') || optional('JWT_SECRET') || optional('DISCORD_CLIENT_SECRET') || optional('NEXTAUTH_SECRET') || (isProd ? '' : 'hearmeout-local-development-only'),
+  jwtSecret: optional('HEARMEOUT_JWT_SECRET') || optional('JWT_SECRET') || (isProd ? '' : 'hearmeout-local-development-only'),
   dbApiKey: optional('DB_API_KEY'),
   dshRedirectSecret: optional('DSH_REDIRECT_SECRET'),
 
