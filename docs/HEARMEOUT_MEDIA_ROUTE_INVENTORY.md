@@ -2,7 +2,7 @@
 
 Prepared from the current App Router files during the 2026-07-11 production-readiness pass.
 
-This inventory supports `docs/HEARMEOUT_PROD_READY_MEDIA_ROADMAP.md`. Its job is to make route ownership explicit before changing the media playback architecture.
+This inventory supports the canonical [suite production roadmap](https://github.com/Mtman1987/spmt-live/blob/main/docs/ecosystem/PRODUCTION_ROADMAP.md). Its job is to preserve route evidence before changing the media playback architecture; it is not a separate backlog.
 
 ## Classification Legend
 
