@@ -6,7 +6,7 @@ import { useRoomContext } from '@livekit/components-react';
 import * as LivekitClient from 'livekit-client';
 import { useSession } from '@/hooks/use-session';
 import { useDoc } from '@/hooks/use-db';
-import { dbSet, dbDelete } from '@/lib/db-helpers';
+import { dbSet, dbDelete, dbUpdate } from '@/lib/db-helpers';
 import { useToast } from '@/hooks/use-toast';
 import { cn } from '@/lib/utils';
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -41,6 +41,7 @@ export default function UserCard({ participant, isLocal, isHost, roomId }: { par
   const [discordGuildId, setDiscordGuildId] = React.useState('');
   const [streamMode, setStreamMode] = React.useState(false);
   const [showOverlayControls, setShowOverlayControls] = React.useState(false);
+  const { data: roomPreferences } = useDoc<{ overlayVisible?: Record<string, boolean>; overlayHiddenUsers?: string[] }>('rooms', roomId);
   const [volume, setVolume] = React.useState(1);
   const [isMutedByMe, setIsMutedByMe] = React.useState(false);
   const lastNonZeroVolume = React.useRef(volume);
@@ -115,20 +116,16 @@ export default function UserCard({ participant, isLocal, isHost, roomId }: { par
     return () => { window.removeEventListener('storage', checkOverlay); clearInterval(interval); };
   }, []);
 
-  const toggleOverlayWidget = (widget: string) => {
-    const saved = localStorage.getItem('overlay-visible');
-    const visible = saved ? JSON.parse(saved) : { chat: true, music: true, queue: true };
+  const toggleOverlayWidget = (widget: 'chat' | 'music' | 'queue') => {
+    const visible = { chat: true, music: true, queue: true, ...(roomPreferences?.overlayVisible || {}) };
     visible[widget] = !visible[widget];
-    localStorage.setItem('overlay-visible', JSON.stringify(visible));
-    window.dispatchEvent(new Event('storage'));
+    dbUpdate('rooms', roomId, { overlayVisible: visible });
   };
 
   const showHiddenUsers = () => {
-    const savedUsers = localStorage.getItem('overlay-hidden-users');
-    const hiddenUsers = savedUsers ? JSON.parse(savedUsers) : [];
+    const hiddenUsers = roomPreferences?.overlayHiddenUsers || [];
     if (hiddenUsers.length > 0) {
-      localStorage.setItem('overlay-hidden-users', JSON.stringify([]));
-      window.dispatchEvent(new Event('storage'));
+      dbUpdate('rooms', roomId, { overlayHiddenUsers: [] });
       toast({ title: 'Profiles Restored', description: `${hiddenUsers.length} hidden profile(s) restored` });
     }
   };

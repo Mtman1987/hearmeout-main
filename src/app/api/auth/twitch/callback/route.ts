@@ -3,6 +3,8 @@ import { db, ensureDb } from '@/lib/db';
 import { setSessionCookie } from '@/lib/auth';
 import { config } from '@/lib/config';
 import { verifyDshRedirect } from '@/lib/dsh-redirect';
+import { grandfatherTwitchIdentity } from '@/lib/spmt-client';
+import { HMO_SPMT_COOKIE, hmoSpmtCookieOptions } from '@/lib/spmt-session';
 
 const BASE_URL = config.baseUrl;
 const DSH_URL = config.dshUrl;
@@ -33,7 +35,15 @@ export async function GET(req: NextRequest) {
       twitchId: userId,
     }, { merge: true });
     await setSessionCookie(uid);
-    return NextResponse.redirect(`${BASE_URL}/login?success=true`);
+    const grandfathered = await grandfatherTwitchIdentity({
+      twitchId: userId,
+      twitchUsername: username,
+      displayName,
+      issueSession: true,
+    });
+    const response = NextResponse.redirect(`${BASE_URL}/login?success=true`);
+    if (grandfathered?.accessToken) response.cookies.set(HMO_SPMT_COOKIE, grandfathered.accessToken, hmoSpmtCookieOptions);
+    return response;
   }
 
   if (error) {

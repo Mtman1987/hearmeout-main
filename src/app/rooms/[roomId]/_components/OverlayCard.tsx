@@ -23,6 +23,7 @@ export default function OverlayCard({ participant, roomId }: OverlayProps) {
   const room = useRoomContext();
   const { data: roomData } = useDoc<{ 
     overlayVisible?: { chat: boolean; music: boolean; queue: boolean }; 
+    overlayHiddenUsers?: string[];
     playlist?: any[];
     currentTrackId?: string; 
     isPlaying?: boolean;
@@ -164,9 +165,8 @@ export default function OverlayCard({ participant, roomId }: OverlayProps) {
   }, []);
 
   const showHiddenUsers = () => {
-    const saved = localStorage.getItem('overlay-hidden-users');
-    if (saved) {
-      localStorage.setItem('overlay-hidden-users', JSON.stringify([]));
+    if (roomData?.overlayHiddenUsers?.length) {
+      dbUpdate('rooms', roomId, { overlayHiddenUsers: [] });
       toast({ title: 'Profiles Restored' });
     }
   };

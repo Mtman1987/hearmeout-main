@@ -8,13 +8,13 @@ import { createHmac } from 'crypto';
 import { db, ensureDb } from '@/lib/db';
 import { config } from '@/lib/config';
 
-const FALLBACK_SECRET = 'hearmeout-internal-session-key';
 function resolveJwtSecret(): string {
   if (config.jwtSecret) return config.jwtSecret;
-  return FALLBACK_SECRET;
+  if (process.env.NODE_ENV === 'production' || process.env.FLY_APP_NAME) {
+    throw new Error('HEARMEOUT_JWT_SECRET is required in production.');
+  }
+  return 'hearmeout-local-development-only';
 }
-const JWT_SECRET = resolveJwtSecret();
-
 const COOKIE_NAME = 'hmo_session';
 const COOKIE_MAX_AGE = 30 * 24 * 60 * 60; // 30 days
 
@@ -28,17 +28,18 @@ function base64url(str: string): string {
 }
 
 function sign(payload: JwtPayload): string {
+  const jwtSecret = resolveJwtSecret();
   const header = base64url(JSON.stringify({ alg: 'HS256', typ: 'JWT' }));
   const body = base64url(JSON.stringify(payload));
-  const signature = createHmac('sha256', JWT_SECRET).update(`${header}.${body}`).digest('base64url');
+  const signature = createHmac('sha256', jwtSecret).update(`${header}.${body}`).digest('base64url');
   return `${header}.${body}.${signature}`;
 }
 
 function verify(token: string): JwtPayload | null {
-  if (!JWT_SECRET) return null; // no key configured = no valid sessions
   try {
+    const jwtSecret = resolveJwtSecret();
     const [header, body, signature] = token.split('.');
-    const expected = createHmac('sha256', JWT_SECRET).update(`${header}.${body}`).digest('base64url');
+    const expected = createHmac('sha256', jwtSecret).update(`${header}.${body}`).digest('base64url');
     if (signature !== expected) return null;
     const payload = JSON.parse(Buffer.from(body, 'base64url').toString()) as JwtPayload;
     if (payload.exp < Date.now() / 1000) return null;

@@ -21,6 +21,8 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { toast } from '@/hooks/use-toast';
+import { Switch } from '@/components/ui/switch';
+import { useSpmtAppState } from '@/hooks/use-spmt-app-state';
 
 type Theme = {
   name: string;
@@ -79,32 +81,45 @@ const parseHsl = (hslStr: string) => {
 };
 
 export function ThemeCustomizer() {
+    const persisted = useSpmtAppState('appearance', { customThemes: [] as Theme[], activeTheme: 'Dark', followWorkspaceTheme: true });
     const [themes, setThemes] = useState<Theme[]>([]);
     const [currentTheme, setCurrentTheme] = useState<Theme>(defaultThemes[0]);
     const [newThemeName, setNewThemeName] = useState('');
     const [isMounted, setIsMounted] = useState(false);
+    const [followWorkspaceTheme, setFollowWorkspaceTheme] = useState(true);
 
     useEffect(() => {
+        if (!persisted.loaded) return;
         setIsMounted(true);
-        const savedThemes = localStorage.getItem('custom-themes');
-        const activeThemeName = localStorage.getItem('active-theme');
-        let allThemes = [...defaultThemes];
-        if (savedThemes) {
-            allThemes = [...allThemes, ...JSON.parse(savedThemes)];
-        }
+        const legacyThemes = localStorage.getItem('custom-themes');
+        const legacyActive = localStorage.getItem('active-theme');
+        const customThemes = persisted.value.customThemes.length ? persisted.value.customThemes : legacyThemes ? JSON.parse(legacyThemes) : [];
+        const activeThemeName = persisted.value.activeTheme || legacyActive || 'Dark';
+        const allThemes = [...defaultThemes, ...customThemes];
         setThemes(allThemes);
         const activeTheme = allThemes.find(t => t.name === activeThemeName) || defaultThemes[0];
         setCurrentTheme(activeTheme);
-    }, []);
+        setFollowWorkspaceTheme(persisted.value.followWorkspaceTheme !== false);
+        if (persisted.accountBacked) {
+            localStorage.removeItem('custom-themes');
+            localStorage.removeItem('active-theme');
+        }
+    }, [persisted.loaded]);
 
     useEffect(() => {
         if(isMounted) {
             applyTheme(currentTheme);
-            if (currentTheme.name !== 'Custom') {
-                localStorage.setItem('active-theme', currentTheme.name);
-            }
         }
     }, [currentTheme, isMounted]);
+
+    useEffect(() => {
+        if (!isMounted || !persisted.loaded) return;
+        const timer = window.setTimeout(() => {
+            const customThemes = themes.filter(t => !defaultThemes.find(dt => dt.name === t.name) && t.name !== 'Custom');
+            void persisted.save({ customThemes, activeTheme: currentTheme.name, followWorkspaceTheme }).catch(() => {});
+        }, 500);
+        return () => window.clearTimeout(timer);
+    }, [themes, currentTheme.name, followWorkspaceTheme, isMounted, persisted.loaded]);
 
     const applyTheme = (theme: Theme) => {
         if (typeof window === 'undefined') return;
@@ -168,8 +183,6 @@ export function ThemeCustomizer() {
         const updatedThemes = [...themes.filter(t => t.name !== 'Custom'), newTheme];
         setThemes(updatedThemes);
         setCurrentTheme(newTheme);
-        const customThemes = updatedThemes.filter(t => !defaultThemes.find(dt => dt.name === t.name));
-        localStorage.setItem('custom-themes', JSON.stringify(customThemes));
         setNewThemeName('');
         toast({ title: 'Theme Saved!', description: `Theme "${newThemeName}" has been saved.` });
     };
@@ -192,7 +205,7 @@ export function ThemeCustomizer() {
         <Card>
             <CardHeader>
                 <CardTitle>Customize Theme</CardTitle>
-                <CardDescription>Change the look and feel of the app. Your changes will be saved locally.</CardDescription>
+                <CardDescription>Change the look and feel of the app. Your changes are saved to your SPMT account.</CardDescription>
             </CardHeader>
             <CardContent className="grid gap-4 py-4">
                 <div className="grid grid-cols-4 items-center gap-4">
@@ -201,6 +214,10 @@ export function ThemeCustomizer() {
                         <SelectTrigger id="theme-select" className="col-span-3"><SelectValue placeholder="Select a theme" /></SelectTrigger>
                         <SelectContent>{themes.map((theme) => (<SelectItem key={theme.name} value={theme.name}>{theme.name}</SelectItem>))}</SelectContent>
                     </Select>
+                </div>
+                <div className="grid grid-cols-4 items-center gap-4">
+                    <Label htmlFor="follow-workspace-theme" className="col-span-3">Follow SpaceMountain theme</Label>
+                    <Switch id="follow-workspace-theme" checked={followWorkspaceTheme} onCheckedChange={setFollowWorkspaceTheme} />
                 </div>
                 <ColorInput label="Background" colorName="background" />
                 <ColorInput label="Primary" colorName="primary" />

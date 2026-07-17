@@ -55,8 +55,10 @@ function LoginContent() {
     // Legacy OAuth - now handled by auto login
 
   const handleAutoLogin = async () => {
-    // Go straight to Discord OAuth via DSH — DSH will identify the user
-    // and redirect back with their specific user_id
+    window.location.href = '/api/auth/spmt/login';
+  };
+
+  const handleDiscordLink = async () => {
     window.location.href = '/api/auth/discord/callback';
   };
 
@@ -101,11 +103,14 @@ function LoginContent() {
         </CardHeader>
         <CardContent className="grid gap-4">
           <Button className="w-full" onClick={handleAutoLogin}>
-            <span>Continue with Discord Stream Hub Login</span>
+            <span>Continue with SPMT</span>
           </Button>
           <div className="text-center text-sm text-muted-foreground">
-            Sign into Discord Stream Hub first, then come back here to continue.
+            Your SPMT account is the suite identity. Discord and Twitch remain linked providers.
           </div>
+          <Button variant="outline" className="w-full" onClick={handleDiscordLink}>
+            <span>Link through Discord Stream Hub</span>
+          </Button>
           <div className="relative">
             <div className="absolute inset-0 flex items-center">
               <span className="w-full border-t" />

@@ -30,7 +30,7 @@ export const config = {
   twitchClientId: optional('NEXT_PUBLIC_TWITCH_CLIENT_ID', 'rxmohc28tthq0nudfd6iwx0sgy88dp'),
 
   // Secrets — never have a public fallback. Empty string in dev = feature disabled.
-  jwtSecret: optional('JWT_SECRET') || optional('DISCORD_CLIENT_SECRET') || optional('NEXTAUTH_SECRET') || 'hearmeout-internal-session-key',
+  jwtSecret: optional('HEARMEOUT_JWT_SECRET') || optional('JWT_SECRET') || optional('DISCORD_CLIENT_SECRET') || optional('NEXTAUTH_SECRET') || (isProd ? '' : 'hearmeout-local-development-only'),
   dbApiKey: optional('DB_API_KEY'),
   dshRedirectSecret: optional('DSH_REDIRECT_SECRET'),
 
@@ -44,9 +44,8 @@ export const config = {
   discordPublicKey: optional('DISCORD_PUBLIC_KEY'),
 
   // Strict mode: when true, reject unsigned DSH redirects on auth callbacks.
-  // Defaults to OFF to avoid breaking existing flows; turn ON once DSH is
-  // configured to sign redirects with DSH_REDIRECT_SECRET.
-  requireDshSignature: optional('REQUIRE_DSH_SIGNATURE') === '1',
+  // Production is fail-closed; development can opt in while wiring a local DSH.
+  requireDshSignature: isProd || optional('REQUIRE_DSH_SIGNATURE') === '1',
 };
 
 export function assertJwtSecret(): string {

@@ -2,6 +2,7 @@
 
 import React, { createContext, useContext, useState, useCallback, ReactNode, useEffect } from 'react';
 import { usePathname } from 'next/navigation';
+import { useSpmtAppState } from '@/hooks/use-spmt-app-state';
 
 export interface PopoutState {
   id: string;
@@ -49,7 +50,7 @@ function layoutKeyFor(type: PopoutState['type'], customSettings: Record<string, 
   return `${type}:${source}`;
 }
 
-function readSavedLayouts(): Record<string, SavedPopoutLayout> {
+function readLegacySavedLayouts(): Record<string, SavedPopoutLayout> {
   try {
     const raw = localStorage.getItem(SAVED_LAYOUTS_KEY);
     return raw ? JSON.parse(raw) : {};
@@ -77,6 +78,19 @@ export function PopoutProvider({ children }: { children: ReactNode }) {
   const storageKey = `hearmeout-popout-state:${scope}`;
   const [popouts, setPopouts] = useState<PopoutState[]>([]);
   const [isHydrated, setIsHydrated] = useState(false);
+  const persistedLayouts = useSpmtAppState('popout-layouts', { layouts: {} as Record<string, SavedPopoutLayout> });
+  const [savedLayouts, setSavedLayouts] = useState<Record<string, SavedPopoutLayout>>({});
+
+  useEffect(() => {
+    if (!persistedLayouts.loaded) return;
+    const legacy = readLegacySavedLayouts();
+    const next = Object.keys(persistedLayouts.value.layouts || {}).length ? persistedLayouts.value.layouts : legacy;
+    setSavedLayouts(next);
+    if (persistedLayouts.accountBacked) localStorage.removeItem(SAVED_LAYOUTS_KEY);
+    if (!Object.keys(persistedLayouts.value.layouts || {}).length && Object.keys(legacy).length) {
+      void persistedLayouts.save({ layouts: legacy }).catch(() => {});
+    }
+  }, [persistedLayouts.loaded]);
 
   useEffect(() => {
     const saved = localStorage.getItem(storageKey);
@@ -103,7 +117,7 @@ export function PopoutProvider({ children }: { children: ReactNode }) {
   const openPopout = useCallback(
     (type: PopoutState['type'], initialSize = { width: 400, height: 300 }, customSettings: Record<string, any> = {}) => {
       const id = `${type}-${customSettings.source || 'widget'}-${Date.now()}`;
-      const savedLayout = readSavedLayouts()[layoutKeyFor(type, customSettings)];
+      const savedLayout = savedLayouts[layoutKeyFor(type, customSettings)];
       const layout = savedLayout
         ? clampLayout(savedLayout)
         : {
@@ -125,7 +139,7 @@ export function PopoutProvider({ children }: { children: ReactNode }) {
       };
       setPopouts((prev) => [...prev, newPopout]);
     },
-    []
+    [savedLayouts]
   );
 
   const closePopout = useCallback((id: string) => {
@@ -142,14 +156,15 @@ export function PopoutProvider({ children }: { children: ReactNode }) {
     const popout = popouts.find((p) => p.id === id);
     if (!popout) return;
 
-    const layouts = readSavedLayouts();
+    const layouts = { ...savedLayouts };
     layouts[layoutKeyFor(popout.type, popout.customSettings)] = {
       position: popout.position,
       size: popout.size,
       opacity: popout.opacity,
     };
-    localStorage.setItem(SAVED_LAYOUTS_KEY, JSON.stringify(layouts));
-  }, [popouts]);
+    setSavedLayouts(layouts);
+    void persistedLayouts.save({ layouts }).catch(() => {});
+  }, [popouts, savedLayouts, persistedLayouts.save]);
 
   const getPopout = useCallback((id: string) => {
     return popouts.find((p) => p.id === id);
