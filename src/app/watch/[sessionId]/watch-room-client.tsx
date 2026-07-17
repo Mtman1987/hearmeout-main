@@ -143,7 +143,7 @@ function mediaErrorMessage(error: MediaError | null | undefined) {
   return `Media error ${error.code}`;
 }
 
-const YOUTUBE_CLIENT_RESOLVE_WAIT_MS = 4500;
+const YOUTUBE_CLIENT_RESOLVE_WAIT_MS = 9000;
 const YOUTUBE_VIDEO_ID_RE = /^[A-Za-z0-9_-]{11}$/;
 
 function youtubeVideoIdForItem(item: any) {

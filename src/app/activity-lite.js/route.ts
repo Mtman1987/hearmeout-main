@@ -68,10 +68,16 @@ const VISUAL_TESTS = [
   { itemId: 'sintel', label: 'Sintel HLS' },
   { itemId: 'tears-of-steel', label: 'Tears of Steel HLS' },
 ];
-const YOUTUBE_CLIENT_RESOLVE_WAIT_MS = 4500;
+const YOUTUBE_CLIENT_RESOLVE_WAIT_MS = 9000;
 const YOUTUBE_VIDEO_ID_RE = /^[A-Za-z0-9_-]{11}$/;
 const INNERTUBE_API_KEY = 'AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8';
-const INNERTUBE_CLIENT_VERSION = '2.20240101.00.00';
+// Prefer clients that return plain, unciphered direct URLs (ANDROID_VR, then
+// IOS); WEB is a last resort since its formats are usually signature-ciphered.
+const INNERTUBE_CLIENTS = [
+  { name: 'ANDROID_VR', context: { clientName: 'ANDROID_VR', clientVersion: '1.60.19', deviceMake: 'Oculus', deviceModel: 'Quest 3', androidSdkVersion: 32, osName: 'Android', osVersion: '12L', hl: 'en', gl: 'US' } },
+  { name: 'IOS', context: { clientName: 'IOS', clientVersion: '19.45.4', deviceMake: 'Apple', deviceModel: 'iPhone16,2', osName: 'iPhone', osVersion: '18.1.0.22B83', hl: 'en', gl: 'US' } },
+  { name: 'WEB', context: { clientName: 'WEB', clientVersion: '2.20240101.00.00', hl: 'en', gl: 'US' } },
+];
 let state = null;
 let currentRequestId = null;
 let hls = null;
@@ -271,24 +277,42 @@ function pickBestYoutubeFormat(formats, type) {
   return candidates[0]?.url || null;
 }
 
+async function resolveYoutubeWithClient(videoId, client) {
+  const response = await fetch('https://www.youtube.com/youtubei/v1/player?key=' + encodeURIComponent(INNERTUBE_API_KEY), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      videoId,
+      context: { client: client.context },
+      contentCheckOk: true,
+      racyCheckOk: true,
+    }),
+  });
+  if (!response.ok) throw new Error('YouTube API returned ' + response.status);
+  const data = await response.json();
+  if (data?.playabilityStatus?.status !== 'OK') {
+    console.warn('[YT Resolve] ' + client.name + ' playability:', data?.playabilityStatus?.status, data?.playabilityStatus?.reason);
+    return null;
+  }
+  const formats = [...(data?.streamingData?.formats || []), ...(data?.streamingData?.adaptiveFormats || [])];
+  const videoUrl = pickBestYoutubeFormat(formats, 'video');
+  const audioUrl = pickBestYoutubeFormat(formats, 'audio');
+  if (!audioUrl) return null;
+  return { videoUrl: videoUrl || audioUrl, audioUrl };
+}
+
 async function resolveYoutubeInBrowser(videoId) {
   let timedOut = false;
   const lookup = (async () => {
-    const response = await fetch('https://www.youtube.com/youtubei/v1/player?key=' + encodeURIComponent(INNERTUBE_API_KEY), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        videoId,
-        context: { client: { clientName: 'WEB', clientVersion: INNERTUBE_CLIENT_VERSION, hl: 'en', gl: 'US' } },
-      }),
-    });
-    if (!response.ok) throw new Error('YouTube API returned ' + response.status);
-    const data = await response.json();
-    if (data?.playabilityStatus?.status !== 'OK') return null;
-    const formats = [...(data?.streamingData?.formats || []), ...(data?.streamingData?.adaptiveFormats || [])];
-    const videoUrl = pickBestYoutubeFormat(formats, 'video');
-    const audioUrl = pickBestYoutubeFormat(formats, 'audio');
-    return videoUrl && audioUrl ? { videoUrl, audioUrl } : null;
+    for (const client of INNERTUBE_CLIENTS) {
+      try {
+        const stream = await resolveYoutubeWithClient(videoId, client);
+        if (stream) { console.log('[YT Resolve] Resolved ' + videoId + ' via ' + client.name); return stream; }
+      } catch (err) {
+        console.warn('[YT Resolve] ' + client.name + ' failed:', err);
+      }
+    }
+    return null;
   })();
   const stream = await Promise.race([
     lookup.catch(() => null),
