@@ -1,7 +1,13 @@
 'use client';
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { resolveYoutubeStream, submitResolvedStream, type ResolvedStream } from '@/lib/youtube-client-resolver';
+import {
+  resolveYoutubeStream,
+  submitResolvedStream,
+  downloadAndCacheAudio,
+  isAudioCached,
+  type ResolvedStream,
+} from '@/lib/youtube-client-resolver';
 
 type WatchState = {
   id: string;
@@ -160,7 +166,26 @@ function shouldResolveYoutubeInBrowser(item: any) {
   return Boolean(youtubeVideoIdForItem(item) && item?.metadata?.playbackStrategy === 'proxy');
 }
 
-async function resolveYoutubeInBrowser(videoId: string) {
+// Stable per-browser id so each user's cached favorites are tracked separately.
+function getBrowserUserId(): string | undefined {
+  try {
+    let id = window.localStorage.getItem('hmo_user_id');
+    if (!id) {
+      id = `u_${Math.random().toString(36).slice(2)}${Date.now().toString(36)}`;
+      window.localStorage.setItem('hmo_user_id', id);
+    }
+    return id;
+  } catch {
+    return undefined;
+  }
+}
+
+async function resolveYoutubeInBrowser(videoId: string, userId?: string) {
+  // Favorites/most-played are already on the server — skip re-downloading.
+  if (await isAudioCached(videoId, userId)) {
+    return { ok: true, reason: 'cached' };
+  }
+
   let timedOut = false;
   const stream = await Promise.race<ResolvedStream | null>([
     resolveYoutubeStream(videoId),
@@ -173,7 +198,14 @@ async function resolveYoutubeInBrowser(videoId: string) {
   ]);
 
   if (!stream) return { ok: false, reason: timedOut ? 'timed out' : 'no streams resolved' };
+
+  // Preferred path: download the audio in this browser (user's IP/session) and
+  // upload it so the server plays a cached file with no server-side extraction.
+  const cached = await downloadAndCacheAudio(videoId, stream.audioUrl, userId);
+  // Also hand off the live URLs so the (video) HLS path keeps working.
   const submitted = await submitResolvedStream(videoId, stream);
+
+  if (cached) return { ok: true, reason: 'cached' };
   return { ok: submitted, reason: submitted ? 'submitted' : 'submit failed' };
 }
 
@@ -620,7 +652,7 @@ export default function WatchRoomClient({ sessionId, activityMode = false, canPa
       if (shouldResolveYoutubeInBrowser(item)) {
         const ytVideoId = youtubeVideoIdForItem(item);
         setMediaStatus('Resolving YouTube stream in this browser');
-        const resolved = await resolveYoutubeInBrowser(ytVideoId);
+        const resolved = await resolveYoutubeInBrowser(ytVideoId, getBrowserUserId());
         if (cancelled) return;
         console.log('[WatchRoom] Browser YouTube resolve result', {
           videoId: ytVideoId,

@@ -145,6 +145,60 @@ export async function resolveYoutubeStream(videoId: string): Promise<ResolvedStr
   return null;
 }
 
+// Checks whether the worker already holds a cached audio file for this video,
+// so the browser can skip re-downloading favorites/most-played tracks.
+export async function isAudioCached(videoId: string, userId?: string): Promise<boolean> {
+  try {
+    const query = new URLSearchParams({ videoId });
+    if (userId) query.set('user', userId);
+    const response = await fetch(`/api/watch/youtube/upload?${query.toString()}`);
+    if (!response.ok) return false;
+    const data = await response.json().catch(() => null);
+    return Boolean(data?.cached);
+  } catch {
+    return false;
+  }
+}
+
+// Downloads the resolved audio bytes in the browser (user's IP/session) and
+// uploads them to the server, which caches the file for playback. This avoids
+// the server ever fetching from YouTube, sidestepping datacenter bot checks.
+export async function downloadAndCacheAudio(
+  videoId: string,
+  audioUrl: string,
+  userId?: string,
+): Promise<boolean> {
+  try {
+    const download = await fetch(audioUrl);
+    if (!download.ok) {
+      console.warn(`[YT Cache] audio download failed for ${videoId}:`, download.status);
+      return false;
+    }
+    const blob = await download.blob();
+    if (!blob.size) {
+      console.warn(`[YT Cache] empty audio download for ${videoId}`);
+      return false;
+    }
+
+    const query = new URLSearchParams({ videoId });
+    if (userId) query.set('user', userId);
+    const upload = await fetch(`/api/watch/youtube/upload?${query.toString()}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/octet-stream' },
+      body: blob,
+    });
+    if (!upload.ok) {
+      console.warn(`[YT Cache] upload failed for ${videoId}:`, upload.status);
+      return false;
+    }
+    console.log(`[YT Cache] Cached ${videoId} on server (${blob.size} bytes)`);
+    return true;
+  } catch (error) {
+    console.warn(`[YT Cache] download/upload failed for ${videoId}:`, error);
+    return false;
+  }
+}
+
 export async function submitResolvedStream(videoId: string, stream: ResolvedStream): Promise<boolean> {
   try {
     const response = await fetch(`/api/watch/youtube/resolve`, {
