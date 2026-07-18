@@ -370,10 +370,10 @@ export async function POST(request: NextRequest) {
         reply: (content) => {
           replies.push(content);
         },
+        richReply: (content) => {
+          replies.push(content);
+        },
       });
-      if (handled && /^!(sr|song)\b/i.test(message)) {
-        replies.push(buildWatchControlsReply(getRequestBaseUrl(request), MUSIC_WATCH_SESSION_ID));
-      }
     }
 
     const discordSends = handled

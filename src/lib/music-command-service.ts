@@ -1,4 +1,4 @@
-import { controlWatchSession, extractWatchRoomAlias, getResolvedWatchSession, getWatchActivityJoinUrl, requestWatchMusicItem } from '@/lib/watch-request-service';
+import { buildWatchJoinMessage, controlWatchSession, extractWatchRoomAlias, getResolvedWatchSession, getWatchActivityJoinUrl, requestWatchMusicItem } from '@/lib/watch-request-service';
 import { getMusicWatchSessionId } from '@/lib/watch-session';
 
 export function parseMusicCommand(message: string) {
@@ -32,6 +32,8 @@ export async function handleMusicCommand(params: {
   publicBaseUrl?: string;
   // eslint-disable-next-line no-unused-vars
   reply?: (content: string) => void | Promise<void>;
+  // eslint-disable-next-line no-unused-vars
+  richReply?: (content: ReturnType<typeof buildWatchJoinMessage>) => void | Promise<void>;
 }) {
   const parsed = parseMusicCommand(params.message);
   if (!parsed) return false;
@@ -71,7 +73,17 @@ export async function handleMusicCommand(params: {
       activityVoiceChannelId: params.activityVoiceChannelId,
       fallbackChannelId: params.channelId,
     });
-    await reply(`Queued in Music Videos: ${result.request.item.title} (${position}). Join: ${joinUrl}`);
+    if (params.richReply) {
+      await params.richReply(buildWatchJoinMessage(
+        result.request.item.title,
+        position,
+        joinUrl,
+        result.request.item,
+        result.session.id,
+      ));
+    } else {
+      await reply(`Queued in Music Videos: ${result.request.item.title} (${position}). Join: ${joinUrl}`);
+    }
     return true;
   }
 

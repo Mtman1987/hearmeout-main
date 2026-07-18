@@ -11,6 +11,7 @@ const APP_BASE_URL = ${JSON.stringify(appBaseUrl.replace(/\/$/, ''))};
 const MOVIE_SESSION_ID = 'discord-watch-room';
 const MUSIC_SESSION_ID = 'discord-music-room';
 const params = new URLSearchParams(location.search);
+const IS_DISCORD_ACTIVITY = Boolean(params.get('frame_id')) || location.hostname.endsWith('.discordsays.com');
 function cleanScopePart(value) {
   return String(value || '').trim().replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 80);
 }
@@ -82,6 +83,7 @@ let state = null;
 let currentRequestId = null;
 let hls = null;
 let youtubeHlsFallbackTimer = null;
+const youtubeNativeRetryCounts = {};
 let applying = false;
 let lastSeekApplyAt = 0;
 let mediaIsBuffering = false;
@@ -263,6 +265,21 @@ function youtubeVideoIdForItem(item) {
 
 function shouldResolveYoutubeInBrowser(item) {
   return Boolean(youtubeVideoIdForItem(item) && item?.metadata?.playbackStrategy === 'proxy');
+}
+
+function reportActivityMedia(message, details) {
+  if (!IS_DISCORD_ACTIVITY) return;
+  fetch('/api/client-log', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      area: 'discord-activity-media',
+      message: message + (details ? ' | ' + details : ''),
+      roomId: sessionId,
+      identity: state?.current?.requestId || null,
+      userAgent: navigator.userAgent,
+    }),
+  }).catch(() => {});
 }
 
 function pickBestYoutubeFormat(formats, type) {
@@ -697,6 +714,26 @@ function syncNativePlayback(action) {
 }
 
 function switchToYoutubeEmbedFallback(item, reason) {
+  if (IS_DISCORD_ACTIVITY) {
+    const retryKey = state?.current?.requestId || youtubeVideoIdForItem(item) || 'youtube';
+    const attempts = (youtubeNativeRetryCounts[retryKey] || 0) + 1;
+    youtubeNativeRetryCounts[retryKey] = attempts;
+    if (youtubeHlsFallbackTimer) clearTimeout(youtubeHlsFallbackTimer);
+    if (attempts > 40) {
+      mediaEl.textContent = 'Media: Discord-native stream failed to prepare';
+      errorEl.textContent = 'This source could not be prepared for Discord. Try Next or request another song.';
+      reportActivityMedia('native stream failed', reason + ' after ' + attempts + ' attempts');
+      return false;
+    }
+    mediaEl.textContent = 'Media: preparing Discord-native stream (' + attempts + ')';
+    reportActivityMedia('native stream retry', reason + ' attempt=' + attempts);
+    youtubeHlsFallbackTimer = setTimeout(() => {
+      youtubeHlsFallbackTimer = null;
+      if (state?.current?.requestId !== retryKey) return;
+      loadMedia(item);
+    }, 3000);
+    return true;
+  }
   const embedUrl = item?.metadata?.embedPlaybackUrl || youtubeEmbedUrlForItem(item);
   if (!embedUrl) return false;
   if (youtubeHlsFallbackTimer) {
@@ -745,7 +782,7 @@ async function loadMedia(item) {
   pendingPlay = false;
   mediaEl.textContent = 'Media: loading ' + item.title;
   const loadingRequestId = state?.current?.requestId || '';
-  if (shouldResolveYoutubeInBrowser(item)) {
+  if (shouldResolveYoutubeInBrowser(item) && !IS_DISCORD_ACTIVITY) {
     const videoId = youtubeVideoIdForItem(item);
     mediaEl.textContent = 'Media: resolving YouTube stream in this browser';
     const resolved = await resolveYoutubeInBrowser(videoId);
@@ -796,6 +833,8 @@ async function loadMedia(item) {
         youtubeHlsFallbackTimer = null;
       }
       mediaEl.textContent = 'Media: ready';
+      if (state?.current?.requestId) youtubeNativeRetryCounts[state.current.requestId] = 0;
+      reportActivityMedia('HLS manifest ready', item.title);
       mediaIsBuffering = false;
       if (state && state.playback && state.playback.status === 'playing') startVideoPlayback();
     });
@@ -806,6 +845,7 @@ async function loadMedia(item) {
         : 'Media: buffering' + (details ? ' - ' + details : '');
       if (data && data.fatal) {
         console.warn('HLS fatal error', data);
+        reportActivityMedia('HLS fatal error', String(details || 'unknown'));
         switchToYoutubeEmbedFallback(item, 'HLS failed');
       }
     });
@@ -1327,7 +1367,11 @@ function onMediaPlay(event) {
   if (event.currentTarget !== media) return;
   if (state && state.playback && state.playback.status !== 'playing') syncNativePlayback('play');
 }
-function onMediaPlaying(event) { if (event.currentTarget === media) mediaEl.textContent = 'Media: playing'; }
+function onMediaPlaying(event) {
+  if (event.currentTarget !== media) return;
+  mediaEl.textContent = 'Media: playing';
+  reportActivityMedia('native media playing', state?.current?.item?.title || 'unknown');
+}
 function onMediaCanPlay(event) {
   if (event.currentTarget !== media) return;
   mediaIsBuffering = false;
@@ -1361,6 +1405,7 @@ function onMediaError(event) {
   const errorKey = activeMediaErrorKey || (state?.current ? state.current.requestId + ':' + playbackUrlForItem(item) : '');
   const attempts = (mediaErrorCounts[errorKey] || 0) + 1;
   mediaErrorCounts[errorKey] = attempts;
+  reportActivityMedia('native media element error', String(media.error?.code || 'unknown') + ' attempt=' + attempts);
   if (isYoutubeAudioMusicItem(item) && attempts < MEDIA_ERROR_FALLBACK_THRESHOLD) {
     mediaEl.textContent = 'Media: retrying audio stream ' + attempts + '/' + MEDIA_ERROR_FALLBACK_THRESHOLD;
     setTimeout(() => {
