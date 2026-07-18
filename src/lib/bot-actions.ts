@@ -456,6 +456,31 @@ export async function updateRoomPlayState(roomId: string, isPlaying: boolean): P
   return { success: true, message: `${isPlaying ? 'Playing' : 'Paused'}: "${trackTitle}"` };
 }
 
+export async function rememberAutoRadioTrack(roomId: string, track: PlaylistItem, userId: string) {
+  if (!roomId || !track?.id) return;
+  await ensureDb();
+  const room = db.get('rooms', roomId);
+  if (!room) return;
+  const playlist: PlaylistItem[] = room.playlist || [];
+  const alreadyStored = playlist.some((item) => item.id === track.id);
+  db.update('rooms', roomId, {
+    playlist: alreadyStored ? playlist : [...playlist, track].slice(-100),
+    autoRadioProfiles: updateUserAutoRadioProfile(room.autoRadioProfiles || {}, userId || 'listener', {
+      id: track.id,
+      title: track.title || 'Unknown Title',
+      artist: track.artist || 'Unknown Artist',
+    }),
+  });
+}
+
+export async function setAutoRadioEnabled(roomId: string, enabled: boolean) {
+  if (!roomId) return false;
+  await ensureDb();
+  if (!db.get('rooms', roomId)) return false;
+  db.update('rooms', roomId, { autoRadio: enabled });
+  return true;
+}
+
 export async function skipTrack(roomId: string): Promise<{ success: boolean; message: string }> {
   if (!roomId) return { success: false, message: 'No room ID provided.' };
   await ensureDb();
@@ -593,6 +618,7 @@ export async function getRoomState(roomId: string) {
     currentTrack: data.playlist?.find((t: any) => t.id === data.currentTrackId) || null,
     playlistLength: data.playlist?.length || 0,
     djDisplayName: data.djDisplayName || 'No DJ',
+    autoRadio: data.autoRadio === true,
   };
 }
 

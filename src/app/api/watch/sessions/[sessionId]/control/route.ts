@@ -29,6 +29,7 @@ export async function POST(request: Request, context: { params: Promise<{ sessio
         isHost: Boolean(body.isHost),
         isAdmin: Boolean(body.isAdmin),
         platform: body.platform || (body.guildId && body.channelId ? 'discord' : body.roomId ? 'room' : 'web'),
+        expectedRequestId: body.expectedRequestId || undefined,
       },
     );
     return NextResponse.json(getPublicWatchSession(session), { headers: CORS_HEADERS });

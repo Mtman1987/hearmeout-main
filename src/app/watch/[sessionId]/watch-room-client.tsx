@@ -15,6 +15,7 @@ type WatchState = {
   queue: Array<any>;
   ttsQueue?: Array<any>;
   current: any | null;
+  autoRadio?: boolean;
   playback: {
     status: 'idle' | 'paused' | 'playing';
     position: number;
@@ -23,6 +24,11 @@ type WatchState = {
   };
   events: Array<{ id: string; at: string; message: string }>;
 };
+
+function playerGain(logicalVolume: number, item: any) {
+  const normalized = Math.max(0, Math.min(1, logicalVolume));
+  return item?.type === 'music' && normalized > 0 ? Math.pow(normalized, 6) : normalized;
+}
 
 function watchRequestErrorMessage(payload: any, fallback: string) {
   if (payload?.discovery) {
@@ -300,7 +306,14 @@ export default function WatchRoomClient({ sessionId, activityMode = false, canPa
       const isHostControl = canPause || activityMode || (action === 'next' && sessionId === 'discord-music-room');
       const nextState = await api(`/api/watch/sessions/${sessionId}/control`, {
         method: 'POST',
-        body: JSON.stringify({ action, position, isHost: isHostControl, isAdmin: canPause || activityMode, platform: activityMode ? 'activity' : 'web' }),
+        body: JSON.stringify({
+          action,
+          position,
+          expectedRequestId: action === 'next' ? state?.current?.requestId : undefined,
+          isHost: isHostControl,
+          isAdmin: canPause || activityMode,
+          platform: activityMode ? 'activity' : 'web',
+        }),
       });
       setControlError(null);
       setState(nextState);
@@ -315,10 +328,11 @@ export default function WatchRoomClient({ sessionId, activityMode = false, canPa
 
   function setPlayerVolume(nextVolume: number) {
     const normalized = Math.max(0, Math.min(1, nextVolume));
+    const gain = playerGain(normalized, currentItem);
     setVolume(normalized);
     if (normalized > 0 && muted) setMuted(false);
     if (embeddedMode) {
-      youtubeCommand('setVolume', [Math.round(normalized * 100)]);
+      youtubeCommand('setVolume', [Math.round(gain * 100)]);
       youtubeCommand(muted || normalized === 0 ? 'mute' : 'unMute');
     }
   }
@@ -364,10 +378,12 @@ export default function WatchRoomClient({ sessionId, activityMode = false, canPa
 
   async function enableSound() {
     localAudioUnlockedRef.current = true;
+    const logicalVolume = volume > 0 ? volume : 0.5;
+    const gain = playerGain(logicalVolume, currentItem);
     if (embeddedMode) {
       setMuted(false);
-      setVolume(1);
-      youtubeCommand('setVolume', [100]);
+      setVolume(logicalVolume);
+      youtubeCommand('setVolume', [Math.round(gain * 100)]);
       youtubeCommand('unMute');
       youtubeCommand('playVideo');
       setMediaStatus('Playing with sound enabled');
@@ -375,10 +391,10 @@ export default function WatchRoomClient({ sessionId, activityMode = false, canPa
     }
     const video = videoRef.current;
     setMuted(false);
-    setVolume(1);
+    setVolume(logicalVolume);
     if (!video) return;
     video.muted = false;
-    video.volume = 1;
+    video.volume = gain;
     try {
       await video.play();
       setMediaStatus('Playing with sound enabled');
@@ -481,7 +497,7 @@ export default function WatchRoomClient({ sessionId, activityMode = false, canPa
   async function nextItem() {
     try {
       const nextState = activityMode
-        ? (await api(`/api/watch/sessions/${sessionId}/quick-control?action=next&position=0&format=json&platform=discord`)).session
+        ? (await api(`/api/watch/sessions/${sessionId}/quick-control?action=next&position=0&format=json&platform=discord&expectedRequestId=${encodeURIComponent(state?.current?.requestId || '')}`)).session
         : await sendControl('next', 0);
       setCurrentRequestId(null);
       setState(nextState);
@@ -775,14 +791,14 @@ export default function WatchRoomClient({ sessionId, activityMode = false, canPa
   useEffect(() => {
     const video = videoRef.current;
     if (embeddedMode) {
-      youtubeCommand('setVolume', [Math.round(volume * 100)]);
+      youtubeCommand('setVolume', [Math.round(playerGain(volume, currentItem) * 100)]);
       youtubeCommand(muted || volume === 0 ? 'mute' : 'unMute');
       return;
     }
     if (!video) return;
-    video.volume = volume;
+    video.volume = playerGain(volume, currentItem);
     video.muted = muted;
-  }, [volume, muted, embeddedMode]);
+  }, [volume, muted, embeddedMode, state?.current?.requestId]);
 
   useEffect(() => {
     if (!localAudioUnlockedRef.current && typeof state?.playback?.muted === 'boolean') {
@@ -818,14 +834,14 @@ export default function WatchRoomClient({ sessionId, activityMode = false, canPa
         if (canPause && state?.playback?.status === 'playing') sendControl('pause', embeddedCurrentTimeRef.current).catch(() => {});
       } else if (code === 0) {
         setMediaStatus('Embedded video ended');
-        if (canPause) nextItem().catch(() => {});
+        if (canSkip) nextItem().catch(() => {});
       } else if (code === 3) {
         setMediaStatus('Embedded video buffering');
       }
     };
     window.addEventListener('message', onMessage);
     return () => window.removeEventListener('message', onMessage);
-  }, [state?.playback?.status, embeddedMode, canPause]);
+  }, [state?.playback?.status, state?.current?.requestId, embeddedMode, canPause, canSkip]);
 
   async function submitRequest(event: React.FormEvent) {
     event.preventDefault();
@@ -907,7 +923,6 @@ export default function WatchRoomClient({ sessionId, activityMode = false, canPa
                 if (!video) return;
                 localAudioUnlockedRef.current = true;
                 setMuted(video.muted);
-                setVolume(video.volume);
               }}
               onError={() => {
                 const mediaError = videoRef.current?.error;
@@ -917,7 +932,7 @@ export default function WatchRoomClient({ sessionId, activityMode = false, canPa
               }}
               onEnded={() => {
                 setMediaStatus('ended');
-                if (canPause) nextItem();
+                if (canSkip) nextItem();
               }}
             />
             {!state?.current && (
@@ -954,6 +969,15 @@ export default function WatchRoomClient({ sessionId, activityMode = false, canPa
             )}
             <button type="button" className="rounded-md border border-slate-700 bg-slate-800 px-3 py-2 hover:border-emerald-400" onClick={syncPlayback}>Sync</button>
             {canSkip && <button type="button" className="rounded-md border border-slate-700 bg-slate-800 px-3 py-2 hover:border-emerald-400" onClick={nextItem}>Next</button>}
+            {sessionId === 'discord-music-room' && canPause && (
+              <button
+                type="button"
+                className={`rounded-md border px-3 py-2 ${state?.autoRadio ? 'border-emerald-400 bg-emerald-950/40 text-emerald-100' : 'border-slate-700 bg-slate-800 hover:border-emerald-400'}`}
+                onClick={() => sendControl('auto-radio', state?.autoRadio ? 0 : 1)}
+              >
+                {state?.autoRadio ? 'Auto-Radio On' : 'Auto-Radio Off'}
+              </button>
+            )}
             {(canPause || activityMode) && <button type="button" className="rounded-md border border-slate-700 bg-slate-800 px-3 py-2 hover:border-emerald-400" onClick={clearQueue}>Clear</button>}
             <button type="button" className="rounded-md border border-slate-700 bg-slate-800 px-3 py-2 hover:border-emerald-400 disabled:opacity-50" onClick={openPopout} disabled={!state?.current}>Pop Out</button>
             <button type="button" className="rounded-md border border-slate-700 bg-slate-800 px-3 py-2 hover:border-emerald-400 disabled:opacity-50" onClick={openFullscreen} disabled={!state?.current}>Fullscreen</button>

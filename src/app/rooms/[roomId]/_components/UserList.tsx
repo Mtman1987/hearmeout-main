@@ -9,6 +9,7 @@ import { useLocalParticipant, useRemoteParticipants, useTracks, AudioTrack } fro
 import { Track } from 'livekit-client';
 import '@livekit/components-styles';
 import type { PlaylistItem } from '@/types/playlist';
+import { canManageRoom } from '@/lib/room-access';
 
 export interface RoomData {
   name: string;
@@ -27,7 +28,8 @@ interface UserListProps {
   musicStatus: string | null;
   djStatus?: string;
   localVolume: number;
-  onVolumeChange: (v: number) => void;
+  // eslint-disable-next-line no-unused-vars
+  onVolumeChange: (volume: number) => void;
   showDJ: boolean;
   autoRadio?: boolean;
   onToggleAutoRadio?: () => void;
@@ -69,8 +71,7 @@ export default function UserList({ roomId, musicStatus, djStatus, localVolume, o
   const { user } = useSession();
   const { data: room } = useDoc<RoomData>('rooms', roomId, 2000);
 
-  const isAdmin = !!user && !!(user as any).isAdmin;
-  const isHost = !!user && (user.uid === room?.ownerId || isAdmin);
+  const isHost = canManageRoom(user as any, room?.ownerId);
   const canControl = isHost;
 
   return (

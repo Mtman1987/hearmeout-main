@@ -499,8 +499,11 @@ function isHlsPlaybackUrl(value) {
 
 function applyVolume() {
   const value = Math.max(0, Math.min(100, Number(volumeInput.value || 0)));
+  const logical = value / 100;
+  const isMusic = Boolean(state && state.current && state.current.item && state.current.item.type === 'music');
+  const gain = isMusic && logical > 0 ? Math.pow(logical, 6) : logical;
   if (embeddedMode) {
-    youtubeCommand('setVolume', [value]);
+    youtubeCommand('setVolume', [Math.round(gain * 100)]);
     youtubeCommand(muted || value === 0 ? 'mute' : 'unMute');
     muteBtn.textContent = muted || value === 0 ? '🔇' : '🔊';
     muteBtn.title = muted || value === 0 ? 'Unmute' : 'Mute';
@@ -508,7 +511,7 @@ function applyVolume() {
     volumeLabel.textContent = (muted ? 0 : value) + '%';
     return;
   }
-  media.volume = value / 100;
+  media.volume = gain;
   media.muted = muted || value === 0;
   muteBtn.textContent = media.muted ? '🔇' : '🔊';
   muteBtn.title = media.muted ? 'Unmute' : 'Mute';
@@ -934,7 +937,8 @@ async function control(action, positionOverride) {
         : (media.currentTime || 0),
   };
   try {
-    const controlUrl = '/api/watch/sessions/' + sessionId + '/quick-control?action=' + encodeURIComponent(action) + '&position=' + encodeURIComponent(String(body.position || 0)) + '&format=json&platform=activity&isHost=true';
+    const expectedRequestId = action === 'next' && state && state.current ? state.current.requestId : '';
+    const controlUrl = '/api/watch/sessions/' + sessionId + '/quick-control?action=' + encodeURIComponent(action) + '&position=' + encodeURIComponent(String(body.position || 0)) + '&expectedRequestId=' + encodeURIComponent(expectedRequestId) + '&format=json&platform=activity&isHost=true';
     const result = await api(controlUrl);
     render(result.session);
     if (action === 'seek') mediaEl.textContent = 'Media: synced at ' + Math.round(body.position) + 's';
@@ -1347,6 +1351,9 @@ function onMediaSeeked(event) { if (event.currentTarget === media && !applying &
 function onMediaEnded(event) {
   if (event.currentTarget !== media) return;
   mediaEl.textContent = 'Media: ended';
+  control('next', 0).catch((err) => {
+    errorEl.textContent = err && err.message ? err.message : String(err);
+  });
 }
 function onMediaError(event) {
   if (event.currentTarget !== media) return;
@@ -1425,6 +1432,9 @@ window.addEventListener('message', (event) => {
     syncEmbeddedNativePlayback('pause');
   } else if (info === 0) {
     mediaEl.textContent = 'Media: embedded video ended';
+    control('next', 0).catch((err) => {
+      errorEl.textContent = err && err.message ? err.message : String(err);
+    });
   } else if (info === 3) {
     mediaEl.textContent = 'Media: embedded video buffering';
   }

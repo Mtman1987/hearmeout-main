@@ -1,10 +1,10 @@
 import { findXtreamSeriesEpisode, getNextXtreamSeriesEpisode, isXtreamConfigured, isXtreamMockEnabled, searchXtreamCatalog } from './xtream-provider';
 import { findInternetArchiveRecommendation } from './internet-archive-provider';
 import { findWatchmodeRecommendation } from './watchmode-provider';
-import { resolveSongRequest } from '@/lib/bot-actions';
+import { autoRadioNext, getRoomState, rememberAutoRadioTrack, resolveSongRequest, setAutoRadioEnabled } from '@/lib/bot-actions';
 import { DISCORD_CLIENT_ID } from '@/lib/public-config';
 import { ensureDiscordActivityRoomForSession } from '@/lib/activity-room';
-import { getGlobalWatchSessionId, getMusicWatchSessionId, getScopedWatchSessionId, normalizeWatchSessionAlias, type WatchMediaKind } from '@/lib/watch-session';
+import { ACTIVITY_ROOM_ID, getGlobalWatchSessionId, getMusicWatchSessionId, getScopedWatchSessionId, normalizeWatchSessionAlias, type WatchMediaKind } from '@/lib/watch-session';
 import { publishSpmtEvent } from '@/lib/spmt-client';
 import type { PlaylistItem } from '@/types/playlist';
 import { dirname } from 'path';
@@ -69,6 +69,7 @@ type WatchSession = {
   queue: WatchRequest[];
   ttsQueue?: WatchRequest[];
   current: WatchRequest | null;
+  autoRadio?: boolean;
   playback: {
     status: 'idle' | 'paused' | 'playing';
     position: number;
@@ -107,6 +108,7 @@ type WatchControlActor = {
   isHost?: boolean;
   isAdmin?: boolean;
   platform?: 'room' | 'discord' | 'activity' | 'web' | 'admin' | 'twitch';
+  expectedRequestId?: string;
 };
 
 const TEST_CATALOG: WatchCatalogItem[] = [
@@ -990,6 +992,11 @@ export async function requestWatchMusicItem(params: {
 
   const item = musicTrackToWatchItem(resolved.track);
   const session = getWatchSession(params.sessionId, params.guildId, params.channelId, 'music');
+  if (params.sessionId === getMusicWatchSessionId()) {
+    const roomState = await getRoomState(ACTIVITY_ROOM_ID);
+    session.autoRadio = roomState?.autoRadio === true;
+    await rememberAutoRadioTrack(ACTIVITY_ROOM_ID, resolved.track, params.userId);
+  }
   const request = enqueue(session, item, {
     userId: params.userId,
     username: params.username,
@@ -1121,6 +1128,19 @@ async function getAutoNextEpisodeRequest(session: WatchSession) {
   };
 }
 
+async function getAutoRadioRequest(sessionId: string): Promise<WatchRequest | null> {
+  if (sessionId !== getMusicWatchSessionId()) return null;
+  const generated = await autoRadioNext(ACTIVITY_ROOM_ID);
+  const roomState = generated.success ? await getRoomState(ACTIVITY_ROOM_ID) : null;
+  if (!roomState?.currentTrack) return null;
+  return {
+    requestId: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+    requestedBy: { userId: 'auto-radio', username: 'Auto-Radio' },
+    addedAt: new Date().toISOString(),
+    item: musicTrackToWatchItem(roomState.currentTrack),
+  };
+}
+
 export async function controlWatchSession(sessionId: string, action: string, position?: number, targetIndex?: number, actor?: WatchControlActor) {
   const session = getWatchSession(sessionId);
   touchSession(session);
@@ -1128,6 +1148,31 @@ export async function controlWatchSession(sessionId: string, action: string, pos
 
   if (session.playback.muted === undefined) session.playback.muted = true;
   if (session.playback.volume === undefined) session.playback.volume = 85;
+
+  if (action === 'auto-radio') {
+    if (!(actor?.isHost || actor?.isAdmin || actor?.platform === 'admin')) {
+      throw new Error('Only the room host or an admin can change auto-radio.');
+    }
+    const enabled = Number(position || 0) > 0;
+    session.autoRadio = enabled;
+    if (sessionId === getMusicWatchSessionId()) await setAutoRadioEnabled(ACTIVITY_ROOM_ID, enabled);
+    if (enabled && !session.current && session.queue.length === 0) {
+      session.current = await getAutoRadioRequest(sessionId);
+      if (session.current) {
+        maybePrepareSharedHls(session.current.item);
+        session.playback = {
+          status: 'playing',
+          position: 0,
+          updatedAt: Date.now(),
+          muted: session.playback.muted ?? true,
+          volume: session.playback.volume ?? 85,
+        };
+      }
+    }
+    addEvent(session, `Auto-radio ${enabled ? 'enabled' : 'disabled'}`);
+    saveWatchStateToDisk();
+    return session;
+  }
 
   if (!session.current && (action === 'play' || action === 'pause' || action === 'seek')) {
     session.playback = {
@@ -1184,7 +1229,11 @@ export async function controlWatchSession(sessionId: string, action: string, pos
   }
 
   if (action === 'next') {
+    if (actor?.expectedRequestId && session.current?.requestId !== actor.expectedRequestId) return session;
     session.current = session.queue.shift() || await getAutoNextEpisodeRequest(session);
+    if (!session.current && session.autoRadio && sessionId === getMusicWatchSessionId()) {
+      session.current = await getAutoRadioRequest(sessionId);
+    }
     if (session.current) maybePrepareSharedHls(session.current.item);
     if (session.current) await updateSeriesProgress(session.current.requestedBy.userId, session.current.item);
     session.playback = { status: session.current ? 'playing' : 'idle', position: 0, updatedAt: Date.now(), muted: session.playback.muted ?? true, volume: session.playback.volume ?? 85 };

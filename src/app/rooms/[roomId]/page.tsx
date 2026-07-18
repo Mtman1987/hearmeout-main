@@ -25,6 +25,12 @@ import { generateLiveKitToken, generateMusicRoomToken } from '@/app/actions';
 import { PlaylistItem } from "@/types/playlist";
 import { getScreenPeerId, PeerAudioListener, PeerScreenViewer, PeerVoiceMesh } from '@/lib/peer-audio-service';
 import { ACTIVITY_ROOM_ID, ACTIVITY_ROOM_NAME, getRoomWatchSessionId, isActivityRoomId, type WatchMediaKind } from '@/lib/watch-session';
+import { canManageRoom } from '@/lib/room-access';
+
+function musicGain(volume: number) {
+    const normalized = Math.max(0, Math.min(1, volume));
+    return normalized === 0 ? 0 : Math.pow(normalized, 6);
+}
 
 interface RoomData {
   id: string;
@@ -535,8 +541,7 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
       user?.uid || null,
     );
 
-    const isAdmin = !!user && !!(user as any).isAdmin;
-    const isOwner = !!user && (user.uid === room.ownerId || isAdmin);
+    const isOwner = canManageRoom(user as any, room.ownerId);
     const musicRoomRef = useRef<LKRoom | null>(null);
     const fallbackRoomRef = useRef<LKRoom | null>(null);
     const musicAudioRef = useRef<HTMLAudioElement | null>(null);
@@ -612,7 +617,7 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
             await lkRoom?.startAudio();
             const audio = musicAudioRef.current;
             if (audio) {
-                audio.volume = localVolumeRef.current;
+                audio.volume = musicGain(localVolumeRef.current);
                 await audio.play();
             }
             setMusicStatus(prev => prev || 'connected');
@@ -689,7 +694,7 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
                         (stream) => {
                             if (!musicAudioRef.current) musicAudioRef.current = new Audio();
                             musicAudioRef.current.srcObject = stream;
-                            musicAudioRef.current.volume = localVolumeRef.current;
+                            musicAudioRef.current.volume = musicGain(localVolumeRef.current);
                             if (userGestureUnlockedRef.current) {
                                 musicAudioRef.current.play().catch(() => {});
                             }
@@ -737,7 +742,7 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
                         console.log('[MusicRoom] 🎵 Audio track received — attaching');
                         if (!musicAudioRef.current) musicAudioRef.current = new Audio();
                         track.attach(musicAudioRef.current);
-                        musicAudioRef.current.volume = localVolumeRef.current;
+                        musicAudioRef.current.volume = musicGain(localVolumeRef.current);
                         if (userGestureUnlockedRef.current) {
                             musicAudioRef.current.play().catch(e => console.warn('[MusicRoom] Autoplay blocked:', e));
                         }
@@ -794,7 +799,7 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
                         (stream) => {
                             if (!musicAudioRef.current) musicAudioRef.current = new Audio();
                             musicAudioRef.current.srcObject = stream;
-                            musicAudioRef.current.volume = localVolumeRef.current;
+                            musicAudioRef.current.volume = musicGain(localVolumeRef.current);
                             if (userGestureUnlockedRef.current) {
                                 musicAudioRef.current.play().catch(() => {});
                             }
@@ -829,7 +834,7 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
     // Sync volume changes to the audio element
     useEffect(() => {
         if (musicAudioRef.current) {
-            musicAudioRef.current.volume = localVolume;
+            musicAudioRef.current.volume = musicGain(localVolume);
         }
     }, [localVolume]);
 
@@ -838,7 +843,7 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
             userGestureUnlockedRef.current = true;
             const audio = musicAudioRef.current;
             if (!audio || !audio.srcObject) return;
-            audio.volume = localVolumeRef.current;
+            audio.volume = musicGain(localVolumeRef.current);
             void audio.play().catch(() => {});
         };
         window.addEventListener('pointerdown', unlockMusicAudio, { passive: true });
@@ -1125,13 +1130,14 @@ function RoomPageContent() {
     const effectiveRoom: RoomData | null = isActivityRoom ? {
         id: ACTIVITY_ROOM_ID,
         name: ACTIVITY_ROOM_NAME,
-        ownerId: user?.uid || ACTIVITY_ROOM_ID,
-        playlist: [],
-        isPlaying: false,
-        djActive: false,
-        djStatus: 'Discord Activity watch room',
-        autoRadio: false,
-        playHistory: [],
+        ownerId: room?.ownerId || ACTIVITY_ROOM_ID,
+        playlist: room?.playlist || [],
+        currentTrackId: room?.currentTrackId,
+        isPlaying: room?.isPlaying || false,
+        djActive: room?.djActive || false,
+        djStatus: room?.djStatus || 'Discord Activity watch room',
+        autoRadio: room?.autoRadio || false,
+        playHistory: room?.playHistory || [],
         isPrivate: false,
     } : room;
 
@@ -1163,7 +1169,7 @@ function RoomPageContent() {
     }
 
     // Password gate for private rooms
-    const isOwner = !!user && (user.uid === effectiveRoom.ownerId || !!(user as any).isAdmin);
+    const isOwner = canManageRoom(user as any, effectiveRoom.ownerId);
     if (effectiveRoom.isPrivate && effectiveRoom.password && !passwordUnlocked && !isOwner) {
         return (
             <div className="flex flex-col h-screen">

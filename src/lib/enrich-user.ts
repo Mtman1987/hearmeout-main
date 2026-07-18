@@ -3,6 +3,7 @@
 
 import { db, ensureDb } from '@/lib/db';
 import { DSH_URL, HARDCODED_GUILD_ID } from '@/lib/constants';
+import { OWNER_ROLE_ID } from '@/lib/room-access';
 
 const SERVER_ID = process.env.HARDCODED_GUILD_ID || HARDCODED_GUILD_ID;
 
@@ -28,7 +29,9 @@ export async function enrichUserFromDSH(discordId: string): Promise<Record<strin
     if (dsh.username) enriched.username = dsh.username;
     if (dsh.displayName) enriched.displayName = dsh.displayName;
     if (dsh.avatarUrl) enriched.photoURL = dsh.avatarUrl;
-    enriched.isAdmin = dsh.isAdmin === true;
+    enriched.isAdmin = dsh.isAdmin === true
+      || dsh.group === 'Crew'
+      || (Array.isArray(dsh.roles) && dsh.roles.includes(OWNER_ROLE_ID));
     enriched.discordGuildId = SERVER_ID;
     enriched.enrichedAt = new Date().toISOString();
 
