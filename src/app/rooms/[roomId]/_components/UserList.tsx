@@ -4,12 +4,15 @@ import UserCard from "./UserCard";
 import DJCard from "./DJCard";
 import React from "react";
 import { useSession } from '@/hooks/use-session';
-import { useDoc } from '@/hooks/use-db';
+import { useCollection, useDoc } from '@/hooks/use-db';
 import { useLocalParticipant, useRemoteParticipants, useTracks, AudioTrack } from '@livekit/components-react';
 import { Track } from 'livekit-client';
 import '@livekit/components-styles';
 import type { PlaylistItem } from '@/types/playlist';
 import { canManageRoom } from '@/lib/room-access';
+import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
+import { Card, CardContent } from '@/components/ui/card';
+import { Radio } from 'lucide-react';
 
 export interface RoomData {
   name: string;
@@ -42,7 +45,50 @@ interface UserListProps {
   onOpenAddSong: () => void;
   onOpenWatch?: () => void;
   voiceEnabled?: boolean;
+  voicePeerFallback?: boolean;
   voiceFallbackFailed?: boolean;
+}
+
+type PeerPresence = {
+  id: string;
+  uid?: string;
+  displayName?: string;
+  photoURL?: string;
+  lastSeen?: number;
+};
+
+function PeerPresenceParticipants({ roomId, localUserId }: { roomId: string; localUserId?: string }) {
+  const { data: users } = useCollection<PeerPresence>(`rooms/${roomId}/users`, { pollInterval: 3000 });
+  const activeUsers = (users || []).filter((presence) => {
+    if (presence.id === localUserId || presence.uid === localUserId) return false;
+    const lastSeen = Number(presence.lastSeen || 0);
+    return lastSeen > 0 && Date.now() - lastSeen < 45_000;
+  });
+
+  return (
+    <>
+      {activeUsers.map((presence) => {
+        const displayName = presence.displayName || 'HearMeOut User';
+        const photoURL = presence.photoURL || `https://picsum.photos/seed/${presence.id}/100/100`;
+        return (
+          <Card key={presence.id} className="flex flex-col h-full">
+            <CardContent className="p-4 flex items-start gap-4">
+              <Avatar className="h-16 w-16">
+                <AvatarImage src={photoURL} alt={displayName} />
+                <AvatarFallback>{displayName.charAt(0).toUpperCase()}</AvatarFallback>
+              </Avatar>
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-lg font-bold">{displayName}</p>
+                <p className="mt-1 flex items-center gap-1.5 text-xs text-blue-500">
+                  <Radio className="h-3.5 w-3.5" /> Connected through P2P voice
+                </p>
+              </div>
+            </CardContent>
+          </Card>
+        );
+      })}
+    </>
+  );
 }
 
 function LiveKitParticipants({ isHost, roomId }: { isHost: boolean; roomId: string }) {
@@ -67,7 +113,7 @@ function LiveKitParticipants({ isHost, roomId }: { isHost: boolean; roomId: stri
   );
 }
 
-export default function UserList({ roomId, musicStatus, djStatus, localVolume, onVolumeChange, showDJ, autoRadio, onToggleAutoRadio, djIsLive, djStarting, onStartDJ, onStopDJ, onStartAudio, onOpenQueue, onOpenAddSong, onOpenWatch, voiceEnabled = true }: UserListProps) {
+export default function UserList({ roomId, musicStatus, djStatus, localVolume, onVolumeChange, showDJ, autoRadio, onToggleAutoRadio, djIsLive, djStarting, onStartDJ, onStopDJ, onStartAudio, onOpenQueue, onOpenAddSong, onOpenWatch, voiceEnabled = true, voicePeerFallback = false }: UserListProps) {
   const { user } = useSession();
   const { data: room } = useDoc<RoomData>('rooms', roomId, 2000);
 
@@ -105,6 +151,7 @@ export default function UserList({ roomId, musicStatus, djStatus, localVolume, o
           )}
           {/* Real users */}
           {voiceEnabled && <LiveKitParticipants isHost={isHost} roomId={roomId} />}
+          {voicePeerFallback && <PeerPresenceParticipants roomId={roomId} localUserId={user?.uid} />}
         </div>
       </div>
     </>

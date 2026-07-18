@@ -608,6 +608,36 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
         }
     }, [roomId, toast, user]);
 
+    // Voice transport must be room-wide. If one browser cannot reach LiveKit
+    // and registers on the PeerJS mesh, move the remaining browsers to that
+    // same mesh so the room is not split across two isolated voice networks.
+    useEffect(() => {
+        if (!user || !roomId || !voiceToken || voiceFallbackActive) return;
+        let cancelled = false;
+
+        const followRoomFallback = async () => {
+            try {
+                const res = await fetch(`/api/peer-voice/peers?roomId=${encodeURIComponent(roomId)}`, {
+                    cache: 'no-store',
+                });
+                if (!res.ok || cancelled) return;
+                const payload = await res.json() as { peers?: string[] };
+                if (Array.isArray(payload.peers) && payload.peers.length > 0) {
+                    await startPeerVoiceFallback(new Error('Another participant switched this room to P2P voice'));
+                }
+            } catch {
+                // LiveKit remains active when fallback discovery is unavailable.
+            }
+        };
+
+        void followRoomFallback();
+        const interval = setInterval(followRoomFallback, 3000);
+        return () => {
+            cancelled = true;
+            clearInterval(interval);
+        };
+    }, [roomId, startPeerVoiceFallback, user, voiceFallbackActive, voiceToken]);
+
     // DJ start/stop via server-side API (Puppeteer on hmo-dj-worker)
     const [djStarting, setDjStarting] = useState(false);
     const handleStartMusicAudio = useCallback(async () => {
@@ -1081,6 +1111,7 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
                           onOpenAddSong={() => openPopout('addSong', { width: 460, height: 560 }, { source: 'addSong', sessionScope: isStreamMode ? 'overlay' : 'discord', roomId, canControl: isOwner })}
                           onOpenWatch={() => openPopout('watch', { width: 760, height: 700 }, { source: 'watch', sessionScope: isStreamMode ? 'overlay' : 'discord', roomId, canControl: isOwner })}
                           voiceEnabled={voiceReady || voiceFallbackActive}
+                          voicePeerFallback={voiceFallbackActive}
                           voiceFallbackFailed={voiceFallbackFailed}
                         />
                         {isActivityRoomId(roomId) ? (
