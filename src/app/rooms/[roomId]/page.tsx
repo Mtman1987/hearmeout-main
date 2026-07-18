@@ -529,8 +529,9 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
     const [peerMicEnabled, setPeerMicEnabled] = useState(true);
     const peerVoiceRef = useRef<PeerVoiceMesh | null>(null);
     const peerVoiceStartingRef = useRef(false);
-    const [, setPeerVoiceStreams] = useState<Map<string, MediaStream>>(new Map());
+    const [peerVoiceStreams, setPeerVoiceStreams] = useState<Map<string, MediaStream>>(new Map());
     const peerVoiceAudioRefs = useRef<Map<string, HTMLAudioElement>>(new Map());
+    const [peerAudioBlocked, setPeerAudioBlocked] = useState(false);
     const [localVolume, setLocalVolume] = useState(0.5);
     const [musicStatus, setMusicStatus] = useState<string | null>(null);
     const [showDJ, setShowDJ] = useState(false);
@@ -578,10 +579,30 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
                     if (!audioEl) {
                         audioEl = new Audio();
                         audioEl.autoplay = true;
+                        audioEl.setAttribute('playsinline', '');
+                        audioEl.muted = false;
+                        audioEl.volume = 1;
+                        audioEl.style.display = 'none';
+                        document.body.appendChild(audioEl);
                         peerVoiceAudioRefs.current.set(peerId, audioEl);
                     }
                     audioEl.srcObject = stream;
-                    audioEl.play().catch(() => {});
+                    audioEl.play().then(() => {
+                        setPeerAudioBlocked(false);
+                    }).catch((playbackError) => {
+                        setPeerAudioBlocked(true);
+                        fetch('/api/client-log', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                area: 'peer-voice-playback',
+                                message: playbackError instanceof Error ? playbackError.message : String(playbackError),
+                                roomId,
+                                identity: peerId,
+                                userAgent: navigator.userAgent,
+                            }),
+                        }).catch(() => {});
+                    });
                 },
                 (peerId) => {
                     setPeerVoiceStreams(prev => {
@@ -592,6 +613,7 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
                     const audioEl = peerVoiceAudioRefs.current.get(peerId);
                     if (audioEl) {
                         audioEl.srcObject = null;
+                        audioEl.remove();
                         peerVoiceAudioRefs.current.delete(peerId);
                     }
                 },
@@ -607,6 +629,17 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
             peerVoiceStartingRef.current = false;
         }
     }, [roomId, toast, user]);
+
+    const unlockPeerAudio = useCallback(async () => {
+        const results = await Promise.allSettled(
+            Array.from(peerVoiceAudioRefs.current.values()).map((audioEl) => audioEl.play()),
+        );
+        const blocked = results.some((result) => result.status === 'rejected');
+        setPeerAudioBlocked(blocked);
+        toast(blocked
+            ? { variant: 'destructive', title: 'P2P Audio Still Blocked', description: 'Check this site\'s sound output and browser autoplay permissions.' }
+            : { title: 'P2P Audio Enabled', description: 'Incoming room voice is now playing.' });
+    }, [toast]);
 
     // Voice transport must be room-wide. If one browser cannot reach LiveKit
     // and registers on the PeerJS mesh, move the remaining browsers to that
@@ -984,7 +1017,8 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
             clearPresence();
             // Clean up audio elements
             for (const [, audioEl] of peerVoiceAudioRefs.current) {
-                audioEl.srcObject = null;
+              audioEl.srcObject = null;
+              audioEl.remove();
             }
             peerVoiceAudioRefs.current.clear();
         };
@@ -1112,6 +1146,9 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
                           onOpenWatch={() => openPopout('watch', { width: 760, height: 700 }, { source: 'watch', sessionScope: isStreamMode ? 'overlay' : 'discord', roomId, canControl: isOwner })}
                           voiceEnabled={voiceReady || voiceFallbackActive}
                           voicePeerFallback={voiceFallbackActive}
+                          peerConnectedPeerIds={Array.from(peerVoiceStreams.keys())}
+                          peerAudioBlocked={peerAudioBlocked}
+                          onEnablePeerAudio={unlockPeerAudio}
                           voiceFallbackFailed={voiceFallbackFailed}
                         />
                         {isActivityRoomId(roomId) ? (

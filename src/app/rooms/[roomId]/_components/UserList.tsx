@@ -13,6 +13,7 @@ import { canManageRoom } from '@/lib/room-access';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Card, CardContent } from '@/components/ui/card';
 import { Radio } from 'lucide-react';
+import { Button } from '@/components/ui/button';
 
 export interface RoomData {
   name: string;
@@ -46,6 +47,9 @@ interface UserListProps {
   onOpenWatch?: () => void;
   voiceEnabled?: boolean;
   voicePeerFallback?: boolean;
+  peerConnectedPeerIds?: string[];
+  peerAudioBlocked?: boolean;
+  onEnablePeerAudio?: () => void;
   voiceFallbackFailed?: boolean;
 }
 
@@ -57,7 +61,7 @@ type PeerPresence = {
   lastSeen?: number;
 };
 
-function PeerPresenceParticipants({ roomId, localUserId }: { roomId: string; localUserId?: string }) {
+function PeerPresenceParticipants({ roomId, localUserId, connectedPeerIds }: { roomId: string; localUserId?: string; connectedPeerIds: string[] }) {
   const { data: users } = useCollection<PeerPresence>(`rooms/${roomId}/users`, { pollInterval: 3000 });
   const activeUsers = (users || []).filter((presence) => {
     if (presence.id === localUserId || presence.uid === localUserId) return false;
@@ -70,6 +74,10 @@ function PeerPresenceParticipants({ roomId, localUserId }: { roomId: string; loc
       {activeUsers.map((presence) => {
         const displayName = presence.displayName || 'HearMeOut User';
         const photoURL = presence.photoURL || `https://picsum.photos/seed/${presence.id}/100/100`;
+        const userIds = [presence.id, presence.uid].filter(Boolean) as string[];
+        const mediaConnected = connectedPeerIds.some((peerId) =>
+          userIds.some((userId) => peerId.includes(`-${userId}-`)),
+        );
         return (
           <Card key={presence.id} className="flex flex-col h-full">
             <CardContent className="p-4 flex items-start gap-4">
@@ -79,8 +87,8 @@ function PeerPresenceParticipants({ roomId, localUserId }: { roomId: string; loc
               </Avatar>
               <div className="min-w-0 flex-1">
                 <p className="truncate text-lg font-bold">{displayName}</p>
-                <p className="mt-1 flex items-center gap-1.5 text-xs text-blue-500">
-                  <Radio className="h-3.5 w-3.5" /> Connected through P2P voice
+                <p className={`mt-1 flex items-center gap-1.5 text-xs ${mediaConnected ? 'text-green-500' : 'text-amber-500'}`}>
+                  <Radio className="h-3.5 w-3.5" /> {mediaConnected ? 'P2P audio connected' : 'Connecting P2P audio…'}
                 </p>
               </div>
             </CardContent>
@@ -113,7 +121,7 @@ function LiveKitParticipants({ isHost, roomId }: { isHost: boolean; roomId: stri
   );
 }
 
-export default function UserList({ roomId, musicStatus, djStatus, localVolume, onVolumeChange, showDJ, autoRadio, onToggleAutoRadio, djIsLive, djStarting, onStartDJ, onStopDJ, onStartAudio, onOpenQueue, onOpenAddSong, onOpenWatch, voiceEnabled = true, voicePeerFallback = false }: UserListProps) {
+export default function UserList({ roomId, musicStatus, djStatus, localVolume, onVolumeChange, showDJ, autoRadio, onToggleAutoRadio, djIsLive, djStarting, onStartDJ, onStopDJ, onStartAudio, onOpenQueue, onOpenAddSong, onOpenWatch, voiceEnabled = true, voicePeerFallback = false, peerConnectedPeerIds = [], peerAudioBlocked = false, onEnablePeerAudio }: UserListProps) {
   const { user } = useSession();
   const { data: room } = useDoc<RoomData>('rooms', roomId, 2000);
 
@@ -123,6 +131,12 @@ export default function UserList({ roomId, musicStatus, djStatus, localVolume, o
   return (
     <>
       <div className="flex flex-col gap-6">
+        {voicePeerFallback && peerAudioBlocked && onEnablePeerAudio && (
+          <div className="flex items-center justify-between gap-3 rounded-md border border-amber-500/50 bg-amber-500/10 p-3">
+            <p className="text-sm">Your browser blocked incoming P2P audio.</p>
+            <Button size="sm" onClick={onEnablePeerAudio}>Enable P2P Audio</Button>
+          </div>
+        )}
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
           {/* DJ Card — toggled via header music note */}
           {showDJ && (
@@ -151,7 +165,7 @@ export default function UserList({ roomId, musicStatus, djStatus, localVolume, o
           )}
           {/* Real users */}
           {voiceEnabled && <LiveKitParticipants isHost={isHost} roomId={roomId} />}
-          {voicePeerFallback && <PeerPresenceParticipants roomId={roomId} localUserId={user?.uid} />}
+          {voicePeerFallback && <PeerPresenceParticipants roomId={roomId} localUserId={user?.uid} connectedPeerIds={peerConnectedPeerIds} />}
         </div>
       </div>
     </>

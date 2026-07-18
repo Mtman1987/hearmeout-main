@@ -116,6 +116,7 @@ export class PeerVoiceMesh {
   private onRemoteStream: ((peerId: string, stream: MediaStream) => void) | null = null;
   private onPeerLeft: ((peerId: string) => void) | null = null;
   private pollInterval: ReturnType<typeof setInterval> | null = null;
+  private callTimeouts: Map<string, ReturnType<typeof setTimeout>> = new Map();
 
   get peerId() { return this._peerId; }
   get active() { return !!this.peer && !this.peer.destroyed; }
@@ -134,6 +135,7 @@ export class PeerVoiceMesh {
       this.localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
     } catch (err) {
       console.warn('[PeerVoice] Microphone unavailable, joining with silent audio:', err);
+      this.report('microphone unavailable; using silent receive-only stream', undefined, err);
       this.localStream = this.createSilentAudioStream();
     }
 
@@ -145,6 +147,7 @@ export class PeerVoiceMesh {
 
       this.peer.on('open', (id) => {
         console.log('[PeerVoice] Joined as', id);
+        this.report('signaling connected', id);
         // Register ourselves in the signaling "room" via the API
         this.registerPresence();
         // Start polling for other peers
@@ -156,18 +159,12 @@ export class PeerVoiceMesh {
       this.peer.on('call', (call) => {
         console.log('[PeerVoice] Incoming call from', call.peer);
         call.answer(this.localStream!);
-        call.on('stream', (remoteStream) => {
-          this.onRemoteStream?.(call.peer, remoteStream);
-        });
-        call.on('close', () => {
-          this.connections.delete(call.peer);
-          this.onPeerLeft?.(call.peer);
-        });
-        this.connections.set(call.peer, call);
+        this.trackCall(call.peer, call, 'incoming');
       });
 
       this.peer.on('error', (err) => {
         console.error('[PeerVoice] Error:', err);
+        this.report('peer signaling error', this._peerId, err);
         if (!this.active) reject(err);
       });
 
@@ -195,6 +192,9 @@ export class PeerVoiceMesh {
       for (const remotePeerId of peers) {
         if (remotePeerId === this._peerId) continue;
         if (this.connections.has(remotePeerId)) continue;
+        // Only one side originates the media call. This prevents both peers
+        // from creating simultaneous offers and replacing each other's call.
+        if (this._peerId.localeCompare(remotePeerId) > 0) continue;
         this.callPeer(remotePeerId);
       }
     } catch {}
@@ -204,14 +204,74 @@ export class PeerVoiceMesh {
     if (!this.peer || !this.localStream) return;
     console.log('[PeerVoice] Calling', remotePeerId);
     const call = this.peer.call(remotePeerId, this.localStream);
+    if (!call) {
+      this.report('outgoing call could not be created', remotePeerId);
+      return;
+    }
+    this.trackCall(remotePeerId, call, 'outgoing');
+  }
+
+  private trackCall(remotePeerId: string, call: MediaConnection, direction: 'incoming' | 'outgoing') {
+    const previous = this.connections.get(remotePeerId);
+    if (previous && previous !== call) {
+      try { previous.close(); } catch {}
+    }
+    this.connections.set(remotePeerId, call);
+    this.report(`${direction} media call started`, remotePeerId);
+
+    const existingTimeout = this.callTimeouts.get(remotePeerId);
+    if (existingTimeout) clearTimeout(existingTimeout);
+    const timeout = setTimeout(() => {
+      if (this.connections.get(remotePeerId) !== call || call.remoteStream) return;
+      this.report(`${direction} media call timed out before receiving audio`, remotePeerId);
+      try { call.close(); } catch {}
+      this.connections.delete(remotePeerId);
+      this.onPeerLeft?.(remotePeerId);
+    }, 15_000);
+    this.callTimeouts.set(remotePeerId, timeout);
+
     call.on('stream', (remoteStream) => {
+      clearTimeout(timeout);
+      this.callTimeouts.delete(remotePeerId);
+      this.report(`${direction} media stream connected`, remotePeerId);
       this.onRemoteStream?.(remotePeerId, remoteStream);
     });
     call.on('close', () => {
-      this.connections.delete(remotePeerId);
-      this.onPeerLeft?.(remotePeerId);
+      clearTimeout(timeout);
+      this.callTimeouts.delete(remotePeerId);
+      if (this.connections.get(remotePeerId) === call) {
+        this.connections.delete(remotePeerId);
+        this.onPeerLeft?.(remotePeerId);
+      }
+      this.report(`${direction} media call closed`, remotePeerId);
     });
-    this.connections.set(remotePeerId, call);
+    call.on('error', (err) => {
+      clearTimeout(timeout);
+      this.callTimeouts.delete(remotePeerId);
+      if (this.connections.get(remotePeerId) === call) {
+        this.connections.delete(remotePeerId);
+        this.onPeerLeft?.(remotePeerId);
+      }
+      this.report(`${direction} media call failed`, remotePeerId, err);
+    });
+    (call as any).on?.('iceStateChanged', (state: string) => {
+      this.report(`${direction} ICE state: ${state}`, remotePeerId);
+    });
+  }
+
+  private report(message: string, remotePeerId?: string, error?: unknown) {
+    const details = error instanceof Error ? `${error.name}: ${error.message}` : error ? String(error) : '';
+    fetch('/api/client-log', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        area: 'peer-voice',
+        message: [message, remotePeerId ? `remote=${remotePeerId}` : '', details].filter(Boolean).join(' | '),
+        roomId: this._roomId,
+        identity: this._peerId || null,
+        userAgent: navigator.userAgent,
+      }),
+    }).catch(() => {});
   }
 
   setMuted(muted: boolean) {
@@ -239,6 +299,8 @@ export class PeerVoiceMesh {
   leave() {
     if (this.pollInterval) clearInterval(this.pollInterval);
     this.pollInterval = null;
+    for (const timeout of this.callTimeouts.values()) clearTimeout(timeout);
+    this.callTimeouts.clear();
     // Unregister
     fetch('/api/peer-voice/register', {
       method: 'DELETE',
