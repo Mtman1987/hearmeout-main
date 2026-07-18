@@ -86,6 +86,7 @@ let youtubeHlsFallbackTimer = null;
 const youtubeNativeRetryCounts = {};
 let applying = false;
 let lastSeekApplyAt = 0;
+let lastNativePlaybackAuthorityKey = '';
 let mediaIsBuffering = false;
 let muted = true;
 let currentDownloadUrl = '';
@@ -102,6 +103,7 @@ let lastEmbeddedNativeSyncAt = 0;
 let musicPlaybackMode = 'video';
 let activeMediaErrorKey = '';
 const mediaErrorCounts = {};
+const prematureEndRecoveryCounts = {};
 const MEDIA_ERROR_FALLBACK_THRESHOLD = 1;
 let ttsEnabled = false;
 let ttsAudio = null;
@@ -664,15 +666,32 @@ function applyPlayback() {
   const remote = position(state.playback);
   const drift = Math.abs((media.currentTime || 0) - remote);
   applying = true;
-  const now = Date.now();
   const isLive = state.current.item.type === 'live' || state.current.item.runtime === 'live';
+  const authorityKey = [
+    state.current.requestId,
+    state.playback.status,
+    Number(state.playback.position || 0).toFixed(3),
+    Number(state.playback.updatedAt || 0),
+  ].join(':');
+  const authorityChanged = authorityKey !== lastNativePlaybackAuthorityKey;
+  lastNativePlaybackAuthorityKey = authorityKey;
   if (!isLive && Number.isFinite(media.duration) && media.duration > 0 && remote >= media.duration - 0.5) {
+    media.playbackRate = 1;
     setTimeout(() => { applying = false; }, 100);
     return;
   }
-  if (!isLive && drift > 8 && Number.isFinite(remote) && now - lastSeekApplyAt > 5000) {
-    lastSeekApplyAt = now;
-    media.currentTime = remote;
+  // A new item or an explicit shared control update is authoritative and may
+  // seek. Ordinary one-second polling must never repeatedly jump an HLS movie
+  // forward when buffering or keyframe seeking leaves it behind the wall clock.
+  if (!isLive && authorityChanged && drift > 2 && Number.isFinite(remote)) {
+    lastSeekApplyAt = Date.now();
+    media.currentTime = Math.max(0, Math.min(remote, Math.max(0, media.duration - 1)));
+  }
+  if (!isLive && state.playback.status === 'playing' && !media.paused && !mediaIsBuffering && !authorityChanged) {
+    const signedDrift = remote - Number(media.currentTime || 0);
+    media.playbackRate = signedDrift > 1.5 ? 1.05 : signedDrift < -1.5 ? 0.95 : 1;
+  } else if (media.playbackRate !== 1) {
+    media.playbackRate = 1;
   }
   const playSyncInFlight = syncingNativeControl && Date.now() - lastNativePlayAt < 5000;
   if (state.playback.status === 'paused' && !media.paused && !playSyncInFlight) media.pause();
@@ -773,6 +792,7 @@ async function loadMedia(item) {
   video.removeAttribute('src');
   if (audio) audio.removeAttribute('src');
   lastSeekApplyAt = 0;
+  lastNativePlaybackAuthorityKey = '';
   lastEmbeddedPlaybackKey = '';
   embeddedCurrentTime = 0;
   lastEmbeddedNativeSyncAt = 0;
@@ -1394,6 +1414,32 @@ function onMediaPause(event) {
 function onMediaSeeked(event) { if (event.currentTarget === media && !applying && state && state.current) mediaEl.textContent = 'Media: sync will restore live position'; }
 function onMediaEnded(event) {
   if (event.currentTarget !== media) return;
+  const requestId = state?.current?.requestId;
+  const duration = Number(media.duration || 0);
+  const remote = state?.playback ? position(state.playback) : 0;
+  const endedBeforeSharedTimeline = Boolean(
+    requestId
+    && state?.playback?.status === 'playing'
+    && Number.isFinite(duration)
+    && duration > 0
+    && Number.isFinite(remote)
+    && remote < duration - 3
+  );
+  if (endedBeforeSharedTimeline) {
+    const attempts = (prematureEndRecoveryCounts[requestId] || 0) + 1;
+    prematureEndRecoveryCounts[requestId] = attempts;
+    mediaEl.textContent = 'Media: recovering from an early stream end';
+    reportActivityMedia('premature media end', 'remote=' + remote.toFixed(1) + ' duration=' + duration.toFixed(1) + ' attempt=' + attempts);
+    if (attempts <= 3) {
+      setTimeout(() => {
+        if (state?.current?.requestId !== requestId) return;
+        loadMedia(state.current.item);
+      }, 750);
+    } else {
+      errorEl.textContent = 'The media source ended early. The shared queue was preserved; press Play to retry.';
+    }
+    return;
+  }
   mediaEl.textContent = 'Media: ended';
   control('next', 0).catch((err) => {
     errorEl.textContent = err && err.message ? err.message : String(err);
