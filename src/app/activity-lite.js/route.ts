@@ -436,15 +436,25 @@ function downloadUrlForItem(item) {
 function appUrl(path) {
   if (!path || /^https?:\\/\\//i.test(path)) return path;
   let nextPath = path.startsWith('/') ? path : '/' + path;
+  if (IS_DISCORD_ACTIVITY) {
+    const youtubeHlsMatch = nextPath.match(/^\\/api\\/watch\\/youtube\\/hls\\/([^/]+)\\/(index\\.m3u8)(?:\\?.*)?$/i);
+    if (youtubeHlsMatch) {
+      const params = new URLSearchParams({
+        mediaVideoId: youtubeHlsMatch[1],
+        mediaFile: youtubeHlsMatch[2],
+      });
+      return '/api/watch/sessions/' + encodeURIComponent(sessionId) + '/state?' + params.toString();
+    }
+    // Discord serves Activities from its own proxied origin. Keep API and media
+    // requests relative so Discord's URL mapping carries them to HearMeOut;
+    // absolute fly.dev URLs are blocked by the Activity sandbox.
+    return nextPath;
+  }
   if (nextPath.startsWith('/api/watch/xtream/hls/')) nextPath = nextPath.replace('/api/watch/xtream/hls/', '/activity-provider/xtream/hls/');
   if (nextPath.startsWith('/api/watch/youtube/hls/')) nextPath = nextPath.replace('/api/watch/youtube/hls/', '/activity-provider/youtube/hls/');
   if (nextPath.startsWith('/activity/watch/xtream/hls/')) nextPath = nextPath.replace('/activity/watch/xtream/hls/', '/api/watch/xtream/hls/');
   if (nextPath.startsWith('/activity/watch/youtube/hls/')) nextPath = nextPath.replace('/activity/watch/youtube/hls/', '/api/watch/youtube/hls/');
   if (nextPath.startsWith('/activity/proxy')) nextPath = nextPath.replace('/activity/proxy', '/activity-proxy');
-  // Discord serves Activities from its own proxied origin. Keep API and media
-  // requests relative so Discord's URL mapping carries them to HearMeOut;
-  // absolute fly.dev URLs are blocked by the Activity sandbox.
-  if (IS_DISCORD_ACTIVITY) return nextPath;
   if (APP_BASE_URL) {
     try {
       const base = new URL(APP_BASE_URL, window.location.href);
