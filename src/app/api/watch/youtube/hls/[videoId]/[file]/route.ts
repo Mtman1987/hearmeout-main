@@ -39,7 +39,9 @@ export async function GET(request: Request, context: { params: Promise<{ videoId
 
     const requestUrl = new URL(request.url);
     const pinnedMachine = cleanMachineId(requestUrl.searchParams.get('machine'));
-    const remoteUrl = new URL(`${workerUrl}/watch/youtube/hls/${encodeURIComponent(videoId)}/${encodeURIComponent(cleanFile)}`);
+    const remoteUrl = cleanFile === 'source.webm'
+      ? new URL(`${workerUrl}/watch/youtube/cache/${encodeURIComponent(videoId)}/stream`)
+      : new URL(`${workerUrl}/watch/youtube/hls/${encodeURIComponent(videoId)}/${encodeURIComponent(cleanFile)}`);
     if (pinnedMachine) remoteUrl.searchParams.set('machine', pinnedMachine);
 
     // If a client already resolved the stream URLs, pass them to the DJ worker
@@ -55,6 +57,8 @@ export async function GET(request: Request, context: { params: Promise<{ videoId
     const workerHeaders: Record<string, string> = {
       'user-agent': 'HearMeOut/1.0',
     };
+    const range = request.headers.get('range');
+    if (range) workerHeaders.range = range;
     if (pinnedMachine) workerHeaders['fly-force-instance-id'] = pinnedMachine;
 
     const MAX_WAIT = 55_000;
@@ -68,7 +72,7 @@ export async function GET(request: Request, context: { params: Promise<{ videoId
     }
 
     const headers = new Headers(CORS_HEADERS);
-    for (const header of ['content-type', 'content-length', 'cache-control']) {
+    for (const header of ['content-type', 'content-length', 'content-range', 'accept-ranges', 'cache-control']) {
       const value = workerResponse.headers.get(header);
       if (value) headers.set(header, value);
     }

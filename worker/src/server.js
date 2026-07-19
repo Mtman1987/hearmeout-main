@@ -13,7 +13,7 @@ const express = require('express');
 const cors = require('cors');
 const { execFile, spawn } = require('child_process');
 const { promisify } = require('util');
-const { existsSync, mkdirSync, unlinkSync, statSync, readdirSync, readFileSync, writeFileSync, createReadStream, mkdtempSync, rmSync } = require('fs');
+const { existsSync, mkdirSync, unlinkSync, statSync, readdirSync, readFileSync, writeFileSync, createReadStream, mkdtempSync, rmSync, openSync, readSync, closeSync } = require('fs');
 const { AudioSource, AudioFrame, LocalAudioTrack, Room, RoomEvent, TrackPublishOptions, TrackSource } = require('@livekit/rtc-node');
 const wrtc = require('@roamhq/wrtc');
 const puppeteer = require('puppeteer');
@@ -202,6 +202,26 @@ function cachedAudioFilePath(videoId) {
   const mp3 = join(CACHE_DIR, `${videoId}.mp3`);
   if (existsSync(mp3)) return mp3;
   return null;
+}
+
+function cachedAudioContentType(filePath) {
+  const header = Buffer.alloc(16);
+  let descriptor;
+  try {
+    descriptor = openSync(filePath, 'r');
+    const bytesRead = readSync(descriptor, header, 0, header.length, 0);
+    const bytes = header.subarray(0, bytesRead);
+    if (bytes.length >= 4 && bytes[0] === 0x1a && bytes[1] === 0x45 && bytes[2] === 0xdf && bytes[3] === 0xa3) return 'audio/webm';
+    if (bytes.length >= 12 && bytes.toString('ascii', 4, 8) === 'ftyp') return 'audio/mp4';
+    if (bytes.length >= 4 && bytes.toString('ascii', 0, 4) === 'OggS') return 'audio/ogg';
+    if (bytes.length >= 3 && bytes.toString('ascii', 0, 3) === 'ID3') return 'audio/mpeg';
+  } catch {}
+  finally {
+    if (descriptor !== undefined) {
+      try { closeSync(descriptor); } catch {}
+    }
+  }
+  return 'application/octet-stream';
 }
 
 function sanitizeUserId(value) {
@@ -1455,6 +1475,43 @@ app.get('/watch/youtube/hls/:videoId/:file', authorizeWorker, async (req, res) =
 });
 
 // Report whether an audio file is already cached for this video.
+app.get('/watch/youtube/cache/:videoId/stream', authorizeWorker, (req, res) => {
+  try {
+    const videoId = String(req.params.videoId || '');
+    if (!isValidVideoId(videoId)) return res.status(400).send('Invalid YouTube video id');
+    const filePath = cachedAudioFilePath(videoId);
+    if (!filePath) return res.status(404).send('Cached audio not found');
+    const stats = statSync(filePath);
+    const range = req.headers.range;
+
+    res.setHeader('Accept-Ranges', 'bytes');
+    res.setHeader('Cache-Control', 'public, max-age=3600');
+    res.setHeader('Content-Type', cachedAudioContentType(filePath));
+
+    if (range) {
+      const match = /^bytes=(\d+)-(\d*)$/i.exec(range);
+      if (!match) return res.status(416).send('Invalid range');
+      const start = Number(match[1]);
+      const requestedEnd = match[2] ? Number(match[2]) : stats.size - 1;
+      if (!Number.isSafeInteger(start) || start < 0 || start >= stats.size) {
+        res.setHeader('Content-Range', `bytes */${stats.size}`);
+        return res.status(416).send('Range not satisfiable');
+      }
+      const end = Math.min(requestedEnd, stats.size - 1);
+      res.status(206);
+      res.setHeader('Content-Length', String(end - start + 1));
+      res.setHeader('Content-Range', `bytes ${start}-${end}/${stats.size}`);
+      return createReadStream(filePath, { start, end }).pipe(res);
+    }
+
+    res.setHeader('Content-Length', String(stats.size));
+    return createReadStream(filePath).pipe(res);
+  } catch (err) {
+    console.error('[Cache] Stream failed:', err?.message || err);
+    if (!res.headersSent) return res.status(500).send('Cached audio stream failed');
+  }
+});
+
 app.get('/watch/youtube/cache/:videoId', authorizeWorker, (req, res) => {
   const videoId = String(req.params.videoId || '');
   if (!isValidVideoId(videoId)) return res.status(400).json({ error: 'Invalid YouTube video id' });

@@ -441,7 +441,9 @@ function appUrl(path) {
     if (youtubeHlsMatch) {
       const params = new URLSearchParams({
         mediaVideoId: youtubeHlsMatch[1],
-        mediaFile: youtubeHlsMatch[2],
+        // Discord's Electron build rejects the AAC MPEG-TS rendition even
+        // after the proxy succeeds. Play the cached WebM/Opus source directly.
+        mediaFile: 'source.webm',
       });
       return '/api/watch/sessions/' + encodeURIComponent(sessionId) + '/state?' + params.toString();
     }
