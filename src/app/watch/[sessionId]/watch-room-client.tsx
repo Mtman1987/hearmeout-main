@@ -64,6 +64,22 @@ function playbackPosition(playback?: WatchState['playback']) {
   return (playback.position || 0) + (Date.now() - playback.updatedAt) / 1000;
 }
 
+function playbackSyncPolicy(item: any) {
+  const isMusic = String(item?.type || '').toLowerCase() === 'music';
+  return isMusic
+    ? { deadband: 4, release: 2, slowRate: 0.98, fastRate: 1.02 }
+    : { deadband: 8, release: 4, slowRate: 0.98, fastRate: 1.02 };
+}
+
+function driftPlaybackRate(signedDrift: number, item: any, currentRate: number) {
+  const policy = playbackSyncPolicy(item);
+  const correcting = Math.abs(currentRate - 1) > 0.001;
+  const threshold = correcting ? policy.release : policy.deadband;
+  if (signedDrift > threshold) return policy.fastRate;
+  if (signedDrift < -threshold) return policy.slowRate;
+  return 1;
+}
+
 function downloadUrlFor(url: string) {
   if (!url.startsWith('/')) return url;
   const next = new URL(url, window.location.origin);
@@ -228,6 +244,9 @@ export default function WatchRoomClient({ sessionId, activityMode = false, canPa
   const hlsRef = useRef<any>(null);
   const applyingRemoteState = useRef(false);
   const syncingNativePlayback = useRef(false);
+  const lastNativePlaybackAuthorityKeyRef = useRef('');
+  const programmaticSeekTargetRef = useRef<number | null>(null);
+  const prematureEndRecoveryCountsRef = useRef<Record<string, number>>({});
   const embeddedCurrentTimeRef = useRef(0);
   const lastEmbeddedPlaybackKeyRef = useRef('');
   const ttsSeenRef = useRef<Set<string>>(new Set());
@@ -489,7 +508,7 @@ export default function WatchRoomClient({ sessionId, activityMode = false, canPa
   }
 
   async function syncPlayback() {
-    applyPlaybackState();
+    applyPlaybackState(state, true);
     setControlError(null);
     setMediaStatus('Synced');
   }
@@ -556,7 +575,7 @@ export default function WatchRoomClient({ sessionId, activityMode = false, canPa
     }
   }
 
-  function applyPlaybackState(nextState = state) {
+  function applyPlaybackState(nextState = state, forceSeek = false) {
     if (embeddedMode && nextState?.current) {
       const remotePosition = playbackPosition(nextState.playback);
       const playbackKey = [
@@ -565,7 +584,7 @@ export default function WatchRoomClient({ sessionId, activityMode = false, canPa
         Math.round(Number(nextState.playback.position || 0)),
         Number(nextState.playback.updatedAt || 0),
       ].join(':');
-      if (playbackKey !== lastEmbeddedPlaybackKeyRef.current && Number.isFinite(remotePosition)) {
+      if ((forceSeek || playbackKey !== lastEmbeddedPlaybackKeyRef.current) && Number.isFinite(remotePosition)) {
         lastEmbeddedPlaybackKeyRef.current = playbackKey;
         youtubeCommand('seekTo', [Math.max(0, remotePosition), true]);
       }
@@ -581,10 +600,37 @@ export default function WatchRoomClient({ sessionId, activityMode = false, canPa
 
     const remotePosition = playbackPosition(nextState.playback);
     const drift = Math.abs((video.currentTime || 0) - remotePosition);
+    const isLive = nextState.current.item?.type === 'live' || nextState.current.item?.runtime === 'live';
+    const authorityKey = [
+      nextState.current.requestId,
+      nextState.playback.status,
+      Number(nextState.playback.position || 0).toFixed(3),
+      Number(nextState.playback.updatedAt || 0),
+    ].join(':');
+    const authorityChanged = authorityKey !== lastNativePlaybackAuthorityKeyRef.current;
     applyingRemoteState.current = true;
 
-    if (drift > 2.5 && Number.isFinite(remotePosition)) {
-      video.currentTime = remotePosition;
+    // Only new media, explicit shared controls, and the Sync button may jump
+    // the playhead. Poll refreshes use a wide deadband and gentle rate changes,
+    // so a buffering movie is not forced forward every few seconds.
+    if (video.readyState >= 1) {
+      lastNativePlaybackAuthorityKeyRef.current = authorityKey;
+      const seekThreshold = forceSeek ? 0.25 : 1.25;
+      if (!isLive && (forceSeek || authorityChanged) && drift > seekThreshold && Number.isFinite(remotePosition)) {
+        const maxPosition = Number.isFinite(video.duration) && video.duration > 0
+          ? Math.max(0, video.duration - 1)
+          : remotePosition;
+        const target = Math.max(0, Math.min(remotePosition, maxPosition));
+        programmaticSeekTargetRef.current = target;
+        video.currentTime = target;
+      }
+    }
+
+    if (!isLive && nextState.playback.status === 'playing' && !video.paused && !authorityChanged && !forceSeek) {
+      const signedDrift = remotePosition - Number(video.currentTime || 0);
+      video.playbackRate = driftPlaybackRate(signedDrift, nextState.current.item, video.playbackRate);
+    } else if (video.playbackRate !== 1) {
+      video.playbackRate = 1;
     }
 
     if (nextState.playback.status === 'playing' && video.paused) {
@@ -645,6 +691,8 @@ export default function WatchRoomClient({ sessionId, activityMode = false, canPa
     setMusicPlaybackMode(item?.metadata?.playbackMode || 'video');
     embeddedCurrentTimeRef.current = 0;
     lastEmbeddedPlaybackKeyRef.current = '';
+    lastNativePlaybackAuthorityKeyRef.current = '';
+    programmaticSeekTargetRef.current = null;
     if (video) video.poster = '';
 
     if (hlsRef.current) {
@@ -739,7 +787,10 @@ export default function WatchRoomClient({ sessionId, activityMode = false, canPa
                 setMediaStatus(usesHlsFallback ? 'HLS fallback ready' : 'Ready to play');
                 // Force playback from server position (0 for new items) so VOD doesn't resume from end
                 const targetPos = playbackPosition(state?.playback);
-                if (video && Number.isFinite(targetPos)) video.currentTime = targetPos;
+                if (video && Number.isFinite(targetPos)) {
+                  programmaticSeekTargetRef.current = targetPos;
+                  video.currentTime = targetPos;
+                }
               });
               hlsRef.current.loadSource(mediaUrl);
               hlsRef.current.attachMedia(video);
@@ -787,6 +838,11 @@ export default function WatchRoomClient({ sessionId, activityMode = false, canPa
   useEffect(() => {
     applyPlaybackState();
   }, [state?.playback.status, state?.playback.position, state?.playback.updatedAt]);
+
+  useEffect(() => {
+    const interval = window.setInterval(() => applyPlaybackState(), 1000);
+    return () => window.clearInterval(interval);
+  }, [state?.current?.requestId, state?.playback.status, state?.playback.position, state?.playback.updatedAt, embeddedMode]);
 
   useEffect(() => {
     const video = videoRef.current;
@@ -903,6 +959,13 @@ export default function WatchRoomClient({ sessionId, activityMode = false, canPa
               autoPlay={activityMode}
               playsInline
               onSeeked={() => {
+                const video = videoRef.current;
+                const programmaticTarget = programmaticSeekTargetRef.current;
+                if (video && programmaticTarget !== null && Math.abs(video.currentTime - programmaticTarget) < 2) {
+                  programmaticSeekTargetRef.current = null;
+                  return;
+                }
+                programmaticSeekTargetRef.current = null;
                 if (canPause && !applyingRemoteState.current && state?.current) sendControl('seek');
               }}
               onCanPlay={() => {
@@ -931,6 +994,34 @@ export default function WatchRoomClient({ sessionId, activityMode = false, canPa
                 console.error('[WatchRoom] Media error', mediaError);
               }}
               onEnded={() => {
+                const video = videoRef.current;
+                const requestId = state?.current?.requestId;
+                const duration = Number(video?.duration || 0);
+                const remotePosition = playbackPosition(state?.playback);
+                const endedBeforeSharedTimeline = Boolean(
+                  video
+                  && requestId
+                  && state?.playback?.status === 'playing'
+                  && Number.isFinite(duration)
+                  && duration > 0
+                  && Number.isFinite(remotePosition)
+                  && remotePosition < duration - 3
+                );
+                if (endedBeforeSharedTimeline && video && requestId) {
+                  const attempts = (prematureEndRecoveryCountsRef.current[requestId] || 0) + 1;
+                  prematureEndRecoveryCountsRef.current[requestId] = attempts;
+                  if (attempts <= 3) {
+                    setMediaStatus('Stream ended early; recovering without skipping');
+                    const target = Math.max(0, Math.min(remotePosition, duration - 1));
+                    programmaticSeekTargetRef.current = target;
+                    video.currentTime = target;
+                    video.play().catch(() => setMediaStatus('Stream recovery needs Play'));
+                  } else {
+                    setMediaStatus('Stream ended early; queue preserved. Press Play to retry.');
+                  }
+                  return;
+                }
+                if (requestId) prematureEndRecoveryCountsRef.current[requestId] = 0;
                 setMediaStatus('ended');
                 if (canSkip) nextItem();
               }}

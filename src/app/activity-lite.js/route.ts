@@ -628,6 +628,22 @@ function position(playback) {
   return (playback.position || 0) + (Date.now() - playback.updatedAt) / 1000;
 }
 
+function playbackSyncPolicy(item) {
+  const isMusic = String((item && item.type) || '').toLowerCase() === 'music';
+  return isMusic
+    ? { deadband: 4, release: 2, slowRate: 0.98, fastRate: 1.02 }
+    : { deadband: 8, release: 4, slowRate: 0.98, fastRate: 1.02 };
+}
+
+function driftPlaybackRate(signedDrift, item, currentRate) {
+  const policy = playbackSyncPolicy(item);
+  const correcting = Math.abs(Number(currentRate || 1) - 1) > 0.001;
+  const threshold = correcting ? policy.release : policy.deadband;
+  if (signedDrift > threshold) return policy.fastRate;
+  if (signedDrift < -threshold) return policy.slowRate;
+  return 1;
+}
+
 function formatClock(totalSeconds) {
   const safeSeconds = Math.max(0, Math.floor(Number(totalSeconds || 0)));
   const minutes = Math.floor(safeSeconds / 60);
@@ -700,15 +716,16 @@ function applyPlayback() {
     return;
   }
   // A new item or an explicit shared control update is authoritative and may
-  // seek. Ordinary one-second polling must never repeatedly jump an HLS movie
-  // forward when buffering or keyframe seeking leaves it behind the wall clock.
-  if (!isLive && authorityChanged && drift > 2 && Number.isFinite(remote)) {
+  // seek once. Ordinary one-second polling must never repeatedly jump an HLS
+  // movie forward when buffering or keyframe seeking leaves it behind the wall
+  // clock. Normal drift is corrected gently with a wide hysteresis window.
+  if (!isLive && authorityChanged && drift > 1.25 && Number.isFinite(remote)) {
     lastSeekApplyAt = Date.now();
     media.currentTime = Math.max(0, Math.min(remote, Math.max(0, media.duration - 1)));
   }
   if (!isLive && state.playback.status === 'playing' && !media.paused && !mediaIsBuffering && !authorityChanged) {
     const signedDrift = remote - Number(media.currentTime || 0);
-    media.playbackRate = signedDrift > 1.5 ? 1.05 : signedDrift < -1.5 ? 0.95 : 1;
+    media.playbackRate = driftPlaybackRate(signedDrift, state.current.item, media.playbackRate);
   } else if (media.playbackRate !== 1) {
     media.playbackRate = 1;
   }
