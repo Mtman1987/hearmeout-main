@@ -436,8 +436,8 @@ function downloadUrlForItem(item) {
 function appUrl(path) {
   if (!path || /^https?:\\/\\//i.test(path)) return path;
   let nextPath = path.startsWith('/') ? path : '/' + path;
+  const youtubeHlsMatch = nextPath.match(/^\\/api\\/watch\\/youtube\\/hls\\/([^/]+)\\/(index\\.m3u8)(?:\\?.*)?$/i);
   if (IS_DISCORD_ACTIVITY) {
-    const youtubeHlsMatch = nextPath.match(/^\\/api\\/watch\\/youtube\\/hls\\/([^/]+)\\/(index\\.m3u8)(?:\\?.*)?$/i);
     if (youtubeHlsMatch) {
       const params = new URLSearchParams({
         mediaVideoId: youtubeHlsMatch[1],
@@ -451,6 +451,9 @@ function appUrl(path) {
     // requests relative so Discord's URL mapping carries them to HearMeOut;
     // absolute fly.dev URLs are blocked by the Activity sandbox.
     return nextPath;
+  }
+  if (youtubeHlsMatch) {
+    nextPath = '/api/watch/youtube/hls/' + encodeURIComponent(youtubeHlsMatch[1]) + '/source.webm';
   }
   if (nextPath.startsWith('/api/watch/xtream/hls/')) nextPath = nextPath.replace('/api/watch/xtream/hls/', '/activity-provider/xtream/hls/');
   if (nextPath.startsWith('/api/watch/youtube/hls/')) nextPath = nextPath.replace('/api/watch/youtube/hls/', '/activity-provider/youtube/hls/');
