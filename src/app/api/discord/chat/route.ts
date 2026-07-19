@@ -291,7 +291,7 @@ export async function POST(request: NextRequest) {
     try {
       body = await parseDiscordChatRequest(request);
     } catch (error) {
-      console.error('[Discord Chat] invalid JSON payload:', error);
+      console.log('[Discord Chat] Rejected malformed JSON payload:', error instanceof Error ? error.message : String(error));
       return NextResponse.json({
         success: false,
         error: 'Invalid JSON payload. Send valid JSON with Content-Type: application/json and build the body with JSON.stringify.',

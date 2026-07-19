@@ -413,7 +413,7 @@ export async function getWatchActivityJoinUrl(params: {
   activityVoiceChannelId?: string;
   fallbackChannelId?: string;
 }) {
-  const activityInviteUrl = await createDiscordActivityInvite(params.activityVoiceChannelId || params.fallbackChannelId);
+  const activityInviteUrl = await createDiscordActivityInvite(params.activityVoiceChannelId);
   return activityInviteUrl || getActivityUrl(params.publicBaseUrl, params.sessionId);
 }
 
@@ -845,7 +845,11 @@ async function createDiscordActivityInvite(channelId?: string) {
 
     const payload = await response.json().catch(() => null);
     if (!response.ok || !payload?.code) {
-      console.error('[WatchRequest] Discord activity invite failed:', response.status, payload);
+      if (response.status === 404 && payload?.code === 10003) {
+        console.log('[WatchRequest] Discord voice channel unavailable; using the normal Activity URL.');
+      } else {
+        console.warn('[WatchRequest] Discord activity invite failed:', response.status, payload);
+      }
       return null;
     }
 

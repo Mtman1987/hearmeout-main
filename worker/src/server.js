@@ -29,6 +29,13 @@ const { Peer } = require('peerjs');
 
 const execFileAsync = promisify(execFile);
 
+function redactSensitiveLogText(value) {
+  return String(value || '')
+    .replace(/([?&](?:access_token|refresh_token|id_token|token|api_key|key|signature|jwt)=)[^&\s"'<>]+/gi, '$1[REDACTED]')
+    .replace(/(\bBearer\s+)[A-Za-z0-9._~+/=-]{12,}/gi, '$1[REDACTED]')
+    .replace(/\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/g, '[REDACTED_JWT]');
+}
+
 const app = express();
 const PORT = process.env.PORT || 3002;
 const APP_URL = process.env.APP_URL || 'https://hearmeout-main.fly.dev';
@@ -2174,18 +2181,18 @@ async function startBrowserDJ(roomId) {
 
   const page = await browser.newPage();
   page.on('console', (msg) => {
-    const text = msg.text();
+    const text = redactSensitiveLogText(msg.text());
     if (/\[DJ\]|\[PeerDJ\]|\[MusicRoom\]|LiveKit|ERROR|error/i.test(text)) {
       console.log(`[BrowserDJ:${roomId}] ${msg.type()}: ${text}`);
     }
   });
   page.on('pageerror', (err) => {
-    console.error(`[BrowserDJ:${roomId}] page error:`, err.message);
+    console.error(`[BrowserDJ:${roomId}] page error:`, redactSensitiveLogText(err.message));
   });
   page.on('requestfailed', (req) => {
     const url = req.url();
     if (/livekit|peer|youtube-audio|\/api\/music|\/api\/db/.test(url)) {
-      console.warn(`[BrowserDJ:${roomId}] request failed: ${url} ${req.failure()?.errorText || ''}`);
+      console.warn(`[BrowserDJ:${roomId}] request failed: ${redactSensitiveLogText(url)} ${redactSensitiveLogText(req.failure()?.errorText || '')}`);
     }
   });
 
