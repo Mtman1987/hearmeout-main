@@ -441,6 +441,10 @@ function appUrl(path) {
   if (nextPath.startsWith('/activity/watch/xtream/hls/')) nextPath = nextPath.replace('/activity/watch/xtream/hls/', '/api/watch/xtream/hls/');
   if (nextPath.startsWith('/activity/watch/youtube/hls/')) nextPath = nextPath.replace('/activity/watch/youtube/hls/', '/api/watch/youtube/hls/');
   if (nextPath.startsWith('/activity/proxy')) nextPath = nextPath.replace('/activity/proxy', '/activity-proxy');
+  // Discord serves Activities from its own proxied origin. Keep API and media
+  // requests relative so Discord's URL mapping carries them to HearMeOut;
+  // absolute fly.dev URLs are blocked by the Activity sandbox.
+  if (IS_DISCORD_ACTIVITY) return nextPath;
   if (APP_BASE_URL) {
     try {
       const base = new URL(APP_BASE_URL, window.location.href);
