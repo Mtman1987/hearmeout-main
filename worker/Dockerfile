@@ -6,6 +6,7 @@ RUN apt-get update && apt-get install -y \
     git \
     python3 \
     python3-pip \
+    build-essential \
     && python3 -m pip install --no-cache-dir --break-system-packages -U yt-dlp bgutil-ytdlp-pot-provider==1.3.1 \
     && rm -rf /var/lib/apt/lists/*
 

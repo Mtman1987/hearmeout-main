@@ -11,6 +11,7 @@ import LeftSidebar from '@/app/components/LeftSidebar';
 import UserList from './_components/UserList';
 import ChatBox from './_components/ChatBox';
 import VoiceQueue from './_components/VoiceQueue';
+import { VoiceBridgeCard } from './_components/VoiceBridgeCard';
 import { cn } from "@/lib/utils";
 import { useToast } from '@/hooks/use-toast';
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -1161,6 +1162,7 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
                           />
                         )}
                         <SharedScreenShareCard roomId={roomId} />
+                        {isOwner && !isActivityRoomId(roomId) && <VoiceBridgeCard roomId={roomId} />}
                         {isOwner && <VoiceQueue roomId={roomId} />}
                     </main>
                 </div>
