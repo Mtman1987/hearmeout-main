@@ -171,20 +171,24 @@ export default function DJCard({
   }, [canControl, musicSessionId, roomId, sharedState?.current?.requestId]);
 
   const sharedItem = sharedState?.current?.item;
-  const currentTitle = sharedItem?.title || legacyCurrentTrack?.title;
-  const currentArtist = sharedItem?.metadata?.artist || legacyCurrentTrack?.artist;
-  const sharedIsPlaying = sharedState ? sharedState.playback.status === 'playing' : Boolean(legacyIsPlaying);
-  const isStreaming = sharedIsPlaying || musicStatus === '🎵 streaming';
-  const duration = runtimeSeconds(sharedItem?.runtime) || Math.max(0, Math.round(Number(legacyCurrentTrack?.duration || 0) / 1000));
+  const currentTitle = sharedItem?.title || (activityRoom ? undefined : legacyCurrentTrack?.title);
+  const currentArtist = sharedItem?.metadata?.artist || (activityRoom ? undefined : legacyCurrentTrack?.artist);
+  const sharedIsPlaying = sharedState
+    ? sharedState.playback.status === 'playing'
+    : activityRoom ? false : Boolean(legacyIsPlaying);
+  const isStreaming = sharedIsPlaying || (!activityRoom && musicStatus === '🎵 streaming');
+  const displayDjActive = activityRoom ? Boolean(sharedState?.current) : djActive;
+  const duration = runtimeSeconds(sharedItem?.runtime)
+    || (activityRoom ? 0 : Math.max(0, Math.round(Number(legacyCurrentTrack?.duration || 0) / 1000)));
   const livePosition = Math.min(duration || Number.POSITIVE_INFINITY, effectivePlaybackPosition(sharedState?.playback, clockNow));
   const displayedPosition = seekDraft ?? livePosition;
   const sharedVolume = volumeDraft ?? Math.max(0, Math.min(100, Number(sharedState?.playback.volume ?? Math.round(localVolume * 100))));
   const sharedMuted = sharedState?.playback.muted ?? sharedVolume === 0;
-  const sharedAutoRadio = sharedState?.autoRadio ?? Boolean(legacyAutoRadio);
+  const sharedAutoRadio = sharedState?.autoRadio ?? (activityRoom ? false : Boolean(legacyAutoRadio));
   const visibleStatus = controlError
     || (sharedState?.current ? `${sharedState.playback.status} · shared with Discord` : null)
-    || djStatus
-    || musicStatus;
+    || (activityRoom ? null : djStatus)
+    || (activityRoom ? null : musicStatus);
 
   const handlePlayPause = useCallback(() => {
     if (!activityRoom) onStartAudio();
@@ -209,12 +213,12 @@ export default function DJCard({
             <Avatar className={cn(
               'h-16 w-16 transition-all duration-200',
               isStreaming && 'ring-4 ring-purple-400 ring-offset-2 ring-offset-background shadow-lg',
-              djActive && !isStreaming && 'ring-2 ring-yellow-400/50 ring-offset-2 ring-offset-background',
+              displayDjActive && !isStreaming && 'ring-2 ring-yellow-400/50 ring-offset-2 ring-offset-background',
             )}>
               <AvatarImage src="https://api.dicebear.com/7.x/bottts/svg?seed=hearmeout-dj&backgroundColor=7c3aed" />
               <AvatarFallback>🎵</AvatarFallback>
             </Avatar>
-            {djActive ? (
+            {displayDjActive ? (
               <div className={cn('absolute -bottom-1 -right-1 rounded-full border-2 border-card p-1', isStreaming ? 'bg-green-500' : 'bg-yellow-500')}>
                 <Music className="h-3 w-3 text-white" />
               </div>
