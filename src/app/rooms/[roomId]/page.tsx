@@ -6,7 +6,7 @@ import { LiveKitRoom, RoomContext, useConnectionState } from '@livekit/component
 import { ConnectionState } from 'livekit-client';
 import { SidebarProvider, SidebarInset, SidebarTrigger, useSidebar } from '@/components/ui/sidebar';
 import { Button } from "@/components/ui/button";
-import { Copy, X, LoaderCircle, FrameIcon, Music, Monitor, Film, ExternalLink } from 'lucide-react';
+import { Copy, X, LoaderCircle, FrameIcon, Music, Monitor, Film, ExternalLink, Radio } from 'lucide-react';
 import LeftSidebar from '@/app/components/LeftSidebar';
 import UserList from './_components/UserList';
 import ChatBox from './_components/ChatBox';
@@ -396,8 +396,8 @@ function SharedScreenShareCard({ roomId }: { roomId: string }) {
     );
 }
 
-function RoomHeader({ roomName, onToggleChat, showDJ, onToggleDJ, peerFallback, livekitReady, onScreenShare }: {
-    roomName: string; onToggleChat: () => void; showDJ: boolean; onToggleDJ: () => void; peerFallback?: boolean; livekitReady?: boolean; onScreenShare?: () => void;
+function RoomHeader({ roomName, onToggleChat, showDJ, onToggleDJ, canBridge, showVoiceBridge, onToggleVoiceBridge, peerFallback, livekitReady, onScreenShare }: {
+    roomName: string; onToggleChat: () => void; showDJ: boolean; onToggleDJ: () => void; canBridge?: boolean; showVoiceBridge?: boolean; onToggleVoiceBridge?: () => void; peerFallback?: boolean; livekitReady?: boolean; onScreenShare?: () => void;
 }) {
     const { isMobile } = useSidebar();
     const params = useParams();
@@ -430,6 +430,18 @@ function RoomHeader({ roomName, onToggleChat, showDJ, onToggleDJ, peerFallback, 
                         <Music className="h-4 w-4" />
                     </Button>
                 </TooltipTrigger><TooltipContent><p>{showDJ ? 'Hide HearMeOut DJ controls' : 'Show HearMeOut DJ controls'}</p></TooltipContent></Tooltip>
+                {canBridge && onToggleVoiceBridge && (
+                    <Tooltip><TooltipTrigger asChild>
+                        <Button
+                            variant={showVoiceBridge ? "secondary" : "outline"}
+                            size="icon"
+                            onClick={onToggleVoiceBridge}
+                            aria-label={showVoiceBridge ? 'Hide Discord voice bridge' : 'Show Discord voice bridge'}
+                        >
+                            <Radio className="h-4 w-4" />
+                        </Button>
+                    </TooltipTrigger><TooltipContent><p>{showVoiceBridge ? 'Hide Discord voice bridge' : 'Show Discord voice bridge'}</p></TooltipContent></Tooltip>
+                )}
                 {onScreenShare && (
                     <Tooltip><TooltipTrigger asChild>
                         <Button variant="outline" size="icon" onClick={onScreenShare}><Monitor className="h-4 w-4" /></Button>
@@ -543,6 +555,7 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
     const [localVolume, setLocalVolume] = useState(0.5);
     const [musicStatus, setMusicStatus] = useState<string | null>(null);
     const [showDJ, setShowDJ] = useState(false);
+    const [showVoiceBridge, setShowVoiceBridge] = useState(false);
     const isActivityRoom = isActivityRoomId(roomId);
 
     const { data: userSettings } = useDoc<{ streamMode?: boolean; twitchChannel?: string }>(
@@ -1119,6 +1132,9 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
                       onToggleChat={() => setChatOpen(!chatOpen)}
                       showDJ={showDJ}
                       onToggleDJ={() => setShowDJ(v => !v)}
+                      canBridge={isOwner && !isActivityRoom}
+                      showVoiceBridge={showVoiceBridge}
+                      onToggleVoiceBridge={() => setShowVoiceBridge(v => !v)}
                       peerFallback={voiceFallbackActive}
                       livekitReady={voiceReady}
                       onScreenShare={() => openPopout('screenShare', { width: 720, height: 520 }, { source: 'screenShare' })}
@@ -1162,7 +1178,7 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
                           />
                         )}
                         <SharedScreenShareCard roomId={roomId} />
-                        {isOwner && !isActivityRoomId(roomId) && <VoiceBridgeCard roomId={roomId} />}
+                        {isOwner && !isActivityRoomId(roomId) && showVoiceBridge && <VoiceBridgeCard roomId={roomId} />}
                         {isOwner && <VoiceQueue roomId={roomId} />}
                     </main>
                 </div>
