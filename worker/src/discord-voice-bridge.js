@@ -57,6 +57,7 @@ let sharedClient = null;
 let sharedClientReady = null;
 const bridgesByChannel = new Map(); // voiceChannelId -> VoiceBridge
 
+
 function getDiscordClient(token) {
   if (sharedClientReady) return sharedClientReady;
   if (!token) return Promise.reject(new Error('DISCORD_BOT_TOKEN is not configured on the worker'));
@@ -271,18 +272,24 @@ class VoiceBridge {
       selfDeaf: false,
       selfMute: false,
     });
-    await entersState(this.connection, VoiceConnectionStatus.Ready, 20_000);
+
+    try {
+      await entersState(this.connection, VoiceConnectionStatus.Ready, 20_000);
+    } catch (err) {
+      this.connection.destroy();
+      this.connection = null;
+      throw err;
+    }
+
     bridgesByChannel.set(this.voiceChannelId, this);
     console.log(`[VoiceBridge:${this.roomId}] Joined Discord voice channel ${this.voiceChannelId}`);
 
-    // Fallback: create a pipe the moment someone starts speaking, even if we
-    // missed their voice-state event.
-    this.connection.receiver.speaking.on('start', (userId) => this.handleMemberJoined(userId));
-
-    // Publish everyone already sitting in the channel.
-    for (const userId of this.currentMemberIds()) this.handleMemberJoined(userId);
-
+    // Start listener rooms first — if this fails we haven't touched any pipes yet.
     await this.startListener();
+
+    // Only wire up pipe creation after listener rooms are confirmed up.
+    this.connection.receiver.speaking.on('start', (userId) => this.handleMemberJoined(userId));
+    for (const userId of this.currentMemberIds()) this.handleMemberJoined(userId);
   }
 
   async startListener() {

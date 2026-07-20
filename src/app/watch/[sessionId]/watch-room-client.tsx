@@ -632,7 +632,7 @@ export default function WatchRoomClient({ sessionId, activityMode = false, canPa
       video.playbackRate = 1;
     }
 
-    if (nextState.playback.status === 'playing' && video.paused) {
+    if (nextState.playback.status === 'playing' && video.paused && localAudioUnlockedRef.current) {
       video.play().catch((error) => {
         const message = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
         console.warn('[WatchRoom] video.play() failed', message);
@@ -640,7 +640,7 @@ export default function WatchRoomClient({ sessionId, activityMode = false, canPa
       });
     }
 
-    if (nextState.playback.status !== 'playing' && !video.paused) {
+    if (nextState.playback.status !== 'playing' && !video.paused && localAudioUnlockedRef.current) {
       video.pause();
     }
 
@@ -959,7 +959,7 @@ export default function WatchRoomClient({ sessionId, activityMode = false, canPa
                   return;
                 }
                 programmaticSeekTargetRef.current = null;
-                if (canPause && !applyingRemoteState.current && state?.current) sendControl('seek');
+                if (canPause && !applyingRemoteState.current && state?.current) sendControl('seek').catch(() => {});
               }}
               onCanPlay={() => {
                 setMediaStatus('Ready to play');

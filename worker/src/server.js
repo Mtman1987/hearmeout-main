@@ -14,7 +14,12 @@ const cors = require('cors');
 const { execFile, spawn } = require('child_process');
 const { promisify } = require('util');
 const { existsSync, mkdirSync, unlinkSync, statSync, readdirSync, readFileSync, writeFileSync, createReadStream, mkdtempSync, rmSync, openSync, readSync, closeSync } = require('fs');
-const { AudioSource, AudioFrame, LocalAudioTrack, Room, RoomEvent, TrackPublishOptions, TrackSource } = require('@livekit/rtc-node');
+let AudioSource, AudioFrame, LocalAudioTrack, Room, RoomEvent, TrackPublishOptions, TrackSource;
+try {
+  ({ AudioSource, AudioFrame, LocalAudioTrack, Room, RoomEvent, TrackPublishOptions, TrackSource } = require('@livekit/rtc-node'));
+} catch (e) {
+  console.warn('[DJ Worker] @livekit/rtc-node not available — LiveKit DJ engine disabled. Run `npm install` inside the worker/ directory to enable it.');
+}
 const wrtc = require('@roamhq/wrtc');
 const puppeteer = require('puppeteer');
 
