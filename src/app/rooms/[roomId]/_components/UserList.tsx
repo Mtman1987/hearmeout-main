@@ -14,6 +14,7 @@ import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Card, CardContent } from '@/components/ui/card';
 import { Radio } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { isActivityRoomId } from '@/lib/watch-session';
 
 export interface RoomData {
   name: string;
@@ -36,7 +37,6 @@ interface UserListProps {
   onVolumeChange: (volume: number) => void;
   showDJ: boolean;
   autoRadio?: boolean;
-  onToggleAutoRadio?: () => void;
   djIsLive: boolean;
   djStarting?: boolean;
   onStartDJ: () => void;
@@ -121,12 +121,12 @@ function LiveKitParticipants({ isHost, roomId }: { isHost: boolean; roomId: stri
   );
 }
 
-export default function UserList({ roomId, musicStatus, djStatus, localVolume, onVolumeChange, showDJ, autoRadio, onToggleAutoRadio, djIsLive, djStarting, onStartDJ, onStopDJ, onStartAudio, onOpenQueue, onOpenAddSong, onOpenWatch, voiceEnabled = true, voicePeerFallback = false, peerConnectedPeerIds = [], peerAudioBlocked = false, onEnablePeerAudio }: UserListProps) {
+export default function UserList({ roomId, musicStatus, djStatus, localVolume, onVolumeChange, showDJ, autoRadio, djIsLive, djStarting, onStartDJ, onStopDJ, onStartAudio, onOpenQueue, onOpenAddSong, onOpenWatch, voiceEnabled = true, voicePeerFallback = false, peerConnectedPeerIds = [], peerAudioBlocked = false, onEnablePeerAudio }: UserListProps) {
   const { user } = useSession();
   const { data: room } = useDoc<RoomData>('rooms', roomId, 2000);
 
   const isHost = canManageRoom(user as any, room?.ownerId);
-  const canControl = isHost;
+  const canControl = isHost || isActivityRoomId(roomId);
 
   return (
     <>
@@ -152,7 +152,6 @@ export default function UserList({ roomId, musicStatus, djStatus, localVolume, o
               onVolumeChange={onVolumeChange}
               canControl={canControl}
               autoRadio={autoRadio}
-              onToggleAutoRadio={onToggleAutoRadio}
               djIsLive={djIsLive}
               djStarting={djStarting}
               onStartDJ={onStartDJ}

@@ -51,6 +51,7 @@ const errorEl = document.getElementById('error');
 const drawerEl = document.getElementById('drawer');
 const fullscreenBtn = document.getElementById('fullscreen');
 const popoutBtn = document.getElementById('popout');
+const playPauseBtn = document.getElementById('play-pause');
 const downloadLink = document.getElementById('download');
 const mediaModeBtn = document.getElementById('media-mode');
 const visualTestBtn = document.getElementById('visual-test');
@@ -111,6 +112,8 @@ let ttsPlaying = false;
 let seekingLocally = false;
 const ttsQueue = [];
 const seenTtsIds = new Set();
+const CONTROL_HIDE_DELAY_MS = 30000;
+let controlsHideTimer = null;
 
 try {
   ttsEnabled = localStorage.getItem('hmo_activity_tts_overlay') === '1';
@@ -267,6 +270,24 @@ function youtubeVideoIdForItem(item) {
 
 function shouldResolveYoutubeInBrowser(item) {
   return Boolean(youtubeVideoIdForItem(item) && item?.metadata?.playbackStrategy === 'proxy');
+}
+
+function scheduleControlsHide() {
+  if (controlsHideTimer) clearTimeout(controlsHideTimer);
+  document.body.classList.remove('controls-hidden');
+  controlsHideTimer = setTimeout(() => {
+    const activeElement = document.activeElement;
+    const controlsFocused = activeElement && activeElement.closest && activeElement.closest('.activity-chrome');
+    if (controlsFocused || drawerEl.classList.contains('open')) {
+      scheduleControlsHide();
+      return;
+    }
+    document.body.classList.add('controls-hidden');
+  }, CONTROL_HIDE_DELAY_MS);
+}
+
+function wakeControls() {
+  scheduleControlsHide();
 }
 
 function reportActivityMedia(message, details) {
@@ -941,6 +962,14 @@ function render(nextState) {
   empty.classList.toggle('hidden', Boolean(state.current));
   empty.style.display = state.current ? 'none' : 'grid';
   popoutBtn.disabled = !state.current;
+  if (playPauseBtn) {
+    const isPlaying = Boolean(state.current && state.playback?.status === 'playing');
+    const label = isPlaying ? 'Pause' : 'Play';
+    playPauseBtn.textContent = isPlaying ? '❚❚' : '▶';
+    playPauseBtn.title = label;
+    playPauseBtn.setAttribute('aria-label', label);
+    playPauseBtn.disabled = !state.current;
+  }
   if (mediaModeBtn) {
     const canToggleMode = Boolean(state.current && hasMusicModeToggle(state.current.item));
     mediaModeBtn.hidden = !canToggleMode;
@@ -1009,6 +1038,7 @@ function setDrawer(panelName) {
     button.classList.toggle('active', !active && button.dataset.panel === panelName);
   });
   document.body.classList.remove('focus-mode');
+  wakeControls();
 }
 
 async function refresh() {
@@ -1354,6 +1384,12 @@ volumeInput.addEventListener('input', () => {
   }
 });
 
+volumeInput.addEventListener('change', () => {
+  control('volume', Number(volumeInput.value || 0)).catch((err) => {
+    errorEl.textContent = err && err.message ? err.message : String(err);
+  });
+});
+
 if (seekInput) {
   seekInput.addEventListener('input', () => {
     seekingLocally = true;
@@ -1576,8 +1612,13 @@ if (youtube) {
   });
 }
 
+['pointermove', 'pointerdown', 'touchstart', 'keydown', 'focusin'].forEach((eventName) => {
+  document.addEventListener(eventName, wakeControls, { passive: eventName !== 'keydown' });
+});
+
 try {
   applyVolume();
+  scheduleControlsHide();
   discordHandshake();
   refresh();
   setInterval(refresh, 1000);

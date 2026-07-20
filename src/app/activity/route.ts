@@ -82,22 +82,28 @@ async function html(request: Request) {
     .video-wrap { position: relative; min-height: 0; background: #000; }
     video, iframe.youtube-player { width: 100%; height: 100%; background: #000; display: block; object-fit: contain; border: 0; pointer-events: none; user-select: none; }
     video.hidden, audio.hidden, iframe.hidden { display: none !important; }
-    audio.audio-player { position: absolute; left: 50%; top: 50%; width: min(720px, calc(100vw - 32px)); transform: translate(-50%, -50%); z-index: 2; pointer-events: auto; }
+    audio.audio-player { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
     .empty { position: absolute; inset: 0; display: grid; place-content: center; gap: 8px; text-align: center; color: #cbd5e1; background: rgba(0,0,0,.55); }
     .empty.hidden { display: none !important; }
+    .activity-chrome { opacity: 1; transition: opacity .22s ease, transform .22s ease; }
+    body.controls-hidden .activity-chrome { opacity: 0; pointer-events: none; }
+    body.controls-hidden .room-tabs { transform: translateY(-8px); }
+    body.controls-hidden .toolbar, body.controls-hidden .meta { transform: translateY(8px); }
+    body.controls-hidden .video-wrap { cursor: none; }
     .room-tabs { position: fixed; left: 10px; top: 10px; z-index: 11; display: flex; gap: 6px; padding: 6px; border: 1px solid rgba(148,163,184,.35); border-radius: 8px; background: rgba(2,6,23,.76); backdrop-filter: blur(8px); }
     .room-tab { min-height: 34px; border-color: transparent; background: transparent; padding: 6px 10px; }
     .room-tab.active { border-color: rgba(52,211,153,.85); background: rgba(16,185,129,.18); color: #bbf7d0; }
-    .toolbar { position: fixed; left: 10px; right: 10px; bottom: 10px; z-index: 11; display: flex; align-items: center; gap: 6px; overflow-x: auto; padding: 8px; border: 1px solid rgba(148,163,184,.35); border-radius: 8px; background: rgba(2,6,23,.82); backdrop-filter: blur(8px); }
+    .toolbar { position: fixed; left: 50%; bottom: 10px; z-index: 11; display: flex; width: min(980px, calc(100vw - 20px)); align-items: center; gap: 6px; overflow-x: auto; padding: 8px; border: 1px solid rgba(148,163,184,.35); border-radius: 8px; background: rgba(2,6,23,.82); backdrop-filter: blur(8px); transform: translateX(-50%); }
+    body.controls-hidden .toolbar { transform: translate(-50%, 8px); }
     button, input { min-height: 38px; border-radius: 6px; border: 1px solid #475569; background: #172033; color: #e5edf5; padding: 8px 10px; font: inherit; }
     button { cursor: pointer; }
     button:disabled { opacity: .45; cursor: not-allowed; }
     button:hover:not(:disabled), .download:hover { border-color: #34d399; }
     .icon-btn { min-width: 40px; width: 40px; padding: 0; display: inline-grid; place-items: center; }
     .panel-btn.active { border-color: #34d399; color: #bbf7d0; }
-    .volume { min-width: 220px; flex: 1; display: flex; align-items: center; gap: 8px; border: 1px solid #475569; border-radius: 6px; background: #0f172a; padding: 7px 9px; }
+    .volume { min-width: 150px; flex: 1; display: flex; align-items: center; gap: 8px; border: 1px solid #475569; border-radius: 6px; background: #0f172a; padding: 7px 9px; }
     .volume input { min-height: 0; padding: 0; accent-color: #34d399; }
-    .seekbar { min-width: 260px; flex: 2; display: flex; align-items: center; gap: 8px; border: 1px solid #475569; border-radius: 6px; background: #0f172a; padding: 7px 9px; }
+    .seekbar { min-width: 220px; flex: 3; display: flex; align-items: center; gap: 8px; border: 1px solid #475569; border-radius: 6px; background: #0f172a; padding: 7px 9px; }
     .seekbar input { min-height: 0; padding: 0; accent-color: #34d399; }
     .seekbar span { min-width: 84px; color: #cbd5e1; font-size: 12px; font-variant-numeric: tabular-nums; }
     .meta { position: fixed; left: 10px; right: 10px; bottom: 64px; z-index: 9; display: grid; justify-items: center; gap: 4px; text-align: center; pointer-events: none; text-shadow: 0 1px 4px #000; }
@@ -118,6 +124,16 @@ async function html(request: Request) {
     body.focus-mode .player { height: 100vh; }
     body.focus-mode .room-tabs, body.focus-mode .meta { opacity: .18; transition: opacity .15s ease; }
     body.focus-mode .room-tabs:hover, body.focus-mode .meta:hover { opacity: 1; }
+    .utility-control { display: none !important; }
+    @media (max-width: 720px) {
+      .toolbar { gap: 4px; }
+      .volume { min-width: 112px; }
+      .volume span, .seekbar span { display: none; }
+      .seekbar { min-width: 140px; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .activity-chrome { transition: none; }
+    }
   </style>
   <script src="${escapeHtml(clientUrl('/api/activity/hls'))}"></script>
 </head>
@@ -134,37 +150,32 @@ async function html(request: Request) {
       <div class="video-wrap">
         <video id="video" class="${isAudioOnly || isEmbeddedVideo ? 'hidden' : ''}" autoplay muted playsinline ${nativeSrc ? `src="${escapeHtml(nativeSrc)}"` : ''}></video>
         <iframe id="youtube" class="youtube-player ${isEmbeddedVideo ? '' : 'hidden'}" ${iframeSrc ? `src="${escapeHtml(iframeSrc)}"` : ''} allow="autoplay; fullscreen; encrypted-media; picture-in-picture" allowfullscreen></iframe>
-        <audio id="audio" class="audio-player ${isAudioOnly ? '' : 'hidden'}" autoplay controls ${audioSrc ? `src="${escapeHtml(audioSrc)}"` : ''}></audio>
+        <audio id="audio" class="audio-player ${isAudioOnly ? '' : 'hidden'}" autoplay ${audioSrc ? `src="${escapeHtml(audioSrc)}"` : ''}></audio>
         <div class="empty ${current ? 'hidden' : ''}" id="empty"><strong>No media loaded</strong><span>Use Discord controls to request and control playback.</span></div>
       </div>
-      <nav class="room-tabs" aria-label="Watch rooms">
+      <nav class="room-tabs activity-chrome" aria-label="Watch rooms">
         <button class="room-tab" data-session-kind="movie" data-session-switch="${GLOBAL_WATCH_SESSION_ID}" type="button">Movies</button>
         <button class="room-tab" data-session-kind="music" data-session-switch="${MUSIC_WATCH_SESSION_ID}" type="button">Music</button>
       </nav>
-      <div class="toolbar" aria-label="Watch controls">
-        <button data-action="play-pause" title="Play or pause the shared session">Play/Pause</button>
-        <button data-action="sync-local" title="Sync to live position">Sync</button>
+      <div class="toolbar activity-chrome" aria-label="Shared media controls">
+        <button class="icon-btn" id="play-pause" data-action="play-pause" title="Play" aria-label="Play">▶</button>
         <div class="seekbar" title="Seek">
           <span id="position-label">0:00 / --:--</span>
           <input id="seek" type="range" min="0" max="1" value="0" step="1" disabled aria-label="Seek position" />
         </div>
-        <button data-action="next" title="Skip to next queued video">Next</button>
-        <button id="visual-test" type="button" title="Try native video sources until a frame renders">Visual Test</button>
-        <button id="popout" type="button" disabled>Pop Out</button>
-        <button id="fullscreen" type="button">Fullscreen</button>
-        <button class="panel-btn" data-panel="request" type="button">Request</button>
-        <button class="panel-btn" data-panel="queue" type="button">Queue</button>
-        <button class="panel-btn" data-panel="events" type="button">Activity</button>
+        <button class="icon-btn" data-action="next" title="Next" aria-label="Next">⏭</button>
+        <button class="icon-btn" id="popout" type="button" disabled title="Pop out" aria-label="Pop out">↗</button>
+        <button class="icon-btn" id="fullscreen" type="button" title="Fullscreen" aria-label="Fullscreen">⛶</button>
         <button id="media-mode" type="button" hidden>Video</button>
-        <button id="tts-toggle" type="button" title="Play TTS over media on this device">TTS Off</button>
         <button class="icon-btn" id="mute" type="button" title="Mute" aria-label="Mute">🔊</button>
         <div class="volume" title="Volume">
           <input id="volume" type="range" min="0" max="100" value="85" aria-label="Video volume" />
           <span id="volume-label">85%</span>
         </div>
-        <button class="icon-btn" id="download" type="button" disabled title="Download" aria-label="Download">⇩</button>
+        <button class="utility-control" id="tts-toggle" type="button" title="Play TTS over media on this device">TTS Off</button>
+        <button class="utility-control" id="download" type="button" disabled title="Download" aria-label="Download">⇩</button>
       </div>
-      <div class="meta">
+      <div class="meta activity-chrome">
         <strong id="title">${escapeHtml(title)}</strong>
         <p class="muted" id="media">${escapeHtml(media)}</p>
         <p class="error" id="error"></p>

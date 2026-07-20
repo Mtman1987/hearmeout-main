@@ -395,8 +395,8 @@ function SharedScreenShareCard({ roomId }: { roomId: string }) {
     );
 }
 
-function RoomHeader({ roomName, onToggleChat, showDJ, onToggleDJ, peerFallback, livekitReady, onScreenShare, activityRoom = false }: {
-    roomName: string; onToggleChat: () => void; showDJ: boolean; onToggleDJ: () => void; peerFallback?: boolean; livekitReady?: boolean; onScreenShare?: () => void; activityRoom?: boolean;
+function RoomHeader({ roomName, onToggleChat, showDJ, onToggleDJ, peerFallback, livekitReady, onScreenShare }: {
+    roomName: string; onToggleChat: () => void; showDJ: boolean; onToggleDJ: () => void; peerFallback?: boolean; livekitReady?: boolean; onScreenShare?: () => void;
 }) {
     const { isMobile } = useSidebar();
     const params = useParams();
@@ -420,8 +420,15 @@ function RoomHeader({ roomName, onToggleChat, showDJ, onToggleDJ, peerFallback, 
             </div>
             <div className="flex flex-initial items-center justify-end space-x-2">
                 <Tooltip><TooltipTrigger asChild>
-                    <Button variant={showDJ ? "secondary" : "outline"} size="icon" onClick={onToggleDJ}><Music className="h-4 w-4" /></Button>
-                </TooltipTrigger><TooltipContent><p>{activityRoom ? 'Open Discord Activity music queue' : showDJ ? 'Hide DJ' : 'Show DJ'}</p></TooltipContent></Tooltip>
+                    <Button
+                        variant={showDJ ? "secondary" : "outline"}
+                        size="icon"
+                        onClick={onToggleDJ}
+                        aria-label={showDJ ? 'Hide HearMeOut DJ controls' : 'Show HearMeOut DJ controls'}
+                    >
+                        <Music className="h-4 w-4" />
+                    </Button>
+                </TooltipTrigger><TooltipContent><p>{showDJ ? 'Hide HearMeOut DJ controls' : 'Show HearMeOut DJ controls'}</p></TooltipContent></Tooltip>
                 {onScreenShare && (
                     <Tooltip><TooltipTrigger asChild>
                         <Button variant="outline" size="icon" onClick={onScreenShare}><Monitor className="h-4 w-4" /></Button>
@@ -1024,10 +1031,6 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
         };
     }, [user, isUserLoading, roomId]);
 
-    const handleToggleAutoRadio = useCallback(() => {
-        dbUpdate('rooms', roomId, { autoRadio: !room.autoRadio });
-    }, [roomId, room.autoRadio]);
-
     const livekitUrl = process.env.NEXT_PUBLIC_LIVEKIT_URL;
 
     if (isBanned) {
@@ -1113,11 +1116,8 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
                     <RoomHeader
                       roomName={room.name}
                       onToggleChat={() => setChatOpen(!chatOpen)}
-                      showDJ={isActivityRoom ? false : showDJ}
-                      onToggleDJ={isActivityRoom
-                        ? () => openPopout('watch', { width: 760, height: 700 }, { source: 'activityMusic', sessionScope: 'discord', roomId, canControl: isOwner, initialTab: 'music' })
-                        : () => setShowDJ(v => !v)}
-                      activityRoom={isActivityRoom}
+                      showDJ={showDJ}
+                      onToggleDJ={() => setShowDJ(v => !v)}
                       peerFallback={voiceFallbackActive}
                       livekitReady={voiceReady}
                       onScreenShare={() => openPopout('screenShare', { width: 720, height: 520 }, { source: 'screenShare' })}
@@ -1132,18 +1132,17 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
                           musicStatus={musicStatus}
                           localVolume={localVolume}
                           onVolumeChange={setLocalVolume}
-                          showDJ={showDJ && !isActivityRoom}
+                          showDJ={showDJ}
                           djStatus={room.djStatus}
                           autoRadio={room.autoRadio}
-                          onToggleAutoRadio={handleToggleAutoRadio}
                           djIsLive={!!room.djActive}
                           djStarting={djStarting}
                           onStartDJ={handleStartDJ}
                           onStopDJ={handleStopDJ}
                           onStartAudio={handleStartMusicAudio}
-                          onOpenQueue={() => openPopout('queue', { width: 760, height: 720 }, { source: 'queue', roomId, canControl: isOwner })}
+                          onOpenQueue={() => openPopout('watch', { width: 760, height: 700 }, { source: 'musicQueue', sessionScope: isStreamMode ? 'overlay' : 'discord', roomId, canControl: isOwner || isActivityRoom, initialTab: 'music' })}
                           onOpenAddSong={() => openPopout('addSong', { width: 460, height: 560 }, { source: 'addSong', sessionScope: isStreamMode ? 'overlay' : 'discord', roomId, canControl: isOwner })}
-                          onOpenWatch={() => openPopout('watch', { width: 760, height: 700 }, { source: 'watch', sessionScope: isStreamMode ? 'overlay' : 'discord', roomId, canControl: isOwner })}
+                          onOpenWatch={() => openPopout('watch', { width: 760, height: 700 }, { source: 'musicWatch', sessionScope: isStreamMode ? 'overlay' : 'discord', roomId, canControl: isOwner || isActivityRoom, initialTab: 'music' })}
                           voiceEnabled={voiceReady || voiceFallbackActive}
                           voicePeerFallback={voiceFallbackActive}
                           peerConnectedPeerIds={Array.from(peerVoiceStreams.keys())}

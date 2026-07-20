@@ -1,16 +1,36 @@
 'use client';
 
-import React, { useCallback, useState } from 'react';
-import { Music, Play, Pause, SkipForward, SkipBack, Volume2, VolumeX, Power, PowerOff, Radio, LoaderCircle, SlidersHorizontal, ListMusic, Film } from 'lucide-react';
+import React, { useCallback, useEffect, useState } from 'react';
+import { Film, ListMusic, LoaderCircle, Music, Pause, Play, Power, PowerOff, Radio, SkipForward, SlidersHorizontal, Volume2, VolumeX } from 'lucide-react';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Slider } from '@/components/ui/slider';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
+import { getRoomWatchSessionId, isActivityRoomId } from '@/lib/watch-session';
 import { SpeakingIndicator } from './SpeakingIndicator';
 import { cn } from '@/lib/utils';
-import { dbUpdateStrict } from '@/lib/db-helpers';
 import type { PlaylistItem } from '@/types/playlist';
+
+type SharedMusicState = {
+  queue: Array<{ requestId: string; item: { title: string } }>;
+  current: {
+    requestId: string;
+    item: {
+      title: string;
+      runtime?: string;
+      metadata?: { artist?: string };
+    };
+  } | null;
+  autoRadio?: boolean;
+  playback: {
+    status: 'idle' | 'paused' | 'playing';
+    position: number;
+    updatedAt: number;
+    muted?: boolean;
+    volume?: number;
+  };
+};
 
 interface DJCardProps {
   roomId: string;
@@ -21,10 +41,10 @@ interface DJCardProps {
   djStatus?: string;
   musicStatus: string | null;
   localVolume: number;
+  // eslint-disable-next-line no-unused-vars
   onVolumeChange: (v: number) => void;
   canControl: boolean;
   autoRadio?: boolean;
-  onToggleAutoRadio?: () => void;
   djIsLive: boolean;
   djStarting?: boolean;
   onStartDJ: () => void;
@@ -35,57 +55,155 @@ interface DJCardProps {
   onOpenWatch?: () => void;
 }
 
+function effectivePlaybackPosition(playback?: SharedMusicState['playback'], now = Date.now()) {
+  if (!playback) return 0;
+  if (playback.status !== 'playing') return Math.max(0, Number(playback.position || 0));
+  return Math.max(0, Number(playback.position || 0) + (now - Number(playback.updatedAt || now)) / 1000);
+}
+
+function runtimeSeconds(value?: string) {
+  const raw = String(value || '').trim();
+  if (!raw || raw === 'unknown' || raw === 'live') return 0;
+  if (raw.includes(':')) {
+    const parts = raw.split(':').map(Number);
+    if (parts.every(Number.isFinite)) return parts.reduce((total, part) => total * 60 + part, 0);
+  }
+  let total = 0;
+  for (const match of raw.matchAll(/(\d+)\s*(h|m|s)/gi)) {
+    const amount = Number(match[1]);
+    total += match[2].toLowerCase() === 'h' ? amount * 3600 : match[2].toLowerCase() === 'm' ? amount * 60 : amount;
+  }
+  return total;
+}
+
+function formatClock(value: number) {
+  const seconds = Math.max(0, Math.floor(Number(value || 0)));
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  const remaining = seconds % 60;
+  return hours > 0
+    ? `${hours}:${String(minutes).padStart(2, '0')}:${String(remaining).padStart(2, '0')}`
+    : `${minutes}:${String(remaining).padStart(2, '0')}`;
+}
+
 export default function DJCard({
-  roomId, playlist, currentTrackId, isPlaying, djActive,
+  roomId, playlist, currentTrackId, isPlaying: legacyIsPlaying, djActive,
   djStatus, musicStatus, localVolume, onVolumeChange, canControl,
-  autoRadio, onToggleAutoRadio,
+  autoRadio: legacyAutoRadio,
   djIsLive, djStarting, onStartDJ, onStopDJ,
   onStartAudio, onOpenQueue, onOpenAddSong, onOpenWatch,
 }: DJCardProps) {
-  const currentTrack = playlist?.find(t => t.id === currentTrackId);
-  const isStreaming = musicStatus === '🎵 streaming';
+  const musicSessionId = getRoomWatchSessionId(roomId, 'music');
+  const activityRoom = isActivityRoomId(roomId);
+  const legacyCurrentTrack = playlist?.find((track) => track.id === currentTrackId);
+  const [sharedState, setSharedState] = useState<SharedMusicState | null>(null);
   const [controlError, setControlError] = useState<string | null>(null);
+  const [controlPending, setControlPending] = useState(false);
   const [activePanel, setActivePanel] = useState<'controls' | 'radio' | null>(null);
-  const visibleStatus = controlError || djStatus || musicStatus;
+  const [clockNow, setClockNow] = useState(() => Date.now());
+  const [seekDraft, setSeekDraft] = useState<number | null>(null);
+  const [volumeDraft, setVolumeDraft] = useState<number | null>(null);
 
-  const updatePlayback = useCallback(async (data: Record<string, unknown>) => {
-    if (!canControl) return;
+  useEffect(() => {
+    let cancelled = false;
+    const refresh = async () => {
+      try {
+        const response = await fetch(`/api/watch/sessions/${encodeURIComponent(musicSessionId)}/state`, { cache: 'no-store' });
+        if (!response.ok || cancelled) return;
+        setSharedState(await response.json());
+      } catch {
+        // The visible status retains the last known state during a transient poll failure.
+      }
+    };
+    refresh();
+    const interval = window.setInterval(refresh, 2000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, [musicSessionId]);
+
+  useEffect(() => {
+    if (sharedState?.playback.status !== 'playing') return;
+    const interval = window.setInterval(() => setClockNow(Date.now()), 1000);
+    return () => window.clearInterval(interval);
+  }, [sharedState?.playback.status]);
+
+  useEffect(() => {
+    const playback = sharedState?.playback;
+    if (!playback) return;
+    setVolumeDraft(null);
+    const sharedVolume = Math.max(0, Math.min(100, Number(playback.volume ?? 85))) / 100;
+    onVolumeChange(playback.muted ? 0 : sharedVolume);
+  }, [onVolumeChange, sharedState?.playback.muted, sharedState?.playback.volume]);
+
+  useEffect(() => {
+    setSeekDraft(null);
+  }, [sharedState?.current?.requestId, sharedState?.playback.position, sharedState?.playback.updatedAt]);
+
+  const sendSharedControl = useCallback(async (action: string, value?: number) => {
+    if (!canControl) return null;
+    setControlPending(true);
     setControlError(null);
     try {
-      await dbUpdateStrict('rooms', roomId, data);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'Playback update failed';
-      setControlError(message);
+      const query = new URLSearchParams({
+        action,
+        format: 'json',
+        platform: 'web',
+        roomId,
+        isHost: 'true',
+      });
+      if (Number.isFinite(value)) query.set('position', String(value));
+      if (action === 'next' && sharedState?.current?.requestId) {
+        query.set('expectedRequestId', sharedState.current.requestId);
+      }
+      const response = await fetch(`/api/watch/sessions/${encodeURIComponent(musicSessionId)}/quick-control?${query.toString()}`, { cache: 'no-store' });
+      const payload = await response.json().catch(() => null);
+      if (!response.ok || payload?.success === false) throw new Error(payload?.error || 'Shared music control failed');
+      setSharedState(payload.session);
+      return payload.session as SharedMusicState;
+    } catch (error) {
+      setControlError(error instanceof Error ? error.message : 'Shared music control failed');
+      return null;
+    } finally {
+      setControlPending(false);
     }
-  }, [canControl, roomId]);
+  }, [canControl, musicSessionId, roomId, sharedState?.current?.requestId]);
+
+  const sharedItem = sharedState?.current?.item;
+  const currentTitle = sharedItem?.title || legacyCurrentTrack?.title;
+  const currentArtist = sharedItem?.metadata?.artist || legacyCurrentTrack?.artist;
+  const sharedIsPlaying = sharedState ? sharedState.playback.status === 'playing' : Boolean(legacyIsPlaying);
+  const isStreaming = sharedIsPlaying || musicStatus === '🎵 streaming';
+  const duration = runtimeSeconds(sharedItem?.runtime) || Math.max(0, Math.round(Number(legacyCurrentTrack?.duration || 0) / 1000));
+  const livePosition = Math.min(duration || Number.POSITIVE_INFINITY, effectivePlaybackPosition(sharedState?.playback, clockNow));
+  const displayedPosition = seekDraft ?? livePosition;
+  const sharedVolume = volumeDraft ?? Math.max(0, Math.min(100, Number(sharedState?.playback.volume ?? Math.round(localVolume * 100))));
+  const sharedMuted = sharedState?.playback.muted ?? sharedVolume === 0;
+  const sharedAutoRadio = sharedState?.autoRadio ?? Boolean(legacyAutoRadio);
+  const visibleStatus = controlError
+    || (sharedState?.current ? `${sharedState.playback.status} · shared with Discord` : null)
+    || djStatus
+    || musicStatus;
 
   const handlePlayPause = useCallback(() => {
-    onStartAudio();
-    void updatePlayback({ isPlaying: !isPlaying });
-  }, [isPlaying, onStartAudio, updatePlayback]);
+    if (!activityRoom) onStartAudio();
+    void sendSharedControl(sharedIsPlaying ? 'pause' : 'play', effectivePlaybackPosition(sharedState?.playback));
+  }, [activityRoom, onStartAudio, sendSharedControl, sharedIsPlaying, sharedState?.playback]);
 
   const handleNext = useCallback(() => {
-    if (!canControl || !playlist?.length) return;
-    const i = playlist.findIndex(t => t.id === currentTrackId);
-    const next = playlist[(i + 1) % playlist.length];
-    if (next) void updatePlayback({ currentTrackId: next.id, isPlaying: true });
-  }, [playlist, currentTrackId, canControl, updatePlayback]);
+    void sendSharedControl('next', 0);
+  }, [sendSharedControl]);
 
-  const handlePrev = useCallback(() => {
-    if (!canControl || !playlist?.length) return;
-    const i = playlist.findIndex(t => t.id === currentTrackId);
-    const prev = playlist[(i - 1 + playlist.length) % playlist.length];
-    if (prev) void updatePlayback({ currentTrackId: prev.id, isPlaying: true });
-  }, [playlist, currentTrackId, canControl, updatePlayback]);
-
-  const isMuted = localVolume === 0;
+  const handleMute = useCallback(() => {
+    onVolumeChange(sharedMuted ? Math.max(0.01, sharedVolume / 100) : 0);
+    void sendSharedControl(sharedMuted ? 'unmute' : 'mute', effectivePlaybackPosition(sharedState?.playback));
+  }, [onVolumeChange, sendSharedControl, sharedMuted, sharedState?.playback, sharedVolume]);
 
   return (
-    <Card className="flex flex-col h-full relative">
-      {isStreaming && (
-        <div className="absolute -inset-1.5 bg-gradient-to-r from-purple-500/20 to-pink-500/20 rounded-2xl blur animate-pulse" />
-      )}
-      <CardContent className="p-4 flex flex-col gap-4 flex-grow relative z-10">
+    <Card className="relative flex h-full flex-col">
+      {isStreaming ? <div className="absolute -inset-1.5 animate-pulse rounded-2xl bg-gradient-to-r from-purple-500/20 to-pink-500/20 blur" /> : null}
+      <CardContent className="relative z-10 flex flex-grow flex-col gap-4 p-4">
         <div className="flex items-start gap-4">
           <div className="relative">
             <Avatar className={cn(
@@ -96,143 +214,151 @@ export default function DJCard({
               <AvatarImage src="https://api.dicebear.com/7.x/bottts/svg?seed=hearmeout-dj&backgroundColor=7c3aed" />
               <AvatarFallback>🎵</AvatarFallback>
             </Avatar>
-            {djActive && (
-              <div className={cn(
-                'absolute -bottom-1 -right-1 rounded-full p-1 border-2 border-card',
-                isStreaming ? 'bg-green-500' : 'bg-yellow-500',
-              )}>
-                <Music className="w-3 h-3 text-white" />
+            {djActive ? (
+              <div className={cn('absolute -bottom-1 -right-1 rounded-full border-2 border-card p-1', isStreaming ? 'bg-green-500' : 'bg-yellow-500')}>
+                <Music className="h-3 w-3 text-white" />
               </div>
-            )}
+            ) : null}
           </div>
-          <div className="flex-1 min-w-0">
-            <p className="font-bold text-lg">HearMeOut DJ</p>
-            {currentTrack ? (
-              <p className="text-sm text-muted-foreground truncate">
-                🎵 {currentTrack.title}
-                {currentTrack.artist && <span className="text-xs"> — {currentTrack.artist}</span>}
+          <div className="min-w-0 flex-1">
+            <p className="text-lg font-bold">HearMeOut DJ</p>
+            {currentTitle ? (
+              <p className="truncate text-sm text-muted-foreground">
+                🎵 {currentTitle}{currentArtist ? <span className="text-xs"> — {currentArtist}</span> : null}
               </p>
             ) : (
-              <p className="text-sm text-muted-foreground">
-                {djIsLive ? 'DJ active — waiting for tracks' : 'Click Start DJ to begin'}
-              </p>
+              <p className="text-sm text-muted-foreground">Shared Discord music queue is waiting for a song</p>
             )}
-            {visibleStatus && visibleStatus !== 'idle' && (
-              <p className={cn('text-xs mt-0.5',
+            {visibleStatus && visibleStatus !== 'idle' ? (
+              <p className={cn(
+                'mt-0.5 text-xs',
                 controlError ? 'text-red-400' :
-                visibleStatus.includes('Streaming') || visibleStatus.includes('streaming') ? 'text-green-400' :
-                visibleStatus === 'connected' ? 'text-blue-400' :
-                visibleStatus === 'error' || visibleStatus.includes('failed') || visibleStatus.includes('Failed') ? 'text-red-400' :
-                'text-yellow-400'
+                  visibleStatus.includes('playing') || visibleStatus.includes('Streaming') || visibleStatus.includes('streaming') ? 'text-green-400' :
+                  visibleStatus.includes('shared') || visibleStatus === 'connected' ? 'text-blue-400' :
+                  visibleStatus.includes('failed') || visibleStatus.includes('Failed') ? 'text-red-400' : 'text-yellow-400',
               )}>{visibleStatus}</p>
-            )}
+            ) : null}
           </div>
         </div>
 
-        <div className="space-y-3 mt-auto">
+        <div className="mt-auto space-y-3">
           <SpeakingIndicator audioLevel={isStreaming ? 0.6 : 0} />
 
           <div className="space-y-2">
-            <div className="flex items-center gap-1">
+            <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
+              <span className="w-10 text-right tabular-nums">{formatClock(displayedPosition)}</span>
+              <Slider
+                aria-label="Shared music position"
+                value={[duration ? Math.min(duration, displayedPosition) : 0]}
+                onValueChange={(value) => setSeekDraft(value[0])}
+                onValueCommit={(value) => void sendSharedControl('seek', value[0])}
+                max={Math.max(1, duration)}
+                step={1}
+                disabled={!canControl || !sharedState?.current || duration <= 0 || controlPending}
+              />
+              <span className="w-10 tabular-nums">{duration ? formatClock(duration) : '--:--'}</span>
+            </div>
+
+            <div className="flex items-center justify-center gap-2">
+              <Tooltip><TooltipTrigger asChild>
+                <Button variant="ghost" size="icon" className="h-10 w-10" onClick={handlePlayPause} disabled={!canControl || !sharedState?.current || controlPending}>
+                  {sharedIsPlaying ? <Pause className="h-5 w-5" /> : <Play className="h-5 w-5" />}
+                </Button>
+              </TooltipTrigger><TooltipContent><p>{sharedIsPlaying ? 'Pause everywhere' : 'Play everywhere'}</p></TooltipContent></Tooltip>
+              <Tooltip><TooltipTrigger asChild>
+                <Button variant="ghost" size="icon" className="h-9 w-9" onClick={handleNext} disabled={!canControl || !sharedState?.current || controlPending}>
+                  <SkipForward className="h-4 w-4" />
+                </Button>
+              </TooltipTrigger><TooltipContent><p>Next everywhere</p></TooltipContent></Tooltip>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <Tooltip><TooltipTrigger asChild>
+                <Button variant="ghost" size="icon" className="h-8 w-8" onClick={handleMute} disabled={!canControl || controlPending}>
+                  {sharedMuted ? <VolumeX className="h-4 w-4" /> : <Volume2 className="h-4 w-4" />}
+                </Button>
+              </TooltipTrigger><TooltipContent><p>{sharedMuted ? 'Unmute everywhere' : 'Mute everywhere'}</p></TooltipContent></Tooltip>
+              <Slider
+                aria-label="Shared music volume"
+                value={[sharedMuted ? 0 : sharedVolume]}
+                onValueChange={(value) => {
+                  setVolumeDraft(value[0]);
+                  onVolumeChange(value[0] / 100);
+                }}
+                onValueCommit={(value) => void sendSharedControl('volume', value[0])}
+                max={100}
+                step={1}
+                disabled={!canControl || controlPending}
+              />
+              <span className="w-9 text-right text-[11px] tabular-nums text-muted-foreground">{sharedMuted ? 0 : Math.round(sharedVolume)}%</span>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-1">
+            {!activityRoom ? (
               <Tooltip><TooltipTrigger asChild>
                 <Button variant={activePanel === 'controls' ? 'secondary' : 'ghost'} size="icon" className="h-8 w-8" onClick={() => setActivePanel(activePanel === 'controls' ? null : 'controls')}>
                   <SlidersHorizontal className="h-4 w-4" />
                 </Button>
-              </TooltipTrigger><TooltipContent><p>DJ controls</p></TooltipContent></Tooltip>
+              </TooltipTrigger><TooltipContent><p>DJ connection controls</p></TooltipContent></Tooltip>
+            ) : null}
+            <Tooltip><TooltipTrigger asChild>
+              <Button variant={sharedAutoRadio ? 'secondary' : 'ghost'} size="icon" className="h-8 w-8" onClick={() => setActivePanel(activePanel === 'radio' ? null : 'radio')}>
+                <Radio className="h-4 w-4" />
+              </Button>
+            </TooltipTrigger><TooltipContent><p>Auto-radio</p></TooltipContent></Tooltip>
+            <Tooltip><TooltipTrigger asChild>
+              <Button variant="ghost" size="icon" className="h-8 w-8" onClick={onOpenQueue}>
+                <ListMusic className="h-4 w-4" />
+              </Button>
+            </TooltipTrigger><TooltipContent><p>Open shared queue</p></TooltipContent></Tooltip>
+            <Tooltip><TooltipTrigger asChild>
+              <Button variant="ghost" size="icon" className="h-8 w-8" onClick={onOpenAddSong}>
+                <Music className="h-4 w-4" />
+              </Button>
+            </TooltipTrigger><TooltipContent><p>Add songs</p></TooltipContent></Tooltip>
+            {onOpenWatch ? (
               <Tooltip><TooltipTrigger asChild>
-                <Button variant={autoRadio ? 'secondary' : 'ghost'} size="icon" className="h-8 w-8" onClick={() => setActivePanel(activePanel === 'radio' ? null : 'radio')}>
-                  <Radio className="h-4 w-4" />
+                <Button variant="ghost" size="icon" className="h-8 w-8" onClick={onOpenWatch}>
+                  <Film className="h-4 w-4" />
                 </Button>
-              </TooltipTrigger><TooltipContent><p>Auto-radio</p></TooltipContent></Tooltip>
+              </TooltipTrigger><TooltipContent><p>Open music player</p></TooltipContent></Tooltip>
+            ) : null}
+            {!activityRoom ? (
               <Tooltip><TooltipTrigger asChild>
-                <Button variant="ghost" size="icon" className="h-8 w-8" onClick={onOpenQueue}>
-                  <ListMusic className="h-4 w-4" />
-                </Button>
-              </TooltipTrigger><TooltipContent><p>Pop out queue</p></TooltipContent></Tooltip>
-              <Tooltip><TooltipTrigger asChild>
-                <Button variant="ghost" size="icon" className="h-8 w-8" onClick={onOpenAddSong}>
-                  <Music className="h-4 w-4" />
-                </Button>
-              </TooltipTrigger><TooltipContent><p>Add songs</p></TooltipContent></Tooltip>
-              {onOpenWatch && (
-                <Tooltip><TooltipTrigger asChild>
-                  <Button variant="ghost" size="icon" className="h-8 w-8" onClick={onOpenWatch}>
-                    <Film className="h-4 w-4" />
-                  </Button>
-                </TooltipTrigger><TooltipContent><p>Watch Party</p></TooltipContent></Tooltip>
-              )}
-              <Tooltip><TooltipTrigger asChild>
-                <Button variant="ghost" size="icon" className="h-8 w-8 ml-auto" onClick={onStartAudio}>
+                <Button variant="ghost" size="icon" className="ml-auto h-8 w-8" onClick={onStartAudio}>
                   <Play className="h-4 w-4" />
                 </Button>
-              </TooltipTrigger><TooltipContent><p>Start audio playback</p></TooltipContent></Tooltip>
-            </div>
-            <div className="flex items-center gap-2">
-              <Tooltip><TooltipTrigger asChild>
-                <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => onVolumeChange(isMuted ? 0.5 : 0)}>
-                  {isMuted ? <VolumeX className="h-4 w-4" /> : <Volume2 className="h-4 w-4" />}
-                </Button>
-              </TooltipTrigger><TooltipContent><p>{isMuted ? 'Unmute' : 'Mute'}</p></TooltipContent></Tooltip>
-              <Slider value={[localVolume]} onValueChange={v => onVolumeChange(v[0])} max={1} step={0.05} />
-            </div>
+              </TooltipTrigger><TooltipContent><p>Enable local audio</p></TooltipContent></Tooltip>
+            ) : null}
           </div>
 
-          {activePanel === 'controls' && (
-            <div className="rounded-md border bg-muted/20 p-3 space-y-3">
-              <div className="flex items-center justify-center gap-1">
-                <Tooltip><TooltipTrigger asChild>
-                  <Button variant="ghost" size="icon" className="h-8 w-8" onClick={handlePrev} disabled={!canControl || !playlist?.length}>
-                    <SkipBack className="h-4 w-4" />
-                  </Button>
-                </TooltipTrigger><TooltipContent><p>Previous</p></TooltipContent></Tooltip>
-                <Tooltip><TooltipTrigger asChild>
-                  <Button variant="ghost" size="icon" className="h-10 w-10" onClick={handlePlayPause} disabled={!canControl}>
-                    {isPlaying ? <Pause className="h-5 w-5" /> : <Play className="h-5 w-5" />}
-                  </Button>
-                </TooltipTrigger><TooltipContent><p>{isPlaying ? 'Pause' : 'Play'}</p></TooltipContent></Tooltip>
-                <Tooltip><TooltipTrigger asChild>
-                  <Button variant="ghost" size="icon" className="h-8 w-8" onClick={handleNext} disabled={!canControl || !playlist?.length}>
-                    <SkipForward className="h-4 w-4" />
-                  </Button>
-                </TooltipTrigger><TooltipContent><p>Next</p></TooltipContent></Tooltip>
-                <Tooltip><TooltipTrigger asChild>
-                  <Button
-                    variant={djIsLive ? 'secondary' : 'outline'}
-                    size="sm"
-                    className="h-9 gap-1 px-2"
-                    onClick={onStartDJ}
-                    disabled={djStarting}
-                  >
-                    {djStarting ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Power className="h-4 w-4" />}
-                    On
-                  </Button>
-                </TooltipTrigger><TooltipContent><p>Start DJ</p></TooltipContent></Tooltip>
-                <Tooltip><TooltipTrigger asChild>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="h-9 gap-1 px-2"
-                    onClick={onStopDJ}
-                    disabled={djStarting}
-                  >
-                    <PowerOff className="h-4 w-4" />
-                    Off
-                  </Button>
-                </TooltipTrigger><TooltipContent><p>Stop DJ</p></TooltipContent></Tooltip>
+          {activePanel === 'controls' && !activityRoom ? (
+            <div className="rounded-md border bg-muted/20 p-3">
+              <div className="flex items-center justify-center gap-2">
+                <Button variant={djIsLive ? 'secondary' : 'outline'} size="sm" className="h-9 gap-1 px-2" onClick={onStartDJ} disabled={djStarting}>
+                  {djStarting ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Power className="h-4 w-4" />} On
+                </Button>
+                <Button variant="outline" size="sm" className="h-9 gap-1 px-2" onClick={onStopDJ} disabled={djStarting}>
+                  <PowerOff className="h-4 w-4" /> Off
+                </Button>
               </div>
             </div>
-          )}
+          ) : null}
 
-          {activePanel === 'radio' && canControl && (
+          {activePanel === 'radio' && canControl ? (
             <div className="rounded-md border bg-muted/20 p-3">
-              <Tooltip><TooltipTrigger asChild>
-                <Button variant={autoRadio ? 'secondary' : 'outline'} size="sm" className="w-full gap-2" onClick={onToggleAutoRadio}>
-                  <Radio className="h-4 w-4" />
-                  {autoRadio ? 'Auto-Radio ON' : 'Auto-Radio OFF'}
-                </Button>
-              </TooltipTrigger><TooltipContent><p>Find related songs when the playlist runs out</p></TooltipContent></Tooltip>
+              <Button
+                variant={sharedAutoRadio ? 'secondary' : 'outline'}
+                size="sm"
+                className="w-full gap-2"
+                onClick={() => void sendSharedControl('auto-radio', sharedAutoRadio ? 0 : 1)}
+                disabled={controlPending}
+              >
+                <Radio className="h-4 w-4" /> {sharedAutoRadio ? 'Auto-Radio ON' : 'Auto-Radio OFF'}
+              </Button>
             </div>
-          )}
+          ) : null}
         </div>
       </CardContent>
     </Card>
