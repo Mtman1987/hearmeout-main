@@ -187,7 +187,8 @@ class VoiceBridge {
     this.connection = null;
     this.pipes = new Map(); // discord userId -> DiscordUserPipe
 
-    this.listener = null; // LiveKit Room (subscribe app audio -> Discord)
+    this.listener = null; // First LiveKit Room listener retained for compatibility.
+    this.listeners = []; // LiveKit Rooms (subscribe app audio -> Discord)
     this.mixSources = new Map(); // participant identity -> { stream, buf }
     this.mixStream = null;
     this.player = null;
@@ -195,12 +196,12 @@ class VoiceBridge {
     this.stopped = false;
   }
 
-  async mintToken({ bridgeIdentity, userName, metadata }) {
+  async mintToken({ roomId = this.roomId, bridgeIdentity, userName, metadata }) {
     const res = await fetch(`${this.appUrl}/api/livekit-token`, {
       method: 'POST',
       headers: { ...this.workerHeaders, 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        roomId: this.roomId,
+        roomId,
         voiceBridge: true,
         bridgeIdentity,
         userName,
@@ -285,31 +286,6 @@ class VoiceBridge {
   }
 
   async startListener() {
-    const token = await this.mintToken({
-      bridgeIdentity: `discord-bridge-listener-${this.roomId}`,
-      userName: 'Discord Bridge',
-      metadata: JSON.stringify({ bridge: true, hidden: true, source: 'discord' }),
-    });
-    this.listener = new Room();
-    await this.listener.connect(this.livekitUrl, token);
-
-    this.listener.on(RoomEvent.TrackSubscribed, (track, _pub, participant) => {
-      this.attachMixSource(participant.identity, track);
-    });
-    this.listener.on(RoomEvent.TrackUnsubscribed, (_track, _pub, participant) => {
-      this.detachMixSource(participant.identity);
-    });
-    this.listener.on(RoomEvent.ParticipantDisconnected, (participant) => {
-      this.detachMixSource(participant.identity);
-    });
-
-    // Pick up tracks that were already published before we connected.
-    for (const participant of this.listener.remoteParticipants.values()) {
-      for (const pub of participant.trackPublications.values()) {
-        if (pub.track) this.attachMixSource(participant.identity, pub.track);
-      }
-    }
-
     this.mixStream = new Readable({ read() {} });
     this.player = createAudioPlayer({ behaviors: { noSubscriber: NoSubscriberBehavior.Play } });
     this.player.on('error', (err) => console.warn(`[VoiceBridge:${this.roomId}] player error:`, err.message));
@@ -318,17 +294,54 @@ class VoiceBridge {
     this.player.play(resource);
 
     this.mixTimer = setInterval(() => this.mixTick(), 20);
+
+    const rooms = Array.from(new Set([this.roomId, `${this.roomId}-music`]));
+    for (const livekitRoomId of rooms) {
+      const label = livekitRoomId === this.roomId ? 'voice' : 'music';
+      await this.startListenerForRoom(livekitRoomId, label);
+    }
   }
 
-  attachMixSource(identity, track) {
+  async startListenerForRoom(livekitRoomId, label) {
+    const token = await this.mintToken({
+      roomId: livekitRoomId,
+      bridgeIdentity: `discord-bridge-listener-${label}-${this.roomId}`,
+      userName: 'Discord Bridge',
+      metadata: JSON.stringify({ bridge: true, hidden: true, source: 'discord', bridgeRoom: livekitRoomId, bridgeLane: label }),
+    });
+    const listener = new Room();
+    await listener.connect(this.livekitUrl, token);
+    this.listeners.push(listener);
+    if (!this.listener) this.listener = listener;
+
+    listener.on(RoomEvent.TrackSubscribed, (track, _pub, participant) => {
+      this.attachMixSource(`${label}:${participant.identity}`, track, participant.identity);
+    });
+    listener.on(RoomEvent.TrackUnsubscribed, (_track, _pub, participant) => {
+      this.detachMixSource(`${label}:${participant.identity}`);
+    });
+    listener.on(RoomEvent.ParticipantDisconnected, (participant) => {
+      this.detachMixSource(`${label}:${participant.identity}`);
+    });
+
+    // Pick up tracks that were already published before we connected.
+    for (const participant of listener.remoteParticipants.values()) {
+      for (const pub of participant.trackPublications.values()) {
+        if (pub.track) this.attachMixSource(`${label}:${participant.identity}`, pub.track, participant.identity);
+      }
+    }
+    console.log(`[VoiceBridge:${this.roomId}] Listening for ${label} audio in LiveKit room ${livekitRoomId}`);
+  }
+
+  attachMixSource(sourceKey, track, identity = sourceKey) {
     if (this.stopped || !identity) return;
     if (identity.startsWith('discord-')) return; // never echo our own audio back
     if (!track || track.kind !== TrackKind.KIND_AUDIO) return;
-    if (this.mixSources.has(identity)) return;
+    if (this.mixSources.has(sourceKey)) return;
 
     const stream = new AudioStream(track, SAMPLE_RATE, CHANNELS);
     const src = { stream, buf: Buffer.alloc(0), closed: false };
-    this.mixSources.set(identity, src);
+    this.mixSources.set(sourceKey, src);
 
     (async () => {
       try {
@@ -347,12 +360,12 @@ class VoiceBridge {
     console.log(`[VoiceBridge:${this.roomId}] Mixing app participant ${identity} into Discord`);
   }
 
-  detachMixSource(identity) {
-    const src = this.mixSources.get(identity);
+  detachMixSource(sourceKey) {
+    const src = this.mixSources.get(sourceKey);
     if (!src) return;
     src.closed = true;
     try { src.stream.close(); } catch {}
-    this.mixSources.delete(identity);
+    this.mixSources.delete(sourceKey);
   }
 
   mixTick() {
@@ -412,9 +425,10 @@ class VoiceBridge {
 
     try { this.player?.stop(true); } catch {}
     try { this.mixStream?.push(null); } catch {}
-    try { await this.listener?.disconnect(); } catch {}
+    for (const listener of this.listeners) { try { await listener.disconnect(); } catch {} }
     try { this.connection?.destroy(); } catch {}
     this.listener = null;
+    this.listeners = [];
     this.connection = null;
     console.log(`[VoiceBridge:${this.roomId}] Stopped`);
   }

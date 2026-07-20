@@ -1132,7 +1132,7 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
                       onToggleChat={() => setChatOpen(!chatOpen)}
                       showDJ={showDJ}
                       onToggleDJ={() => setShowDJ(v => !v)}
-                      canBridge={isOwner && !isActivityRoom}
+                      canBridge={isOwner || isActivityRoom}
                       showVoiceBridge={showVoiceBridge}
                       onToggleVoiceBridge={() => setShowVoiceBridge(v => !v)}
                       peerFallback={voiceFallbackActive}
@@ -1178,7 +1178,7 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
                           />
                         )}
                         <SharedScreenShareCard roomId={roomId} />
-                        {isOwner && !isActivityRoomId(roomId) && showVoiceBridge && <VoiceBridgeCard roomId={roomId} />}
+                        {(isOwner || isActivityRoomId(roomId)) && showVoiceBridge && <VoiceBridgeCard roomId={roomId} />}
                         {isOwner && <VoiceQueue roomId={roomId} />}
                     </main>
                 </div>

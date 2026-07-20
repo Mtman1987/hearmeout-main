@@ -943,17 +943,6 @@ async function loadMedia(item) {
 function render(nextState) {
   state = nextState;
   handleTtsOverlay(state);
-  if (state.playback && typeof state.playback.muted === 'boolean' && muted !== state.playback.muted) {
-    muted = state.playback.muted;
-    applyVolume();
-  }
-  if (state.playback && typeof state.playback.volume === 'number' && volumeInput) {
-    const nextVolume = Math.max(0, Math.min(100, Math.round(Number(state.playback.volume || 0))));
-    if (String(volumeInput.value) !== String(nextVolume)) {
-      volumeInput.value = String(nextVolume);
-      applyVolume();
-    }
-  }
   if (state.id && state.id !== sessionId) {
     sessionId = state.id;
     document.getElementById('room').textContent = 'Room ' + sessionId;
@@ -1307,9 +1296,6 @@ muteBtn.addEventListener('click', () => {
   muted = !muted;
   applyVolume();
   mediaEl.textContent = muted ? 'Media: muted locally' : 'Media: unmuted locally';
-  control(muted ? 'mute' : 'unmute').catch((err) => {
-    errorEl.textContent = err && err.message ? err.message : String(err);
-  });
 });
 
 async function switchSession(nextSessionId) {
@@ -1377,17 +1363,11 @@ volumeInput.addEventListener('input', () => {
   if (shouldUnmute) muted = false;
   applyVolume();
   mediaEl.textContent = 'Media: volume ' + volumeLabel.textContent;
-  if (shouldUnmute) {
-    control('unmute').catch((err) => {
-      errorEl.textContent = err && err.message ? err.message : String(err);
-    });
-  }
 });
 
 volumeInput.addEventListener('change', () => {
-  control('volume', Number(volumeInput.value || 0)).catch((err) => {
-    errorEl.textContent = err && err.message ? err.message : String(err);
-  });
+  applyVolume();
+  mediaEl.textContent = 'Media: volume ' + volumeLabel.textContent;
 });
 
 if (seekInput) {

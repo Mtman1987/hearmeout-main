@@ -361,7 +361,6 @@ export default function WatchRoomClient({ sessionId, activityMode = false, canPa
     localAudioUnlockedRef.current = true;
     setMuted(nextMuted);
     if (embeddedMode) youtubeCommand(nextMuted ? 'mute' : 'unMute');
-    if (canPause && state?.current) sendControl(nextMuted ? 'mute' : 'unmute').catch(() => {});
   }
 
   function saveSeenTtsIds() {
@@ -855,12 +854,6 @@ export default function WatchRoomClient({ sessionId, activityMode = false, canPa
     video.volume = playerGain(volume, currentItem);
     video.muted = muted;
   }, [volume, muted, embeddedMode, state?.current?.requestId]);
-
-  useEffect(() => {
-    if (!localAudioUnlockedRef.current && typeof state?.playback?.muted === 'boolean') {
-      setMuted(state.playback.muted);
-    }
-  }, [state?.current?.requestId]);
 
   useEffect(() => {
     const onMessage = (event: MessageEvent) => {

@@ -130,14 +130,6 @@ export default function DJCard({
   }, [sharedState?.playback.status]);
 
   useEffect(() => {
-    const playback = sharedState?.playback;
-    if (!playback) return;
-    setVolumeDraft(null);
-    const sharedVolume = Math.max(0, Math.min(100, Number(playback.volume ?? 85))) / 100;
-    onVolumeChange(playback.muted ? 0 : sharedVolume);
-  }, [onVolumeChange, sharedState?.playback.muted, sharedState?.playback.volume]);
-
-  useEffect(() => {
     setSeekDraft(null);
   }, [sharedState?.current?.requestId, sharedState?.playback.position, sharedState?.playback.updatedAt]);
 
@@ -182,8 +174,9 @@ export default function DJCard({
     || (activityRoom ? 0 : Math.max(0, Math.round(Number(legacyCurrentTrack?.duration || 0) / 1000)));
   const livePosition = Math.min(duration || Number.POSITIVE_INFINITY, effectivePlaybackPosition(sharedState?.playback, clockNow));
   const displayedPosition = seekDraft ?? livePosition;
-  const sharedVolume = volumeDraft ?? Math.max(0, Math.min(100, Number(sharedState?.playback.volume ?? Math.round(localVolume * 100))));
-  const sharedMuted = sharedState?.playback.muted ?? sharedVolume === 0;
+  const localVolumePercent = Math.max(0, Math.min(100, Math.round(localVolume * 100)));
+  const displayedVolume = volumeDraft ?? localVolumePercent;
+  const locallyMuted = displayedVolume === 0 || localVolume <= 0;
   const sharedAutoRadio = sharedState?.autoRadio ?? (activityRoom ? false : Boolean(legacyAutoRadio));
   const visibleStatus = controlError
     || (sharedState?.current ? `${sharedState.playback.status} · shared with Discord` : null)
@@ -200,9 +193,10 @@ export default function DJCard({
   }, [sendSharedControl]);
 
   const handleMute = useCallback(() => {
-    onVolumeChange(sharedMuted ? Math.max(0.01, sharedVolume / 100) : 0);
-    void sendSharedControl(sharedMuted ? 'unmute' : 'mute', effectivePlaybackPosition(sharedState?.playback));
-  }, [onVolumeChange, sendSharedControl, sharedMuted, sharedState?.playback, sharedVolume]);
+    const nextVolume = locallyMuted ? Math.max(0.01, (displayedVolume || 85) / 100) : 0;
+    setVolumeDraft(null);
+    onVolumeChange(nextVolume);
+  }, [displayedVolume, locallyMuted, onVolumeChange]);
 
   return (
     <Card className="relative flex h-full flex-col">
@@ -278,23 +272,22 @@ export default function DJCard({
 
             <div className="flex items-center gap-2">
               <Tooltip><TooltipTrigger asChild>
-                <Button variant="ghost" size="icon" className="h-8 w-8" onClick={handleMute} disabled={!canControl || controlPending}>
-                  {sharedMuted ? <VolumeX className="h-4 w-4" /> : <Volume2 className="h-4 w-4" />}
+                <Button variant="ghost" size="icon" className="h-8 w-8" onClick={handleMute}>
+                  {locallyMuted ? <VolumeX className="h-4 w-4" /> : <Volume2 className="h-4 w-4" />}
                 </Button>
-              </TooltipTrigger><TooltipContent><p>{sharedMuted ? 'Unmute everywhere' : 'Mute everywhere'}</p></TooltipContent></Tooltip>
+              </TooltipTrigger><TooltipContent><p>{locallyMuted ? 'Unmute for me' : 'Mute for me'}</p></TooltipContent></Tooltip>
               <Slider
-                aria-label="Shared music volume"
-                value={[sharedMuted ? 0 : sharedVolume]}
+                aria-label="Personal music volume"
+                value={[locallyMuted ? 0 : displayedVolume]}
                 onValueChange={(value) => {
                   setVolumeDraft(value[0]);
                   onVolumeChange(value[0] / 100);
                 }}
-                onValueCommit={(value) => void sendSharedControl('volume', value[0])}
+                onValueCommit={() => setVolumeDraft(null)}
                 max={100}
                 step={1}
-                disabled={!canControl || controlPending}
               />
-              <span className="w-9 text-right text-[11px] tabular-nums text-muted-foreground">{sharedMuted ? 0 : Math.round(sharedVolume)}%</span>
+              <span className="w-9 text-right text-[11px] tabular-nums text-muted-foreground">{locallyMuted ? 0 : Math.round(displayedVolume)}%</span>
             </div>
           </div>
 

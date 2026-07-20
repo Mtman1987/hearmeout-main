@@ -2,6 +2,9 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth';
 import { db, ensureDb } from '@/lib/db';
 import { getDjWorkerUrl } from '@/lib/dj-worker-config';
+import { ensureDiscordActivityRoom } from '@/lib/activity-room';
+import { canManageRoom } from '@/lib/room-access';
+import { isActivityRoomId } from '@/lib/watch-session';
 
 // Room-scoped Discord <-> HearMeOut voice bridge control.
 //
@@ -51,9 +54,13 @@ async function callWorker(path: string, init?: RequestInit) {
 function authorize(roomId: string, uid: string) {
   const room = db.get('rooms', roomId);
   if (!room) return { ok: false as const, status: 404, error: 'Room not found' };
+  const dbUser = db.get('users', uid) || {};
+  const user = { ...dbUser, uid };
   const isOwner = room.ownerId === uid || room.createdBy === uid;
-  const isAdmin = db.get('users', uid)?.isAdmin === true;
-  if (!isOwner && !isAdmin) return { ok: false as const, status: 403, error: 'Not authorized' };
+  const canManage = canManageRoom(user, room.ownerId) || (room.createdBy && canManageRoom(user, room.createdBy));
+  const isAdmin = dbUser?.isAdmin === true;
+  const isActivityRoom = isActivityRoomId(roomId);
+  if (!isOwner && !canManage && !isAdmin && !isActivityRoom) return { ok: false as const, status: 403, error: 'Not authorized' };
   return { ok: true as const, room };
 }
 
@@ -79,6 +86,7 @@ export async function POST(req: NextRequest) {
 
   const { roomId, action, guildId, voiceChannelId } = await req.json();
   if (!roomId || !action) return NextResponse.json({ error: 'Missing roomId or action' }, { status: 400 });
+  if (isActivityRoomId(roomId)) await ensureDiscordActivityRoom();
 
   const auth = authorize(roomId, session.uid);
   if (!auth.ok) return NextResponse.json({ error: auth.error }, { status: auth.status });
