@@ -26,6 +26,12 @@ Object.assign(globalThis, {
   MediaStreamTrack: wrtc.MediaStreamTrack,
 });
 const { Peer } = require('peerjs');
+const {
+  startVoiceBridge,
+  stopVoiceBridge,
+  getVoiceBridgeStatus,
+  listVoiceBridges,
+} = require('./discord-voice-bridge');
 
 const execFileAsync = promisify(execFile);
 
@@ -2361,6 +2367,56 @@ app.get('/dj', (req, res) => {
   const nodeInstances = Array.from(djInstances.entries()).map(([id, s]) => ({ roomId: id, startedAt: s.startedAt, mode: s.peerFallback ? 'peerjs' : 'livekit' }));
   const instances = [...browserInstances, ...nodeInstances];
   return res.json({ instances });
+});
+
+// ── Discord voice bridge ────────────────────────────────────────────────
+const DISCORD_BOT_TOKEN = process.env.DISCORD_BOT_TOKEN || '';
+const BRIDGE_LIVEKIT_URL =
+  process.env.LIVEKIT_URL || process.env.NEXT_PUBLIC_LIVEKIT_URL || '';
+
+app.post('/voice-bridge', async (req, res) => {
+  const { action, roomId, guildId, voiceChannelId } = req.body || {};
+  if (!roomId) return res.status(400).json({ success: false, message: 'Missing roomId' });
+
+  try {
+    if (action === 'start') {
+      if (!DISCORD_BOT_TOKEN) {
+        return res.status(500).json({ success: false, message: 'DISCORD_BOT_TOKEN is not configured on the worker' });
+      }
+      if (!BRIDGE_LIVEKIT_URL) {
+        return res.status(500).json({ success: false, message: 'LIVEKIT_URL/NEXT_PUBLIC_LIVEKIT_URL is not configured on the worker' });
+      }
+      if (!guildId || !voiceChannelId) {
+        return res.status(400).json({ success: false, message: 'Missing guildId or voiceChannelId' });
+      }
+      const result = await startVoiceBridge({
+        roomId,
+        guildId,
+        voiceChannelId,
+        token: DISCORD_BOT_TOKEN,
+        appUrl: APP_URL,
+        workerHeaders: WORKER_CALLBACK_HEADERS,
+        livekitUrl: BRIDGE_LIVEKIT_URL,
+      });
+      return res.json(result);
+    }
+
+    if (action === 'stop') {
+      const result = await stopVoiceBridge(roomId);
+      return res.json(result);
+    }
+
+    return res.status(400).json({ success: false, message: 'Invalid action' });
+  } catch (err) {
+    console.error(`[VoiceBridge] ${action} failed for ${roomId}:`, err.message);
+    return res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+app.get('/voice-bridge', (req, res) => {
+  const { roomId } = req.query;
+  if (roomId) return res.json(getVoiceBridgeStatus(roomId));
+  return res.json({ instances: listVoiceBridges() });
 });
 
 // ── Health ──────────────────────────────────────────────────────────────

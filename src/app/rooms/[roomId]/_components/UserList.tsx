@@ -99,15 +99,22 @@ function PeerPresenceParticipants({ roomId, localUserId, connectedPeerIds }: { r
   );
 }
 
+// The voice-bridge "listener" participant only exists to pipe app audio into
+// Discord — it publishes nothing and must never render a card.
+const isHiddenBridgeParticipant = (identity?: string) =>
+  !!identity && identity.startsWith('discord-bridge-listener');
+
 function LiveKitParticipants({ isHost, roomId }: { isHost: boolean; roomId: string }) {
   const { localParticipant } = useLocalParticipant();
   const remoteParticipants = useRemoteParticipants();
-  const allParticipants = [localParticipant, ...remoteParticipants];
+  const allParticipants = [localParticipant, ...remoteParticipants].filter(
+    (participant) => !isHiddenBridgeParticipant(participant?.identity),
+  );
 
   const allAudioTracks = useTracks(
     [Track.Source.Microphone, Track.Source.Unknown],
     { onlySubscribed: true }
-  ).filter(track => track.publication && !track.participant.isLocal);
+  ).filter(track => track.publication && !track.participant.isLocal && !isHiddenBridgeParticipant(track.participant.identity));
 
   return (
     <>

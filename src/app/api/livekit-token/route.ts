@@ -36,9 +36,9 @@ export async function POST(request: NextRequest) {
 
   try {
     const body = await request.json();
-    const { roomId, userName, musicRoom, isDJ } = body;
+    const { roomId, userName, musicRoom, isDJ, voiceBridge, bridgeIdentity, bridgeMetadata } = body;
 
-    if (!session && !(musicRoom && isDJ)) {
+    if (!session && !(musicRoom && isDJ) && !(voiceBridge && fromDjWorker)) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
@@ -51,6 +51,22 @@ export async function POST(request: NextRequest) {
 
     if (!apiKey || !apiSecret) {
       return NextResponse.json({ error: 'LiveKit credentials not configured' }, { status: 500 });
+    }
+
+    // Voice bridge: the DJ worker publishes Discord speakers into the plain
+    // (voice) room, one LiveKit participant per Discord user, so each shows up
+    // as their own HearMeOut card. Only the internal worker may mint these.
+    if (voiceBridge && fromDjWorker) {
+      const identity = String(bridgeIdentity || `discord-bridge-${roomId}`).slice(0, 96);
+      const at = new AccessToken(apiKey, apiSecret, {
+        identity,
+        name: (typeof userName === 'string' && userName.trim()) ? userName.slice(0, 64) : identity,
+        metadata: typeof bridgeMetadata === 'string' ? bridgeMetadata.slice(0, 2048) : undefined,
+        ttl: '12h',
+      });
+      at.addGrant({ roomJoin: true, room: roomId, canPublish: true, canSubscribe: true });
+      const bridgeToken = await at.toJwt();
+      return NextResponse.json({ token: bridgeToken });
     }
 
     // Bind user-browser tokens to the verified session uid. The headless DJ
