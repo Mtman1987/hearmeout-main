@@ -2370,9 +2370,22 @@ app.get('/dj', (req, res) => {
 });
 
 // ── Discord voice bridge ────────────────────────────────────────────────
-const DISCORD_BOT_TOKEN = process.env.DISCORD_BOT_TOKEN || '';
 const BRIDGE_LIVEKIT_URL =
   process.env.LIVEKIT_URL || process.env.NEXT_PUBLIC_LIVEKIT_URL || '';
+
+// The bot token lives on the main app. Rather than duplicating the secret on
+// the worker, fetch it over the existing internal worker channel. Falls back to
+// a local env var if one is set. Cached after first successful fetch.
+let cachedBotToken = process.env.DISCORD_BOT_TOKEN || '';
+async function resolveDiscordBotToken() {
+  if (cachedBotToken) return cachedBotToken;
+  const res = await fetch(`${APP_URL}/api/discord/bot-token`, { headers: WORKER_CALLBACK_HEADERS });
+  if (!res.ok) throw new Error(`Could not fetch Discord bot token from app (${res.status})`);
+  const { token } = await res.json();
+  if (!token) throw new Error('App returned no Discord bot token');
+  cachedBotToken = token;
+  return cachedBotToken;
+}
 
 app.post('/voice-bridge', async (req, res) => {
   const { action, roomId, guildId, voiceChannelId } = req.body || {};
@@ -2380,20 +2393,18 @@ app.post('/voice-bridge', async (req, res) => {
 
   try {
     if (action === 'start') {
-      if (!DISCORD_BOT_TOKEN) {
-        return res.status(500).json({ success: false, message: 'DISCORD_BOT_TOKEN is not configured on the worker' });
-      }
       if (!BRIDGE_LIVEKIT_URL) {
         return res.status(500).json({ success: false, message: 'LIVEKIT_URL/NEXT_PUBLIC_LIVEKIT_URL is not configured on the worker' });
       }
       if (!guildId || !voiceChannelId) {
         return res.status(400).json({ success: false, message: 'Missing guildId or voiceChannelId' });
       }
+      const token = await resolveDiscordBotToken();
       const result = await startVoiceBridge({
         roomId,
         guildId,
         voiceChannelId,
-        token: DISCORD_BOT_TOKEN,
+        token,
         appUrl: APP_URL,
         workerHeaders: WORKER_CALLBACK_HEADERS,
         livekitUrl: BRIDGE_LIVEKIT_URL,
