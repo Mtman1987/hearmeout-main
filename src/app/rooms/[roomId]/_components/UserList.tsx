@@ -81,7 +81,7 @@ function PeerPresenceParticipants({ roomId, localUserId, connectedPeerIds }: { r
         return (
           <Card key={presence.id} className="flex flex-col h-full">
             <CardContent className="p-4 flex items-start gap-4">
-              <Avatar className="h-16 w-16">
+              <Avatar className={`h-16 w-16 transition-all ${mediaConnected ? 'ring-4 ring-green-400 ring-offset-2 ring-offset-background shadow-lg' : 'ring-1 ring-border'}`}>
                 <AvatarImage src={photoURL} alt={displayName} />
                 <AvatarFallback>{displayName.charAt(0).toUpperCase()}</AvatarFallback>
               </Avatar>

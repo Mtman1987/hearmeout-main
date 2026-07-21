@@ -13,6 +13,18 @@ const resolvedUrls = globalThis.__youtubeResolvedUrls || new Map();
 globalThis.__youtubeResolvedUrls = resolvedUrls;
 
 const MAX_AGE_MS = 5 * 60 * 60 * 1000; // 5 hours (YouTube URLs expire ~6h)
+const ALLOWED_YOUTUBE_MEDIA_HOSTS = ['googlevideo.com', 'youtube.com', 'ytimg.com'];
+
+function isAllowedYoutubeMediaUrl(raw: string): boolean {
+  try {
+    const parsed = new URL(raw);
+    if (parsed.protocol !== 'https:') return false;
+    const host = parsed.hostname.toLowerCase();
+    return ALLOWED_YOUTUBE_MEDIA_HOSTS.some((base) => host === base || host.endsWith(`.${base}`));
+  } catch {
+    return false;
+  }
+}
 
 export function getResolvedYoutubeUrls(videoId: string) {
   const entry = resolvedUrls.get(videoId);
@@ -37,8 +49,8 @@ export async function POST(request: Request) {
     if (!videoUrl || !audioUrl) {
       return NextResponse.json({ error: 'Missing videoUrl or audioUrl' }, { status: 400 });
     }
-    if (!/^https?:\/\//i.test(videoUrl) || !/^https?:\/\//i.test(audioUrl)) {
-      return NextResponse.json({ error: 'URLs must be absolute https URLs' }, { status: 400 });
+    if (!isAllowedYoutubeMediaUrl(videoUrl) || !isAllowedYoutubeMediaUrl(audioUrl)) {
+      return NextResponse.json({ error: 'Resolved URLs must be HTTPS YouTube media hosts' }, { status: 400 });
     }
 
     resolvedUrls.set(videoId, { videoUrl, audioUrl, resolvedAt: Date.now() });

@@ -1057,6 +1057,18 @@ function cleanFlyMachineId(machineId) {
   return clean || null;
 }
 
+function isAllowedYoutubeMediaUrl(rawUrl) {
+  if (!rawUrl) return false;
+  try {
+    const parsed = new URL(String(rawUrl));
+    if (parsed.protocol !== 'https:') return false;
+    const host = parsed.hostname.toLowerCase();
+    return ['googlevideo.com', 'youtube.com', 'ytimg.com'].some((base) => host === base || host.endsWith(`.${base}`));
+  } catch {
+    return false;
+  }
+}
+
 function watchHlsPaths(streamId) {
   const clean = cleanWatchStreamId(streamId);
   const dir = join(WATCH_HLS_DIR, clean);
@@ -1435,8 +1447,8 @@ app.get('/watch/youtube/hls/:videoId/:file', authorizeWorker, async (req, res) =
     if (file === 'index.m3u8') {
       const sourceUrl = String(req.query.source || '');
       const audioSourceUrl = String(req.query.audioSource || '');
-      if (sourceUrl && !/^https?:\/\//i.test(sourceUrl)) return res.status(400).json({ error: 'Invalid source URL' });
-      if (audioSourceUrl && !/^https?:\/\//i.test(audioSourceUrl)) return res.status(400).json({ error: 'Invalid audio source URL' });
+      if (sourceUrl && !isAllowedYoutubeMediaUrl(sourceUrl)) return res.status(400).json({ error: 'Invalid source URL' });
+      if (audioSourceUrl && !isAllowedYoutubeMediaUrl(audioSourceUrl)) return res.status(400).json({ error: 'Invalid audio source URL' });
       const hasClientResolvedStreams = Boolean(sourceUrl && audioSourceUrl);
       const hasCachedAudio = Boolean(cachedAudioFilePath(videoId));
       const priorFailure = (sourceUrl || hasClientResolvedStreams || hasCachedAudio)
@@ -1983,6 +1995,7 @@ class DJSession {
     let buffer = Buffer.alloc(0);
     let frameQueue = [];
     let draining = false;
+    let finalized = false;
 
     const drainQueue = async () => {
       if (draining) return;
@@ -2018,19 +2031,30 @@ class DJSession {
       if (msg) console.warn(`[DJ:${this.roomId}] ffmpeg: ${msg}`);
     });
 
-    this.ffmpegProcess.on('close', (code) => {
-      if (this.stopped) return;
-      console.log(`[DJ:${this.roomId}] ffmpeg exited (code ${code}), track ended`);
+    const finalize = (reason, codeOrErr) => {
+      if (finalized || this.stopped) return;
+      finalized = true;
       this.playing = false;
       this.ffmpegProcess = null;
-      // Auto-advance to next track
-      this.advanceTrack(roomData);
+
+      if (reason === 'close') {
+        console.log(`[DJ:${this.roomId}] ffmpeg exited (code ${codeOrErr}), track ended`);
+      } else {
+        const message = codeOrErr?.message || String(codeOrErr || 'unknown error');
+        console.error(`[DJ:${this.roomId}] ffmpeg error:`, message);
+      }
+
+      // Keep playback moving even when ffmpeg dies mid-track.
+      setTimeout(() => this.advanceTrack(roomData).catch(() => {}), 500);
+    };
+
+    this.ffmpegProcess.on('close', (code) => {
+      if (this.stopped) return;
+      finalize('close', code);
     });
 
     this.ffmpegProcess.on('error', (err) => {
-      console.error(`[DJ:${this.roomId}] ffmpeg error:`, err.message);
-      this.playing = false;
-      this.ffmpegProcess = null;
+      finalize('error', err);
     });
   }
 
@@ -2164,6 +2188,7 @@ class DJSession {
     let buffer = Buffer.alloc(0);
     let frameQueue = [];
     let draining = false;
+    let finalized = false;
 
     const drainQueue = async () => {
       if (draining) return;
@@ -2199,17 +2224,28 @@ class DJSession {
       if (msg) console.warn(`[DJ:${this.roomId}] ffmpeg: ${msg}`);
     });
 
-    this.ffmpegProcess.on('close', (code) => {
-      if (this.stopped) return;
-      console.log(`[DJ:${this.roomId}] ffmpeg exited (code ${code}), track ended`);
+    const finalize = async (reason, codeOrErr) => {
+      if (finalized || this.stopped) return;
+      finalized = true;
       this.playing = false;
       this.ffmpegProcess = null;
+
+      if (reason === 'close') {
+        console.log(`[DJ:${this.roomId}] ffmpeg exited (code ${codeOrErr}), track ended`);
+      } else {
+        const message = codeOrErr?.message || String(codeOrErr || 'unknown error');
+        console.error(`[DJ:${this.roomId}] ffmpeg error:`, message);
+        await this.patchRoom({ djStatus: `Playback error: ${message.slice(0, 120)}` }).catch(() => {});
+      }
+    };
+
+    this.ffmpegProcess.on('close', (code) => {
+      if (this.stopped) return;
+      finalize('close', code).catch(() => {});
     });
 
     this.ffmpegProcess.on('error', (err) => {
-      console.error(`[DJ:${this.roomId}] ffmpeg error:`, err.message);
-      this.playing = false;
-      this.ffmpegProcess = null;
+      finalize('error', err).catch(() => {});
     });
   }
 }

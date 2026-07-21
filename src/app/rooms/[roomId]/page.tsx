@@ -28,9 +28,11 @@ import { getScreenPeerId, PeerAudioListener, PeerScreenViewer, PeerVoiceMesh } f
 import { ACTIVITY_ROOM_ID, ACTIVITY_ROOM_NAME, getRoomWatchSessionId, isActivityRoomId, type WatchMediaKind } from '@/lib/watch-session';
 import { canManageRoom } from '@/lib/room-access';
 
+const MAX_ROOM_PLAYBACK_VOLUME = 0.12;
+
 function musicGain(volume: number) {
     const normalized = Math.max(0, Math.min(1, volume));
-    return normalized === 0 ? 0 : Math.pow(normalized, 6);
+    return normalized <= 0 ? 0 : Math.min(MAX_ROOM_PLAYBACK_VOLUME, normalized * MAX_ROOM_PLAYBACK_VOLUME);
 }
 
 interface RoomData {

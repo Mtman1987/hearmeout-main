@@ -25,9 +25,13 @@ type WatchState = {
   events: Array<{ id: string; at: string; message: string }>;
 };
 
+const MAX_MOVIE_VOLUME = 0.16;
+const MAX_MUSIC_VOLUME = 0.10;
+
 function playerGain(logicalVolume: number, item: any) {
   const normalized = Math.max(0, Math.min(1, logicalVolume));
-  return item?.type === 'music' && normalized > 0 ? Math.pow(normalized, 6) : normalized;
+  const maxVolume = item?.type === 'music' ? MAX_MUSIC_VOLUME : MAX_MOVIE_VOLUME;
+  return normalized <= 0 ? 0 : Math.min(maxVolume, normalized * maxVolume);
 }
 
 function watchRequestErrorMessage(payload: any, fallback: string) {

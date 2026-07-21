@@ -14,6 +14,12 @@ function dbKey(serverId: string) {
   return `twitch_bot_${serverId}`;
 }
 
+function getTwitchOAuthConfig() {
+  const clientId = process.env.TWITCH_CLIENT_ID || process.env.NEXT_PUBLIC_TWITCH_CLIENT_ID;
+  const clientSecret = process.env.TWITCH_CLIENT_SECRET;
+  return { clientId, clientSecret };
+}
+
 export async function getUserBotToken(serverId: string, _discordUserId: string): Promise<string | null> {
   try {
     const data = db.get('config', dbKey(serverId));
@@ -34,6 +40,7 @@ export async function getUserBotToken(serverId: string, _discordUserId: string):
 
 export async function getUserBotUsername(serverId: string, _discordUserId: string): Promise<string | null> {
   try {
+    void _discordUserId;
     const data = db.get('config', dbKey(serverId));
     return data?.username || null;
   } catch (error) {
@@ -66,19 +73,39 @@ export async function storeUserBotToken(
 
 export async function refreshUserBotToken(serverId: string, _discordUserId: string, refreshToken: string): Promise<string | null> {
   try {
+    const { clientId, clientSecret } = getTwitchOAuthConfig();
+    if (!clientId || !clientSecret) {
+      console.error(`[Token] Twitch OAuth config missing for server ${serverId}`);
+      return null;
+    }
+
     const response = await fetch('https://id.twitch.tv/oauth2/token', {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams({
-        client_id: process.env.TWITCH_CLIENT_ID!,
-        client_secret: process.env.TWITCH_CLIENT_SECRET!,
+        client_id: clientId,
+        client_secret: clientSecret,
         grant_type: 'refresh_token',
         refresh_token: refreshToken,
       }),
     });
 
     if (!response.ok) {
-      console.error(`[Token] Refresh failed for server ${serverId}:`, response.status);
+      const details = await response.text().catch(() => '');
+      console.error(`[Token] Refresh failed for server ${serverId}:`, response.status, details);
+
+      if (response.status === 400) {
+        const existing = db.get('config', dbKey(serverId)) || {};
+        db.set('config', dbKey(serverId), {
+          ...existing,
+          accessToken: '',
+          refreshToken: '',
+          expiresAt: 0,
+          requiresReauth: true,
+          lastAuthError: 'invalid_refresh_token',
+          updatedAt: new Date().toISOString(),
+        });
+      }
       return null;
     }
 

@@ -71,7 +71,13 @@ export default function UserCard({ participant, isLocal, isHost, roomId }: { par
     return () => { const at = participant.getTrackPublication(LivekitClient.Track.Source.Microphone); if (at?.audioTrack) (at.audioTrack as any).off('audioLevel', handleAudioLevel); };
   }, [participant]);
 
-  useEffect(() => { if (isLocal) return; if (volume > 0) { lastNonZeroVolume.current = volume; setIsMutedByMe(false); } else { setIsMutedByMe(true); } }, [volume, isLocal]);
+  useEffect(() => {
+    if (isLocal) return;
+    if (volume > 0) { lastNonZeroVolume.current = volume; setIsMutedByMe(false); } else { setIsMutedByMe(true); }
+    // Apply volume directly to the LiveKit remote participant
+    const remoteParticipant = participant as LivekitClient.RemoteParticipant;
+    if (typeof remoteParticipant.setVolume === 'function') remoteParticipant.setVolume(volume);
+  }, [volume, isLocal, participant]);
   const toggleMuteByMe = () => { if (isLocal) return; setVolume(prev => (prev > 0 ? 0 : lastNonZeroVolume.current || 1)); };
 
   const { data: firestoreUser } = useDoc<RoomParticipantData>(userRecordId ? `rooms/${roomId}/users` : null, userRecordId || null);

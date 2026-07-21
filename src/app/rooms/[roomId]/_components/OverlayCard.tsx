@@ -18,6 +18,8 @@ import { extractAudioUrl as extractBrowserAudioUrl } from '@/lib/yt-client-extra
 
 interface OverlayProps { participant: LivekitClient.Participant; roomId: string; }
 
+const MAX_OVERLAY_AUDIO_VOLUME = 0.12;
+
 export default function OverlayCard({ participant, roomId }: OverlayProps) {
   const { toast } = useToast();
   const room = useRoomContext();
@@ -57,7 +59,7 @@ export default function OverlayCard({ participant, roomId }: OverlayProps) {
         const audioEl = new Audio();
         audioElementRef.current = audioEl;
         audioEl.crossOrigin = 'anonymous';
-        audioEl.volume = localVolume;
+        audioEl.volume = Math.min(MAX_OVERLAY_AUDIO_VOLUME, Math.max(0, localVolume) * MAX_OVERLAY_AUDIO_VOLUME);
 
         // Get audio URL
         const videoId = new URL(currentTrack.url).searchParams.get('v');
