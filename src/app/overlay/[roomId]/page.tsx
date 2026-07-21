@@ -8,9 +8,10 @@
 import { useParams, useSearchParams } from 'next/navigation';
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import Image from 'next/image';
-import { Music, Play, Volume2, VolumeX, Film } from 'lucide-react';
+import { Music, Play, Volume2, VolumeX, Film, Users, ListMusic } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Slider } from '@/components/ui/slider';
+import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import {
   DropdownMenu,
@@ -22,6 +23,7 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { usePopout } from '@/components/PopoutWidgets/PopoutProvider';
 import { getRoomWatchSessionId } from '@/lib/watch-session';
+import { useCollection } from '@/hooks/use-db';
 
 type WatchPlayback = {
   status: 'idle' | 'paused' | 'playing';
@@ -44,6 +46,23 @@ type WatchState = {
 };
 
 type MediaLane = 'auto' | 'music' | 'movie';
+
+type OverlayProfile = {
+  id: string;
+  uid?: string;
+  displayName?: string;
+  photoURL?: string;
+  lastSeen?: number;
+};
+
+type OverlayViewState = {
+  volume: number;
+  muted: boolean;
+  musicPlaybackMode: 'video' | 'audio';
+  showNowPlaying: boolean;
+  showMusicQueue: boolean;
+  showProfiles: boolean;
+};
 
 async function api(path: string) {
   const response = await fetch(path, { cache: 'no-store' });
@@ -150,6 +169,48 @@ export default function OverlayPage() {
   const [audioReady, setAudioReady] = useState(false);
   const [mediaStatus, setMediaStatus] = useState('Waiting for media');
   const [musicPlaybackMode, setMusicPlaybackMode] = useState<'video' | 'audio'>('video');
+  const [showNowPlaying, setShowNowPlaying] = useState(true);
+  const [showMusicQueue, setShowMusicQueue] = useState(true);
+  const [showProfiles, setShowProfiles] = useState(true);
+  const [viewStateHydrated, setViewStateHydrated] = useState(false);
+  const { data: roomProfiles } = useCollection<OverlayProfile>(`rooms/${roomId}/users`, { pollInterval: 3000 });
+
+  const activeProfiles = useMemo(() => (roomProfiles || []).filter((profile) => {
+    const lastSeen = Number(profile.lastSeen || 0);
+    return lastSeen > 0 && Date.now() - lastSeen < 45_000;
+  }), [roomProfiles]);
+
+  useEffect(() => {
+    try {
+      const saved = JSON.parse(window.localStorage.getItem(`hearmeout-overlay-view:v1:${roomId}`) || '{}') as Partial<OverlayViewState>;
+      if (typeof saved.volume === 'number') {
+        const nextVolume = Math.max(0, Math.min(1, saved.volume));
+        volumeRef.current = nextVolume;
+        setVolume(nextVolume);
+      }
+      if (typeof saved.muted === 'boolean') {
+        mutedRef.current = saved.muted;
+        setIsMuted(saved.muted);
+      }
+      if (saved.musicPlaybackMode === 'audio' || saved.musicPlaybackMode === 'video') setMusicPlaybackMode(saved.musicPlaybackMode);
+      if (typeof saved.showNowPlaying === 'boolean') setShowNowPlaying(saved.showNowPlaying);
+      if (typeof saved.showMusicQueue === 'boolean') setShowMusicQueue(saved.showMusicQueue);
+      if (typeof saved.showProfiles === 'boolean') setShowProfiles(saved.showProfiles);
+    } catch {}
+    setViewStateHydrated(true);
+  }, [roomId]);
+
+  useEffect(() => {
+    if (!viewStateHydrated) return;
+    window.localStorage.setItem(`hearmeout-overlay-view:v1:${roomId}`, JSON.stringify({
+      volume,
+      muted: isMuted,
+      musicPlaybackMode,
+      showNowPlaying,
+      showMusicQueue,
+      showProfiles,
+    } satisfies OverlayViewState));
+  }, [isMuted, musicPlaybackMode, roomId, showMusicQueue, showNowPlaying, showProfiles, viewStateHydrated, volume]);
 
   useEffect(() => { volumeRef.current = volume; }, [volume]);
   useEffect(() => { mutedRef.current = isMuted; }, [isMuted]);
@@ -481,6 +542,7 @@ export default function OverlayPage() {
   const mediaImage = currentItem?.thumbnail || currentItem?.poster || currentItem?.image;
   const queueLength = activeState?.queue?.length || 0;
   const laneLabel = activeBundle.lane === 'music' ? 'Music Videos' : 'Watch Party';
+  const musicQueue = musicState?.queue || [];
 
   return (
     <div className="relative min-h-screen overflow-hidden bg-transparent text-white">
@@ -523,7 +585,35 @@ export default function OverlayPage() {
         />
       </div>
 
-      {currentItem && (
+      {showProfiles && (
+        <div style={{ position: 'absolute', left: 20, top: 20 }}>
+          <div className="min-w-[240px] max-w-[360px] rounded-lg bg-black/80 p-3 shadow-2xl backdrop-blur-md">
+            <div className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-sky-300">
+              <Users className="h-4 w-4" /> In the room ({activeProfiles.length})
+            </div>
+            {activeProfiles.length ? (
+              <div className="flex flex-wrap gap-2">
+                {activeProfiles.map((profile) => {
+                  const name = profile.displayName || 'HearMeOut User';
+                  return (
+                    <div key={profile.id} className="flex max-w-[160px] items-center gap-2 rounded-full bg-white/10 py-1 pl-1 pr-3">
+                      <Avatar className="h-7 w-7">
+                        <AvatarImage src={profile.photoURL} alt={name} />
+                        <AvatarFallback>{name.charAt(0).toUpperCase()}</AvatarFallback>
+                      </Avatar>
+                      <span className="truncate text-xs font-medium">{name}</span>
+                    </div>
+                  );
+                })}
+              </div>
+            ) : (
+              <p className="text-xs text-gray-400">Waiting for room profiles…</p>
+            )}
+          </div>
+        </div>
+      )}
+
+      {showNowPlaying && (
         <div style={{ position: 'absolute', left: 20, bottom: 20 }}>
           <div className="flex min-w-[320px] max-w-[520px] items-center gap-4 rounded-lg bg-black/80 p-4 shadow-2xl backdrop-blur-md">
             {mediaImage ? (
@@ -544,6 +634,36 @@ export default function OverlayPage() {
         </div>
       )}
 
+      {showMusicQueue && (
+        <div style={{ position: 'absolute', right: 20, bottom: 20 }}>
+          <div className="w-[340px] max-w-[calc(100vw-40px)] rounded-lg bg-black/80 p-4 shadow-2xl backdrop-blur-md">
+            <div className="mb-3 flex items-center justify-between gap-3">
+              <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-emerald-300">
+                <ListMusic className="h-4 w-4" /> Music Queue
+              </div>
+              <span className="rounded-full bg-white/10 px-2 py-0.5 text-xs text-gray-300">{musicQueue.length}</span>
+            </div>
+            {musicState?.current && (
+              <div className="mb-2 rounded-md bg-emerald-500/15 p-2">
+                <p className="text-[10px] font-semibold uppercase text-emerald-300">Now playing</p>
+                <p className="truncate text-sm font-semibold">{musicState.current.item?.title || 'Untitled'}</p>
+              </div>
+            )}
+            <div className="space-y-1.5">
+              {musicQueue.slice(0, 5).map((request, index) => (
+                <div key={request.requestId} className="flex items-center gap-2 rounded-md bg-white/5 px-2 py-1.5 text-xs">
+                  <span className="w-5 shrink-0 text-center text-gray-400">{index + 1}</span>
+                  <span className="min-w-0 flex-1 truncate">{request.item?.title || 'Untitled'}</span>
+                  {request.requestedBy?.username && <span className="max-w-[90px] truncate text-gray-400">{request.requestedBy.username}</span>}
+                </div>
+              ))}
+              {!musicQueue.length && <p className="py-2 text-center text-xs text-gray-400">The music queue is empty.</p>}
+              {musicQueue.length > 5 && <p className="text-right text-[11px] text-gray-400">+{musicQueue.length - 5} more</p>}
+            </div>
+          </div>
+        </div>
+      )}
+
       <div style={{ position: 'absolute', right: 20, top: 20 }} className="opacity-20 transition-opacity hover:opacity-100">
         <div className="flex items-center gap-2 rounded-lg bg-black/80 p-3 shadow-2xl backdrop-blur-md">
           <Tooltip>
@@ -552,6 +672,7 @@ export default function OverlayPage() {
                 variant="ghost"
                 size="icon"
                 className="h-8 w-8 text-white hover:bg-white/20"
+                aria-label="Start overlay audio"
                 onClick={() => startOverlayAudio().catch((error) => console.warn('[Overlay] start audio failed:', error))}
               >
                 <Play className="h-4 w-4" />
@@ -561,12 +682,22 @@ export default function OverlayPage() {
           </Tooltip>
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button variant="ghost" size="icon" className="h-8 w-8 text-white hover:bg-white/20">
+              <Button variant="ghost" size="icon" className="h-8 w-8 text-white hover:bg-white/20" aria-label="Overlay widgets">
                 <Music className="h-4 w-4" />
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="w-56">
               <DropdownMenuLabel>Overlay Widgets</DropdownMenuLabel>
+              <DropdownMenuSeparator />
+              <DropdownMenuCheckboxItem checked={showNowPlaying} onCheckedChange={(checked) => setShowNowPlaying(checked === true)}>
+                Now Playing
+              </DropdownMenuCheckboxItem>
+              <DropdownMenuCheckboxItem checked={showMusicQueue} onCheckedChange={(checked) => setShowMusicQueue(checked === true)}>
+                Music Queue HUD
+              </DropdownMenuCheckboxItem>
+              <DropdownMenuCheckboxItem checked={showProfiles} onCheckedChange={(checked) => setShowProfiles(checked === true)}>
+                Room Profiles
+              </DropdownMenuCheckboxItem>
               <DropdownMenuSeparator />
               <DropdownMenuCheckboxItem
                 checked={hasPopout('space')}
@@ -664,6 +795,7 @@ export default function OverlayPage() {
                 variant="ghost"
                 size="icon"
                 className="h-8 w-8 text-white hover:bg-white/20"
+                aria-label={isMuted ? 'Unmute overlay media' : 'Mute overlay media'}
                 onClick={() => {
                   const nextMuted = !isMuted;
                   mutedRef.current = nextMuted;

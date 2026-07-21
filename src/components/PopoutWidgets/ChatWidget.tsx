@@ -17,11 +17,16 @@ interface ChatWidgetProps {
 export function ChatWidget({ id, position, size, onPositionChange, onSizeChange, opacity, onOpacityChange, onSaveLayout, onClose, roomId, source = 'discord' }: ChatWidgetProps) {
   const { user } = useSession();
   const [serverId, setServerId] = useState('1240832965865635881');
+  const [embedParent, setEmbedParent] = useState('localhost');
   const iframeRef = useRef<HTMLIFrameElement>(null);
 
   const { data: firestoreUser } = useDoc<{ discordGuildId?: string; twitchChannel?: string; discordSelectedChannel?: string }>(
     user ? `rooms/${roomId}/users` : null, user?.uid || null
   );
+
+  useEffect(() => {
+    setEmbedParent(window.location.hostname || 'localhost');
+  }, []);
 
   useEffect(() => {
     if (firestoreUser?.discordGuildId) {
@@ -49,7 +54,7 @@ export function ChatWidget({ id, position, size, onPositionChange, onSizeChange,
   const twitchChannel = firestoreUser?.twitchChannel?.trim().toLowerCase();
   const iframeUrl = source === 'discord'
     ? `${DSH_URL}/forwarding?embed=1&mode=discord&serverId=${encodeURIComponent(serverId)}${channelId ? `&discordChannelId=${encodeURIComponent(channelId)}` : ''}`
-    : `${DSH_URL}/forwarding?embed=1&mode=twitch&serverId=${encodeURIComponent(serverId)}${twitchChannel ? `&twitchChannel=${encodeURIComponent(twitchChannel)}` : ''}`;
+    : `https://www.twitch.tv/embed/${encodeURIComponent(twitchChannel || '')}/chat?parent=${encodeURIComponent(embedParent)}&darkpopout`;
 
   return (
     <DraggableContainer id={id} position={position} size={size} opacity={opacity} onOpacityChange={onOpacityChange} onSaveLayout={onSaveLayout} onPositionChange={onPositionChange} onSizeChange={onSizeChange} onClose={onClose} title={title} minimalChrome>
