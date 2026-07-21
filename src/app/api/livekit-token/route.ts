@@ -79,7 +79,9 @@ export async function POST(request: NextRequest) {
 
     let actualRoom = roomId;
     let identity = uid;
-    let canPublish = false;
+    // Plain room tokens carry user microphones. Music-room listeners stay
+    // subscribe-only unless the authorized DJ branch below enables publishing.
+    let canPublish = !musicRoom;
 
     if (musicRoom) {
       actualRoom = `${roomId}-music`;
