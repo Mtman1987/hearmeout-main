@@ -50,7 +50,32 @@ const APP_SILENCE_TAIL_MS = 1200;
 const SILENCE_HEARTBEAT_MS = 250;
 const LIVEKIT_RECONNECT_BASE_MS = 1500;
 const LIVEKIT_RECONNECT_MAX_MS = 20000;
+const LIVEKIT_CONNECT_MAX_ATTEMPTS = 5;
+const LIVEKIT_RATE_LIMIT_BASE_MS = 2000;
 const DISCORD_JOIN_COOLDOWN_MS = 60_000;
+
+function isLiveKitRateLimitError(err) {
+  const message = String(err?.message || err || '');
+  return /\b429\b|too many requests|rate[ -]?limit/i.test(message);
+}
+
+async function connectLiveKitRoom(room, url, token, label) {
+  for (let attempt = 1; attempt <= LIVEKIT_CONNECT_MAX_ATTEMPTS; attempt += 1) {
+    try {
+      await room.connect(url, token);
+      return;
+    } catch (err) {
+      if (!isLiveKitRateLimitError(err) || attempt === LIVEKIT_CONNECT_MAX_ATTEMPTS) throw err;
+
+      const delayMs = LIVEKIT_RATE_LIMIT_BASE_MS * (2 ** (attempt - 1));
+      console.warn(
+        `[VoiceBridge] LiveKit rate-limited ${label} connection ` +
+        `(attempt ${attempt}/${LIVEKIT_CONNECT_MAX_ATTEMPTS}); retrying in ${delayMs}ms.`,
+      );
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+    }
+  }
+}
 
 // ── Shared Discord gateway client ─────────────────────────────────────────
 let sharedClient = null;
@@ -522,7 +547,7 @@ class VoiceBridge {
       this.scheduleListenerReconnect(spec, String(reason || 'disconnected'));
     });
 
-    await listener.connect(this.livekitUrl, token);
+    await connectLiveKitRoom(listener, this.livekitUrl, token, `${this.roomId}/${spec.label}`);
     spec.room = listener;
 
     for (const participant of listener.remoteParticipants.values()) {
@@ -617,7 +642,7 @@ class VoiceBridge {
       this.schedulePublisherReconnect(String(reason || 'disconnected'));
     });
 
-    await this.publishRoom.connect(this.livekitUrl, token);
+    await connectLiveKitRoom(this.publishRoom, this.livekitUrl, token, `${this.roomId}/publisher`);
     this.mixedSource = new AudioSource(SAMPLE_RATE, CHANNELS);
     this.mixedTrack = LocalAudioTrack.createAudioTrack('discord-mixed', this.mixedSource);
     await this.publishRoom.localParticipant.publishTrack(
