@@ -548,6 +548,11 @@ class VoiceBridge {
       throw new Error('Selected channel is not a voice channel');
     }
 
+    // Bring the LiveKit side up first so a transient WS/rate-limit failure does
+    // not cause a visible join-then-immediate-leave cycle in Discord.
+    await this.startPublisher();
+    await this.startListeners();
+
     this.connection = joinVoiceChannel({
       channelId: this.voiceChannelId,
       guildId: this.guildId,
@@ -567,6 +572,8 @@ class VoiceBridge {
     bridgesByChannel.set(this.voiceChannelId, this);
     console.log(`[VoiceBridge:${this.roomId}] Joined Discord voice channel ${this.voiceChannelId}`);
 
+    await this.startOrRepairPlayback('post-discord-join');
+
     this.connection.on('stateChange', async (_oldState, newState) => {
       if (this.stopped) return;
       if (newState.status === VoiceConnectionStatus.Destroyed) {
@@ -584,10 +591,6 @@ class VoiceBridge {
         }
       }
     });
-
-    // Connect the single publisher room and the listener rooms
-    await this.startPublisher();
-    await this.startListeners();
 
     // Wire up Discord speaker subscriptions
     this.connection.receiver.speaking.on('start', (userId) => this.handleMemberJoined(userId));
