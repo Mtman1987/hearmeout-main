@@ -26,7 +26,7 @@ export function isSpmtEnabled() {
   return Boolean(SPMT_API_KEY);
 }
 
-export async function grandfatherTwitchIdentity(input: { twitchId: string; twitchUsername: string; displayName?: string; issueSession?: boolean }) {
+export async function grandfatherTwitchIdentity(input: { twitchId: string; twitchUsername: string; displayName?: string; avatarUrl?: string; issueSession?: boolean }) {
   if (!SPMT_API_KEY) return null;
   try {
     const response = await fetch(`${SPMT_BASE_URL.replace(/\/$/, '')}/api/platform/identity/grandfather`, {
@@ -36,6 +36,7 @@ export async function grandfatherTwitchIdentity(input: { twitchId: string; twitc
         provider: 'twitch', providerUserId: input.twitchId,
         providerUsername: input.twitchUsername, username: input.twitchUsername,
         displayName: input.displayName || input.twitchUsername,
+        avatarUrl: input.avatarUrl || undefined,
         issueSession: input.issueSession === true,
       }),
     });

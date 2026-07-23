@@ -7,10 +7,11 @@ import { OWNER_ROLE_ID } from '@/lib/room-access';
 
 const SERVER_ID = process.env.HARDCODED_GUILD_ID || HARDCODED_GUILD_ID;
 
-export async function enrichUserFromDSH(discordId: string): Promise<Record<string, any> | null> {
+export async function enrichUserFromDSH(discordId: string, targetUid?: string): Promise<Record<string, any> | null> {
   await ensureDb();
-  const uid = discordId.startsWith('discord_') ? discordId : `discord_${discordId}`;
-  const rawId = uid.replace('discord_', '');
+  const discordUid = discordId.startsWith('discord_') ? discordId : `discord_${discordId}`;
+  const uid = targetUid || discordUid;
+  const rawId = discordUid.replace('discord_', '');
   if (!SERVER_ID) return null;
 
   try {

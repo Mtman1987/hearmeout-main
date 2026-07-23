@@ -3,6 +3,7 @@ import { timingSafeEqual } from 'crypto';
 import { db, ensureDb } from '@/lib/db';
 import { setSessionCookie } from '@/lib/auth';
 import { HMO_SPMT_COOKIE, HMO_SPMT_STATE_COOKIE, SPMT_BASE_URL, hmoSpmtCookieOptions } from '@/lib/spmt-session';
+import { enrichUserFromDSH } from '@/lib/enrich-user';
 
 function equalState(left: string, right: string) {
   const a = Buffer.from(left);
@@ -33,9 +34,13 @@ export async function GET(request: NextRequest) {
     username: String(user.username || user.displayName || 'SPMT User'),
     displayName: String(user.displayName || user.username || 'SPMT User'),
     email: user.email || null,
+    photoURL: user.avatarUrl || user.avatar_url || null,
     discordId: user.discordId || null,
     twitchUsername: user.twitchUsername || null,
   });
+  if (user.discordId) {
+    await enrichUserFromDSH(String(user.discordId), uid);
+  }
   await setSessionCookie(uid);
   const response = NextResponse.redirect(new URL('/', request.url));
   response.cookies.set(HMO_SPMT_COOKIE, payload.access_token, hmoSpmtCookieOptions);

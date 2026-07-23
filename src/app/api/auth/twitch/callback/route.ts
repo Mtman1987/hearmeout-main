@@ -39,6 +39,7 @@ export async function GET(req: NextRequest) {
       twitchId: userId,
       twitchUsername: username,
       displayName,
+      avatarUrl: photoURL || undefined,
       issueSession: true,
     });
     const response = NextResponse.redirect(`${BASE_URL}/login?success=true`);
