@@ -1,3 +1,5 @@
+import { replaceDiscordUserMentions } from '@/lib/discord-mentions';
+
 export interface DiscordMessage {
   id: string;
   author: string;
@@ -119,7 +121,7 @@ export class DiscordChatService {
           id: m.id,
           author: m.author.username,
           authorId: m.author.id,
-          content: m.content,
+          content: replaceDiscordUserMentions(m.content, m.mentions),
           timestamp: new Date(m.timestamp),
           role: m.author.bot ? 'bot' : 'user',
           avatarUrl: m.author.avatar
@@ -200,7 +202,7 @@ export class DiscordChatService {
                 id: m.id,
                 author: m.author.username,
                 authorId: m.author.id,
-                content: m.content,
+                content: replaceDiscordUserMentions(m.content, m.mentions),
                 timestamp: new Date(m.timestamp),
                 role: m.author.bot ? 'bot' : 'user',
                 avatarUrl: m.author.avatar

@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { replaceDiscordUserMentions } from '@/lib/discord-mentions';
 import { handleMusicCommand } from '@/lib/music-command-service';
 import { GLOBAL_WATCH_SESSION_ID, MUSIC_WATCH_SESSION_ID, normalizeWatchSessionAlias } from '@/lib/watch-session';
 import {
@@ -298,7 +299,7 @@ export async function POST(request: NextRequest) {
       }, { status: 400 });
     }
     const data = unwrapDiscordChatRoot(body);
-    const message = String(data.message || data.content || '').trim();
+    const message = replaceDiscordUserMentions(data.message || data.content || '', data).trim();
     const channelId = String(data.channelId || '').trim();
     const guildId = String(data.guildId || data.serverId || 'local').trim();
     const userId = String(data.userId || data.authorId || 'discord').trim();
