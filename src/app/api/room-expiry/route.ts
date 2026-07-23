@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { effectiveRoomExpiry, ROOM_LIFETIME_HOURS } from '@/lib/room-lifecycle';
+import { db, ensureDb } from '@/lib/db';
 
 // Called periodically (e.g. via cron or health check) to:
 // 1. Warn admin about rooms expiring within 30 minutes
@@ -14,10 +15,8 @@ export async function POST(request: Request) {
     : 'http://localhost:3000';
 
   try {
-    // Fetch all rooms
-    const roomsRes = await fetch(`${baseUrl}/api/db?collection=rooms`, { cache: 'no-store' });
-    const rooms = await roomsRes.json();
-    if (!Array.isArray(rooms)) return NextResponse.json({ ok: true, processed: 0 });
+    await ensureDb();
+    const rooms = db.list('rooms');
 
     const now = Date.now();
     const warnings: string[] = [];
@@ -32,24 +31,12 @@ export async function POST(request: Request) {
       const timeLeft = expiresAt - now;
 
       if (data.expiresAt !== new Date(expiresAt).toISOString()) {
-        await fetch(`${baseUrl}/api/db`, {
-          method: 'PATCH',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            collection: 'rooms',
-            id: room.id,
-            data: { expiresAt: new Date(expiresAt).toISOString() },
-          }),
-        }).catch(() => {});
+        db.update('rooms', room.id, { expiresAt: new Date(expiresAt).toISOString() });
       }
 
       if (timeLeft <= 0) {
         // Room expired — delete it
-        await fetch(`${baseUrl}/api/db`, {
-          method: 'DELETE',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ collection: 'rooms', id: room.id }),
-        }).catch(() => {});
+        db.delete('rooms', room.id);
         deleted.push(data.name || room.id);
       } else if (timeLeft <= WARNING_WINDOW) {
         // Room expiring soon — warn admin
