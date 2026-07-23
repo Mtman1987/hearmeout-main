@@ -1,8 +1,8 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
-import { useRoomContext } from '@livekit/components-react';
-import { Participant, LocalParticipant, RemoteParticipant } from 'livekit-client';
+import { useLocalParticipant, useRoomContext } from '@livekit/components-react';
+import { Participant } from 'livekit-client';
 import { Button } from '@/components/ui/button';
 import { Mic, MicOff, LogOut, Volume2 } from 'lucide-react';
 import { DraggableContainer } from './DraggableContainer';
@@ -11,7 +11,9 @@ interface VoiceRoomWidgetProps {
   id: string;
   position: { x: number; y: number };
   size: { width: number; height: number };
+  // eslint-disable-next-line no-unused-vars
   onPositionChange: (pos: { x: number; y: number }) => void;
+  // eslint-disable-next-line no-unused-vars
   onSizeChange: (size: { width: number; height: number }) => void;
   onClose: () => void;
 }
@@ -25,8 +27,9 @@ export function VoiceRoomWidget({
   onClose,
 }: VoiceRoomWidgetProps) {
   const room = useRoomContext();
+  const { localParticipant, isMicrophoneEnabled } = useLocalParticipant();
   const [participants, setParticipants] = useState<Participant[]>([]);
-  const [isMuted, setIsMuted] = useState(false);
+  const isMuted = !isMicrophoneEnabled;
 
   useEffect(() => {
     if (!room) return;
@@ -61,10 +64,9 @@ export function VoiceRoomWidget({
   }, [room]);
 
   const handleToggleMute = async () => {
-    if (room?.localParticipant) {
+    if (localParticipant) {
       try {
-        await room.localParticipant.setMicrophoneEnabled(!isMuted);
-        setIsMuted(!isMuted);
+        await localParticipant.setMicrophoneEnabled(isMuted);
       } catch (error) {
         console.error('Error toggling microphone:', error);
       }

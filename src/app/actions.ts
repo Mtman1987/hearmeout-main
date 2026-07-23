@@ -79,36 +79,6 @@ export async function generateLiveKitToken(roomName: string, participantIdentity
   }
 }
 
-export async function generateMusicRoomToken(roomName: string, participantIdentity: string, participantName: string, isDJ: boolean) {
-  const apiKey = process.env.LIVEKIT_API_KEY;
-  const apiSecret = process.env.LIVEKIT_API_SECRET;
-  const livekitUrl = process.env.NEXT_PUBLIC_LIVEKIT_URL || process.env.LIVEKIT_URL;
-
-  if (!apiKey || !apiSecret || !livekitUrl) {
-    throw new Error(
-      'LiveKit not configured. Required: LIVEKIT_API_KEY, LIVEKIT_API_SECRET, and NEXT_PUBLIC_LIVEKIT_URL (or LIVEKIT_URL).',
-    );
-  }
-
-  // DJ bot gets a fixed identity, listeners get prefixed identity to avoid collision
-  const identity = isDJ ? 'HearMeOutDJ' : `listener-${participantIdentity}`;
-
-  const at = new AccessToken(apiKey, apiSecret, {
-    identity,
-    name: isDJ ? 'HearMeOut DJ' : participantName,
-    ttl: '6h',
-  });
-
-  at.addGrant({
-    room: `${roomName}-music`,
-    roomJoin: true,
-    canPublish: isDJ,
-    canSubscribe: true,
-  });
-
-  return await at.toJwt();
-}
-
 export async function postToDiscord(
   channelId: string, 
   roomId: string,

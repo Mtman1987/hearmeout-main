@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { effectiveRoomExpiry, roomExpiryFrom } from '@/lib/room-lifecycle';
 import { db, ensureDb } from '@/lib/db';
 import { getOverlayWatchSessionId } from '@/lib/watch-session';
 import { publishSpmtEvent } from '@/lib/spmt-client';
@@ -83,7 +84,7 @@ function listOpenRooms(baseUrl: string): OpenRoom[] {
   const rooms = db.list('rooms')
     .filter((room) => room.data?.isPrivate !== true)
     .filter((room) => {
-      const expiresAt = room.data?.expiresAt ? Date.parse(room.data.expiresAt) : 0;
+      const expiresAt = effectiveRoomExpiry(room.data?.expiresAt, room.data?.createdAt);
       return !expiresAt || expiresAt > now;
     })
     .map((room) => {
@@ -182,7 +183,7 @@ async function createVoiceRoom(input: { text: string; baseUrl: string; userId: s
     isPrivate: false,
     password: null,
     createdAt: now.toISOString(),
-    expiresAt: new Date(now.getTime() + 12 * 60 * 60 * 1000).toISOString(),
+    expiresAt: roomExpiryFrom(now.getTime()),
     playlist: [],
     isPlaying: false,
   };

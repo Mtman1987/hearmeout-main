@@ -28,6 +28,8 @@ import { useRouter } from 'next/navigation';
 
 interface RoomParticipantData { id: string; uid: string; displayName: string; photoURL: string; twitchChannel?: string; discordGuildId?: string; streamMode?: boolean; serverMuted?: boolean; }
 
+const OPEN_MIC_SILENCE_TIMEOUT_MS = 10 * 60 * 1000;
+
 export default function UserCard({ participant, isLocal, isHost, roomId }: { participant: LivekitClient.Participant; isLocal: boolean; isHost?: boolean; roomId: string; }) {
   const { user } = useSession();
   const { toast } = useToast();
@@ -53,15 +55,62 @@ export default function UserCard({ participant, isLocal, isHost, roomId }: { par
   const participantMeta = participant.metadata ? JSON.parse(participant.metadata) : {};
   const userRecordId = participantMeta.uid || identity;
   const [trackAudioLevel, setTrackAudioLevel] = useState(0);
+  const [micPauseReason, setMicPauseReason] = useState<string | null>(
+    isLocal ? 'Microphone muted on entry. You are still listening.' : null,
+  );
+  const lastSpokeAtRef = React.useRef(Date.now());
+  const voiceModeRef = React.useRef<'open' | 'pushToTalk' | 'noiseGate'>('open');
   const isSpeaking = participant.isSpeaking;
 
   const setMicEnabled = useCallback(async (enabled: boolean) => {
     if (!isLocal || !room) return;
     await room.localParticipant.setMicrophoneEnabled(enabled);
+    if (enabled) {
+      lastSpokeAtRef.current = Date.now();
+      setMicPauseReason(null);
+      return;
+    }
+    setMicPauseReason(
+      voiceModeRef.current === 'pushToTalk'
+        ? 'Push-to-talk is ready. Hold your configured key to speak; you are still listening.'
+        : voiceModeRef.current === 'noiseGate'
+          ? 'Noise gate closed your microphone. You are still listening.'
+          : 'Microphone muted. You are still listening.',
+    );
   }, [isLocal, room]);
 
   const voiceControls = useVoiceControls({ setMicEnabled, audioLevel: trackAudioLevel });
   const [pttBinding, setPttBinding] = useState(false);
+
+  useEffect(() => {
+    voiceModeRef.current = voiceControls.mode;
+  }, [voiceControls.mode]);
+
+  useEffect(() => {
+    if (!isLocal) return;
+
+    const handleSpeakingChanged = () => {
+      if (participant.isSpeaking) lastSpokeAtRef.current = Date.now();
+    };
+    participant.on(LivekitClient.ParticipantEvent.IsSpeakingChanged, handleSpeakingChanged);
+
+    const interval = window.setInterval(() => {
+      if (
+        voiceModeRef.current === 'open'
+        && participant.isMicrophoneEnabled
+        && Date.now() - lastSpokeAtRef.current >= OPEN_MIC_SILENCE_TIMEOUT_MS
+      ) {
+        void room.localParticipant.setMicrophoneEnabled(false).then(() => {
+          setMicPauseReason('Microphone paused after 10 minutes of silence. You are still listening—select Unmute to talk again.');
+        });
+      }
+    }, 15_000);
+
+    return () => {
+      window.clearInterval(interval);
+      participant.off(LivekitClient.ParticipantEvent.IsSpeakingChanged, handleSpeakingChanged);
+    };
+  }, [isLocal, participant, room]);
 
   useEffect(() => {
     if (!participant) return;
@@ -81,6 +130,15 @@ export default function UserCard({ participant, isLocal, isHost, roomId }: { par
   const toggleMuteByMe = () => { if (isLocal) return; setVolume(prev => (prev > 0 ? 0 : lastNonZeroVolume.current || 1)); };
 
   const { data: firestoreUser } = useDoc<RoomParticipantData>(userRecordId ? `rooms/${roomId}/users` : null, userRecordId || null);
+
+  useEffect(() => {
+    if (!isLocal) return;
+    if (firestoreUser?.serverMuted) {
+      void room.localParticipant.setMicrophoneEnabled(false).then(() => {
+        setMicPauseReason('A room moderator muted your microphone. You are still listening.');
+      });
+    }
+  }, [firestoreUser?.serverMuted, isLocal, room]);
 
   React.useEffect(() => {
     if (firestoreUser?.twitchChannel) setTwitchChannel(firestoreUser.twitchChannel);
@@ -174,7 +232,14 @@ export default function UserCard({ participant, isLocal, isHost, roomId }: { par
     }
   };
 
-  const handleToggleMic = async () => { if (isLocal && room) await room.localParticipant.setMicrophoneEnabled(!participant.isMicrophoneEnabled); };
+  const handleToggleMic = async () => {
+    if (!isLocal || !room) return;
+    if (firestoreUser?.serverMuted && !participant.isMicrophoneEnabled) {
+      setMicPauseReason('A room moderator muted your microphone. You are still listening.');
+      return;
+    }
+    await setMicEnabled(!participant.isMicrophoneEnabled);
+  };
   const isMuted = !participant.isMicrophoneEnabled;
   const liveKitName = name && name !== 'User' ? name : null;
   const sessionName = isLocal ? user?.displayName || (user as any)?.username : null;
@@ -261,7 +326,7 @@ export default function UserCard({ participant, isLocal, isHost, roomId }: { par
                     <p className="font-bold text-lg truncate">{displayName}</p>
                     {isLocal ? (
                         <div className="flex items-center gap-1 text-muted-foreground">
-                            <Tooltip><TooltipTrigger asChild><Button variant={isMuted ? "destructive" : "ghost"} size="icon" onClick={handleToggleMic} className="h-7 w-7">{isMuted ? <MicOff className="h-4 w-4" /> : <Mic className="h-4 w-4" />}</Button></TooltipTrigger><TooltipContent><p>{isMuted ? 'Unmute' : 'Mute'}</p></TooltipContent></Tooltip>
+                            <Tooltip><TooltipTrigger asChild><Button variant={isMuted ? "destructive" : "ghost"} size="icon" onClick={handleToggleMic} disabled={!!firestoreUser?.serverMuted} className="h-7 w-7">{isMuted ? <MicOff className="h-4 w-4" /> : <Mic className="h-4 w-4" />}</Button></TooltipTrigger><TooltipContent><p>{firestoreUser?.serverMuted ? 'Muted by room moderator' : isMuted ? 'Unmute' : 'Mute'}</p></TooltipContent></Tooltip>
                             <Popover><PopoverTrigger asChild><Button variant="ghost" size="icon" className="h-7 w-7"><Headphones className="h-4 w-4" /></Button></PopoverTrigger>
                                 <PopoverContent className="w-80"><div className="grid gap-4"><div className="space-y-2"><h4 className="font-medium leading-none">Audio Settings</h4></div><div className="grid gap-2">
                                     <div className="grid grid-cols-3 items-center gap-4"><Label htmlFor="mic-select">Microphone</Label><Select value={activeAudioInputDeviceId} onValueChange={setAudioInputDevice}><SelectTrigger id="mic-select" className="col-span-2"><SelectValue placeholder="Select an input" /></SelectTrigger><SelectContent>{audioInputDevices.map(d => <SelectItem key={d.deviceId} value={d.deviceId}>{d.label}</SelectItem>)}</SelectContent></Select></div>
@@ -334,6 +399,11 @@ export default function UserCard({ participant, isLocal, isHost, roomId }: { par
                 </div>
             </div>
             <div className="space-y-2 flex-grow flex flex-col justify-end">
+                {isLocal && micPauseReason && (
+                  <p className="rounded-md border border-amber-500/40 bg-amber-500/10 px-2 py-1.5 text-xs text-muted-foreground">
+                    {micPauseReason}
+                  </p>
+                )}
                 <SpeakingIndicator audioLevel={isMuted ? 0 : (isSpeaking ? trackAudioLevel : 0)} />
                 {!isLocal && (
                     <div className="flex items-center gap-2">

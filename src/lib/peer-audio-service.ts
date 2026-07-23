@@ -126,6 +126,7 @@ export class PeerVoiceMesh {
     userId: string,
     onRemoteStream: (peerId: string, stream: MediaStream) => void,
     onPeerLeft: (peerId: string) => void,
+    startMuted = true,
   ): Promise<string> {
     this._roomId = roomId;
     this.onRemoteStream = onRemoteStream;
@@ -137,6 +138,9 @@ export class PeerVoiceMesh {
       console.warn('[PeerVoice] Microphone unavailable, joining with silent audio:', err);
       this.report('microphone unavailable; using silent receive-only stream', undefined, err);
       this.localStream = this.createSilentAudioStream();
+    }
+    if (startMuted) {
+      for (const track of this.localStream.getAudioTracks()) track.enabled = false;
     }
 
     const peerId = `hmo-voice-${roomId}-${userId}-${Math.random().toString(36).slice(2, 6)}`;

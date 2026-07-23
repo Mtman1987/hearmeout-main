@@ -12,6 +12,7 @@ import { Switch } from '@/components/ui/switch';
 import { PlusCircle, LoaderCircle } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 import { useRouter } from 'next/navigation';
+import { roomExpiryFrom } from '@/lib/room-lifecycle';
 
 function roomIdFromName(name: string) {
   return name
@@ -64,7 +65,7 @@ export function CreateRoomDialog() {
         isPrivate,
         password: isPrivate ? password : null,
         createdAt: new Date().toISOString(),
-        expiresAt: new Date(Date.now() + 12 * 60 * 60 * 1000).toISOString(),
+        expiresAt: roomExpiryFrom(),
         playlist: [],
         isPlaying: false,
           },

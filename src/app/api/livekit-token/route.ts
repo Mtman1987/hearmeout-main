@@ -62,7 +62,7 @@ export async function POST(request: NextRequest) {
         identity,
         name: (typeof userName === 'string' && userName.trim()) ? userName.slice(0, 64) : identity,
         metadata: typeof bridgeMetadata === 'string' ? bridgeMetadata.slice(0, 2048) : undefined,
-        ttl: '12h',
+        ttl: '6h',
       });
       at.addGrant({ roomJoin: true, room: roomId, canPublish: true, canSubscribe: true });
       const bridgeToken = await at.toJwt();

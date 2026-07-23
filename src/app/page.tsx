@@ -14,6 +14,7 @@ import { dbDelete } from '@/lib/db-helpers';
 import { Skeleton } from '@/components/ui/skeleton';
 import { useToast } from '@/hooks/use-toast';
 import { ACTIVITY_ROOM_ID, ACTIVITY_ROOM_NAME } from '@/lib/watch-session';
+import { effectiveRoomExpiry } from '@/lib/room-lifecycle';
 
 function DashboardHeader() {
     const { isMobile } = useSidebar();
@@ -36,9 +37,10 @@ interface Room {
     createdAt?: string;
 }
 
-function timeRemaining(expiresAt?: string) {
-  if (!expiresAt) return null;
-  const ms = new Date(expiresAt).getTime() - Date.now();
+function timeRemaining(expiresAt?: string, createdAt?: string) {
+  const expiry = effectiveRoomExpiry(expiresAt, createdAt);
+  if (!expiry) return null;
+  const ms = expiry - Date.now();
   if (ms <= 0) return 'Expired';
   const h = Math.floor(ms / 3600000);
   const m = Math.floor((ms % 3600000) / 60000);
@@ -130,10 +132,10 @@ export default function Home() {
                                         <Users className="h-3.5 w-3.5" />
                                         <span>{room.occupantCount || 0} in room</span>
                                     </div>
-                                    {room.expiresAt && (
+                                    {effectiveRoomExpiry(room.expiresAt, room.createdAt) && (
                                         <div className="flex items-center gap-2 text-xs text-muted-foreground">
                                             <Clock className="h-3 w-3" />
-                                            <span>{timeRemaining(room.expiresAt)}</span>
+                                            <span>{timeRemaining(room.expiresAt, room.createdAt)}</span>
                                         </div>
                                     )}
                                 </CardContent>

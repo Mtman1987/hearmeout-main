@@ -1,16 +1,15 @@
 'use client';
 
 import React, { useCallback, useEffect, useState } from 'react';
-import { Film, ListMusic, LoaderCircle, Music, Pause, Play, Power, PowerOff, Radio, SkipForward, SlidersHorizontal, Volume2, VolumeX } from 'lucide-react';
+import { Film, ListMusic, Music, Pause, Play, Radio, SkipForward, Volume2, VolumeX } from 'lucide-react';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Slider } from '@/components/ui/slider';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
-import { getRoomWatchSessionId, isActivityRoomId } from '@/lib/watch-session';
+import { getRoomWatchSessionId } from '@/lib/watch-session';
 import { SpeakingIndicator } from './SpeakingIndicator';
 import { cn } from '@/lib/utils';
-import type { PlaylistItem } from '@/types/playlist';
 
 type SharedMusicState = {
   queue: Array<{ requestId: string; item: { title: string } }>;
@@ -34,22 +33,10 @@ type SharedMusicState = {
 
 interface DJCardProps {
   roomId: string;
-  playlist: PlaylistItem[];
-  currentTrackId?: string;
-  isPlaying?: boolean;
-  djActive?: boolean;
-  djStatus?: string;
-  musicStatus: string | null;
   localVolume: number;
   // eslint-disable-next-line no-unused-vars
   onVolumeChange: (v: number) => void;
   canControl: boolean;
-  autoRadio?: boolean;
-  djIsLive: boolean;
-  djStarting?: boolean;
-  onStartDJ: () => void;
-  onStopDJ: () => void;
-  onStartAudio: () => void;
   onOpenQueue: () => void;
   onOpenAddSong: () => void;
   onOpenWatch?: () => void;
@@ -87,19 +74,14 @@ function formatClock(value: number) {
 }
 
 export default function DJCard({
-  roomId, playlist, currentTrackId, isPlaying: legacyIsPlaying, djActive,
-  djStatus, musicStatus, localVolume, onVolumeChange, canControl,
-  autoRadio: legacyAutoRadio,
-  djIsLive, djStarting, onStartDJ, onStopDJ,
-  onStartAudio, onOpenQueue, onOpenAddSong, onOpenWatch,
+  roomId, localVolume, onVolumeChange, canControl,
+  onOpenQueue, onOpenAddSong, onOpenWatch,
 }: DJCardProps) {
   const musicSessionId = getRoomWatchSessionId(roomId, 'music');
-  const activityRoom = isActivityRoomId(roomId);
-  const legacyCurrentTrack = playlist?.find((track) => track.id === currentTrackId);
   const [sharedState, setSharedState] = useState<SharedMusicState | null>(null);
   const [controlError, setControlError] = useState<string | null>(null);
   const [controlPending, setControlPending] = useState(false);
-  const [activePanel, setActivePanel] = useState<'controls' | 'radio' | null>(null);
+  const [activePanel, setActivePanel] = useState<'radio' | null>(null);
   const [clockNow, setClockNow] = useState(() => Date.now());
   const [seekDraft, setSeekDraft] = useState<number | null>(null);
   const [volumeDraft, setVolumeDraft] = useState<number | null>(null);
@@ -163,30 +145,24 @@ export default function DJCard({
   }, [canControl, musicSessionId, roomId, sharedState?.current?.requestId]);
 
   const sharedItem = sharedState?.current?.item;
-  const currentTitle = sharedItem?.title || (activityRoom ? undefined : legacyCurrentTrack?.title);
-  const currentArtist = sharedItem?.metadata?.artist || (activityRoom ? undefined : legacyCurrentTrack?.artist);
-  const sharedIsPlaying = sharedState
-    ? sharedState.playback.status === 'playing'
-    : activityRoom ? false : Boolean(legacyIsPlaying);
-  const isStreaming = sharedIsPlaying || (!activityRoom && musicStatus === '🎵 streaming');
-  const displayDjActive = activityRoom ? Boolean(sharedState?.current) : djActive;
-  const duration = runtimeSeconds(sharedItem?.runtime)
-    || (activityRoom ? 0 : Math.max(0, Math.round(Number(legacyCurrentTrack?.duration || 0) / 1000)));
+  const currentTitle = sharedItem?.title;
+  const currentArtist = sharedItem?.metadata?.artist;
+  const sharedIsPlaying = sharedState?.playback.status === 'playing';
+  const isStreaming = sharedIsPlaying;
+  const displayDjActive = Boolean(sharedState?.current);
+  const duration = runtimeSeconds(sharedItem?.runtime);
   const livePosition = Math.min(duration || Number.POSITIVE_INFINITY, effectivePlaybackPosition(sharedState?.playback, clockNow));
   const displayedPosition = seekDraft ?? livePosition;
   const localVolumePercent = Math.max(0, Math.min(100, Math.round(localVolume * 100)));
   const displayedVolume = volumeDraft ?? localVolumePercent;
   const locallyMuted = displayedVolume === 0 || localVolume <= 0;
-  const sharedAutoRadio = sharedState?.autoRadio ?? (activityRoom ? false : Boolean(legacyAutoRadio));
+  const sharedAutoRadio = Boolean(sharedState?.autoRadio);
   const visibleStatus = controlError
-    || (sharedState?.current ? `${sharedState.playback.status} · shared with Discord` : null)
-    || (activityRoom ? null : djStatus)
-    || (activityRoom ? null : musicStatus);
+    || (sharedState?.current ? `${sharedState.playback.status} · shared with Discord` : null);
 
   const handlePlayPause = useCallback(() => {
-    if (!activityRoom) onStartAudio();
     void sendSharedControl(sharedIsPlaying ? 'pause' : 'play', effectivePlaybackPosition(sharedState?.playback));
-  }, [activityRoom, onStartAudio, sendSharedControl, sharedIsPlaying, sharedState?.playback]);
+  }, [sendSharedControl, sharedIsPlaying, sharedState?.playback]);
 
   const handleNext = useCallback(() => {
     void sendSharedControl('next', 0);
@@ -292,13 +268,6 @@ export default function DJCard({
           </div>
 
           <div className="flex items-center gap-1">
-            {!activityRoom ? (
-              <Tooltip><TooltipTrigger asChild>
-                <Button variant={activePanel === 'controls' ? 'secondary' : 'ghost'} size="icon" className="h-8 w-8" onClick={() => setActivePanel(activePanel === 'controls' ? null : 'controls')}>
-                  <SlidersHorizontal className="h-4 w-4" />
-                </Button>
-              </TooltipTrigger><TooltipContent><p>DJ connection controls</p></TooltipContent></Tooltip>
-            ) : null}
             <Tooltip><TooltipTrigger asChild>
               <Button variant={sharedAutoRadio ? 'secondary' : 'ghost'} size="icon" className="h-8 w-8" onClick={() => setActivePanel(activePanel === 'radio' ? null : 'radio')}>
                 <Radio className="h-4 w-4" />
@@ -321,27 +290,7 @@ export default function DJCard({
                 </Button>
               </TooltipTrigger><TooltipContent><p>Open music player</p></TooltipContent></Tooltip>
             ) : null}
-            {!activityRoom ? (
-              <Tooltip><TooltipTrigger asChild>
-                <Button variant="ghost" size="icon" className="ml-auto h-8 w-8" onClick={onStartAudio}>
-                  <Play className="h-4 w-4" />
-                </Button>
-              </TooltipTrigger><TooltipContent><p>Enable local audio</p></TooltipContent></Tooltip>
-            ) : null}
           </div>
-
-          {activePanel === 'controls' && !activityRoom ? (
-            <div className="rounded-md border bg-muted/20 p-3">
-              <div className="flex items-center justify-center gap-2">
-                <Button variant={djIsLive ? 'secondary' : 'outline'} size="sm" className="h-9 gap-1 px-2" onClick={onStartDJ} disabled={djStarting}>
-                  {djStarting ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Power className="h-4 w-4" />} On
-                </Button>
-                <Button variant="outline" size="sm" className="h-9 gap-1 px-2" onClick={onStopDJ} disabled={djStarting}>
-                  <PowerOff className="h-4 w-4" /> Off
-                </Button>
-              </div>
-            </div>
-          ) : null}
 
           {activePanel === 'radio' && canControl ? (
             <div className="rounded-md border bg-muted/20 p-3">

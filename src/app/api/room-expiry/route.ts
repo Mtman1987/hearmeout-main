@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { effectiveRoomExpiry, ROOM_LIFETIME_HOURS } from '@/lib/room-lifecycle';
 
 // Called periodically (e.g. via cron or health check) to:
 // 1. Warn admin about rooms expiring within 30 minutes
@@ -24,10 +25,23 @@ export async function POST(request: Request) {
 
     for (const room of rooms) {
       const data = room.data;
-      if (!data?.expiresAt) continue;
+      if (!data) continue;
 
-      const expiresAt = new Date(data.expiresAt).getTime();
+      const expiresAt = effectiveRoomExpiry(data.expiresAt, data.createdAt);
+      if (!expiresAt) continue;
       const timeLeft = expiresAt - now;
+
+      if (data.expiresAt !== new Date(expiresAt).toISOString()) {
+        await fetch(`${baseUrl}/api/db`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            collection: 'rooms',
+            id: room.id,
+            data: { expiresAt: new Date(expiresAt).toISOString() },
+          }),
+        }).catch(() => {});
+      }
 
       if (timeLeft <= 0) {
         // Room expired — delete it
@@ -58,7 +72,7 @@ export async function POST(request: Request) {
       await fetch(`${baseUrl}${ADMIN_CHAT_ENDPOINT}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: `🗑️ Room "${name}" has been auto-deleted (12h shelf life expired).`, source: 'room-expiry' }),
+        body: JSON.stringify({ message: `🗑️ Room "${name}" has been auto-deleted (${ROOM_LIFETIME_HOURS}h shelf life expired).`, source: 'room-expiry' }),
       }).catch(() => {});
     }
 

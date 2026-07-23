@@ -8,7 +8,6 @@ import { useCollection, useDoc } from '@/hooks/use-db';
 import { useLocalParticipant, useRemoteParticipants, useTracks, AudioTrack } from '@livekit/components-react';
 import { Track } from 'livekit-client';
 import '@livekit/components-styles';
-import type { PlaylistItem } from '@/types/playlist';
 import { canManageRoom } from '@/lib/room-access';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Card, CardContent } from '@/components/ui/card';
@@ -19,29 +18,14 @@ import { isActivityRoomId } from '@/lib/watch-session';
 export interface RoomData {
   name: string;
   ownerId: string;
-  playlist: PlaylistItem[];
-  currentTrackId?: string;
-  isPlaying?: boolean;
-  djActive?: boolean;
-  djStatus?: string;
-  autoRadio?: boolean;
-  playHistory?: string[];
 }
 
 interface UserListProps {
   roomId: string;
-  musicStatus: string | null;
-  djStatus?: string;
   localVolume: number;
   // eslint-disable-next-line no-unused-vars
   onVolumeChange: (volume: number) => void;
   showDJ: boolean;
-  autoRadio?: boolean;
-  djIsLive: boolean;
-  djStarting?: boolean;
-  onStartDJ: () => void;
-  onStopDJ: () => void;
-  onStartAudio: () => void;
   onOpenQueue: () => void;
   onOpenAddSong: () => void;
   onOpenWatch?: () => void;
@@ -50,7 +34,6 @@ interface UserListProps {
   peerConnectedPeerIds?: string[];
   peerAudioBlocked?: boolean;
   onEnablePeerAudio?: () => void;
-  voiceFallbackFailed?: boolean;
 }
 
 type PeerPresence = {
@@ -128,7 +111,7 @@ function LiveKitParticipants({ isHost, roomId }: { isHost: boolean; roomId: stri
   );
 }
 
-export default function UserList({ roomId, musicStatus, djStatus, localVolume, onVolumeChange, showDJ, autoRadio, djIsLive, djStarting, onStartDJ, onStopDJ, onStartAudio, onOpenQueue, onOpenAddSong, onOpenWatch, voiceEnabled = true, voicePeerFallback = false, peerConnectedPeerIds = [], peerAudioBlocked = false, onEnablePeerAudio }: UserListProps) {
+export default function UserList({ roomId, localVolume, onVolumeChange, showDJ, onOpenQueue, onOpenAddSong, onOpenWatch, voiceEnabled = true, voicePeerFallback = false, peerConnectedPeerIds = [], peerAudioBlocked = false, onEnablePeerAudio }: UserListProps) {
   const { user } = useSession();
   const { data: room } = useDoc<RoomData>('rooms', roomId, 2000);
 
@@ -149,21 +132,9 @@ export default function UserList({ roomId, musicStatus, djStatus, localVolume, o
           {showDJ && (
             <DJCard
               roomId={roomId}
-              playlist={room?.playlist || []}
-              currentTrackId={room?.currentTrackId}
-              isPlaying={room?.isPlaying}
-              djActive={room?.djActive}
-              djStatus={room?.djStatus || djStatus}
-              musicStatus={musicStatus}
               localVolume={localVolume}
               onVolumeChange={onVolumeChange}
               canControl={canControl}
-              autoRadio={autoRadio}
-              djIsLive={djIsLive}
-              djStarting={djStarting}
-              onStartDJ={onStartDJ}
-              onStopDJ={onStopDJ}
-              onStartAudio={onStartAudio}
               onOpenQueue={onOpenQueue}
               onOpenAddSong={onOpenAddSong}
               onOpenWatch={onOpenWatch}

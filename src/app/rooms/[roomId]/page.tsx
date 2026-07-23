@@ -3,7 +3,7 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { LiveKitRoom, RoomContext, useConnectionState } from '@livekit/components-react';
-import { ConnectionState } from 'livekit-client';
+import { ConnectionState, DisconnectReason, Room as LKRoom } from 'livekit-client';
 import { SidebarProvider, SidebarInset, SidebarTrigger, useSidebar } from '@/components/ui/sidebar';
 import { Button } from "@/components/ui/button";
 import { Copy, X, LoaderCircle, FrameIcon, Music, Monitor, Film, ExternalLink, Radio } from 'lucide-react';
@@ -21,19 +21,12 @@ import { useDoc } from '@/hooks/use-db';
 import { dbUpdate, dbSet } from '@/lib/db-helpers';
 import { usePopout } from '@/components/PopoutWidgets/PopoutProvider';
 import { dbGet } from '@/lib/db-helpers';
-import { Room as LKRoom, RoomEvent, Track, RemoteTrack } from 'livekit-client';
-import { generateLiveKitToken, generateMusicRoomToken } from '@/app/actions';
+import { generateLiveKitToken } from '@/app/actions';
 import { PlaylistItem } from "@/types/playlist";
-import { getScreenPeerId, PeerAudioListener, PeerScreenViewer, PeerVoiceMesh } from '@/lib/peer-audio-service';
+import { getScreenPeerId, PeerScreenViewer, PeerVoiceMesh } from '@/lib/peer-audio-service';
 import { ACTIVITY_ROOM_ID, ACTIVITY_ROOM_NAME, getRoomWatchSessionId, isActivityRoomId, type WatchMediaKind } from '@/lib/watch-session';
 import { canManageRoom } from '@/lib/room-access';
-
-const MAX_ROOM_PLAYBACK_VOLUME = 0.12;
-
-function musicGain(volume: number) {
-    const normalized = Math.max(0, Math.min(1, volume));
-    return normalized <= 0 ? 0 : Math.min(MAX_ROOM_PLAYBACK_VOLUME, normalized * MAX_ROOM_PLAYBACK_VOLUME);
-}
+import { effectiveRoomExpiry, ROOM_LIFETIME_HOURS } from '@/lib/room-lifecycle';
 
 interface RoomData {
   id: string;
@@ -50,6 +43,7 @@ interface RoomData {
   peerFallback?: boolean;
   isPrivate?: boolean;
   password?: string;
+  createdAt?: string;
   expiresAt?: string;
 }
 
@@ -490,18 +484,6 @@ function ConnectionStatusIndicator({ peerFallback, livekitReady }: { peerFallbac
     return <StatusDot indicatorClass="bg-gray-500" statusText="No voice" />;
 }
 
-function getOrCreateSessionId(key: string) {
-    try {
-        const existing = sessionStorage.getItem(key);
-        if (existing) return existing;
-        const generated = Math.random().toString(36).slice(2, 8);
-        sessionStorage.setItem(key, generated);
-        return generated;
-    } catch {
-        return Math.random().toString(36).slice(2, 8);
-    }
-}
-
 async function copyTextToClipboard(text: string) {
     try {
         await navigator.clipboard.writeText(text);
@@ -539,8 +521,30 @@ function liveKitErrorPayload(err: unknown, area: string, roomId: string, identit
     };
 }
 
+function voiceDisconnectMessage(reason?: DisconnectReason) {
+    switch (reason) {
+        case DisconnectReason.DUPLICATE_IDENTITY:
+            return 'Voice moved to your newer HearMeOut session. This page is still open, but it no longer owns your microphone.';
+        case DisconnectReason.PARTICIPANT_REMOVED:
+            return 'Voice was disconnected by a room moderator.';
+        case DisconnectReason.ROOM_DELETED:
+        case DisconnectReason.ROOM_CLOSED:
+            return 'The LiveKit voice room has ended.';
+        case DisconnectReason.JOIN_FAILURE:
+            return 'Voice could not finish connecting.';
+        case DisconnectReason.CONNECTION_TIMEOUT:
+        case DisconnectReason.MEDIA_FAILURE:
+            return 'Voice lost its media connection and could not recover automatically.';
+        default:
+            return 'Voice disconnected and could not recover automatically.';
+    }
+}
+
 function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
     const { user, isLoading: isUserLoading } = useSession();
+    const userId = user?.uid;
+    const userDisplayName = user?.displayName || (user as any)?.username || 'User';
+    const userPhotoURL = user?.photoURL || (userId ? `https://picsum.photos/seed/${userId}/100/100` : '');
     const { toast } = useToast();
     const { openPopout } = usePopout();
     const router = useRouter();
@@ -548,14 +552,16 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
     const [voiceToken, setVoiceToken] = useState<string | undefined>(undefined);
     const [voiceFallbackActive, setVoiceFallbackActive] = useState(false);
     const [voiceFallbackFailed, setVoiceFallbackFailed] = useState(false);
-    const [peerMicEnabled, setPeerMicEnabled] = useState(true);
+    const [voiceFailureMessage, setVoiceFailureMessage] = useState<string | null>(null);
+    const [voiceConnectionGeneration, setVoiceConnectionGeneration] = useState(0);
+    const [voiceRetrying, setVoiceRetrying] = useState(false);
+    const [peerMicEnabled, setPeerMicEnabled] = useState(false);
     const peerVoiceRef = useRef<PeerVoiceMesh | null>(null);
     const peerVoiceStartingRef = useRef(false);
     const [peerVoiceStreams, setPeerVoiceStreams] = useState<Map<string, MediaStream>>(new Map());
     const peerVoiceAudioRefs = useRef<Map<string, HTMLAudioElement>>(new Map());
     const [peerAudioBlocked, setPeerAudioBlocked] = useState(false);
     const [localVolume, setLocalVolume] = useState(0.5);
-    const [musicStatus, setMusicStatus] = useState<string | null>(null);
     const [showDJ, setShowDJ] = useState(false);
     const [showVoiceBridge, setShowVoiceBridge] = useState(false);
     const isActivityRoom = isActivityRoomId(roomId);
@@ -566,36 +572,41 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
     );
 
     const isOwner = canManageRoom(user as any, room.ownerId);
-    const musicRoomRef = useRef<LKRoom | null>(null);
     const fallbackRoomRef = useRef<LKRoom | null>(null);
-    const musicAudioRef = useRef<HTMLAudioElement | null>(null);
-    const musicIdentityRef = useRef<string>('');
     const voiceIdentityRef = useRef<string>('');
-    const localVolumeRef = useRef(localVolume);
-    const userGestureUnlockedRef = useRef(false);
-    const peerListenerRef = useRef<PeerAudioListener | null>(null);
     const voiceTokenRef = useRef<string | undefined>(undefined);
     const voiceFallbackActiveRef = useRef(false);
-    useEffect(() => { localVolumeRef.current = localVolume; }, [localVolume]);
     useEffect(() => { voiceTokenRef.current = voiceToken; }, [voiceToken]);
     useEffect(() => { voiceFallbackActiveRef.current = voiceFallbackActive; }, [voiceFallbackActive]);
 
     const isStreamMode = !!userSettings?.streamMode;
 
+    const mintVoiceToken = useCallback(async () => {
+        if (!userId) throw new Error('Sign in is required for voice.');
+        voiceIdentityRef.current = userId;
+        return generateLiveKitToken(
+            roomId,
+            voiceIdentityRef.current,
+            userDisplayName,
+            JSON.stringify({ uid: userId, displayName: userDisplayName, photoURL: userPhotoURL }),
+        );
+    }, [roomId, userDisplayName, userId, userPhotoURL]);
+
     const startPeerVoiceFallback = useCallback(async (reason: unknown) => {
-        if (!user || !roomId || peerVoiceRef.current?.active || peerVoiceStartingRef.current) return;
+        if (!userId || !roomId || peerVoiceRef.current?.active || peerVoiceStartingRef.current) return;
         peerVoiceStartingRef.current = true;
         voiceFallbackActiveRef.current = true;
         voiceTokenRef.current = undefined;
         setVoiceToken(undefined);
         setVoiceFallbackActive(true);
         setVoiceFallbackFailed(false);
+        setVoiceFailureMessage(reason instanceof Error ? reason.message : String(reason || 'LiveKit unavailable'));
         console.warn('[Voice] LiveKit unavailable, trying PeerJS voice fallback:', reason);
         try {
             const mesh = new PeerVoiceMesh();
             await mesh.join(
                 roomId,
-                user.uid,
+                userId,
                 (peerId, stream) => {
                     setPeerVoiceStreams(prev => new Map(prev).set(peerId, stream));
                     let audioEl = peerVoiceAudioRefs.current.get(peerId);
@@ -640,10 +651,12 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
                         peerVoiceAudioRefs.current.delete(peerId);
                     }
                 },
+                true,
             );
             peerVoiceRef.current = mesh;
-            setPeerMicEnabled(true);
-            toast({ title: 'Voice Connected (P2P)', description: 'Using peer-to-peer voice since LiveKit is unavailable.' });
+            mesh.setMuted(true);
+            setPeerMicEnabled(false);
+            toast({ title: 'Voice Connected (P2P)', description: 'Using peer-to-peer voice in listen-only mode. Use Unmute when you want to talk.' });
         } catch (peerErr) {
             setVoiceFallbackFailed(true);
             console.error('[Voice] PeerJS fallback failed:', peerErr);
@@ -651,7 +664,38 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
         } finally {
             peerVoiceStartingRef.current = false;
         }
-    }, [roomId, toast, user]);
+    }, [roomId, toast, userId]);
+
+    const retryLiveKitVoice = useCallback(async () => {
+        if (!userId || voiceRetrying) return;
+        setVoiceRetrying(true);
+        try {
+            peerVoiceRef.current?.leave();
+            peerVoiceRef.current = null;
+            for (const audioEl of peerVoiceAudioRefs.current.values()) {
+                audioEl.srcObject = null;
+                audioEl.remove();
+            }
+            peerVoiceAudioRefs.current.clear();
+            setPeerVoiceStreams(new Map());
+            setPeerMicEnabled(false);
+            fallbackRoomRef.current = null;
+            voiceFallbackActiveRef.current = false;
+            setVoiceFallbackActive(false);
+            setVoiceFallbackFailed(false);
+
+            const token = await mintVoiceToken();
+            voiceTokenRef.current = token;
+            setVoiceToken(token);
+            setVoiceConnectionGeneration((value) => value + 1);
+            setVoiceFailureMessage(null);
+        } catch (error) {
+            setVoiceFailureMessage(error instanceof Error ? error.message : 'Voice reconnect failed.');
+            setVoiceFallbackFailed(true);
+        } finally {
+            setVoiceRetrying(false);
+        }
+    }, [mintVoiceToken, userId, voiceRetrying]);
 
     const unlockPeerAudio = useCallback(async () => {
         const results = await Promise.allSettled(
@@ -668,7 +712,7 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
     // and registers on the PeerJS mesh, move the remaining browsers to that
     // same mesh so the room is not split across two isolated voice networks.
     useEffect(() => {
-        if (!user || !roomId || !voiceToken || voiceFallbackActive) return;
+        if (!userId || !roomId || !voiceToken || voiceFallbackActive) return;
         let cancelled = false;
 
         const followRoomFallback = async () => {
@@ -692,307 +736,48 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
             cancelled = true;
             clearInterval(interval);
         };
-    }, [roomId, startPeerVoiceFallback, user, voiceFallbackActive, voiceToken]);
-
-    // DJ start/stop via server-side API (Puppeteer on hmo-dj-worker)
-    const [djStarting, setDjStarting] = useState(false);
-    const handleStartMusicAudio = useCallback(async () => {
-        const lkRoom = musicRoomRef.current;
-        try {
-            userGestureUnlockedRef.current = true;
-            await lkRoom?.startAudio();
-            const audio = musicAudioRef.current;
-            if (audio) {
-                audio.volume = musicGain(localVolumeRef.current);
-                await audio.play();
-            }
-            setMusicStatus(prev => prev || 'connected');
-            toast({ title: 'Music Audio Ready', description: 'Music playback is unlocked for this page.' });
-        } catch (err) {
-            toast({
-                variant: 'destructive',
-                title: 'Music Audio Blocked',
-                description: err instanceof Error ? err.message : 'Click again after the DJ stream connects.',
-            });
-        }
-    }, [toast]);
-
-    const handleStartDJ = useCallback(async () => {
-        setDjStarting(true);
-        try {
-            const res = await fetch('/api/dj', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ action: 'start', roomId }),
-            });
-            const data = await res.json();
-            if (!data.success) {
-                toast({ variant: 'destructive', title: 'DJ Error', description: data.message });
-            } else {
-                toast({ title: 'DJ Connected', description: data.message || 'Server DJ is starting.' });
-            }
-        } catch {
-            toast({ variant: 'destructive', title: 'DJ Error', description: 'Failed to start DJ' });
-        } finally {
-            setDjStarting(false);
-        }
-    }, [roomId, toast]);
-
-    const handleStopDJ = useCallback(async () => {
-        try {
-            const res = await fetch('/api/dj', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ action: 'stop', roomId }),
-            });
-            const data = await res.json().catch(() => null);
-            if (!res.ok || data?.success === false) {
-                toast({ variant: 'destructive', title: 'DJ Error', description: data?.message || data?.error || 'Failed to stop DJ' });
-            } else {
-                toast({ title: 'DJ Disconnected', description: data?.message || 'HearMeOut DJ stopped.' });
-            }
-        } catch {
-            toast({ variant: 'destructive', title: 'DJ Error', description: 'Failed to stop DJ' });
-        }
-    }, [roomId, toast]);
-
-    // Connect to LiveKit Music Room as subscriber.
-    // Stream-mode users skip this — they hear music from the OBS overlay.
-    // Falls back to PeerJS if LiveKit fails (e.g. tokens exhausted).
-    useEffect(() => {
-        if (isUserLoading || !user || !roomId) return;
-        if (isActivityRoom) {
-            setMusicStatus('Discord Activity music');
-            return;
-        }
-        if (isStreamMode) {
-            setMusicStatus('stream mode (music in overlay)');
-            return;
-        }
-        let cancelled = false;
-
-        const connectMusicRoom = async () => {
-            if (room.peerFallback) {
-                try {
-                    const listener = new PeerAudioListener();
-                    await listener.connect(
-                        roomId,
-                        (stream) => {
-                            if (!musicAudioRef.current) musicAudioRef.current = new Audio();
-                            musicAudioRef.current.srcObject = stream;
-                            musicAudioRef.current.volume = musicGain(localVolumeRef.current);
-                            if (userGestureUnlockedRef.current) {
-                                musicAudioRef.current.play().catch(() => {});
-                            }
-                            setMusicStatus('streaming (P2P)');
-                        },
-                        () => {
-                            setMusicStatus('P2P disconnected');
-                        },
-                        room.djPeerId,
-                    );
-                    if (cancelled) { listener.disconnect(); return; }
-                    peerListenerRef.current = listener;
-                    setMusicStatus('connected (P2P)');
-                } catch (peerErr) {
-                    console.error('[MusicRoom] PeerJS fallback failed:', peerErr);
-                    setMusicStatus('P2P unavailable');
-                }
-                return;
-            }
-
-            try {
-                console.log('[MusicRoom] Connecting as listener...');
-                if (!musicIdentityRef.current) {
-                    const tabId = getOrCreateSessionId('hmo_music_tab_id');
-                    musicIdentityRef.current = `${user.uid}-${tabId}`;
-                }
-                const token = await generateMusicRoomToken(
-                    roomId,
-                    musicIdentityRef.current,
-                    user.displayName || 'Listener',
-                    false,
-                );
-                const livekitUrl = process.env.NEXT_PUBLIC_LIVEKIT_URL;
-                if (!livekitUrl || cancelled) return;
-
-                const lkRoom = new LKRoom();
-                await lkRoom.connect(livekitUrl, token);
-                if (cancelled) { lkRoom.disconnect(); return; }
-                musicRoomRef.current = lkRoom;
-                console.log('[MusicRoom] Connected! Participants:', lkRoom.remoteParticipants.size);
-                setMusicStatus('connected');
-
-                const attachTrack = (track: RemoteTrack) => {
-                    if (track.kind === Track.Kind.Audio) {
-                        console.log('[MusicRoom] 🎵 Audio track received — attaching');
-                        if (!musicAudioRef.current) musicAudioRef.current = new Audio();
-                        track.attach(musicAudioRef.current);
-                        musicAudioRef.current.volume = musicGain(localVolumeRef.current);
-                        if (userGestureUnlockedRef.current) {
-                            musicAudioRef.current.play().catch(e => console.warn('[MusicRoom] Autoplay blocked:', e));
-                        }
-                        setMusicStatus('🎵 streaming');
-                    }
-                };
-
-                lkRoom.remoteParticipants.forEach(p => {
-                    console.log('[MusicRoom] Remote participant:', p.identity, 'tracks:', p.trackPublications.size);
-                    p.trackPublications.forEach(pub => {
-                        if (pub.track && pub.isSubscribed) attachTrack(pub.track as RemoteTrack);
-                    });
-                });
-
-                lkRoom.on(RoomEvent.TrackSubscribed, (track) => {
-                    console.log('[MusicRoom] TrackSubscribed:', track.kind, track.source);
-                    attachTrack(track);
-                });
-                lkRoom.on(RoomEvent.TrackUnsubscribed, () => {
-                    console.log('[MusicRoom] Track unsubscribed');
-                    if (musicAudioRef.current) { musicAudioRef.current.srcObject = null; }
-                    setMusicStatus('connected');
-                });
-                lkRoom.on(RoomEvent.ParticipantConnected, (p) => {
-                    console.log('[MusicRoom] Participant joined:', p.identity);
-                });
-                lkRoom.on(RoomEvent.Disconnected, (reason) => {
-                    console.warn('[MusicRoom] Disconnected:', reason);
-                });
-                lkRoom.on(RoomEvent.Reconnecting, () => {
-                    console.warn('[MusicRoom] Reconnecting...');
-                });
-                lkRoom.on(RoomEvent.Reconnected, () => {
-                    console.log('[MusicRoom] Reconnected');
-                });
-            } catch (err) {
-                console.warn('[MusicRoom] LiveKit failed, trying PeerJS fallback:', err);
-                fetch('/api/client-log', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(liveKitErrorPayload(err, 'music-room-livekit', roomId, musicIdentityRef.current || null)),
-                }).catch(() => {});
-                if (cancelled) return;
-                if (!room.peerFallback) {
-                    setMusicStatus('LiveKit unavailable');
-                    return;
-                }
-
-                // PeerJS music fallback only works when a browser DJ broadcaster is active.
-                try {
-                    const listener = new PeerAudioListener();
-                    await listener.connect(
-                        roomId,
-                        (stream) => {
-                            if (!musicAudioRef.current) musicAudioRef.current = new Audio();
-                            musicAudioRef.current.srcObject = stream;
-                            musicAudioRef.current.volume = musicGain(localVolumeRef.current);
-                            if (userGestureUnlockedRef.current) {
-                                musicAudioRef.current.play().catch(() => {});
-                            }
-                            setMusicStatus('🎵 streaming (P2P)');
-                        },
-                        () => {
-                            setMusicStatus('P2P disconnected');
-                        },
-                        room.djPeerId,
-                    );
-                    if (cancelled) { listener.disconnect(); return; }
-                    peerListenerRef.current = listener;
-                    setMusicStatus('connected (P2P)');
-                } catch (peerErr) {
-                    console.error('[MusicRoom] PeerJS fallback also failed:', peerErr);
-                    setMusicStatus('error');
-                }
-            }
-        };
-
-        connectMusicRoom();
-        return () => {
-            cancelled = true;
-            musicRoomRef.current?.disconnect();
-            musicRoomRef.current = null;
-            peerListenerRef.current?.disconnect();
-            peerListenerRef.current = null;
-            if (musicAudioRef.current) { musicAudioRef.current.srcObject = null; }
-        };
-    }, [user, isUserLoading, roomId, isActivityRoom, isStreamMode, room.peerFallback, room.djPeerId]);
-
-    // Sync volume changes to the audio element
-    useEffect(() => {
-        if (musicAudioRef.current) {
-            musicAudioRef.current.volume = musicGain(localVolume);
-        }
-    }, [localVolume]);
-
-    useEffect(() => {
-        const unlockMusicAudio = () => {
-            userGestureUnlockedRef.current = true;
-            const audio = musicAudioRef.current;
-            if (!audio || !audio.srcObject) return;
-            audio.volume = musicGain(localVolumeRef.current);
-            void audio.play().catch(() => {});
-        };
-        window.addEventListener('pointerdown', unlockMusicAudio, { passive: true });
-        window.addEventListener('keydown', unlockMusicAudio);
-        window.addEventListener('touchstart', unlockMusicAudio, { passive: true });
-        return () => {
-            window.removeEventListener('pointerdown', unlockMusicAudio);
-            window.removeEventListener('keydown', unlockMusicAudio);
-            window.removeEventListener('touchstart', unlockMusicAudio);
-        };
-    }, []);
+    }, [roomId, startPeerVoiceFallback, userId, voiceFallbackActive, voiceToken]);
 
     // Check if user is banned
     const [isBanned, setIsBanned] = React.useState(false);
     useEffect(() => {
-      if (!user || !roomId) return;
-      dbGet(`rooms/${roomId}/banned`, user.uid).then(data => { if (data) setIsBanned(true); });
-    }, [user, roomId]);
+      if (!userId || !roomId) return;
+      dbGet(`rooms/${roomId}/banned`, userId).then(data => { if (data) setIsBanned(true); });
+    }, [userId, roomId]);
 
     // Poll for move instructions
     useEffect(() => {
-      if (!user || !roomId) return;
+      if (!userId || !roomId) return;
       const checkMove = async () => {
-        const move = await dbGet(`rooms/${roomId}/moves`, user.uid);
+        const move = await dbGet(`rooms/${roomId}/moves`, userId);
         if (move?.targetRoomId) {
-          fetch('/api/db', { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ collection: `rooms/${roomId}/moves`, id: user.uid }) }).catch(() => {});
+          fetch('/api/db', { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ collection: `rooms/${roomId}/moves`, id: userId }) }).catch(() => {});
           toast({ title: 'Moved!', description: `You've been moved to ${move.targetRoomName || 'another room'}.` });
           router.push(`/rooms/${move.targetRoomId}`);
         }
       };
       const interval = setInterval(checkMove, 3000);
       return () => clearInterval(interval);
-    }, [user, roomId, router, toast]);
+    }, [userId, roomId, router, toast]);
 
     useEffect(() => {
-        if (isUserLoading || !user || !roomId) return;
+        if (isUserLoading || !userId || !roomId) return;
         if (voiceTokenRef.current || voiceFallbackActiveRef.current) return;
         let isCancelled = false;
         const setup = async () => {
             const userPresence = {
-                uid: user.uid,
-                displayName: user.displayName,
-                photoURL: user.photoURL || `https://picsum.photos/seed/${user.uid}/100/100`,
+                uid: userId,
+                displayName: userDisplayName,
+                photoURL: userPhotoURL,
                 lastSeen: Date.now(),
             };
-            dbSet(`rooms/${roomId}/users`, user.uid, userPresence, true);
+            dbSet(`rooms/${roomId}/users`, userId, userPresence, true);
             // Update occupant count
             fetch(`/api/db?collection=rooms/${roomId}/users`).then(r => r.json()).then(users => {
                 if (Array.isArray(users)) dbUpdate('rooms', roomId, { occupantCount: users.length });
             }).catch(() => {});
             try {
-                if (!voiceIdentityRef.current) {
-                    const tabId = getOrCreateSessionId('hmo_voice_tab_id');
-                    voiceIdentityRef.current = `${user.uid}-${tabId}`;
-                }
-                const displayName = user.displayName || (user as any).username || 'User';
-                const photoURL = user.photoURL || `https://picsum.photos/seed/${user.uid}/100/100`;
-                const token = await generateLiveKitToken(
-                    roomId,
-                    voiceIdentityRef.current,
-                    displayName,
-                    JSON.stringify({ uid: user.uid, displayName, photoURL }),
-                );
+                const token = await mintVoiceToken();
                 if (!isCancelled) setVoiceToken(token);
             } catch (e) {
                 if (isCancelled) return;
@@ -1001,7 +786,7 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
         };
         setup();
         const heartbeat = setInterval(() => {
-            dbSet(`rooms/${roomId}/users`, user.uid, { lastSeen: Date.now() }, true);
+            dbSet(`rooms/${roomId}/users`, userId, { lastSeen: Date.now() }, true);
             // Re-register peer presence for discovery
             if (peerVoiceRef.current?.active) {
                 fetch('/api/peer-voice/register', {
@@ -1017,7 +802,7 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
                 method: 'DELETE',
                 keepalive: true,
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ collection: `rooms/${roomId}/users`, id: user.uid }),
+                body: JSON.stringify({ collection: `rooms/${roomId}/users`, id: userId }),
             }).then(() => {
                 // Update occupant count on leave
                 fetch(`/api/db?collection=rooms/${roomId}/users`).then(r => r.json()).then(users => {
@@ -1045,7 +830,7 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
             }
             peerVoiceAudioRefs.current.clear();
         };
-    }, [user, isUserLoading, roomId]);
+    }, [isUserLoading, roomId, mintVoiceToken, startPeerVoiceFallback, userDisplayName, userId, userPhotoURL]);
 
     const livekitUrl = process.env.NEXT_PUBLIC_LIVEKIT_URL;
 
@@ -1060,13 +845,13 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
     }
 
     // Room expiry check
-    const expiresAt = room.expiresAt ? new Date(room.expiresAt).getTime() : null;
+    const expiresAt = effectiveRoomExpiry(room.expiresAt, room.createdAt);
     const isExpired = expiresAt ? Date.now() > expiresAt : false;
     if (isExpired) {
       return (
         <div className="flex-1 flex flex-col items-center justify-center text-center p-4">
           <h3 className="text-2xl font-bold font-headline mb-4">Room Expired</h3>
-          <p className="text-muted-foreground mb-8">This room has reached its 12-hour shelf life. Create a new one!</p>
+          <p className="text-muted-foreground mb-8">This room has reached its {ROOM_LIFETIME_HOURS}-hour shelf life. Create a new one!</p>
           <Button onClick={() => router.push('/')}>Go Home</Button>
         </div>
       );
@@ -1077,8 +862,13 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
 
     return (
       voiceReady ? (
-      <LiveKitRoom serverUrl={livekitUrl} token={voiceToken} connect={true} audio={true} video={false}
-          options={{ dynacast: true, adaptiveStream: true }}
+      <LiveKitRoom key={voiceConnectionGeneration} serverUrl={livekitUrl} token={voiceToken} connect={true} audio={false} video={false}
+          options={{ audioCaptureDefaults: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } }}
+          onConnected={() => setVoiceFailureMessage(null)}
+          onDisconnected={(reason) => {
+            if (reason === DisconnectReason.CLIENT_INITIATED || voiceFallbackActiveRef.current) return;
+            setVoiceFailureMessage(voiceDisconnectMessage(reason));
+          }}
           onError={(err) => {
             if (voiceFallbackActiveRef.current || peerVoiceStartingRef.current) return;
             fetch('/api/client-log', {
@@ -1143,22 +933,29 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
                     />
 
                     <main className="flex-1 p-4 md:p-6 overflow-y-auto space-y-6">
-                        {/* Hidden audio element for LiveKit music track attachment */}
-                        <audio ref={musicAudioRef} className="sr-only" />
-
+                        {(voiceFailureMessage || voiceFallbackActive || voiceFallbackFailed) && (
+                          <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-amber-500/50 bg-amber-500/10 p-3">
+                            <div>
+                              <p className="text-sm font-medium">
+                                {voiceFallbackActive ? 'Using P2P voice fallback' : 'LiveKit voice needs attention'}
+                              </p>
+                              <p className="text-xs text-muted-foreground">
+                                {voiceFallbackActive
+                                  ? 'You are still listening. Your microphone starts muted; use the existing Unmute button when you want to talk.'
+                                  : voiceFailureMessage || 'Voice is currently disconnected.'}
+                              </p>
+                            </div>
+                            <Button size="sm" variant="outline" onClick={() => void retryLiveKitVoice()} disabled={voiceRetrying}>
+                              {voiceRetrying ? <LoaderCircle className="mr-2 h-4 w-4 animate-spin" /> : null}
+                              Reconnect LiveKit
+                            </Button>
+                          </div>
+                        )}
                         <UserList
                           roomId={roomId}
-                          musicStatus={musicStatus}
                           localVolume={localVolume}
                           onVolumeChange={setLocalVolume}
                           showDJ={showDJ}
-                          djStatus={room.djStatus}
-                          autoRadio={room.autoRadio}
-                          djIsLive={!!room.djActive}
-                          djStarting={djStarting}
-                          onStartDJ={handleStartDJ}
-                          onStopDJ={handleStopDJ}
-                          onStartAudio={handleStartMusicAudio}
                           onOpenQueue={() => openPopout('watch', { width: 760, height: 700 }, { source: 'musicQueue', sessionScope: isStreamMode ? 'overlay' : 'discord', roomId, canControl: isOwner || isActivityRoom, initialTab: 'music' })}
                           onOpenAddSong={() => openPopout('addSong', { width: 460, height: 560 }, { source: 'addSong', sessionScope: isStreamMode ? 'overlay' : 'discord', roomId, canControl: isOwner })}
                           onOpenWatch={() => openPopout('watch', { width: 760, height: 700 }, { source: 'musicWatch', sessionScope: isStreamMode ? 'overlay' : 'discord', roomId, canControl: isOwner || isActivityRoom, initialTab: 'music' })}
@@ -1167,7 +964,6 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
                           peerConnectedPeerIds={Array.from(peerVoiceStreams.keys())}
                           peerAudioBlocked={peerAudioBlocked}
                           onEnablePeerAudio={unlockPeerAudio}
-                          voiceFallbackFailed={voiceFallbackFailed}
                         />
                         {isActivityRoomId(roomId) ? (
                           <DiscordActivityEmbedCard canPause={isOwner} />
