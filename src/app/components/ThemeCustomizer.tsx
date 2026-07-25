@@ -23,6 +23,7 @@ import {
 import { toast } from '@/hooks/use-toast';
 import { Switch } from '@/components/ui/switch';
 import { useSpmtAppState } from '@/hooks/use-spmt-app-state';
+import type { WorkspaceThemeTokensV1 } from '@spmt/sdk';
 
 type Theme = {
   name: string;
@@ -87,6 +88,9 @@ export function ThemeCustomizer() {
     const [newThemeName, setNewThemeName] = useState('');
     const [isMounted, setIsMounted] = useState(false);
     const [followWorkspaceTheme, setFollowWorkspaceTheme] = useState(true);
+    const [workspaceThemeStatus, setWorkspaceThemeStatus] = useState<'idle' | 'loading' | 'applied' | 'error'>('idle');
+    const [workspaceThemeError, setWorkspaceThemeError] = useState('');
+    const [workspaceThemeRetry, setWorkspaceThemeRetry] = useState(0);
 
     useEffect(() => {
         if (!persisted.loaded) return;
@@ -107,10 +111,35 @@ export function ThemeCustomizer() {
     }, [persisted.loaded]);
 
     useEffect(() => {
-        if(isMounted) {
+        if(isMounted && !followWorkspaceTheme) {
             applyTheme(currentTheme);
         }
-    }, [currentTheme, isMounted]);
+    }, [currentTheme, isMounted, followWorkspaceTheme]);
+
+    useEffect(() => {
+        if (!isMounted || !persisted.loaded || !followWorkspaceTheme) return;
+        let cancelled = false;
+        setWorkspaceThemeStatus('loading');
+        setWorkspaceThemeError('');
+        fetch('/api/spmt/workspace-theme', { cache: 'no-store', credentials: 'include' })
+            .then(async (response) => {
+                const body = await response.json().catch(() => ({}));
+                if (!response.ok || !body?.tokens) throw new Error(body?.error || 'Workspace theme unavailable');
+                return body.tokens as WorkspaceThemeTokensV1;
+            })
+            .then((tokens) => {
+                if (cancelled) return;
+                applyWorkspaceThemeTokens(tokens);
+                setWorkspaceThemeStatus('applied');
+            })
+            .catch((error) => {
+                if (cancelled) return;
+                applyTheme(currentTheme);
+                setWorkspaceThemeStatus('error');
+                setWorkspaceThemeError(error instanceof Error ? error.message : 'Workspace theme unavailable');
+            });
+        return () => { cancelled = true; };
+    }, [currentTheme, followWorkspaceTheme, isMounted, persisted.loaded, workspaceThemeRetry]);
 
     useEffect(() => {
         if (!isMounted || !persisted.loaded) return;
@@ -124,6 +153,7 @@ export function ThemeCustomizer() {
     const applyTheme = (theme: Theme) => {
         if (typeof window === 'undefined') return;
         const root = document.documentElement;
+        root.dataset.workspaceTheme = '';
         if (theme.name.toLowerCase().includes('dark')) {
             root.classList.add('dark');
         } else {
@@ -132,6 +162,31 @@ export function ThemeCustomizer() {
         Object.entries(theme.colors).forEach(([name, value]) => {
             if (value) root.style.setProperty(`--${name}`, value);
         });
+    };
+
+    const hexToHslString = (hex: string) => {
+        const hsl = hexToHsl(hex);
+        return `${hsl.h} ${hsl.s}% ${hsl.l}%`;
+    };
+
+    const applyWorkspaceThemeTokens = (tokens: WorkspaceThemeTokensV1) => {
+        if (typeof window === 'undefined') return;
+        const root = document.documentElement;
+        root.classList.add('dark');
+        root.style.setProperty('--background', hexToHslString(tokens.background));
+        root.style.setProperty('--foreground', hexToHslString(tokens.text));
+        root.style.setProperty('--card', hexToHslString(tokens.surface));
+        root.style.setProperty('--card-foreground', hexToHslString(tokens.text));
+        root.style.setProperty('--popover', hexToHslString(tokens.surface));
+        root.style.setProperty('--popover-foreground', hexToHslString(tokens.text));
+        root.style.setProperty('--primary', hexToHslString(tokens.accent));
+        root.style.setProperty('--accent', hexToHslString(tokens.accent));
+        root.style.setProperty('--ring', hexToHslString(tokens.accent));
+        const radius = ({ sm: '0.25rem', md: '0.5rem', lg: '0.8rem', full: '9999px' } as Record<string, string>)[tokens.radius] || tokens.radius;
+        root.style.setProperty('--radius', radius);
+        root.dataset.workspaceTheme = tokens.themeId;
+        root.dataset.workspaceDensity = tokens.density;
+        root.dataset.workspaceMotion = tokens.motion.enabled ? 'on' : 'off';
     };
     
     const hexToHsl = (hex: string) => {
@@ -219,6 +274,18 @@ export function ThemeCustomizer() {
                     <Label htmlFor="follow-workspace-theme" className="col-span-3">Follow SpaceMountain theme</Label>
                     <Switch id="follow-workspace-theme" checked={followWorkspaceTheme} onCheckedChange={setFollowWorkspaceTheme} />
                 </div>
+                {followWorkspaceTheme && (
+                    <div className="col-span-full rounded-md border border-border/60 bg-muted/30 p-3 text-sm text-muted-foreground">
+                        {workspaceThemeStatus === 'loading' && 'Loading SpaceMountain workspace theme...'}
+                        {workspaceThemeStatus === 'applied' && 'Using your SpaceMountain workspace theme.'}
+                        {workspaceThemeStatus === 'error' && (
+                            <div className="flex items-center justify-between gap-3">
+                                <span>Workspace theme unavailable: {workspaceThemeError}</span>
+                                <Button type="button" variant="outline" size="sm" onClick={() => setWorkspaceThemeRetry((value) => value + 1)}>Retry</Button>
+                            </div>
+                        )}
+                    </div>
+                )}
                 <ColorInput label="Background" colorName="background" />
                 <ColorInput label="Primary" colorName="primary" />
                 <ColorInput label="Accent" colorName="accent" />
