@@ -90,7 +90,7 @@ async function html(request: Request) {
     body.controls-hidden .room-tabs { transform: translateY(-8px); }
     body.controls-hidden .toolbar, body.controls-hidden .meta { transform: translateY(8px); }
     body.controls-hidden .video-wrap { cursor: none; }
-    .room-tabs { position: fixed; left: 10px; top: 10px; z-index: 11; display: flex; gap: 6px; padding: 6px; border: 1px solid rgba(148,163,184,.35); border-radius: 8px; background: rgba(2,6,23,.76); backdrop-filter: blur(8px); }
+    .room-tabs { position: fixed; left: 10px; top: 10px; z-index: 11; display: flex; flex-wrap: wrap; gap: 6px; max-width: calc(100vw - 20px); padding: 6px; border: 1px solid rgba(148,163,184,.35); border-radius: 8px; background: rgba(2,6,23,.76); backdrop-filter: blur(8px); }
     .room-tab { min-height: 34px; border-color: transparent; background: transparent; padding: 6px 10px; }
     .room-tab.active { border-color: rgba(52,211,153,.85); background: rgba(16,185,129,.18); color: #bbf7d0; }
     .toolbar { position: fixed; left: 50%; bottom: 10px; z-index: 11; display: flex; width: min(980px, calc(100vw - 20px)); align-items: center; gap: 6px; overflow-x: auto; padding: 8px; border: 1px solid rgba(148,163,184,.35); border-radius: 8px; background: rgba(2,6,23,.82); backdrop-filter: blur(8px); transform: translateX(-50%); }
@@ -124,7 +124,7 @@ async function html(request: Request) {
     body.focus-mode .player { height: 100vh; }
     body.focus-mode .room-tabs, body.focus-mode .meta { opacity: .18; transition: opacity .15s ease; }
     body.focus-mode .room-tabs:hover, body.focus-mode .meta:hover { opacity: 1; }
-    .utility-control { display: none !important; }
+    .utility-control { display: inline-grid; place-items: center; }
     @media (max-width: 720px) {
       .toolbar { gap: 4px; }
       .volume { min-width: 112px; }
@@ -156,6 +156,9 @@ async function html(request: Request) {
       <nav class="room-tabs activity-chrome" aria-label="Watch rooms">
         <button class="room-tab" data-session-kind="movie" data-session-switch="${GLOBAL_WATCH_SESSION_ID}" type="button">Movies</button>
         <button class="room-tab" data-session-kind="music" data-session-switch="${MUSIC_WATCH_SESSION_ID}" type="button">Music</button>
+        <button class="room-tab panel-btn" data-panel="request" type="button">Request</button>
+        <button class="room-tab panel-btn" data-panel="queue" type="button">Queue</button>
+        <button class="room-tab panel-btn" data-panel="events" type="button">Activity</button>
       </nav>
       <div class="toolbar activity-chrome" aria-label="Shared media controls">
         <button class="icon-btn" id="play-pause" data-action="play-pause" title="Play" aria-label="Play">▶</button>
@@ -172,7 +175,7 @@ async function html(request: Request) {
           <input id="volume" type="range" min="0" max="100" value="85" aria-label="Video volume" />
           <span id="volume-label">85%</span>
         </div>
-        <button class="utility-control" id="tts-toggle" type="button" title="Play TTS over media on this device">TTS Off</button>
+        <button class="utility-control panel-btn" id="tts-toggle" type="button" title="Play all room TTS on this Discord Activity">TTS Off</button>
         <button class="utility-control" id="download" type="button" disabled title="Download" aria-label="Download">⇩</button>
       </div>
       <div class="meta activity-chrome">
