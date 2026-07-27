@@ -81,6 +81,40 @@ const parseHsl = (hslStr: string) => {
     return { h, s, l };
 };
 
+const workspaceProperties = [
+    '--workspace-glow-intensity',
+    '--workspace-star-density',
+    '--workspace-glass-opacity',
+    '--workspace-blur-strength',
+    '--workspace-nebula-intensity',
+    '--workspace-parallax-depth',
+    '--workspace-border-strength',
+    '--workspace-chat-transparency',
+    '--workspace-animation-speed',
+    '--workspace-dock-slot-count',
+];
+
+const clearWorkspaceSettings = (root: HTMLElement) => {
+    for (const property of workspaceProperties) root.style.removeProperty(property);
+    delete root.dataset.workspaceTheme;
+    delete root.dataset.workspaceDensity;
+    delete root.dataset.workspaceMotion;
+    delete root.dataset.workspaceSidebarCollapsed;
+    delete root.dataset.workspaceSidebarStyle;
+    delete root.dataset.workspaceSidebarPosition;
+    delete root.dataset.workspaceTopbarStyle;
+    delete root.dataset.workspaceTabStyle;
+    delete root.dataset.workspaceTabPosition;
+    delete root.dataset.workspaceShowAvatars;
+    delete root.dataset.workspaceSmoothTransitions;
+    delete root.dataset.workspacePushToTalk;
+    delete root.dataset.workspaceParticles;
+    delete root.dataset.workspaceShootingStars;
+    delete root.dataset.workspaceActiveOverlaySceneId;
+    delete root.dataset.workspaceTtsSubscriptions;
+    delete root.dataset.workspaceDockSlots;
+};
+
 export function ThemeCustomizer() {
     const persisted = useSpmtAppState('appearance', { customThemes: [] as Theme[], activeTheme: 'Dark', followWorkspaceTheme: true });
     const [themes, setThemes] = useState<Theme[]>([]);
@@ -153,7 +187,7 @@ export function ThemeCustomizer() {
     const applyTheme = (theme: Theme) => {
         if (typeof window === 'undefined') return;
         const root = document.documentElement;
-        root.dataset.workspaceTheme = '';
+        clearWorkspaceSettings(root);
         if (theme.name.toLowerCase().includes('dark')) {
             root.classList.add('dark');
         } else {
@@ -184,9 +218,36 @@ export function ThemeCustomizer() {
         root.style.setProperty('--ring', hexToHslString(tokens.accent));
         const radius = ({ sm: '0.25rem', md: '0.5rem', lg: '0.8rem', full: '9999px' } as Record<string, string>)[tokens.radius] || tokens.radius;
         root.style.setProperty('--radius', radius);
+        const appearance = tokens.appearance;
+        if (appearance) {
+            root.style.setProperty('--workspace-glow-intensity', String(appearance.glowIntensity / 100));
+            root.style.setProperty('--workspace-star-density', String(appearance.starDensity / 100));
+            root.style.setProperty('--workspace-glass-opacity', String(appearance.glassOpacity / 100));
+            root.style.setProperty('--workspace-blur-strength', `${appearance.blurStrength}px`);
+            root.style.setProperty('--workspace-nebula-intensity', String(appearance.nebulaIntensity / 100));
+            root.style.setProperty('--workspace-parallax-depth', String(appearance.parallaxDepth / 100));
+            root.style.setProperty('--workspace-border-strength', String(appearance.borderStrength / 100));
+            root.style.setProperty('--workspace-chat-transparency', String(appearance.chatTransparency / 100));
+            root.style.setProperty('--workspace-animation-speed', String(appearance.animation.speed / 100));
+            root.dataset.workspaceSidebarCollapsed = appearance.sidebarCollapsed ? 'true' : 'false';
+            root.dataset.workspaceSidebarStyle = appearance.sidebarStyle;
+            root.dataset.workspaceSidebarPosition = appearance.sidebarPosition;
+            root.dataset.workspaceTopbarStyle = appearance.topbarStyle;
+            root.dataset.workspaceTabStyle = appearance.tabStyle;
+            root.dataset.workspaceTabPosition = appearance.tabPosition;
+            root.dataset.workspaceShowAvatars = appearance.showAvatars ? 'true' : 'false';
+            root.dataset.workspaceSmoothTransitions = appearance.smoothTransitions ? 'true' : 'false';
+            root.dataset.workspacePushToTalk = appearance.pushToTalk ? 'true' : 'false';
+            root.dataset.workspaceParticles = appearance.animation.particles ? 'true' : 'false';
+            root.dataset.workspaceShootingStars = appearance.animation.shootingStars ? 'true' : 'false';
+        }
+        root.style.setProperty('--workspace-dock-slot-count', String(tokens.dockSlots?.length || 0));
         root.dataset.workspaceTheme = tokens.themeId;
         root.dataset.workspaceDensity = tokens.density;
         root.dataset.workspaceMotion = tokens.motion.enabled ? 'on' : 'off';
+        root.dataset.workspaceActiveOverlaySceneId = tokens.activeOverlaySceneId || '';
+        root.dataset.workspaceTtsSubscriptions = (tokens.ttsSubscriptions || []).join(',');
+        root.dataset.workspaceDockSlots = encodeURIComponent(JSON.stringify(tokens.dockSlots || []));
     };
     
     const hexToHsl = (hex: string) => {
