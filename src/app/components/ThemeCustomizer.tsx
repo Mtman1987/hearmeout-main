@@ -110,7 +110,9 @@ const clearWorkspaceSettings = (root: HTMLElement) => {
     delete root.dataset.workspacePushToTalk;
     delete root.dataset.workspaceParticles;
     delete root.dataset.workspaceShootingStars;
-    delete root.dataset.workspaceActiveOverlaySceneId;
+    delete root.dataset.workspaceOverlayEnabled;
+    delete root.dataset.workspaceOverlayWidgets;
+    delete root.dataset.workspaceOverlayWorkflows;
     delete root.dataset.workspaceTtsSubscriptions;
     delete root.dataset.workspaceDockSlots;
 };
@@ -245,9 +247,16 @@ export function ThemeCustomizer() {
         root.dataset.workspaceTheme = tokens.themeId;
         root.dataset.workspaceDensity = tokens.density;
         root.dataset.workspaceMotion = tokens.motion.enabled ? 'on' : 'off';
-        root.dataset.workspaceActiveOverlaySceneId = tokens.activeOverlaySceneId || '';
         root.dataset.workspaceTtsSubscriptions = (tokens.ttsSubscriptions || []).join(',');
         root.dataset.workspaceDockSlots = encodeURIComponent(JSON.stringify(tokens.dockSlots || []));
+        delete root.dataset.workspaceOverlayEnabled;
+        delete root.dataset.workspaceOverlayWidgets;
+        delete root.dataset.workspaceOverlayWorkflows;
+        if (tokens.overlayWorkspace) {
+            root.dataset.workspaceOverlayEnabled = tokens.overlayWorkspace.enabled ? 'true' : 'false';
+            root.dataset.workspaceOverlayWidgets = encodeURIComponent(JSON.stringify(tokens.overlayWorkspace.widgets || []));
+            root.dataset.workspaceOverlayWorkflows = encodeURIComponent(JSON.stringify(tokens.overlayWorkspace.workflows || []));
+        }
     };
     
     const hexToHsl = (hex: string) => {
