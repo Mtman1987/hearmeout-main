@@ -1,14 +1,14 @@
-import { NextResponse } from 'next/server';
-import { parseJsonRequest } from '@/lib/request-json';
-import { controlWatchSession, getPublicWatchSession } from '@/lib/watch-request-service';
+import {
+  OPTIONS as optionsCanonicalControl,
+  POST as postCanonicalControl,
+} from '@/app/api/watch/sessions/[sessionId]/control/route';
+import { recordLegacyRouteUse } from '@/lib/route-telemetry';
 
-export async function POST(request: Request, context: { params: Promise<{ sessionId: string }> }) {
-  try {
-    const { sessionId } = await context.params;
-    const body = await parseJsonRequest<any>(request);
-    const session = await controlWatchSession(sessionId, String(body.action || '').toLowerCase(), Number(body.position || 0));
-    return NextResponse.json(getPublicWatchSession(session));
-  } catch (error: any) {
-    return NextResponse.json({ error: error.message || 'Unsupported action' }, { status: 400 });
-  }
+type RouteContext = { params: Promise<{ sessionId: string }> };
+
+export function POST(request: Request, context: RouteContext) {
+  recordLegacyRouteUse('/activity-control/[sessionId]', request);
+  return postCanonicalControl(request, context);
 }
+
+export const OPTIONS = optionsCanonicalControl;

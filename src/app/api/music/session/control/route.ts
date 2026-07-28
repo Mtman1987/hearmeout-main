@@ -1,14 +1,10 @@
-import { NextRequest, NextResponse } from 'next/server';
-import { controlGlobalMusicSession } from '@/lib/music-session-service';
+import { POST as postCanonicalControl } from '@/app/api/watch/sessions/[sessionId]/control/route';
+import { recordLegacyRouteUse } from '@/lib/route-telemetry';
+import { getMusicWatchSessionId } from '@/lib/watch-session';
 
-export async function POST(request: NextRequest) {
-  const body = await request.json();
-  try {
-    return NextResponse.json(await controlGlobalMusicSession(
-      String(body.action || '').toLowerCase(),
-      Number(body.position || 0),
-    ));
-  } catch (error: any) {
-    return NextResponse.json({ error: error.message || 'Unsupported action' }, { status: 400 });
-  }
+export function POST(request: Request) {
+  recordLegacyRouteUse('/api/music/session/control', request);
+  return postCanonicalControl(request, {
+    params: Promise.resolve({ sessionId: getMusicWatchSessionId() }),
+  });
 }

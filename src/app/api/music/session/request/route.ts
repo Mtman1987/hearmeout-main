@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getPublicWatchSession, requestWatchMusicItem } from '@/lib/watch-request-service';
 import { getMusicWatchSessionId } from '@/lib/watch-session';
+import { recordLegacyRouteUse } from '@/lib/route-telemetry';
 
 function getRequestBaseUrl(request: Request) {
   const url = new URL(request.url);
@@ -12,6 +13,7 @@ function getRequestBaseUrl(request: Request) {
 }
 
 export async function POST(request: NextRequest) {
+  recordLegacyRouteUse('/api/music/session/request', request);
   const body = await request.json();
   const query = String(body.query || '').trim();
   if (!query) return NextResponse.json({ error: 'Missing query' }, { status: 400 });

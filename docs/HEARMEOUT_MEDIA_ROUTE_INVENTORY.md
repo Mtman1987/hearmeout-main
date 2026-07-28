@@ -16,7 +16,7 @@ This inventory supports the canonical [suite production roadmap](https://github.
 
 - The canonical watch session API is `/api/watch/sessions/[sessionId]/*`.
 - `/watch/sessions/[sessionId]/*` and `/activity/session/[sessionId]/*` mostly re-export the canonical watch API and should stay as temporary aliases.
-- The older root-level Activity API routes (`/activity-state`, `/activity-request`, `/activity-control`) duplicate behavior instead of re-exporting the canonical API and should be deprecated or converted to aliases.
+- The older root-level Activity API routes (`/activity-state`, `/activity-request`, `/activity-control`) are telemetry-emitting compatibility wrappers around the canonical watch-session APIs.
 - The legacy `/api/music/session/request` endpoint was defaulting to the movie session when no `sessionId` was supplied. This pass changes that default to the music watch session.
 - YouTube audio/video proxy routes are not safe as the production shared-media source. They can remain as experimental adapters while the app moves music onto first-party playable media.
 - Current OBS support is mostly media/chat oriented. A voice-only OBS surface does not exist yet.
@@ -85,19 +85,19 @@ All shared media should converge here:
 | `/activity/session/[sessionId]/request` | `src/app/activity/session/[sessionId]/request/route.ts` | alias | Re-exports canonical watch request route. |
 | `/activity/session/[sessionId]/quick-control` | `src/app/activity/session/[sessionId]/quick-control/route.ts` | alias | Re-exports canonical quick-control route. |
 | `/activity/session/[sessionId]/accept` | `src/app/activity/session/[sessionId]/accept/route.ts` | alias | Re-exports canonical accept route. |
-| `/activity-state/[sessionId]` | `src/app/activity-state/[sessionId]/route.ts` | deprecate | Older duplicate state reader; should become alias or be removed after traffic check. |
-| `/activity-request/[sessionId]` | `src/app/activity-request/[sessionId]/route.ts` | deprecate | Older duplicate request route; does not include all canonical request behavior. |
-| `/activity-request/[sessionId]/accept` | `src/app/activity-request/[sessionId]/accept/route.ts` | deprecate | Older duplicate accept route. |
-| `/activity-control/[sessionId]` | `src/app/activity-control/[sessionId]/route.ts` | deprecate | Older duplicate control route with weaker actor context. |
+| `/activity-state/[sessionId]` | `src/app/activity-state/[sessionId]/route.ts` | alias | Calls canonical state behavior and records privacy-safe legacy-route telemetry. |
+| `/activity-request/[sessionId]` | `src/app/activity-request/[sessionId]/route.ts` | alias | Calls canonical request behavior and records privacy-safe legacy-route telemetry. |
+| `/activity-request/[sessionId]/accept` | `src/app/activity-request/[sessionId]/accept/route.ts` | alias | Calls canonical accept behavior and records privacy-safe legacy-route telemetry. |
+| `/activity-control/[sessionId]` | `src/app/activity-control/[sessionId]/route.ts` | alias | Calls canonical control behavior, including actor context, and records privacy-safe legacy-route telemetry. |
 | `/activity-worker/[...path]` | `src/app/activity-worker/[...path]/route.ts` | adapt | Redirects to DJ worker paths. Keep only if Activity still needs worker-origin compatibility. |
 
 ## Music Routes
 
 | Route | File | Class | Notes |
 | --- | --- | --- | --- |
-| `/api/music/session/state` | `src/app/api/music/session/state/route.ts` | deprecate | Reads old `music-session-service` global state. Should converge to `/api/watch/sessions/discord-music-room/state`. |
-| `/api/music/session/request` | `src/app/api/music/session/request/route.ts` | adapt | Legacy music request route. Now defaults to `discord-music-room`; should eventually alias canonical watch request. |
-| `/api/music/session/control` | `src/app/api/music/session/control/route.ts` | deprecate | Controls old global music state. Should converge to canonical watch-session control. |
+| `/api/music/session/state` | `src/app/api/music/session/state/route.ts` | alias | Reads the canonical music watch session and records legacy-route telemetry. |
+| `/api/music/session/request` | `src/app/api/music/session/request/route.ts` | adapt | Uses the canonical music watch request service, defaults to `discord-music-room`, and records legacy-route telemetry. |
+| `/api/music/session/control` | `src/app/api/music/session/control/route.ts` | alias | Controls the canonical music watch session and records legacy-route telemetry. |
 | `/api/music/[videoId]` | `src/app/api/music/[videoId]/route.ts` | deprecate | Old worker proxy for `/music/{videoId}`. Keep only if live callers exist. |
 | `/api/offline-music` | `src/app/api/offline-music/route.ts` | keep | Strong candidate for first-party music source. Supports search and range streaming through worker. |
 | `/api/youtube-audio` | `src/app/api/youtube-audio/route.ts` | adapt | Worker extraction facade. Discovery/experimental only until playable-source validation is enforced. |
@@ -131,9 +131,8 @@ All shared media should converge here:
 
 ## Next Code Moves
 
-1. Convert `/api/music/session/state` and `/api/music/session/control` into aliases for the music watch session.
+1. Observe `[RouteTelemetry]` for legacy Activity, music, and DJ-debug paths for a full production window before considering removal.
 2. Add a normalized shared-media contract under `src/lib/watch/`.
 3. Make music requests validate or resolve first-party playback before enqueue.
 4. Extract shared player playback-decision helpers so watch, Activity, and overlay stop duplicating YouTube/HLS/audio logic.
 5. Add explicit OBS media-only and voice-only pages.
-6. Add deprecation logging for old root Activity and old music routes before removing anything.
