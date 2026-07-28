@@ -13,6 +13,7 @@ const express = require('express');
 const cors = require('cors');
 const { execFile, spawn } = require('child_process');
 const { promisify } = require('util');
+const { timingSafeEqual } = require('crypto');
 const { existsSync, mkdirSync, unlinkSync, statSync, readdirSync, readFileSync, writeFileSync, createReadStream, mkdtempSync, rmSync, openSync, readSync, closeSync } = require('fs');
 let AudioSource, AudioFrame, LocalAudioTrack, Room, RoomEvent, TrackPublishOptions, TrackSource;
 try {
@@ -50,7 +51,13 @@ function redactSensitiveLogText(value) {
 const app = express();
 const PORT = process.env.PORT || 3002;
 const APP_URL = process.env.APP_URL || 'https://hearmeout-main.fly.dev';
-const WORKER_CALLBACK_HEADERS = { 'x-hmo-dj-worker': '1' };
+const LOCAL_DEV_WORKER_SECRET = 'hearmeout-local-worker-development-only';
+const WORKER_SHARED_SECRET =
+  String(process.env.HMO_WORKER_SHARED_SECRET || '').trim() ||
+  (process.env.NODE_ENV !== 'production' ? LOCAL_DEV_WORKER_SECRET : '');
+const WORKER_CALLBACK_HEADERS = WORKER_SHARED_SECRET
+  ? { Authorization: `Bearer ${WORKER_SHARED_SECRET}` }
+  : {};
 const DEFAULT_WINDOWS_CHROME = 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe';
 const CHROMIUM_PATH =
   process.env.PUPPETEER_EXECUTABLE_PATH ||
@@ -189,7 +196,24 @@ function scoreCatalogTrack(track, query) {
 app.use(cors());
 app.use(express.json());
 
+function secretsMatch(actual, expected) {
+  const actualBuffer = Buffer.from(String(actual || ''));
+  const expectedBuffer = Buffer.from(String(expected || ''));
+  return actualBuffer.length === expectedBuffer.length && timingSafeEqual(actualBuffer, expectedBuffer);
+}
+
 const authorizeWorker = (req, res, next) => {
+  if (!WORKER_SHARED_SECRET) {
+    console.error('[DJ Worker Auth] HMO_WORKER_SHARED_SECRET is required in production');
+    return res.status(503).json({ error: 'Worker authentication is not configured' });
+  }
+
+  const authorization = String(req.get('authorization') || '');
+  const suppliedSecret = authorization.startsWith('Bearer ') ? authorization.slice(7) : '';
+  if (!secretsMatch(suppliedSecret, WORKER_SHARED_SECRET)) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+
   next();
 };
 
@@ -2354,7 +2378,7 @@ async function getBrowserDJStatus(roomId) {
 // ── DJ API ──────────────────────────────────────────────────────────────
 const djInstances = new Map();
 
-app.post('/dj', async (req, res) => {
+app.post('/dj', authorizeWorker, async (req, res) => {
   const { action, roomId, audioUrl, trackTitle } = req.body;
   if (!roomId) return res.status(400).json({ success: false, message: 'Missing roomId' });
 
@@ -2394,7 +2418,7 @@ app.post('/dj', async (req, res) => {
   }
 });
 
-app.get('/dj', (req, res) => {
+app.get('/dj', authorizeWorker, (req, res) => {
   const { roomId } = req.query;
   if (roomId) {
     const session = djInstances.get(roomId);
@@ -2428,7 +2452,7 @@ async function resolveDiscordBotToken() {
   return cachedBotToken;
 }
 
-app.post('/voice-bridge', async (req, res) => {
+app.post('/voice-bridge', authorizeWorker, async (req, res) => {
   const { action, roomId, guildId, voiceChannelId } = req.body || {};
   if (!roomId) return res.status(400).json({ success: false, message: 'Missing roomId' });
 
@@ -2465,7 +2489,7 @@ app.post('/voice-bridge', async (req, res) => {
   }
 });
 
-app.get('/voice-bridge', (req, res) => {
+app.get('/voice-bridge', authorizeWorker, (req, res) => {
   const { roomId } = req.query;
   if (roomId) return res.json(getVoiceBridgeStatus(roomId));
   return res.json({ instances: listVoiceBridges() });

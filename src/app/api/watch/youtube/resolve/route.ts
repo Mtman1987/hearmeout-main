@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { getDjWorkerUrl } from '@/lib/dj-worker-config';
 import { isValidVideoId } from '@/lib/validate-video-id';
+import { getDjWorkerRequestHeaders } from '@/lib/dj-worker-auth';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -70,7 +71,9 @@ export async function POST(request: Request) {
       const hlsUrl = new URL(`${workerUrl}/watch/youtube/hls/${videoId}/index.m3u8`);
       hlsUrl.searchParams.set('source', videoUrl);
       hlsUrl.searchParams.set('audioSource', audioUrl);
-      fetch(hlsUrl.toString(), { headers: { 'user-agent': 'HearMeOut/1.0' } }).catch(() => {});
+      fetch(hlsUrl.toString(), {
+        headers: getDjWorkerRequestHeaders({ 'user-agent': 'HearMeOut/1.0' }),
+      }).catch(() => {});
     }
 
     return NextResponse.json({ ok: true, videoId });

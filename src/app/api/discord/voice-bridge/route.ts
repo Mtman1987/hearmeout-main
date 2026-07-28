@@ -5,6 +5,7 @@ import { getDjWorkerUrl } from '@/lib/dj-worker-config';
 import { ensureDiscordActivityRoom } from '@/lib/activity-room';
 import { canManageRoom } from '@/lib/room-access';
 import { isActivityRoomId } from '@/lib/watch-session';
+import { getDjWorkerRequestHeaders } from '@/lib/dj-worker-auth';
 
 // Room-scoped Discord <-> HearMeOut voice bridge control.
 //
@@ -42,7 +43,7 @@ async function callWorker(path: string, init?: RequestInit) {
   try {
     const res = await fetch(`${url}${path}`, {
       ...init,
-      headers: { 'Content-Type': 'application/json', 'x-hmo-dj-worker': '1', ...(init?.headers || {}) },
+      headers: getDjWorkerRequestHeaders({ 'Content-Type': 'application/json', ...(init?.headers || {}) }),
     });
     const body = await res.json().catch(() => ({}));
     return { ok: res.ok, status: res.status, body };

@@ -23,7 +23,7 @@ Legend: **P0** = must fix before/at production · **P1** = fix soon after ·
 
 ## P0 — Security & data-integrity blockers
 
-### 1. Internal worker endpoints trust a spoofable static header
+### 1. Internal worker endpoints trust a spoofable static header ✅ DONE
 - **Why it matters:** The app authorizes privileged internal calls purely on the
   header `x-hmo-dj-worker: '1'` (`src/lib/dj-worker-auth.ts`). Next.js API routes
   are **publicly reachable**, so anyone who sends that header can:
@@ -35,23 +35,21 @@ Legend: **P0** = must fix before/at production · **P1** = fix soon after ·
 - **Where:** `src/lib/dj-worker-auth.ts`, `src/app/api/livekit-token/route.ts`,
   `src/app/api/db/route.ts`, `src/app/api/discord/bot-token/route.ts`,
   `worker/src/server.js` (`WORKER_CALLBACK_HEADERS`).
-- **Fix:** Replace the static header with a **shared secret** set on both apps
-  (e.g. `WORKER_SHARED_SECRET`), compared with `crypto.timingSafeEqual`. Have the
-  worker send `Authorization: Bearer <secret>`; have `isDjWorkerRequest` verify it.
-  Bonus: restrict these routes to Fly private networking (call the app via
-  `http://hearmeout-main.internal:3001`) and reject public-origin requests.
+- **Status:** Replaced with `HMO_WORKER_SHARED_SECRET`, an
+  `Authorization: Bearer` contract, and timing-safe comparisons in both
+  directions. Production fails closed when the secret is absent.
 
-### 2. Worker HTTP endpoints are unauthenticated and public
+### 2. Worker HTTP endpoints are unauthenticated and public ✅ DONE
 - **Why it matters:** `authorizeWorker` in `worker/src/server.js` is a no-op, and
   the worker is exposed on a public Fly domain (`worker/fly.toml [http_service]`).
   Anyone can `POST /dj` or `POST /voice-bridge` with an arbitrary `roomId` to
   start/stop DJ sessions and voice bridges, burning CPU and joining Discord VCs.
 - **Where:** `worker/src/server.js` (`authorizeWorker`, `/dj`, `/voice-bridge`).
-- **Fix:** Implement `authorizeWorker` to require the same shared secret as item 1
-  (from the app, which is the only legitimate caller). Optionally drop the public
-  `http_service` and use Fly private networking only.
+- **Status:** All DJ, voice-bridge, extraction, cache, and media endpoints require
+  the shared secret. `/health` remains public for Fly health checks. The repeatable
+  `npm run verify:worker-auth` test proves public 401 and authenticated 200.
 
-### 3. sql.js "shared DB" model is not safe across processes / instances
+### 3. sql.js "shared DB" model is not safe across processes / instances ⚠️ PARTIAL
 - **Why it matters:** The DB is an in-memory sql.js image loaded once and written
   back to a single file with a 500ms debounce (`src/lib/db.ts`). Consequences:
   - **Cross-app sharing is broken.** The comment says the file is "the same
@@ -66,10 +64,14 @@ Legend: **P0** = must fix before/at production · **P1** = fix soon after ·
   - **Crash-window data loss.** Up to 500ms of writes are lost on crash, and each
     save rewrites the whole file with no fsync/atomic-rename.
 - **Where:** `src/lib/db.ts`, `fly.toml [mounts]`, cross-repo with DSH.
-- **Fix (pick one):** migrate to a real shared store — **Turso/libSQL**,
+- **Status:** Saves now use same-directory temp files, fsync, atomic rename, and a
+  last-known-good backup. Startup runs `PRAGMA integrity_check` and restores the
+  backup after a damaged primary; shutdown signals flush pending writes. The
+  repeatable `npm run verify:db-durability` drill records measured RPO/RTO.
+- **Remaining:** migrate to a real shared store — **Turso/libSQL**,
   **Postgres**, or **LiteFS** (if you truly need SQLite shared across apps). At
-  minimum: make saves atomic (write temp file + rename), and explicitly assert
-  single-instance until migrated. Confirm the HMO↔DSH user-sync path.
+  minimum, retain one app machine until migrated and confirm the HMO↔DSH
+  user-sync path.
 
 ### 4. Sync `db.get()` can run before the async DB init completes
 - **Why it matters:** `db.get/set/...` return early (`null` / no-op) if `_db` is

@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { getDjWorkerUrl } from '@/lib/dj-worker-config';
 import { isValidVideoId } from '@/lib/validate-video-id';
+import { getDjWorkerRequestHeaders } from '@/lib/dj-worker-auth';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -24,7 +25,9 @@ export async function GET(request: Request) {
   if (user) target.searchParams.set('user', user);
 
   try {
-    const response = await fetch(target.toString(), { headers: { 'user-agent': 'HearMeOut/1.0' } });
+    const response = await fetch(target.toString(), {
+      headers: getDjWorkerRequestHeaders({ 'user-agent': 'HearMeOut/1.0' }),
+    });
     if (response.status === 404) return NextResponse.json({ cached: false });
     const data = await response.json().catch(() => null);
     return NextResponse.json({ cached: Boolean(data?.cached), bytes: data?.bytes });
@@ -63,7 +66,7 @@ export async function POST(request: Request) {
 
     const response = await fetch(target.toString(), {
       method: 'POST',
-      headers: { 'Content-Type': 'application/octet-stream', 'user-agent': 'HearMeOut/1.0' },
+      headers: getDjWorkerRequestHeaders({ 'Content-Type': 'application/octet-stream', 'user-agent': 'HearMeOut/1.0' }),
       body,
     });
     const data = await response.json().catch(() => null);

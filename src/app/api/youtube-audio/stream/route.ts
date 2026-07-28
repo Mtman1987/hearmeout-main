@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { isValidVideoId } from '@/lib/validate-video-id';
 import { getDjWorkerUrl } from '@/lib/dj-worker-config';
+import { getDjWorkerRequestHeaders } from '@/lib/dj-worker-auth';
 
 const DJ_WORKER_URL = getDjWorkerUrl();
 const RESPONSE_CHUNK_SIZE = 256 * 1024;
@@ -117,7 +118,7 @@ async function streamExtractedAudio(videoId: string, req: NextRequest, requestId
   if (!DJ_WORKER_URL) return null;
   const extractRes = await fetch(
     `${DJ_WORKER_URL}/extract?videoId=${encodeURIComponent(videoId)}`,
-    { signal: AbortSignal.timeout(45_000) }
+    { headers: getDjWorkerRequestHeaders(), signal: AbortSignal.timeout(45_000) }
   );
   if (!extractRes.ok) {
     console.warn('[AudioStream] worker extract failed', { requestId, videoId, status: extractRes.status });
@@ -171,9 +172,9 @@ export async function GET(req: NextRequest) {
   // Try worker stream first
   if (DJ_WORKER_URL) {
     try {
-      const headers: Record<string, string> = {};
+      const headers = getDjWorkerRequestHeaders();
       const rangeHeader = req.headers.get('range');
-      if (rangeHeader) headers['Range'] = rangeHeader;
+      if (rangeHeader) headers.set('Range', rangeHeader);
 
       const workerRes = await fetch(
         `${DJ_WORKER_URL}/stream?videoId=${encodeURIComponent(videoId)}`,

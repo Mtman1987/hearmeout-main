@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getDjWorkerUrl } from '@/lib/dj-worker-config';
+import { getDjWorkerRequestHeaders } from '@/lib/dj-worker-auth';
 
 async function forwardToWorker(body: Record<string, unknown>): Promise<NextResponse> {
   const url = getDjWorkerUrl();
@@ -10,7 +11,7 @@ async function forwardToWorker(body: Record<string, unknown>): Promise<NextRespo
   try {
     const res = await fetch(`${url}/dj`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: getDjWorkerRequestHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify(body),
     });
     const data = await res.json().catch(() => ({ success: false, message: `Worker returned ${res.status}` }));
@@ -50,7 +51,7 @@ export async function GET(request: NextRequest) {
 
   try {
     const endpoint = roomId ? `/dj?roomId=${encodeURIComponent(roomId)}` : '/dj';
-    const res = await fetch(`${url}${endpoint}`);
+    const res = await fetch(`${url}${endpoint}`, { headers: getDjWorkerRequestHeaders() });
     const data = await res.json();
     return NextResponse.json(data);
   } catch {

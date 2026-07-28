@@ -3,6 +3,7 @@ import { Readable } from 'node:stream';
 import { getDjWorkerUrl } from '@/lib/dj-worker-config';
 import { ensureXtreamHls, getXtreamHlsFile, waitForXtreamHlsIndex } from '@/lib/watch/xtream-hls';
 import { getResolvedXtreamStreamUrl, type XtreamKind } from '@/lib/watch/xtream-provider';
+import { getDjWorkerRequestHeaders } from '@/lib/dj-worker-auth';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -43,10 +44,10 @@ export async function GET(request: Request, context: { params: Promise<{ streamI
         remoteUrl.searchParams.set('source', upstreamUrl.toString());
       }
 
-      const workerHeaders: Record<string, string> = {
+      const workerHeaders = getDjWorkerRequestHeaders({
         'user-agent': 'HearMeOut/1.0',
-      };
-      if (pinnedMachine) workerHeaders['fly-force-instance-id'] = pinnedMachine;
+      });
+      if (pinnedMachine) workerHeaders.set('fly-force-instance-id', pinnedMachine);
 
       const MAX_WAIT = 55_000;
       const POLL_INTERVAL = 2500;

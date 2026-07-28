@@ -1,4 +1,5 @@
 import { getDjWorkerUrl } from './dj-worker-config';
+import { getDjWorkerRequestHeaders } from './dj-worker-auth';
 
 export type OfflineMusicTrack = {
   id: string;
@@ -26,6 +27,7 @@ export async function findOfflineMusicTrack(query: string): Promise<OfflineMusic
   try {
     const response = await fetch(`${workerUrl}/offline-music?query=${encodeURIComponent(needle)}&limit=1`, {
       cache: 'no-store',
+      headers: getDjWorkerRequestHeaders(),
       signal: AbortSignal.timeout(5000),
     });
     const payload = await response.json().catch(() => null);
@@ -54,6 +56,7 @@ export async function findSavedMusicTrack(query: string): Promise<SavedMusicTrac
   try {
     const response = await fetch(`${workerUrl}/offline-music/catalog?query=${encodeURIComponent(needle)}&limit=1`, {
       cache: 'no-store',
+      headers: getDjWorkerRequestHeaders(),
       signal: AbortSignal.timeout(5000),
     });
     const payload = await response.json().catch(() => null);
@@ -81,7 +84,7 @@ export async function saveSearchedMusicTrack(track: SavedMusicTrack, query?: str
   try {
     await fetch(`${workerUrl}/offline-music/catalog`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: getDjWorkerRequestHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify({ track, query }),
       cache: 'no-store',
       signal: AbortSignal.timeout(5000),

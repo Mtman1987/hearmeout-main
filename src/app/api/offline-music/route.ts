@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getDjWorkerUrl } from '@/lib/dj-worker-config';
+import { getDjWorkerRequestHeaders } from '@/lib/dj-worker-auth';
 
 const DJ_WORKER_URL = getDjWorkerUrl();
 
@@ -18,9 +19,9 @@ export async function GET(request: NextRequest) {
   if (id) {
     const upstreamUrl = workerUrl(`/offline-music/stream?id=${encodeURIComponent(id)}`);
     if (!upstreamUrl) return new NextResponse('DJ worker not configured', { status: 503 });
-    const headers: Record<string, string> = {};
+    const headers = getDjWorkerRequestHeaders();
     const range = request.headers.get('range');
-    if (range) headers.Range = range;
+    if (range) headers.set('Range', range);
 
     const upstream = await fetch(upstreamUrl, {
       headers,
@@ -46,7 +47,11 @@ export async function GET(request: NextRequest) {
   const limit = url.searchParams.get('limit') || '10';
   const upstreamUrl = workerUrl(`/offline-music?query=${encodeURIComponent(query)}&limit=${encodeURIComponent(limit)}`);
   if (!upstreamUrl) return NextResponse.json({ error: 'DJ worker not configured' }, { status: 503 });
-  const upstream = await fetch(upstreamUrl, { cache: 'no-store', signal: AbortSignal.timeout(10000) });
+  const upstream = await fetch(upstreamUrl, {
+    headers: getDjWorkerRequestHeaders(),
+    cache: 'no-store',
+    signal: AbortSignal.timeout(10000),
+  });
   const payload = await upstream.json().catch(() => ({ items: [] }));
   return NextResponse.json(payload, { status: upstream.status });
 }

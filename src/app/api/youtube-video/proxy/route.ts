@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getDjWorkerUrl } from '@/lib/dj-worker-config';
 import { isValidVideoId } from '@/lib/validate-video-id';
+import { getDjWorkerRequestHeaders } from '@/lib/dj-worker-auth';
 
 type ExtractedMedia = {
   url: string;
@@ -110,7 +111,10 @@ async function extract(videoId: string, media: 'audio' | 'video', forceRefresh =
   let data: any = null;
   try {
     const refreshQuery = forceRefresh ? '&refresh=1' : '';
-    const res = await fetch(`${workerUrl}/extract?videoId=${encodeURIComponent(videoId)}&mode=${media}${refreshQuery}`, { cache: 'no-store' });
+    const res = await fetch(`${workerUrl}/extract?videoId=${encodeURIComponent(videoId)}&mode=${media}${refreshQuery}`, {
+      cache: 'no-store',
+      headers: getDjWorkerRequestHeaders(),
+    });
     data = await res.json().catch(() => null);
     if (!res.ok || !data?.url || !isAllowedYoutubeMediaUrl(data.url)) return null;
   } catch (error: any) {

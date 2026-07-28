@@ -3,10 +3,21 @@
 // API is compatible with the rest of the app
 
 import initSqlJs, { Database as SqlJsDatabase } from 'sql.js';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
+import {
+  closeSync,
+  existsSync,
+  fsyncSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  renameSync,
+  unlinkSync,
+  writeFileSync,
+} from 'fs';
 import { dirname } from 'path';
 
 const DB_FILE = process.env.DB_FILE || './data/app.db';
+const DB_BACKUP_FILE = `${DB_FILE}.bak`;
 
 const dbDir = dirname(DB_FILE);
 if (!existsSync(dbDir)) {
@@ -17,6 +28,17 @@ if (!existsSync(dbDir)) {
 let _db: SqlJsDatabase | null = null;
 let _initPromise: Promise<SqlJsDatabase> | null = null;
 
+function assertDatabaseIntegrity(database: SqlJsDatabase) {
+  const result = database.prepare('PRAGMA integrity_check;');
+  try {
+    if (!result.step() || Object.values(result.getAsObject())[0] !== 'ok') {
+      throw new Error('SQLite integrity check failed');
+    }
+  } finally {
+    result.free();
+  }
+}
+
 async function ensureDb(): Promise<SqlJsDatabase> {
   if (_db) return _db;
   if (_initPromise) return _initPromise;
@@ -25,8 +47,16 @@ async function ensureDb(): Promise<SqlJsDatabase> {
     const SQL = await initSqlJs();
 
     if (existsSync(DB_FILE)) {
-      const fileBuffer = readFileSync(DB_FILE);
-      _db = new SQL.Database(fileBuffer);
+      try {
+        _db = new SQL.Database(readFileSync(DB_FILE));
+        assertDatabaseIntegrity(_db);
+      } catch (primaryError) {
+        if (!existsSync(DB_BACKUP_FILE)) throw primaryError;
+        console.error('[DB] Primary database could not be opened; restoring the last atomic backup:', primaryError);
+        _db = new SQL.Database(readFileSync(DB_BACKUP_FILE));
+        assertDatabaseIntegrity(_db);
+        writeAtomic(DB_FILE, readFileSync(DB_BACKUP_FILE));
+      }
     } else {
       _db = new SQL.Database();
     }
@@ -51,17 +81,73 @@ async function ensureDb(): Promise<SqlJsDatabase> {
 // Auto-init
 ensureDb().catch(err => console.error('[DB] Init failed:', err));
 
+let _dirty = false;
+
+function writeAtomic(targetFile: string, buffer: Buffer) {
+  const temporaryFile = `${targetFile}.${process.pid}.${Date.now()}.tmp`;
+  let descriptor: number | null = null;
+
+  try {
+    descriptor = openSync(temporaryFile, 'wx', 0o600);
+    writeFileSync(descriptor, buffer);
+    fsyncSync(descriptor);
+    closeSync(descriptor);
+    descriptor = null;
+
+    renameSync(temporaryFile, targetFile);
+  } catch (error) {
+    if (descriptor !== null) closeSync(descriptor);
+    if (existsSync(temporaryFile)) unlinkSync(temporaryFile);
+    console.error('[DB] Atomic persistence failed:', error);
+    throw error;
+  }
+}
+
 function save() {
   if (!_db) return;
-  const data = _db.export();
-  const buffer = Buffer.from(data);
-  writeFileSync(DB_FILE, buffer);
+  if (!_dirty && existsSync(DB_FILE)) return;
+  const buffer = Buffer.from(_db.export());
+
+  if (existsSync(DB_FILE)) writeAtomic(DB_BACKUP_FILE, readFileSync(DB_FILE));
+  writeAtomic(DB_FILE, buffer);
+  _dirty = false;
 }
 
 let _saveTimer: ReturnType<typeof setTimeout> | null = null;
 function debouncedSave() {
+  _dirty = true;
   if (_saveTimer) clearTimeout(_saveTimer);
-  _saveTimer = setTimeout(() => save(), 500);
+  _saveTimer = setTimeout(() => {
+    _saveTimer = null;
+    save();
+  }, 500);
+  _saveTimer.unref?.();
+}
+
+function flushDb() {
+  if (_saveTimer) {
+    clearTimeout(_saveTimer);
+    _saveTimer = null;
+  }
+  save();
+}
+
+declare global {
+  var __hmoDbShutdownHooksInstalled: boolean | undefined;
+}
+
+if (!globalThis.__hmoDbShutdownHooksInstalled) {
+  globalThis.__hmoDbShutdownHooksInstalled = true;
+  process.once('beforeExit', flushDb);
+  for (const signal of ['SIGINT', 'SIGTERM'] as const) {
+    process.once(signal, () => {
+      try {
+        flushDb();
+      } finally {
+        process.exit(0);
+      }
+    });
+  }
 }
 
 function getNestedField(obj: any, field: string): any {
@@ -279,5 +365,5 @@ export const db = {
 };
 
 // Export for direct access
-export { ensureDb, save };
+export { ensureDb, save, flushDb };
 

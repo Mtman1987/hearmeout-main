@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { getDjWorkerUrl } from '@/lib/dj-worker-config';
 import { isValidVideoId } from '@/lib/validate-video-id';
 import { getResolvedYoutubeUrls } from '@/app/api/watch/youtube/resolve/route';
+import { getDjWorkerRequestHeaders } from '@/lib/dj-worker-auth';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -54,12 +55,12 @@ export async function GET(request: Request, context: { params: Promise<{ videoId
       }
     }
 
-    const workerHeaders: Record<string, string> = {
+    const workerHeaders = getDjWorkerRequestHeaders({
       'user-agent': 'HearMeOut/1.0',
-    };
+    });
     const range = request.headers.get('range');
-    if (range) workerHeaders.range = range;
-    if (pinnedMachine) workerHeaders['fly-force-instance-id'] = pinnedMachine;
+    if (range) workerHeaders.set('range', range);
+    if (pinnedMachine) workerHeaders.set('fly-force-instance-id', pinnedMachine);
 
     const MAX_WAIT = 55_000;
     const POLL_INTERVAL = 2500;
