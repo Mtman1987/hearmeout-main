@@ -81,6 +81,29 @@
   body {
     @apply bg-background text-foreground;
   }
+
+  :root[data-workspace-theme] body {
+    background-image:
+      radial-gradient(circle at 14% 12%, hsl(var(--primary) / calc(0.2 * var(--workspace-glow-intensity, 1))), transparent 28%),
+      radial-gradient(circle at 86% 18%, hsl(var(--accent) / calc(0.16 * var(--workspace-nebula-intensity, 1))), transparent 24%);
+    background-attachment: fixed;
+  }
+
+  :root[data-workspace-topbar-style='glass'] header {
+    background: hsl(var(--card) / var(--workspace-glass-opacity, 0.65));
+    backdrop-filter: blur(var(--workspace-blur-strength, 22px));
+  }
+
+  :root[data-workspace-theme] :is(.rounded-md, .rounded-lg, .rounded-xl, .rounded-2xl) {
+    border-radius: var(--radius);
+  }
+
+  :root[data-workspace-motion='off'] *,
+  :root[data-workspace-smooth-transitions='false'] * {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }
 
 /* Custom slim scrollbars */
