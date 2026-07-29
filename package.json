@@ -13,6 +13,7 @@
     "start": "next start",
     "lint": "eslint --config eslint.config.cjs src --ext .js,.jsx,.ts,.tsx",
     "typecheck": "tsc --noEmit",
+    "test:workspace-theme": "tsx --test tests/workspace-theme.test.ts",
     "verify:worker-auth": "node scripts/verify-worker-auth.js",
     "verify:db-durability": "tsx scripts/verify-db-durability.ts"
   },
