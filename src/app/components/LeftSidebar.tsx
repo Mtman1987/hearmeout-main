@@ -149,7 +149,7 @@ export default function LeftSidebar({ roomId }: { roomId?: string }) {
   }, []);
 
   return (
-    <Sidebar>
+    <Sidebar collapsible="icon" data-workspace-sidebar>
       <SidebarHeader>
         <Logo />
       </SidebarHeader>

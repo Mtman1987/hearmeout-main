@@ -114,7 +114,7 @@ export default function ChatBox({ compact = false, onOpenSpaceChat, onOpenTwitch
   };
 
   return (
-    <Card className="flex flex-col h-full w-full border-0 shadow-none rounded-none bg-transparent">
+    <Card className="flex flex-col h-full w-full border-0 shadow-none rounded-none bg-transparent" data-workspace-chat-surface>
       <CardHeader className="px-4 py-3">
         <div className="flex items-center justify-between gap-3">
           <CardTitle className="font-headline text-base flex items-center gap-2">Space Mountain Chat</CardTitle>

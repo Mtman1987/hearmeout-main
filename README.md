@@ -247,3 +247,10 @@ Bot syncs channels from Firestore every 30 seconds.
 ## License
 
 MIT
+## Shared SpaceMountain appearance
+
+HearMeOut can follow the signed-in account's shared appearance for its
+workspace shell, navigation, top bar, tabs, avatars, Space Mountain chat
+surface, and motion. Custom HearMeOut themes remain account-backed app state and
+become active when follow mode is off. Voice, volume, push-to-talk hardware,
+room playback, and OBS behavior remain app/device concerns.

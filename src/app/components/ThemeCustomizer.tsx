@@ -91,6 +91,7 @@ const workspaceProperties = [
     '--workspace-border-strength',
     '--workspace-chat-transparency',
     '--workspace-animation-speed',
+    '--workspace-shooting-star-duration',
     '--workspace-dock-slot-count',
 ];
 
@@ -231,6 +232,7 @@ export function ThemeCustomizer() {
             root.style.setProperty('--workspace-border-strength', String(appearance.borderStrength / 100));
             root.style.setProperty('--workspace-chat-transparency', String(appearance.chatTransparency / 100));
             root.style.setProperty('--workspace-animation-speed', String(appearance.animation.speed / 100));
+            root.style.setProperty('--workspace-shooting-star-duration', `${1200 / appearance.animation.speed}s`);
             root.dataset.workspaceSidebarCollapsed = appearance.sidebarCollapsed ? 'true' : 'false';
             root.dataset.workspaceSidebarStyle = appearance.sidebarStyle;
             root.dataset.workspaceSidebarPosition = appearance.sidebarPosition;
