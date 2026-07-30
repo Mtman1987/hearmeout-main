@@ -7,7 +7,7 @@ import {
   SidebarMenuItem, SidebarMenuButton, SidebarGroup, SidebarGroupLabel,
 } from '@/components/ui/sidebar';
 import { Button } from '@/components/ui/button';
-import { Home, Music, LogOut, Settings, User, LogIn, Users, ExternalLink } from 'lucide-react';
+import { Home, Music, LogOut, Settings, User, LogIn, Users, ExternalLink, MessageSquare } from 'lucide-react';
 import { Logo } from '@/app/components/Logo';
 import { Avatar, AvatarImage, AvatarFallback } from '@/components/ui/avatar';
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -158,6 +158,11 @@ export default function LeftSidebar({ roomId }: { roomId?: string }) {
           <SidebarMenuItem>
             <SidebarMenuButton asChild isActive={pathname === '/'}>
               <Link href="/"><Home />Home</Link>
+            </SidebarMenuButton>
+          </SidebarMenuItem>
+          <SidebarMenuItem>
+            <SidebarMenuButton asChild isActive={pathname === '/messages'}>
+              <Link href="/messages"><MessageSquare />Messages</Link>
             </SidebarMenuButton>
           </SidebarMenuItem>
           <SidebarMenuItem>
