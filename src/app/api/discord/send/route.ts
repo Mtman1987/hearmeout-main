@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth';
+import { sendHearMeOutDiscordMessage } from '@/lib/discord-messaging';
 
 export async function POST(req: NextRequest) {
   const session = await getSession();
@@ -12,77 +13,16 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Missing channelId or content' }, { status: 400 });
     }
 
-    const botToken = process.env.DISCORD_BOT_TOKEN;
-    if (!botToken) {
-      return NextResponse.json({ error: 'Bot not configured' }, { status: 500 });
-    }
-
-    // Get or create webhook for channel
-    const webhooksRes = await fetch(`https://discord.com/api/v10/channels/${channelId}/webhooks`, {
-      headers: { 'Authorization': `Bot ${botToken}` },
+    const result = await sendHearMeOutDiscordMessage(channelId, content, {
+      responseType: 'Shared Message',
+      sourceUser: username || session.user?.displayName || session.user?.username || session.user?.email || 'HearMeOut User',
+      sourceMessage: content,
+      sourceUserAvatarUrl: avatarUrl || session.user?.photoURL || '',
     });
-
-    let webhookUrl;
-    if (webhooksRes.ok) {
-      const webhooks = await webhooksRes.json();
-      const existingWebhook = webhooks.find((w: any) => w.name === 'HearMeOut');
-      
-      if (existingWebhook) {
-        webhookUrl = `https://discord.com/api/v10/webhooks/${existingWebhook.id}/${existingWebhook.token}`;
-      } else {
-        // Create webhook
-        const createRes = await fetch(`https://discord.com/api/v10/channels/${channelId}/webhooks`, {
-          method: 'POST',
-          headers: {
-            'Authorization': `Bot ${botToken}`,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({ name: 'HearMeOut' }),
-        });
-        
-        if (createRes.ok) {
-          const webhook = await createRes.json();
-          webhookUrl = `https://discord.com/api/v10/webhooks/${webhook.id}/${webhook.token}`;
-        }
-      }
+    if (!result.ok) {
+      return NextResponse.json({ error: 'Failed to send message', details: result.error }, { status: 502 });
     }
-
-    // Send via webhook with user impersonation
-    if (webhookUrl) {
-      const response = await fetch(webhookUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          content,
-          username: username || 'HearMeOut User',
-          avatar_url: avatarUrl,
-        }),
-      });
-
-      if (!response.ok) {
-        const error = await response.json();
-        return NextResponse.json({ error: 'Failed to send message', details: error }, { status: response.status });
-      }
-
-      return NextResponse.json({ success: true });
-    }
-
-    // Fallback to bot message
-    const response = await fetch(`https://discord.com/api/v10/channels/${channelId}/messages`, {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bot ${botToken}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({ content }),
-    });
-
-    if (!response.ok) {
-      const error = await response.json();
-      return NextResponse.json({ error: 'Failed to send message', details: error }, { status: response.status });
-    }
-
-    return NextResponse.json({ success: true });
+    return NextResponse.json({ success: true, messageId: result.messageId, via: result.via });
   } catch (error) {
     console.error('Error sending Discord message:', error);
     return NextResponse.json({ error: 'Internal error' }, { status: 500 });

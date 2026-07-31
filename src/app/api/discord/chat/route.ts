@@ -1,5 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { replaceDiscordUserMentions } from '@/lib/discord-mentions';
+import {
+  processDueHearMeOutDiscordCleanups,
+  sendHearMeOutDiscordMessage,
+  type HearMeOutDiscordPayload as DiscordMessagePayload,
+} from '@/lib/discord-messaging';
 import { handleMusicCommand } from '@/lib/music-command-service';
 import { GLOBAL_WATCH_SESSION_ID, MUSIC_WATCH_SESSION_ID, normalizeWatchSessionAlias } from '@/lib/watch-session';
 import {
@@ -11,13 +16,6 @@ import {
   watchControlsPromptComponents,
 } from '@/lib/watch/watch-request-service';
 
-type DiscordMessagePayload = {
-  content?: string;
-  embeds?: unknown[];
-  components?: unknown[];
-  allowed_mentions?: unknown;
-};
-
 const processedDiscordMessages = new Map<string, number>();
 const PROCESSED_MESSAGE_TTL_MS = 10 * 60 * 1000;
 
@@ -28,98 +26,6 @@ function getRequestBaseUrl(request: NextRequest) {
   const host = forwardedHost || request.headers.get('host') || request.nextUrl.host;
   return `${proto}://${host}`;
 }
-
-function timeoutSignal(milliseconds: number) {
-  const controller = new AbortController();
-  setTimeout(() => controller.abort(), milliseconds);
-  return controller.signal;
-}
-
-function buildDiscordMessageBody(reply: string | DiscordMessagePayload, username?: string, components?: any[]) {
-  if (typeof reply === 'string') {
-    return { content: reply, username, components };
-  }
-
-  return {
-    content: reply.content || '',
-    embeds: reply.embeds,
-    components: components || reply.components,
-    allowed_mentions: reply.allowed_mentions,
-    username,
-  };
-}
-
-async function sendDiscordMessageDirect(channelId: string, reply: string | DiscordMessagePayload, botToken: string, components?: any[]) {
-  const body = buildDiscordMessageBody(reply, undefined, components);
-  delete body.username;
-  const res = await fetch(`https://discord.com/api/v10/channels/${channelId}/messages`, {
-    method: 'POST',
-    headers: { Authorization: `Bot ${botToken}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-    signal: timeoutSignal(7_000),
-  });
-  if (res.ok) return { ok: true, via: 'bot-message' };
-  return { ok: false, error: `Bot message send failed (${res.status})` };
-}
-
-async function sendDiscordMessage(channelId: string, reply: string | DiscordMessagePayload, username?: string, components?: any[], isDM?: boolean) {
-  const botToken = process.env.DISCORD_BOT_TOKEN;
-  if (!botToken) return { ok: false, error: 'DISCORD_BOT_TOKEN is not configured' };
-
-  const hasComponents = Boolean(components?.length || (typeof reply !== 'string' && reply.components?.length));
-
-  // DMs don't support webhooks — send directly via Bot API
-  if (isDM || hasComponents) {
-    try {
-      return await sendDiscordMessageDirect(channelId, reply, botToken, components);
-    } catch (error: any) {
-      return { ok: false, error: error?.message || 'Discord bot message send failed' };
-    }
-  }
-
-  try {
-    const webhooksRes = await fetch(`https://discord.com/api/v10/channels/${channelId}/webhooks`, {
-      headers: { Authorization: `Bot ${botToken}` },
-      signal: timeoutSignal(7_000),
-    });
-
-    if (webhooksRes.ok) {
-      const webhooks = await webhooksRes.json();
-      let webhook = Array.isArray(webhooks) ? webhooks.find((entry: any) => entry.name === 'HearMeOut') : null;
-
-      if (!webhook) {
-        const createRes = await fetch(`https://discord.com/api/v10/channels/${channelId}/webhooks`, {
-          method: 'POST',
-          headers: { Authorization: `Bot ${botToken}`, 'Content-Type': 'application/json' },
-          body: JSON.stringify({ name: 'HearMeOut' }),
-          signal: timeoutSignal(7_000),
-        });
-        if (createRes.ok) webhook = await createRes.json();
-      }
-
-      if (webhook?.id && webhook?.token) {
-        const sendRes = await fetch(`https://discord.com/api/v10/webhooks/${webhook.id}/${webhook.token}`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(buildDiscordMessageBody(reply, username || 'HearMeOut', components)),
-          signal: timeoutSignal(7_000),
-        });
-        if (sendRes.ok) return { ok: true, via: 'webhook' };
-      }
-    }
-
-    // Fallback to direct Bot API if webhook fails (e.g. permissions issue)
-    return sendDiscordMessageDirect(channelId, reply, botToken, components);
-  } catch (error: any) {
-    // Last-resort fallback to direct message on network/timeout errors
-    try {
-      return await sendDiscordMessageDirect(channelId, reply, botToken, components);
-    } catch {
-      return { ok: false, error: error?.message || 'Discord send failed' };
-    }
-  }
-}
-
 
 function parseJsonText(raw: string) {
   if (!raw.trim()) return {};
@@ -288,6 +194,7 @@ function buildWatchControlsReply(publicBaseUrl: string, sessionId = GLOBAL_WATCH
 
 export async function POST(request: NextRequest) {
   try {
+    processDueHearMeOutDiscordCleanups().catch(() => {});
     let body: any;
     try {
       body = await parseDiscordChatRequest(request);
@@ -304,6 +211,7 @@ export async function POST(request: NextRequest) {
     const guildId = String(data.guildId || data.serverId || 'local').trim();
     const userId = String(data.userId || data.authorId || 'discord').trim();
     const userName = String(data.userName || data.displayName || data.username || 'Discord User').trim();
+    const userAvatar = String(data.userAvatar || data.avatarUrl || data.avatar_url || data.author?.avatarUrl || data.author?.displayAvatarURL || '').trim();
     const isDM = isDirectDiscordMessage(data);
     const activityVoiceChannelId = getActivityVoiceChannelId(data);
     const replies: Array<string | DiscordMessagePayload> = [];
@@ -378,12 +286,16 @@ export async function POST(request: NextRequest) {
     }
 
     const discordSends = handled
-      ? await Promise.all(replies.map((reply) => sendDiscordMessage(
+      ? await Promise.all(replies.map((reply) => sendHearMeOutDiscordMessage(
           channelId,
           reply,
-          'HearMeOut',
-          typeof reply === 'string' ? undefined : reply.components,
-          isDM
+          {
+            sourceUser: userName,
+            sourceMessage: message,
+            sourceUserAvatarUrl: userAvatar,
+            sourceMessageId: messageId,
+            isDirectMessage: isDM,
+          },
         )))
       : [];
 

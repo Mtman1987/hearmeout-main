@@ -1,4 +1,5 @@
 import { replaceDiscordUserMentions } from '@/lib/discord-mentions';
+import { sendHearMeOutDiscordMessage } from '@/lib/discord-messaging';
 
 export interface DiscordMessage {
   id: string;
@@ -144,21 +145,15 @@ export class DiscordChatService {
     if (!this.botToken) throw new Error('Discord bot token not set');
 
     try {
-      const response = await fetch(`${DISCORD_API}/channels/${channelId}/messages`, {
-        method: 'POST',
-        headers: {
-          Authorization: `Bot ${this.botToken}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ content }),
+      const response = await sendHearMeOutDiscordMessage(channelId, content, {
+        responseType: 'Channel Message',
       });
 
-      if (!response.ok) {
-        throw new Error(`Discord API error: ${response.statusText}`);
+      if (!response.ok || !response.messageId) {
+        throw new Error(response.error || 'Discord did not return a message id');
       }
 
-      const message = await response.json();
-      return message.id;
+      return response.messageId;
     } catch (error) {
       console.error('Error sending Discord message:', error);
       throw error;
