@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth';
 import { config } from '@/lib/config';
 import { publishSpmtEvent } from '@/lib/spmt-client';
+import { sendHearMeOutDiscordMessage } from '@/lib/discord-messaging';
 
 // Audit S5: previously this route accepted any roomUrl and DM'd it from the
 // HearMeOut bot to any Discord user, turning the bot into a spam/phishing
@@ -70,16 +71,16 @@ export async function POST(req: NextRequest) {
     const expiresLine = typeof expiresAt === 'string' && expiresAt.length < 200
       ? `\n\n⏰ This link expires at: ${expiresAt}`
       : '';
-    const messageRes = await fetch(`https://discord.com/api/v10/channels/${dmChannel.id}/messages`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bot ${DISCORD_BOT_TOKEN}`,
+    const messageRes = await sendHearMeOutDiscordMessage(
+      dmChannel.id,
+      `🎤 **It's your turn to join the voice chat!**\n\n${roomUrl}${expiresLine}\n\nJoin now and have fun!`,
+      {
+        responseType: 'Voice Invitation',
+        sourceUser: session.user?.displayName || session.user?.name || session.user?.username || session.user?.email || 'HearMeOut',
+        sourceMessage: 'Send voice room invitation',
+        isDirectMessage: true,
       },
-      body: JSON.stringify({
-        content: `🎤 **It's your turn to join the voice chat!**\n\n${roomUrl}${expiresLine}\n\nJoin now and have fun!`,
-      }),
-    });
+    );
 
     if (!messageRes.ok) {
       throw new Error('Failed to send DM');

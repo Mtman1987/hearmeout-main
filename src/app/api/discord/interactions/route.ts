@@ -3,6 +3,10 @@ import { addSongToPlaylist, skipTrack } from '@/lib/bot-actions';
 import { db, ensureDb } from '@/lib/db';
 import { GLOBAL_WATCH_SESSION_ID, normalizeWatchSessionAlias } from '@/lib/watch-session';
 import {
+  buildHearMeOutDiscordPayload,
+  type HearMeOutDiscordPayload,
+} from '@/lib/discord-messaging';
+import {
   buildWatchJoinMessage,
   controlWatchSession,
   getActivityUrl,
@@ -28,37 +32,61 @@ function verifyDiscordRequest(body: string, signature: string, timestamp: string
   } catch { return false; }
 }
 
-async function sendFollowup(clientId: string, token: string, content: string): Promise<void> {
+function interactionContext(body: any, responseType: string) {
+  const user = body?.member?.user || body?.user || {};
+  const avatar = user.id && user.avatar
+    ? `https://cdn.discordapp.com/avatars/${user.id}/${user.avatar}.${String(user.avatar).startsWith('a_') ? 'gif' : 'png'}?size=128`
+    : undefined;
+  return {
+    responseType,
+    sourceUser: user.global_name || user.username || 'Discord User',
+    sourceMessage: body?.data?.name
+      ? `/${body.data.name}`
+      : String(body?.data?.custom_id || 'Discord interaction'),
+    sourceUserAvatarUrl: avatar,
+  };
+}
+
+async function interactionMessage(
+  body: any,
+  raw: string | HearMeOutDiscordPayload,
+  responseType: string,
+) {
+  return buildHearMeOutDiscordPayload(raw, interactionContext(body, responseType));
+}
+
+async function sendFollowup(clientId: string, token: string, content: string, body?: any): Promise<void> {
+  const payload = await interactionMessage(body, content, 'Interaction Update');
   await fetch(`https://discord.com/api/v10/webhooks/${clientId}/${token}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ content }),
+    body: JSON.stringify(payload),
   }).catch(console.error);
 }
 
 async function handlePlayPauseButton(body: any, token: string): Promise<void> {
   const targetRoomId = process.env.TARGET_ROOM_ID;
   const clientId = process.env.NEXT_PUBLIC_DISCORD_CLIENT_ID;
-  if (!targetRoomId || !clientId) { await sendFollowup(clientId!, token, '❌ Bot not configured.'); return; }
+  if (!targetRoomId || !clientId) { await sendFollowup(clientId!, token, '❌ Bot not configured.', body); return; }
 
   try {
     const roomData = db.get('rooms', targetRoomId);
-    if (!roomData) { await sendFollowup(clientId, token, '❌ Room not found.'); return; }
+    if (!roomData) { await sendFollowup(clientId, token, '❌ Room not found.', body); return; }
     const newState = !roomData.isPlaying;
     db.update('rooms', targetRoomId, { isPlaying: newState });
-    await sendFollowup(clientId, token, newState ? '▶️ Playing' : '⏸️ Paused');
-  } catch { await sendFollowup(clientId!, token, '❌ Error updating playback state.'); }
+    await sendFollowup(clientId, token, newState ? '▶️ Playing' : '⏸️ Paused', body);
+  } catch { await sendFollowup(clientId!, token, '❌ Error updating playback state.', body); }
 }
 
 async function handleSkipButton(body: any, token: string): Promise<void> {
   const targetRoomId = process.env.TARGET_ROOM_ID;
   const clientId = process.env.NEXT_PUBLIC_DISCORD_CLIENT_ID;
-  if (!targetRoomId || !clientId) { await sendFollowup(clientId!, token, '❌ Bot not configured.'); return; }
+  if (!targetRoomId || !clientId) { await sendFollowup(clientId!, token, '❌ Bot not configured.', body); return; }
 
   try {
     const result = await skipTrack(targetRoomId);
-    await sendFollowup(clientId, token, result.success ? `✅ ${result.message}` : `❌ ${result.message}`);
-  } catch { await sendFollowup(clientId!, token, '❌ Error skipping track.'); }
+    await sendFollowup(clientId, token, result.success ? `✅ ${result.message}` : `❌ ${result.message}`, body);
+  } catch { await sendFollowup(clientId!, token, '❌ Error skipping track.', body); }
 }
 
 function getRequestBaseUrl(request: NextRequest) {
@@ -199,7 +227,7 @@ export async function POST(req: NextRequest) {
       if (!allowedActions.has(action)) {
         return NextResponse.json({
           type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
-          data: { content: 'Unsupported watch control.', flags: 64 },
+          data: await interactionMessage(body, { content: 'Unsupported watch control.', flags: 64 }, 'Watch Controls'),
         });
       }
 
@@ -210,11 +238,18 @@ export async function POST(req: NextRequest) {
           channelId: channel_id,
           isAdmin: discordMemberCanManageWatch(member),
         });
-        return NextResponse.json({ type: InteractionResponseType.UPDATE_MESSAGE, data: update });
+        return NextResponse.json({
+          type: InteractionResponseType.UPDATE_MESSAGE,
+          data: await interactionMessage(body, update, 'Watch Controls'),
+        });
       } catch (error: any) {
         return NextResponse.json({
           type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
-          data: { content: error?.message || 'Unable to update watch controls.', flags: 64 },
+          data: await interactionMessage(
+            body,
+            { content: error?.message || 'Unable to update watch controls.', flags: 64 },
+            'Watch Controls',
+          ),
         });
       }
     }
@@ -224,14 +259,14 @@ export async function POST(req: NextRequest) {
       const sessionId = normalizeWatchSessionAlias(parts[1], GLOBAL_WATCH_SESSION_ID);
       return NextResponse.json({
         type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
-        data: buildEphemeralWatchControls(req, sessionId),
+        data: await interactionMessage(body, buildEphemeralWatchControls(req, sessionId), 'Watch Controls'),
       });
     }
 
     if (custom_id.startsWith('hmo_watch_lane:')) {
       return NextResponse.json({
         type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
-        data: buildEphemeralLanePicker(),
+        data: await interactionMessage(body, buildEphemeralLanePicker(), 'Watch Lane'),
       });
     }
 
@@ -247,7 +282,11 @@ export async function POST(req: NextRequest) {
       const parts = String(custom_id).split(':');
       return NextResponse.json({
         type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
-        data: buildEphemeralVolumeControls(parts[1] || GLOBAL_WATCH_SESSION_ID),
+        data: await interactionMessage(
+          body,
+          buildEphemeralVolumeControls(parts[1] || GLOBAL_WATCH_SESSION_ID),
+          'Volume Controls',
+        ),
       });
     }
 
@@ -255,7 +294,7 @@ export async function POST(req: NextRequest) {
       const roomId = custom_id.split(':')[1];
       return NextResponse.json({
         type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
-        data: {
+        data: await interactionMessage(body, {
           content: '🎵 **Personal Music Controls**\nThese controls are only visible to you!',
           flags: 64,
           components: [{ type: 1, components: [
@@ -263,7 +302,7 @@ export async function POST(req: NextRequest) {
             { type: 2, style: 3, label: 'Join Queue', emoji: { name: '🎤' }, custom_id: `join_queue:${roomId}` },
             { type: 2, style: 2, label: 'Mute', emoji: { name: '🔇' }, custom_id: `mute_toggle:${roomId}` },
           ]}],
-        },
+        }, 'Music Controls'),
       });
     }
 
@@ -272,7 +311,10 @@ export async function POST(req: NextRequest) {
       const userId = member?.user?.id || body.user?.id;
       const username = member?.user?.global_name || member?.user?.username || body.user?.username || 'Discord User';
       if (!userId) {
-        return NextResponse.json({ type: InteractionResponseType.UPDATE_MESSAGE, data: { content: '❌ Unable to identify your user ID.', components: [] } });
+        return NextResponse.json({
+          type: InteractionResponseType.UPDATE_MESSAGE,
+          data: await interactionMessage(body, { content: '❌ Unable to identify your user ID.', components: [] }, 'Voice Queue'),
+        });
       }
 
       const deferResponse = NextResponse.json({ type: InteractionResponseType.DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE, data: { flags: 64 } });
@@ -283,15 +325,18 @@ export async function POST(req: NextRequest) {
           const queue = db.query(`rooms/${roomId}/voiceQueue`, undefined, { field: 'addedAt', dir: 'asc' });
           const position = queue.findIndex(d => d.id === userId) + 1;
           const clientId = process.env.NEXT_PUBLIC_DISCORD_CLIENT_ID;
-          await sendFollowup(clientId!, token, `✅ You've been added to the voice chat queue!\n**Position:** #${position}\n\nThe streamer will send you an invite link when it's your turn!`);
-        } catch { const clientId = process.env.NEXT_PUBLIC_DISCORD_CLIENT_ID; await sendFollowup(clientId!, token, '❌ Error joining queue.'); }
+          await sendFollowup(clientId!, token, `✅ You've been added to the voice chat queue!\n**Position:** #${position}\n\nThe streamer will send you an invite link when it's your turn!`, body);
+        } catch { const clientId = process.env.NEXT_PUBLIC_DISCORD_CLIENT_ID; await sendFollowup(clientId!, token, '❌ Error joining queue.', body); }
       })();
 
       return deferResponse;
     }
 
     if (custom_id.startsWith('room_close:')) {
-      return NextResponse.json({ type: InteractionResponseType.UPDATE_MESSAGE, data: { content: '❌ Room embed closed.', embeds: [], components: [] } });
+      return NextResponse.json({
+        type: InteractionResponseType.UPDATE_MESSAGE,
+        data: await interactionMessage(body, { content: '❌ Room embed closed.', embeds: [], components: [] }, 'Room Controls'),
+      });
     }
 
     if (custom_id.startsWith('request_song:')) {
@@ -307,7 +352,10 @@ export async function POST(req: NextRequest) {
     }
 
     if (custom_id.startsWith('mute_toggle:')) {
-      return NextResponse.json({ type: InteractionResponseType.UPDATE_MESSAGE, data: { content: '🔇 **Muted**\nThe music is now muted for you.', components: [] } });
+      return NextResponse.json({
+        type: InteractionResponseType.UPDATE_MESSAGE,
+        data: await interactionMessage(body, { content: '🔇 **Muted**\nThe music is now muted for you.', components: [] }, 'Music Controls'),
+      });
     }
 
     if (custom_id === 'request_song_modal_trigger') {
@@ -339,7 +387,7 @@ export async function POST(req: NextRequest) {
       if (!Number.isFinite(volume)) {
         return NextResponse.json({
           type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
-          data: { content: 'Volume must be a number from 0 to 100.', flags: 64 },
+          data: await interactionMessage(body, { content: 'Volume must be a number from 0 to 100.', flags: 64 }, 'Volume Controls'),
         });
       }
       const update = await buildWatchControlUpdate(req, 'volume', sessionId, {
@@ -350,7 +398,11 @@ export async function POST(req: NextRequest) {
       }, volume);
       return NextResponse.json({
         type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
-        data: { content: `Set volume to ${volume}%.`, components: update.components, flags: 64 },
+        data: await interactionMessage(
+          body,
+          { content: `Set volume to ${volume}%.`, components: update.components, flags: 64 },
+          'Volume Controls',
+        ),
       });
     }
 
@@ -366,14 +418,17 @@ export async function POST(req: NextRequest) {
     }
 
     if (!roomId || !clientId) {
-      return NextResponse.json({ type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE, data: { content: '❌ Bot not configured.', flags: 64 } });
+      return NextResponse.json({
+        type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
+        data: await interactionMessage(body, { content: '❌ Bot not configured.', flags: 64 }, 'Song Request'),
+      });
     }
 
     const deferResponse = NextResponse.json({ type: InteractionResponseType.DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE, data: { flags: 64 } });
 
     addSongToPlaylist(songQuery, roomId, `${requester} (Discord)`)
-      .then(result => sendFollowup(clientId, token, result.success ? `✅ ${result.message}` : `❌ ${result.message}`))
-      .catch(() => sendFollowup(clientId, token, '❌ Failed to add song.'));
+      .then(result => sendFollowup(clientId, token, result.success ? `✅ ${result.message}` : `❌ ${result.message}`, body))
+      .catch(() => sendFollowup(clientId, token, '❌ Failed to add song.', body));
 
     return deferResponse;
   }

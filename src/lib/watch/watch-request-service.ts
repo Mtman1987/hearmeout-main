@@ -6,6 +6,11 @@ import { DISCORD_CLIENT_ID } from '@/lib/public-config';
 import { ensureDiscordActivityRoomForSession } from '@/lib/activity-room';
 import { ACTIVITY_ROOM_ID, getGlobalWatchSessionId, getMusicWatchSessionId, getScopedWatchSessionId, normalizeWatchSessionAlias, type WatchMediaKind } from '@/lib/watch-session';
 import { publishSpmtEvent } from '@/lib/spmt-client';
+import {
+  sendHearMeOutDiscordMessage,
+  type HearMeOutDiscordContext,
+  type HearMeOutDiscordPayload as DiscordMessagePayload,
+} from '@/lib/discord-messaging';
 import type { PlaylistItem } from '@/types/playlist';
 import { dirname } from 'path';
 import { copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'fs';
@@ -91,13 +96,6 @@ type SeriesProgress = {
   nextSeasonNumber: number;
   nextEpisodeNumber: number;
   updatedAt: number;
-};
-
-type DiscordMessagePayload = {
-  content?: string;
-  embeds?: unknown[];
-  components?: unknown[];
-  allowed_mentions?: unknown;
 };
 
 type WatchControlActor = {
@@ -323,33 +321,17 @@ function getPublicWatchRequest(request: WatchRequest) {
 }
 
 function sendDiscordReply(channelId: string, content: string, userMessageId?: string): void {
-  const botToken = process.env.DISCORD_BOT_TOKEN;
-  if (!botToken || !channelId) return;
-
-  fetch(`https://discord.com/api/v10/channels/${channelId}/messages`, {
-    method: 'POST',
-    headers: { Authorization: `Bot ${botToken}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      content,
-      message_reference: userMessageId ? { message_id: userMessageId, fail_if_not_exists: false } : undefined,
-    }),
+  if (!channelId) return;
+  sendHearMeOutDiscordMessage(channelId, content, {
+    responseType: 'Watch Request',
+    sourceMessageId: userMessageId,
+    sourceMessage: 'Watch request',
   }).catch((error) => console.error('[WatchRequest] Discord reply failed:', error));
 }
 
-async function sendDiscordPayload(channelId: string, payload: DiscordMessagePayload) {
-  const botToken = process.env.DISCORD_BOT_TOKEN;
-  if (!botToken || !channelId || channelId === 'watch') return { ok: false, skipped: 'missing-discord-channel' };
-
-  const response = await fetch(`https://discord.com/api/v10/channels/${channelId}/messages`, {
-    method: 'POST',
-    headers: { Authorization: `Bot ${botToken}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
-  });
-  if (!response.ok) {
-    const body = await response.text().catch(() => '');
-    return { ok: false, status: response.status, error: body.slice(0, 500) };
-  }
-  return { ok: true, status: response.status };
+async function sendDiscordPayload(channelId: string, payload: DiscordMessagePayload, context: HearMeOutDiscordContext = {}) {
+  if (!channelId || channelId === 'watch') return { ok: false, skipped: 'missing-discord-channel' };
+  return sendHearMeOutDiscordMessage(channelId, payload, context);
 }
 
 function sessionIdFromJoinUrl(joinUrl?: string) {
@@ -822,7 +804,15 @@ export async function announceWatchRequestToDiscord(params: {
     activityVoiceChannelId: params.activityVoiceChannelId,
     fallbackChannelId: channelId,
   });
-  return sendDiscordPayload(channelId, buildWatchJoinMessage(params.request.item.title, position, joinUrl, params.request.item, params.session.id));
+  return sendDiscordPayload(
+    channelId,
+    buildWatchJoinMessage(params.request.item.title, position, joinUrl, params.request.item, params.session.id),
+    {
+      responseType: 'Watch Party Update',
+      sourceUser: params.request.requestedBy.username,
+      sourceMessage: `Requested ${params.request.item.title}`,
+    },
+  );
 }
 
 async function createDiscordActivityInvite(channelId?: string) {
