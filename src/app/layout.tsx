@@ -6,6 +6,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { SessionProvider } from '@/hooks/use-session';
 import { PopoutProvider } from '@/components/PopoutWidgets/PopoutProvider';
 import { PopoutRenderer } from '@/components/PopoutWidgets/PopoutRenderer';
+import { WorkspaceTruthProvider } from '@/components/workspace-truth-provider';
 
 export const metadata: Metadata = {
   title: 'HearMeOut',
@@ -37,10 +38,12 @@ export default function RootLayout({
       <body className="font-body antialiased bg-background min-h-screen">
         <PopoutProvider>
           <SessionProvider>
-            <TooltipProvider delayDuration={200}>
-              {children}
-              <PopoutRenderer />
-            </TooltipProvider>
+            <WorkspaceTruthProvider>
+              <TooltipProvider delayDuration={200}>
+                {children}
+                <PopoutRenderer />
+              </TooltipProvider>
+            </WorkspaceTruthProvider>
           </SessionProvider>
         </PopoutProvider>
         <Toaster />
