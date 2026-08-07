@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { timingSafeEqual } from 'crypto';
 import { db, ensureDb } from '@/lib/db';
 import { setSessionCookie } from '@/lib/auth';
-import { HMO_SPMT_COOKIE, HMO_SPMT_STATE_COOKIE, SPMT_BASE_URL, hmoSpmtCookieOptions } from '@/lib/spmt-session';
+import { HMO_SPMT_COOKIE, HMO_SPMT_REFRESH_COOKIE, HMO_SPMT_STATE_COOKIE, SPMT_BASE_URL, hmoSpmtCookieOptions } from '@/lib/spmt-session';
 import { enrichUserFromDSH } from '@/lib/enrich-user';
 
 function equalState(left: string, right: string) {
@@ -43,7 +43,8 @@ export async function GET(request: NextRequest) {
   }
   await setSessionCookie(uid);
   const response = NextResponse.redirect(new URL('/', request.url));
-  response.cookies.set(HMO_SPMT_COOKIE, payload.access_token, hmoSpmtCookieOptions);
+  response.cookies.set(HMO_SPMT_COOKIE, payload.access_token, { ...hmoSpmtCookieOptions, maxAge: Number(payload.expires_in || 604800) });
+  if (payload.refresh_token) response.cookies.set(HMO_SPMT_REFRESH_COOKIE, payload.refresh_token, { ...hmoSpmtCookieOptions, maxAge: Number(payload.refresh_expires_in || 2592000) });
   response.cookies.set(HMO_SPMT_STATE_COOKIE, '', { ...hmoSpmtCookieOptions, maxAge: 0 });
   return response;
 }
