@@ -5,6 +5,7 @@ const SPMT_BASE_URL = String(process.env.SPMT_BASE_URL || 'https://spmt.live').r
 const SPMT_COOKIE = 'hmo_spmt_session';
 
 const PUBLIC_PREFIXES = [
+  '/login',
   '/api/auth/',
   '/api/health',
   '/api/webhooks/',
@@ -57,8 +58,8 @@ async function resolveIdentity(request: NextRequest): Promise<{ identity: any; r
 
 function withRefresh(response: NextResponse, refreshed: RefreshedHmoSpmtSession | null) {
   if (refreshed) {
-    response.cookies.set(SPMT_COOKIE, refreshed.accessToken, { httpOnly: true, secure: true, sameSite: 'lax', path: '/', maxAge: refreshed.expiresIn });
-    response.cookies.set(HMO_SPMT_REFRESH_COOKIE, refreshed.refreshToken, { httpOnly: true, secure: true, sameSite: 'lax', path: '/', maxAge: refreshed.refreshExpiresIn });
+    response.cookies.set(SPMT_COOKIE, refreshed.accessToken, { httpOnly: true, secure: true, sameSite: 'none', path: '/', maxAge: refreshed.expiresIn });
+    response.cookies.set(HMO_SPMT_REFRESH_COOKIE, refreshed.refreshToken, { httpOnly: true, secure: true, sameSite: 'none', path: '/', maxAge: refreshed.refreshExpiresIn });
   }
   return response;
 }
@@ -72,7 +73,7 @@ export async function middleware(request: NextRequest) {
   const { identity, refreshed } = await resolveIdentity(request);
   if (!identity) {
     if (pathname.startsWith('/api/')) return NextResponse.json({ error: 'SPMT session required' }, { status: 401 });
-    const login = new URL('/api/auth/spmt/login', request.url);
+    const login = new URL('/login', request.url);
     login.searchParams.set('next', `${pathname}${request.nextUrl.search}`);
     return NextResponse.redirect(login);
   }
