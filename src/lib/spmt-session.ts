@@ -6,7 +6,7 @@ export const SPMT_BASE_URL = String(process.env.SPMT_BASE_URL || 'https://spmt.l
 export const hmoSpmtCookieOptions = {
   httpOnly: true,
   secure: process.env.NODE_ENV === 'production',
-  sameSite: 'lax' as const,
+  sameSite: (process.env.NODE_ENV === 'production' ? 'none' : 'lax') as 'none' | 'lax',
   path: '/',
   maxAge: 60 * 60 * 24 * 30,
 };

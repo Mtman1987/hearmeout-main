@@ -55,7 +55,14 @@ function LoginContent() {
     // Legacy OAuth - now handled by auto login
 
   const handleAutoLogin = async () => {
-    window.location.href = '/api/auth/spmt/login';
+    const next = searchParams?.get('next') || '/';
+    const signInUrl = new URL('/api/auth/spmt/login', window.location.origin);
+    signInUrl.searchParams.set('next', next);
+    if (window.top && window.top !== window) {
+      window.top.location.href = signInUrl.toString();
+      return;
+    }
+    window.location.href = signInUrl.toString();
   };
 
   const handleDiscordLink = async () => {
