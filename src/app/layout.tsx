@@ -7,6 +7,7 @@ import { SessionProvider } from '@/hooks/use-session';
 import { PopoutProvider } from '@/components/PopoutWidgets/PopoutProvider';
 import { PopoutRenderer } from '@/components/PopoutWidgets/PopoutRenderer';
 import { WorkspaceTruthProvider } from '@/components/workspace-truth-provider';
+import { SpmtWorkspaceHost } from '@/components/spmt-workspace-host';
 
 export const metadata: Metadata = {
   title: 'HearMeOut',
@@ -42,6 +43,7 @@ export default function RootLayout({
               <TooltipProvider delayDuration={200}>
                 {children}
                 <PopoutRenderer />
+                <SpmtWorkspaceHost />
               </TooltipProvider>
             </WorkspaceTruthProvider>
           </SessionProvider>
