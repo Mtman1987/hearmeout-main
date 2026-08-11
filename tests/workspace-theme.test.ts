@@ -18,7 +18,7 @@ function fixtureRoot() {
 }
 
 const tokens = {
-  themeId: 'nebula',
+  themeId: 'nebula-purple',
   background: '#000000',
   surface: '#112233',
   text: '#ffffff',
@@ -43,7 +43,8 @@ test('applies the full workspace appearance contract', () => {
   const { root, values, classes } = fixtureRoot();
   applyWorkspaceThemeTokens(root, tokens);
   assert.equal(values.get('--background'), '0 0% 0%');
-  assert.equal(values.get('--radius'), '0.8rem');
+  assert.equal(values.get('--radius'), '26px');
+  assert.equal(values.get('--workspace-background-image'), 'url("https://spacemountain.live/assets/theme-nebula-purple-background.webp")');
   assert.equal(values.get('--workspace-shooting-star-duration'), '12s');
   assert.equal(values.get('--workspace-dock-slot-count'), '2');
   assert.equal(root.dataset.workspaceSidebarStyle, 'glass');
@@ -57,7 +58,8 @@ test('clears workspace-only values when returning to a local theme', () => {
   applyWorkspaceThemeTokens(root, tokens);
   clearWorkspaceThemeTokens(root);
   assert.equal(values.has('--workspace-glow-intensity'), false);
-  assert.equal(values.has('--background'), true);
+  assert.equal(values.has('--workspace-background-image'), false);
+  assert.equal(values.has('--background'), false);
   assert.equal(root.dataset.workspaceTheme, undefined);
   assert.equal(root.dataset.workspaceOverlayWidgets, undefined);
 });
