@@ -4,7 +4,7 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import {
   Sidebar, SidebarHeader, SidebarContent, SidebarFooter, SidebarMenu,
-  SidebarMenuItem, SidebarMenuButton, SidebarGroup, SidebarGroupLabel,
+  SidebarMenuItem, SidebarMenuButton, SidebarGroup, SidebarGroupLabel, SidebarRail,
 } from '@/components/ui/sidebar';
 import { Button } from '@/components/ui/button';
 import { Home, Music, LogOut, Settings, User, LogIn, Users, ExternalLink, MessageSquare } from 'lucide-react';
@@ -51,8 +51,8 @@ function DSHLiveUsers() {
   if (!liveUsers.length) return null;
 
   return (
-    <SidebarGroup>
-      <SidebarGroupLabel className="text-red-400"><span className="inline-block h-2 w-2 rounded-full bg-red-500 animate-pulse mr-1" />Live on Twitch</SidebarGroupLabel>
+    <SidebarGroup className="group-data-[collapsible=icon]:hidden">
+      <SidebarGroupLabel className="text-red-400"><span className="mr-1 inline-block h-2 w-2 animate-pulse rounded-full bg-red-500" />Live on Twitch</SidebarGroupLabel>
       <div className="px-2">
         <div className="flex flex-wrap gap-1">
           {liveUsers.slice(0, 12).map(u => (
@@ -68,7 +68,7 @@ function DSHLiveUsers() {
               <TooltipContent side="right"><p>{u.username} • {u.group}</p></TooltipContent>
             </Tooltip>
           ))}
-          {liveUsers.length > 12 && <span className="text-[10px] text-muted-foreground self-center">+{liveUsers.length - 12}</span>}
+          {liveUsers.length > 12 && <span className="self-center text-[10px] text-muted-foreground">+{liveUsers.length - 12}</span>}
         </div>
       </div>
     </SidebarGroup>
@@ -103,12 +103,12 @@ function HMOOnlineUsers() {
   }, {});
 
   return (
-    <SidebarGroup>
-      <SidebarGroupLabel><Users className="h-3 w-3 mr-1" />In Rooms</SidebarGroupLabel>
+    <SidebarGroup className="group-data-[collapsible=icon]:hidden">
+      <SidebarGroupLabel><Users className="mr-1 h-3 w-3" />In Rooms</SidebarGroupLabel>
       <div className="px-2">
         {Object.entries(usersByRoom).map(([roomKey, users]) => (
           <div key={roomKey} className="mb-2">
-            <p className="text-[10px] text-muted-foreground font-medium mb-1 truncate">{users[0]?.roomName || roomKey}</p>
+            <p className="mb-1 truncate text-[10px] font-medium text-muted-foreground">{users[0]?.roomName || roomKey}</p>
             <div className="flex flex-wrap gap-1">
               {users.slice(0, 8).map((u) => (
                 <Tooltip key={`${u.roomId}-${u.id}`}>
@@ -121,7 +121,7 @@ function HMOOnlineUsers() {
                   <TooltipContent side="right"><p>{u.username || 'User'}</p></TooltipContent>
                 </Tooltip>
               ))}
-              {users.length > 8 && <span className="text-[10px] text-muted-foreground self-center">+{users.length - 8}</span>}
+              {users.length > 8 && <span className="self-center text-[10px] text-muted-foreground">+{users.length - 8}</span>}
             </div>
           </div>
         ))}
@@ -150,131 +150,131 @@ export default function LeftSidebar({ roomId }: { roomId?: string }) {
 
   return (
     <Sidebar collapsible="icon" data-workspace-sidebar>
-      <SidebarHeader>
+      <SidebarHeader className="group-data-[collapsible=icon]:px-1 group-data-[collapsible=icon]:py-2">
         <Logo />
       </SidebarHeader>
-      <SidebarContent>
+      <SidebarContent className="group-data-[collapsible=icon]:px-1">
         <SidebarMenu>
           <SidebarMenuItem>
-            <SidebarMenuButton asChild isActive={pathname === '/'}>
+            <SidebarMenuButton asChild isActive={pathname === '/'} tooltip="Home">
               <Link href="/"><Home />Home</Link>
             </SidebarMenuButton>
           </SidebarMenuItem>
           <SidebarMenuItem>
-            <SidebarMenuButton asChild isActive={pathname === '/messages'}>
+            <SidebarMenuButton asChild isActive={pathname === '/messages'} tooltip="Messages">
               <Link href="/messages"><MessageSquare />Messages</Link>
             </SidebarMenuButton>
           </SidebarMenuItem>
           <SidebarMenuItem>
-            <SidebarMenuButton asChild>
+            <SidebarMenuButton asChild tooltip="Discord Stream Hub">
               <a href="https://discord-stream-hub-new.fly.dev" target="_blank" rel="noopener noreferrer">
                 <ExternalLink />Stream Hub
               </a>
             </SidebarMenuButton>
           </SidebarMenuItem>
         </SidebarMenu>
-        <SidebarGroup>
+        <SidebarGroup className="group-data-[collapsible=icon]:px-0">
           <SidebarGroupLabel>Public Rooms</SidebarGroupLabel>
           <SidebarMenu>
             <SidebarMenuItem>
-              <SidebarMenuButton asChild isActive={roomId === ACTIVITY_ROOM_ID}>
+              <SidebarMenuButton asChild isActive={roomId === ACTIVITY_ROOM_ID} tooltip={ACTIVITY_ROOM_NAME}>
                 <Link href={`/rooms/${ACTIVITY_ROOM_ID}`}><Music />{ACTIVITY_ROOM_NAME}</Link>
               </SidebarMenuButton>
             </SidebarMenuItem>
             {roomsLoading && (
-                <>
+                <div className="space-y-2 group-data-[collapsible=icon]:hidden">
                     <Skeleton className="h-8 w-full" />
                     <Skeleton className="h-8 w-full" />
                     <Skeleton className="h-8 w-full" />
-                </>
+                </div>
             )}
             {visiblePublicRooms && visiblePublicRooms.map(room => (
               <SidebarMenuItem key={room.id}>
-                <SidebarMenuButton asChild isActive={room.id === roomId}>
+                <SidebarMenuButton asChild isActive={room.id === roomId} tooltip={room.name}>
                   <Link href={`/rooms/${room.id}`}><Music />{room.name}</Link>
                 </SidebarMenuButton>
               </SidebarMenuItem>
             ))}
              {!roomsLoading && (!visiblePublicRooms || visiblePublicRooms.length === 0) && (
-              <p className="px-2 text-sm text-muted-foreground">No other public rooms yet.</p>
+              <p className="px-2 text-sm text-muted-foreground group-data-[collapsible=icon]:hidden">No other public rooms yet.</p>
             )}
           </SidebarMenu>
         </SidebarGroup>
 
-        {/* Live on Twitch (from DiscordStreamHub) */}
         <DSHLiveUsers />
-
-        {/* Active users across rooms */}
         <HMOOnlineUsers />
       </SidebarContent>
-      <SidebarFooter className='gap-4'>
-        <CreateRoomDialog />
-        <div className="border-t -mx-2"></div>
+      <SidebarFooter className="gap-4 group-data-[collapsible=icon]:gap-2 group-data-[collapsible=icon]:px-1">
+        <div className="group-data-[collapsible=icon]:hidden">
+          <CreateRoomDialog />
+        </div>
+        <div className="-mx-2 border-t group-data-[collapsible=icon]:hidden"></div>
 
         {isUserLoading ? (
-            <>
-              <div className="flex items-center gap-3 p-2 rounded-md">
+            <div className="space-y-2 group-data-[collapsible=icon]:hidden">
+              <div className="flex items-center gap-3 rounded-md p-2">
                   <Skeleton className="h-9 w-9 rounded-full" />
-                  <div className="flex flex-col flex-1 overflow-hidden gap-2">
+                  <div className="flex flex-1 flex-col gap-2 overflow-hidden">
                       <Skeleton className="h-4 w-3/4" />
                       <Skeleton className="h-3 w-full" />
                   </div>
               </div>
-              <div className='flex gap-2'>
+              <div className="flex gap-2">
                 <Skeleton className="h-10 flex-1" />
                 <Skeleton className="h-10 flex-1" />
                 <Skeleton className="h-10 flex-1" />
               </div>
-            </>
+            </div>
         ) : user ? (
             <>
-                <div className="flex items-center gap-3 p-2 rounded-md">
-                    <Avatar className="h-9 w-9">
+                <div className="flex items-center gap-3 rounded-md p-2 group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:p-0">
+                    <Avatar className="h-9 w-9 shrink-0 group-data-[collapsible=icon]:h-8 group-data-[collapsible=icon]:w-8">
                         <AvatarImage src={user.photoURL || `https://picsum.photos/seed/${user.uid}/100/100`} alt="User Avatar" />
                         <AvatarFallback>{user.isAnonymous ? 'G' : user.displayName?.charAt(0)?.toUpperCase() || 'U'}</AvatarFallback>
                     </Avatar>
-                    <div className="flex flex-col flex-1 overflow-hidden">
-                        <p className="text-sm font-medium leading-none truncate">{user.isAnonymous ? 'Guest User' : user.displayName || 'User'}</p>
-                        <p className="text-xs leading-none text-muted-foreground truncate">
+                    <div className="flex flex-1 flex-col overflow-hidden group-data-[collapsible=icon]:hidden">
+                        <p className="truncate text-sm font-medium leading-none">{user.isAnonymous ? 'Guest User' : user.displayName || 'User'}</p>
+                        <p className="truncate text-xs leading-none text-muted-foreground">
                             {user.email || (user.isAnonymous ? 'guest@hearmeout.com' : 'Space Mountain')}
                         </p>
                     </div>
                 </div>
-                <div className='flex gap-2'>
+                <div className="flex gap-2 group-data-[collapsible=icon]:flex-col group-data-[collapsible=icon]:items-center group-data-[collapsible=icon]:gap-1">
                     <Tooltip>
                         <TooltipTrigger asChild>
-                            <Button variant="outline" size="icon" className='flex-1' disabled={user.isAnonymous}>
-                                <User/><span className='sr-only'>Profile</span>
+                            <Button variant="outline" size="icon" className="flex-1 group-data-[collapsible=icon]:h-8 group-data-[collapsible=icon]:w-8 group-data-[collapsible=icon]:flex-none" disabled={user.isAnonymous}>
+                                <User/><span className="sr-only">Profile</span>
                             </Button>
                         </TooltipTrigger>
-                        <TooltipContent side="top"><p>Profile</p></TooltipContent>
+                        <TooltipContent side="right"><p>Profile</p></TooltipContent>
                     </Tooltip>
                     <Tooltip>
                         <TooltipTrigger asChild>
-                            <Button variant="outline" size="icon" asChild className='flex-1'>
-                                <Link href="/settings"><Settings/><span className='sr-only'>Settings</span></Link>
+                            <Button variant="outline" size="icon" asChild className="flex-1 group-data-[collapsible=icon]:h-8 group-data-[collapsible=icon]:w-8 group-data-[collapsible=icon]:flex-none">
+                                <Link href="/settings"><Settings/><span className="sr-only">Settings</span></Link>
                             </Button>
                         </TooltipTrigger>
-                        <TooltipContent side="top"><p>Settings</p></TooltipContent>
+                        <TooltipContent side="right"><p>Settings</p></TooltipContent>
                     </Tooltip>
                     <Tooltip>
                         <TooltipTrigger asChild>
-                            <Button variant="outline" size="icon" onClick={logout} className='flex-1'>
-                                <LogOut /><span className='sr-only'>Log out</span>
+                            <Button variant="outline" size="icon" onClick={logout} className="flex-1 group-data-[collapsible=icon]:h-8 group-data-[collapsible=icon]:w-8 group-data-[collapsible=icon]:flex-none">
+                                <LogOut /><span className="sr-only">Log out</span>
                             </Button>
                         </TooltipTrigger>
-                        <TooltipContent side="top"><p>Log out</p></TooltipContent>
+                        <TooltipContent side="right"><p>Log out</p></TooltipContent>
                     </Tooltip>
                 </div>
             </>
         ) : (
-            <Button asChild>
-                <Link href="/login" className="w-full">
-                    <LogIn className="mr-2 h-4 w-4" /> Log In or Sign Up
+            <Button asChild className="group-data-[collapsible=icon]:h-8 group-data-[collapsible=icon]:w-8 group-data-[collapsible=icon]:p-0">
+                <Link href="/login" className="w-full group-data-[collapsible=icon]:justify-center">
+                    <LogIn className="h-4 w-4 group-data-[collapsible=icon]:mr-0" /> <span className="group-data-[collapsible=icon]:hidden">Log In or Sign Up</span>
                 </Link>
             </Button>
         )}
       </SidebarFooter>
+      <SidebarRail />
     </Sidebar>
   );
 }
