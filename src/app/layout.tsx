@@ -1,6 +1,7 @@
 import type {Metadata} from 'next';
 import type { ReactNode } from 'react';
 import './globals.css';
+import './workspace-parity.css';
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { SessionProvider } from '@/hooks/use-session';
