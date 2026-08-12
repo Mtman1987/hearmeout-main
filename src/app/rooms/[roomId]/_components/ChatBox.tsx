@@ -1,8 +1,9 @@
 "use client";
 
-import React, { useState, useRef, useEffect } from "react";
+import React, { useState, useRef, useEffect, useContext } from "react";
 import { useParams } from "next/navigation";
-import { useRemoteParticipants } from "@livekit/components-react";
+import { RoomContext } from "@livekit/components-react";
+import { RoomEvent, type RemoteParticipant } from "livekit-client";
 import { Card, CardContent, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -59,7 +60,6 @@ export function resolveBotInvocation(
     }
   }
 
-  // If exactly one bot is in the room, `bot ...` is an unambiguous generic wake word.
   if (bots.length === 1 && matchesWakeName(value, "bot")) {
     return { displayName: bots[0].displayName };
   }
@@ -74,7 +74,7 @@ export function resolveBotInvocation(
   return null;
 }
 
-function participantDescriptors(participants: ReturnType<typeof useRemoteParticipants>): RoomBotDescriptor[] {
+function participantDescriptors(participants: RemoteParticipant[]): RoomBotDescriptor[] {
   return participants
     .filter(isPersonaParticipant)
     .map((participant) => {
@@ -94,17 +94,7 @@ function participantDescriptors(participants: ReturnType<typeof useRemotePartici
     });
 }
 
-/**
- * Use this wrapper only when a LiveKit RoomContext is mounted. The plain
- * ChatBox remains safe for the P2P/loading/popout paths where no LiveKit room
- * exists yet.
- */
-export function LiveKitBotAwareChatBox(props: Omit<ChatBoxProps, "botParticipants">) {
-  const remoteParticipants = useRemoteParticipants();
-  return <ChatBox {...props} botParticipants={participantDescriptors(remoteParticipants)} />;
-}
-
-export default function ChatBox({ roomId, compact = false, onOpenSpaceChat, onOpenTwitchChat, onOpenDiscordChat, botParticipants = [] }: ChatBoxProps) {
+export default function ChatBox({ roomId, compact = false, onOpenSpaceChat, onOpenTwitchChat, onOpenDiscordChat, botParticipants }: ChatBoxProps) {
   const params = useParams<{ roomId?: string }>();
   const activeRoomId = roomId || params?.roomId;
   const [input, setInput] = useState("");
@@ -112,8 +102,32 @@ export default function ChatBox({ roomId, compact = false, onOpenSpaceChat, onOp
   const [isPending, setIsPending] = useState(false);
   const [messages, setMessages] = useState<AdminChatMessage[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [liveKitBots, setLiveKitBots] = useState<RoomBotDescriptor[]>([]);
   const scrollAreaRef = useRef<HTMLDivElement>(null);
   const { user } = useSession();
+  const room = useContext(RoomContext);
+  const activeBotParticipants = botParticipants ?? liveKitBots;
+
+  useEffect(() => {
+    if (!room) {
+      setLiveKitBots([]);
+      return;
+    }
+
+    const refreshBotParticipants = () => {
+      setLiveKitBots(participantDescriptors(Array.from(room.remoteParticipants.values())));
+    };
+
+    refreshBotParticipants();
+    room.on(RoomEvent.ParticipantConnected, refreshBotParticipants);
+    room.on(RoomEvent.ParticipantDisconnected, refreshBotParticipants);
+    room.on(RoomEvent.ParticipantMetadataChanged, refreshBotParticipants);
+    return () => {
+      room.off(RoomEvent.ParticipantConnected, refreshBotParticipants);
+      room.off(RoomEvent.ParticipantDisconnected, refreshBotParticipants);
+      room.off(RoomEvent.ParticipantMetadataChanged, refreshBotParticipants);
+    };
+  }, [room]);
 
   const fetchAdminChat = async () => {
     try {
@@ -203,7 +217,7 @@ export default function ChatBox({ roomId, compact = false, onOpenSpaceChat, onOp
 
     setIsPending(true);
     try {
-      const botInvocation = resolveBotInvocation(submittedText, botParticipants);
+      const botInvocation = resolveBotInvocation(submittedText, activeBotParticipants);
       if (botInvocation) {
         try {
           const { reply, botName } = await sendToBot(submittedText, botInvocation.displayName);
