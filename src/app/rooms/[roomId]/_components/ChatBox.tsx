@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState, useRef, useEffect } from "react";
+import { useParams } from "next/navigation";
 import { Card, CardContent, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -26,7 +27,13 @@ interface ChatBoxProps {
   onOpenDiscordChat?: () => void;
 }
 
-export default function ChatBox({ compact = false, onOpenSpaceChat, onOpenTwitchChat, onOpenDiscordChat }: ChatBoxProps) {
+function isAthenaInvocation(value: string) {
+  return /^\s*@?athena(?:\s*os)?\b/i.test(value);
+}
+
+export default function ChatBox({ roomId, compact = false, onOpenSpaceChat, onOpenTwitchChat, onOpenDiscordChat }: ChatBoxProps) {
+  const params = useParams<{ roomId?: string }>();
+  const activeRoomId = roomId || params?.roomId;
   const [input, setInput] = useState("");
   const [moderationResult, setModerationResult] = useState<ModerateContentOutput | null>(null);
   const [isPending, setIsPending] = useState(false);
@@ -65,6 +72,25 @@ export default function ChatBox({ compact = false, onOpenSpaceChat, onOpenTwitch
     }
   };
 
+  const sendToAthena = async (command: string) => {
+    const response = await fetch("/api/athena/commands", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        command,
+        roomId: activeRoomId,
+        // Text chat only needs Athena's text. Voice/persona callers can request
+        // synthesized audio from the same canonical SPMT route.
+        speak: false,
+      }),
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(String(payload?.error || `Athena returned ${response.status}`));
+    }
+    return String(payload?.response || payload?.data?.response || "").trim();
+  };
+
   useEffect(() => {
     fetchAdminChat();
     const interval = setInterval(fetchAdminChat, 5000);
@@ -80,10 +106,11 @@ export default function ChatBox({ compact = false, onOpenSpaceChat, onOpenTwitch
     e.preventDefault();
     if (!input.trim() || isPending || !user) return;
 
+    const submittedText = input.trim();
     const newMessage: AdminChatMessage = {
       id: `${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
       username: user.displayName || "HearMeOut User",
-      text: input.trim(),
+      text: submittedText,
       timestamp: new Date().toISOString(),
     };
 
@@ -95,6 +122,22 @@ export default function ChatBox({ compact = false, onOpenSpaceChat, onOpenTwitch
 
     setIsPending(true);
     try {
+      if (isAthenaInvocation(submittedText)) {
+        try {
+          const reply = await sendToAthena(submittedText);
+          if (reply) {
+            await sendToAdminChat({
+              id: `athena_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+              username: "Athena",
+              text: reply,
+              timestamp: new Date().toISOString(),
+            });
+          }
+        } catch (error) {
+          console.error("Athena command failed", error);
+        }
+      }
+
       const result = await runModeration(conversationHistory);
       setModerationResult(result);
     } catch (error) {
