@@ -9,6 +9,7 @@ import { PopoutProvider } from '@/components/PopoutWidgets/PopoutProvider';
 import { PopoutRenderer } from '@/components/PopoutWidgets/PopoutRenderer';
 import { WorkspaceTruthProvider } from '@/components/workspace-truth-provider';
 import { SpmtWorkspaceHost } from '@/components/spmt-workspace-host';
+import { PersonalOverlayHost } from '@/components/personal-overlay-host';
 
 export const metadata: Metadata = {
   title: 'HearMeOut',
@@ -44,6 +45,7 @@ export default function RootLayout({
               <TooltipProvider delayDuration={200}>
                 {children}
                 <PopoutRenderer />
+                <PersonalOverlayHost />
                 <SpmtWorkspaceHost />
               </TooltipProvider>
             </WorkspaceTruthProvider>
