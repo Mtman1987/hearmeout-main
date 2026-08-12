@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState, useRef, useEffect } from "react";
+import { useParams } from "next/navigation";
 import { Card, CardContent, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -31,6 +32,8 @@ function isAthenaInvocation(value: string) {
 }
 
 export default function ChatBox({ roomId, compact = false, onOpenSpaceChat, onOpenTwitchChat, onOpenDiscordChat }: ChatBoxProps) {
+  const params = useParams<{ roomId?: string }>();
+  const activeRoomId = roomId || params?.roomId;
   const [input, setInput] = useState("");
   const [moderationResult, setModerationResult] = useState<ModerateContentOutput | null>(null);
   const [isPending, setIsPending] = useState(false);
@@ -75,7 +78,7 @@ export default function ChatBox({ roomId, compact = false, onOpenSpaceChat, onOp
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         command,
-        roomId,
+        roomId: activeRoomId,
         // Text chat only needs Athena's text. Voice/persona callers can request
         // synthesized audio from the same canonical SPMT route.
         speak: false,
