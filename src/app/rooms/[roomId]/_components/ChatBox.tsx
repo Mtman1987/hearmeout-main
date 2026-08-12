@@ -21,12 +21,18 @@ interface AdminChatMessage {
   timestamp: string;
 }
 
+export type RoomBotDescriptor = {
+  displayName: string;
+  wakeNames: string[];
+};
+
 interface ChatBoxProps {
   roomId?: string;
   compact?: boolean;
   onOpenSpaceChat?: () => void;
   onOpenTwitchChat?: () => void;
   onOpenDiscordChat?: () => void;
+  botParticipants?: RoomBotDescriptor[];
 }
 
 type BotInvocation = {
@@ -43,40 +49,19 @@ function matchesWakeName(value: string, wakeName: string) {
   return new RegExp(`^\\s*@?${escapeRegex(normalized)}\\b`, "i").test(value);
 }
 
-function resolveBotInvocation(
+export function resolveBotInvocation(
   value: string,
-  participants: ReturnType<typeof useRemoteParticipants>,
+  bots: RoomBotDescriptor[] = [],
 ): BotInvocation | null {
-  const bots = participants.filter(isPersonaParticipant);
-
-  for (const participant of bots) {
-    const metadata = parsePersonaMetadata(participant.metadata) || {};
-    const displayName = metadata.displayName
-      || participant.name
-      || participant.identity.replace(/^persona:/, "")
-      || "StreamWeaver Bot";
-    const wakeNames = Array.from(new Set([
-      displayName,
-      metadata.personaId,
-      participant.name,
-      participant.identity.replace(/^persona:/, ""),
-    ].map((entry) => String(entry || "").trim()).filter(Boolean)));
-
-    if (wakeNames.some((wakeName) => matchesWakeName(value, wakeName))) {
-      return { displayName };
+  for (const bot of bots) {
+    if (bot.wakeNames.some((wakeName) => matchesWakeName(value, wakeName))) {
+      return { displayName: bot.displayName };
     }
   }
 
   // If exactly one bot is in the room, `bot ...` is an unambiguous generic wake word.
   if (bots.length === 1 && matchesWakeName(value, "bot")) {
-    const participant = bots[0];
-    const metadata = parsePersonaMetadata(participant.metadata) || {};
-    return {
-      displayName: metadata.displayName
-        || participant.name
-        || participant.identity.replace(/^persona:/, "")
-        || "StreamWeaver Bot",
-    };
+    return { displayName: bots[0].displayName };
   }
 
   // Compatibility only. Existing rooms and bookmarks may still address Athena
@@ -89,7 +74,37 @@ function resolveBotInvocation(
   return null;
 }
 
-export default function ChatBox({ roomId, compact = false, onOpenSpaceChat, onOpenTwitchChat, onOpenDiscordChat }: ChatBoxProps) {
+function participantDescriptors(participants: ReturnType<typeof useRemoteParticipants>): RoomBotDescriptor[] {
+  return participants
+    .filter(isPersonaParticipant)
+    .map((participant) => {
+      const metadata = parsePersonaMetadata(participant.metadata) || {};
+      const identityName = participant.identity.replace(/^persona:/, "");
+      const displayName = metadata.displayName
+        || participant.name
+        || identityName
+        || "StreamWeaver Bot";
+      const wakeNames = Array.from(new Set([
+        displayName,
+        metadata.personaId,
+        participant.name,
+        identityName,
+      ].map((entry) => String(entry || "").trim()).filter(Boolean)));
+      return { displayName, wakeNames };
+    });
+}
+
+/**
+ * Use this wrapper only when a LiveKit RoomContext is mounted. The plain
+ * ChatBox remains safe for the P2P/loading/popout paths where no LiveKit room
+ * exists yet.
+ */
+export function LiveKitBotAwareChatBox(props: Omit<ChatBoxProps, "botParticipants">) {
+  const remoteParticipants = useRemoteParticipants();
+  return <ChatBox {...props} botParticipants={participantDescriptors(remoteParticipants)} />;
+}
+
+export default function ChatBox({ roomId, compact = false, onOpenSpaceChat, onOpenTwitchChat, onOpenDiscordChat, botParticipants = [] }: ChatBoxProps) {
   const params = useParams<{ roomId?: string }>();
   const activeRoomId = roomId || params?.roomId;
   const [input, setInput] = useState("");
@@ -99,7 +114,6 @@ export default function ChatBox({ roomId, compact = false, onOpenSpaceChat, onOp
   const [isLoading, setIsLoading] = useState(true);
   const scrollAreaRef = useRef<HTMLDivElement>(null);
   const { user } = useSession();
-  const remoteParticipants = useRemoteParticipants();
 
   const fetchAdminChat = async () => {
     try {
@@ -189,7 +203,7 @@ export default function ChatBox({ roomId, compact = false, onOpenSpaceChat, onOp
 
     setIsPending(true);
     try {
-      const botInvocation = resolveBotInvocation(submittedText, remoteParticipants);
+      const botInvocation = resolveBotInvocation(submittedText, botParticipants);
       if (botInvocation) {
         try {
           const { reply, botName } = await sendToBot(submittedText, botInvocation.displayName);
