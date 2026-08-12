@@ -1,6 +1,7 @@
 'use client';
 
 import UserCard from "./UserCard";
+import PersonaCard, { isPersonaParticipant } from './PersonaCard';
 import DJCard from "./DJCard";
 import React from "react";
 import { useSession } from '@/hooks/use-session';
@@ -105,7 +106,9 @@ function LiveKitParticipants({ isHost, roomId }: { isHost: boolean; roomId: stri
         <AudioTrack key={trackRef.publication.trackSid} trackRef={trackRef} volume={1.0} muted={false} />
       ))}
       {allParticipants.map((participant) => (
-        <UserCard key={participant.sid} participant={participant} isLocal={participant.isLocal} isHost={isHost} roomId={roomId} />
+        isPersonaParticipant(participant)
+          ? <PersonaCard key={participant.sid} participant={participant} />
+          : <UserCard key={participant.sid} participant={participant} isLocal={participant.isLocal} isHost={isHost} roomId={roomId} />
       ))}
     </>
   );
@@ -140,7 +143,7 @@ export default function UserList({ roomId, localVolume, onVolumeChange, showDJ, 
               onOpenWatch={onOpenWatch}
             />
           )}
-          {/* Real users */}
+          {/* Real users and StreamWeaver personas */}
           {voiceEnabled && <LiveKitParticipants isHost={isHost} roomId={roomId} />}
           {voicePeerFallback && <PeerPresenceParticipants roomId={roomId} localUserId={user?.uid} connectedPeerIds={peerConnectedPeerIds} />}
         </div>
