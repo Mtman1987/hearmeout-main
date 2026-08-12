@@ -26,23 +26,32 @@ test('old Athena API is only a compatibility alias to the generic bot route', as
   assert.doesNotMatch(source, /HMO_SPMT_COOKIE/);
 });
 
-test('room chat resolves actual LiveKit bot participants and uses the generic bot API', async () => {
+test('room chat discovers actual LiveKit bot participants without requiring LiveKit to exist', async () => {
   const source = await readFile(chatBox, 'utf8');
-  assert.match(source, /useRemoteParticipants/);
+  assert.match(source, /useContext\(RoomContext\)/);
+  assert.match(source, /room\.remoteParticipants\.values\(\)/);
+  assert.match(source, /RoomEvent\.ParticipantConnected/);
+  assert.match(source, /RoomEvent\.ParticipantDisconnected/);
+  assert.match(source, /RoomEvent\.ParticipantMetadataChanged/);
   assert.match(source, /isPersonaParticipant/);
   assert.match(source, /parsePersonaMetadata/);
   assert.match(source, /metadata\.displayName/);
   assert.match(source, /metadata\.personaId/);
   assert.match(source, /participant\.identity\.replace\(\/\^persona:\//);
+  assert.match(source, /if \(!room\)/);
+});
+
+test('room chat uses the generic bot API and server-returned bot name', async () => {
+  const source = await readFile(chatBox, 'utf8');
   assert.match(source, /fetch\("\/api\/bot\/commands"/);
   assert.match(source, /payload\?\.bot\?\.name/);
   assert.match(source, /speak: false/);
   assert.doesNotMatch(source, /fetch\("\/api\/athena\/commands"/);
+  assert.doesNotMatch(source, /sendToAthena/);
 });
 
 test('Athena wake names remain backward-compatible without owning a separate command path', async () => {
   const source = await readFile(chatBox, 'utf8');
   assert.match(source, /@\?athena/);
   assert.match(source, /Compatibility only/);
-  assert.doesNotMatch(source, /sendToAthena/);
 });
