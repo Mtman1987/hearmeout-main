@@ -9,20 +9,21 @@ export async function GET(request: NextRequest) {
   if (!token) return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
 
   const headers = { Authorization: `Bearer ${token}`, Accept: 'application/json' };
-  const [profileResponse, overlayResponse] = await Promise.all([
+  const [profileResponse, personalResponse] = await Promise.all([
     fetch(`${SPMT_BASE_URL}/api/workspace-profile`, { headers, cache: 'no-store' }),
-    fetch(`${SPMT_BASE_URL}/api/overlay-workspace`, { headers, cache: 'no-store' }),
+    fetch(`${SPMT_BASE_URL}/api/personal-overlay-launch`, { headers, cache: 'no-store' }),
   ]);
-  const [payload, overlayPayload] = await Promise.all([
+  const [payload, personalPayload] = await Promise.all([
     profileResponse.json().catch(() => null),
-    overlayResponse.json().catch(() => null),
+    personalResponse.json().catch(() => null),
   ]);
   if (!profileResponse.ok || !payload?.profile) {
     return NextResponse.json({ error: payload?.error || 'Workspace theme unavailable' }, { status: profileResponse.status || 502 });
   }
 
   return NextResponse.json({
-    tokens: workspaceThemeTokens(payload.profile, 'hearmeout', overlayResponse.ok ? overlayPayload?.layout || null : null),
+    tokens: workspaceThemeTokens(payload.profile, 'hearmeout', null),
+    personalOverlayUrl: personalResponse.ok && typeof personalPayload?.url === 'string' ? personalPayload.url : null,
     revision: payload.profile.revision,
     updatedAt: payload.profile.updatedAt,
   });
