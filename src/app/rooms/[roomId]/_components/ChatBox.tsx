@@ -1,7 +1,9 @@
 "use client";
 
-import React, { useState, useRef, useEffect } from "react";
+import React, { useState, useRef, useEffect, useContext } from "react";
 import { useParams } from "next/navigation";
+import { RoomContext } from "@livekit/components-react";
+import { RoomEvent, type RemoteParticipant } from "livekit-client";
 import { Card, CardContent, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -11,6 +13,7 @@ import { Send, Info, ShieldAlert, Smile, Frown, Meh, LoaderCircle, MessageSquare
 import { runModeration } from "@/app/actions";
 import type { ModerateContentOutput } from "@/ai/flows/sentiment-based-moderation";
 import { useSession } from "@/hooks/use-session";
+import { isPersonaParticipant, parsePersonaMetadata } from "./PersonaCard";
 
 interface AdminChatMessage {
   id: string;
@@ -19,19 +22,79 @@ interface AdminChatMessage {
   timestamp: string;
 }
 
+export type RoomBotDescriptor = {
+  displayName: string;
+  wakeNames: string[];
+};
+
 interface ChatBoxProps {
   roomId?: string;
   compact?: boolean;
   onOpenSpaceChat?: () => void;
   onOpenTwitchChat?: () => void;
   onOpenDiscordChat?: () => void;
+  botParticipants?: RoomBotDescriptor[];
 }
 
-function isAthenaInvocation(value: string) {
-  return /^\s*@?athena(?:\s*os)?\b/i.test(value);
+type BotInvocation = {
+  displayName: string;
+};
+
+function escapeRegex(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-export default function ChatBox({ roomId, compact = false, onOpenSpaceChat, onOpenTwitchChat, onOpenDiscordChat }: ChatBoxProps) {
+function matchesWakeName(value: string, wakeName: string) {
+  const normalized = String(wakeName || "").trim().replace(/^@/, "");
+  if (!normalized) return false;
+  return new RegExp(`^\\s*@?${escapeRegex(normalized)}\\b`, "i").test(value);
+}
+
+export function resolveBotInvocation(
+  value: string,
+  bots: RoomBotDescriptor[] = [],
+): BotInvocation | null {
+  for (const bot of bots) {
+    if (bot.wakeNames.some((wakeName) => matchesWakeName(value, wakeName))) {
+      return { displayName: bot.displayName };
+    }
+  }
+
+  if (bots.length === 1 && matchesWakeName(value, "bot")) {
+    return { displayName: bots[0].displayName };
+  }
+
+  // Compatibility only. Existing rooms and bookmarks may still address Athena
+  // before a bot participant is connected. The request itself still goes
+  // through the same tenant-generic SPMT/StreamWeaver bot runtime.
+  if (/^\s*@?athena(?:\s*os)?\b/i.test(value)) {
+    return { displayName: "Athena" };
+  }
+
+  return null;
+}
+
+function participantDescriptors(participants: RemoteParticipant[]): RoomBotDescriptor[] {
+  return participants
+    .filter(isPersonaParticipant)
+    .map((participant) => {
+      const metadata = parsePersonaMetadata(participant.metadata) || {};
+      const identityName = participant.identity.replace(/^persona:/, "");
+      const displayName = metadata.displayName
+        || participant.name
+        || identityName
+        || "StreamWeaver Bot";
+      const wakeNames = Array.from(new Set([
+        displayName,
+        metadata.personaId,
+        participant.name,
+        identityName,
+      ].map((entry) => String(entry || "").trim()).filter(Boolean)));
+      return { displayName, wakeNames };
+    });
+}
+
+export default function ChatBox({ roomId, compact = false, onOpenSpaceChat, onOpenTwitchChat, onOpenDiscordChat, botParticipants }: ChatBoxProps) {
   const params = useParams<{ roomId?: string }>();
   const activeRoomId = roomId || params?.roomId;
   const [input, setInput] = useState("");
@@ -39,8 +102,32 @@ export default function ChatBox({ roomId, compact = false, onOpenSpaceChat, onOp
   const [isPending, setIsPending] = useState(false);
   const [messages, setMessages] = useState<AdminChatMessage[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [liveKitBots, setLiveKitBots] = useState<RoomBotDescriptor[]>([]);
   const scrollAreaRef = useRef<HTMLDivElement>(null);
   const { user } = useSession();
+  const room = useContext(RoomContext);
+  const activeBotParticipants = botParticipants ?? liveKitBots;
+
+  useEffect(() => {
+    if (!room) {
+      setLiveKitBots([]);
+      return;
+    }
+
+    const refreshBotParticipants = () => {
+      setLiveKitBots(participantDescriptors(Array.from(room.remoteParticipants.values())));
+    };
+
+    refreshBotParticipants();
+    room.on(RoomEvent.ParticipantConnected, refreshBotParticipants);
+    room.on(RoomEvent.ParticipantDisconnected, refreshBotParticipants);
+    room.on(RoomEvent.ParticipantMetadataChanged, refreshBotParticipants);
+    return () => {
+      room.off(RoomEvent.ParticipantConnected, refreshBotParticipants);
+      room.off(RoomEvent.ParticipantDisconnected, refreshBotParticipants);
+      room.off(RoomEvent.ParticipantMetadataChanged, refreshBotParticipants);
+    };
+  }, [room]);
 
   const fetchAdminChat = async () => {
     try {
@@ -72,23 +159,31 @@ export default function ChatBox({ roomId, compact = false, onOpenSpaceChat, onOp
     }
   };
 
-  const sendToAthena = async (command: string) => {
-    const response = await fetch("/api/athena/commands", {
+  const sendToBot = async (command: string, fallbackDisplayName: string) => {
+    const response = await fetch("/api/bot/commands", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         command,
         roomId: activeRoomId,
-        // Text chat only needs Athena's text. Voice/persona callers can request
-        // synthesized audio from the same canonical SPMT route.
+        // Text chat only needs the response text. Voice callers can request
+        // synthesized audio from the same canonical SPMT bot route.
         speak: false,
       }),
     });
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) {
-      throw new Error(String(payload?.error || `Athena returned ${response.status}`));
+      throw new Error(String(payload?.error || `Bot runtime returned ${response.status}`));
     }
-    return String(payload?.response || payload?.data?.response || "").trim();
+    return {
+      reply: String(payload?.response || payload?.data?.response || "").trim(),
+      botName: String(
+        payload?.bot?.name
+        || payload?.data?.bot?.name
+        || fallbackDisplayName
+        || "StreamWeaver Bot",
+      ).trim(),
+    };
   };
 
   useEffect(() => {
@@ -122,19 +217,20 @@ export default function ChatBox({ roomId, compact = false, onOpenSpaceChat, onOp
 
     setIsPending(true);
     try {
-      if (isAthenaInvocation(submittedText)) {
+      const botInvocation = resolveBotInvocation(submittedText, activeBotParticipants);
+      if (botInvocation) {
         try {
-          const reply = await sendToAthena(submittedText);
+          const { reply, botName } = await sendToBot(submittedText, botInvocation.displayName);
           if (reply) {
             await sendToAdminChat({
-              id: `athena_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
-              username: "Athena",
+              id: `bot_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+              username: botName,
               text: reply,
               timestamp: new Date().toISOString(),
             });
           }
         } catch (error) {
-          console.error("Athena command failed", error);
+          console.error("StreamWeaver bot command failed", error);
         }
       }
 
