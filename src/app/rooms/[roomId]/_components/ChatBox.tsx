@@ -2,6 +2,7 @@
 
 import React, { useState, useRef, useEffect } from "react";
 import { useParams } from "next/navigation";
+import { useRemoteParticipants } from "@livekit/components-react";
 import { Card, CardContent, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -11,6 +12,7 @@ import { Send, Info, ShieldAlert, Smile, Frown, Meh, LoaderCircle, MessageSquare
 import { runModeration } from "@/app/actions";
 import type { ModerateContentOutput } from "@/ai/flows/sentiment-based-moderation";
 import { useSession } from "@/hooks/use-session";
+import { isPersonaParticipant, parsePersonaMetadata } from "./PersonaCard";
 
 interface AdminChatMessage {
   id: string;
@@ -27,8 +29,64 @@ interface ChatBoxProps {
   onOpenDiscordChat?: () => void;
 }
 
-function isAthenaInvocation(value: string) {
-  return /^\s*@?athena(?:\s*os)?\b/i.test(value);
+type BotInvocation = {
+  displayName: string;
+};
+
+function escapeRegex(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function matchesWakeName(value: string, wakeName: string) {
+  const normalized = String(wakeName || "").trim().replace(/^@/, "");
+  if (!normalized) return false;
+  return new RegExp(`^\\s*@?${escapeRegex(normalized)}\\b`, "i").test(value);
+}
+
+function resolveBotInvocation(
+  value: string,
+  participants: ReturnType<typeof useRemoteParticipants>,
+): BotInvocation | null {
+  const bots = participants.filter(isPersonaParticipant);
+
+  for (const participant of bots) {
+    const metadata = parsePersonaMetadata(participant.metadata) || {};
+    const displayName = metadata.displayName
+      || participant.name
+      || participant.identity.replace(/^persona:/, "")
+      || "StreamWeaver Bot";
+    const wakeNames = Array.from(new Set([
+      displayName,
+      metadata.personaId,
+      participant.name,
+      participant.identity.replace(/^persona:/, ""),
+    ].map((entry) => String(entry || "").trim()).filter(Boolean)));
+
+    if (wakeNames.some((wakeName) => matchesWakeName(value, wakeName))) {
+      return { displayName };
+    }
+  }
+
+  // If exactly one bot is in the room, `bot ...` is an unambiguous generic wake word.
+  if (bots.length === 1 && matchesWakeName(value, "bot")) {
+    const participant = bots[0];
+    const metadata = parsePersonaMetadata(participant.metadata) || {};
+    return {
+      displayName: metadata.displayName
+        || participant.name
+        || participant.identity.replace(/^persona:/, "")
+        || "StreamWeaver Bot",
+    };
+  }
+
+  // Compatibility only. Existing rooms and bookmarks may still address Athena
+  // before a bot participant is connected. The request itself still goes
+  // through the same tenant-generic SPMT/StreamWeaver bot runtime.
+  if (/^\s*@?athena(?:\s*os)?\b/i.test(value)) {
+    return { displayName: "Athena" };
+  }
+
+  return null;
 }
 
 export default function ChatBox({ roomId, compact = false, onOpenSpaceChat, onOpenTwitchChat, onOpenDiscordChat }: ChatBoxProps) {
@@ -41,6 +99,7 @@ export default function ChatBox({ roomId, compact = false, onOpenSpaceChat, onOp
   const [isLoading, setIsLoading] = useState(true);
   const scrollAreaRef = useRef<HTMLDivElement>(null);
   const { user } = useSession();
+  const remoteParticipants = useRemoteParticipants();
 
   const fetchAdminChat = async () => {
     try {
@@ -72,23 +131,31 @@ export default function ChatBox({ roomId, compact = false, onOpenSpaceChat, onOp
     }
   };
 
-  const sendToAthena = async (command: string) => {
-    const response = await fetch("/api/athena/commands", {
+  const sendToBot = async (command: string, fallbackDisplayName: string) => {
+    const response = await fetch("/api/bot/commands", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         command,
         roomId: activeRoomId,
-        // Text chat only needs Athena's text. Voice/persona callers can request
-        // synthesized audio from the same canonical SPMT route.
+        // Text chat only needs the response text. Voice callers can request
+        // synthesized audio from the same canonical SPMT bot route.
         speak: false,
       }),
     });
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) {
-      throw new Error(String(payload?.error || `Athena returned ${response.status}`));
+      throw new Error(String(payload?.error || `Bot runtime returned ${response.status}`));
     }
-    return String(payload?.response || payload?.data?.response || "").trim();
+    return {
+      reply: String(payload?.response || payload?.data?.response || "").trim(),
+      botName: String(
+        payload?.bot?.name
+        || payload?.data?.bot?.name
+        || fallbackDisplayName
+        || "StreamWeaver Bot",
+      ).trim(),
+    };
   };
 
   useEffect(() => {
@@ -122,19 +189,20 @@ export default function ChatBox({ roomId, compact = false, onOpenSpaceChat, onOp
 
     setIsPending(true);
     try {
-      if (isAthenaInvocation(submittedText)) {
+      const botInvocation = resolveBotInvocation(submittedText, remoteParticipants);
+      if (botInvocation) {
         try {
-          const reply = await sendToAthena(submittedText);
+          const { reply, botName } = await sendToBot(submittedText, botInvocation.displayName);
           if (reply) {
             await sendToAdminChat({
-              id: `athena_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
-              username: "Athena",
+              id: `bot_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+              username: botName,
               text: reply,
               timestamp: new Date().toISOString(),
             });
           }
         } catch (error) {
-          console.error("Athena command failed", error);
+          console.error("StreamWeaver bot command failed", error);
         }
       }
 
