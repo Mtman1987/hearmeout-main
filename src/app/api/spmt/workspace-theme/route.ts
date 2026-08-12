@@ -21,8 +21,18 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: payload?.error || 'Workspace theme unavailable' }, { status: profileResponse.status || 502 });
   }
 
+  const tenant = personalResponse.ok ? String(personalPayload?.tenant || '').trim().toLowerCase() : '';
+  const personalCanonical = personalResponse.ok && typeof personalPayload?.canonicalUrl === 'string'
+    ? personalPayload.canonicalUrl
+    : (tenant ? `${SPMT_BASE_URL}/tenant/${encodeURIComponent(tenant)}/personal` : null);
+
   return NextResponse.json({
     tokens: workspaceThemeTokens(payload.profile, 'hearmeout', null),
+    tenant: tenant || null,
+    tenantOutputs: tenant ? {
+      public: `${SPMT_BASE_URL}/tenant/${encodeURIComponent(tenant)}/public`,
+      personal: personalCanonical,
+    } : null,
     personalOverlayUrl: personalResponse.ok && typeof personalPayload?.url === 'string' ? personalPayload.url : null,
     revision: payload.profile.revision,
     updatedAt: payload.profile.updatedAt,
