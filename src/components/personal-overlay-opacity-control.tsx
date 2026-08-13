@@ -3,7 +3,8 @@
 import * as React from 'react';
 
 type Props = { storageKey: string };
-const PERSONAL_SELECTOR = '[data-canonical-personal-overlay="true"]';
+const SPMT_ORIGIN = 'https://spmt.live';
+const PERSONAL_SELECTOR = 'iframe[data-canonical-personal-overlay="true"]';
 
 function clampOpacity(value: unknown) {
   const number = Number(value);
@@ -20,18 +21,22 @@ export function PersonalOverlayOpacityControl({ storageKey }: Props) {
 
   React.useEffect(() => {
     const apply = () => {
-      const layers = Array.from(document.querySelectorAll<HTMLElement>(PERSONAL_SELECTOR));
-      setAvailable(layers.length > 0);
+      const frames = Array.from(document.querySelectorAll<HTMLIFrameElement>(PERSONAL_SELECTOR));
+      setAvailable(frames.length > 0);
       const factor = opacity / 100;
-      layers.forEach((layer) => {
-        layer.style.filter = `opacity(${factor})`;
-        layer.dataset.localPersonalOpacity = String(opacity);
+      frames.forEach((frame) => {
+        frame.dataset.localPersonalOpacity = String(opacity);
+        frame.contentWindow?.postMessage({ type: 'spmt.personal.local-opacity', opacity: factor }, SPMT_ORIGIN);
       });
     };
     apply();
     const observer = new MutationObserver(apply);
-    observer.observe(document.body, { childList: true, subtree: true });
-    return () => observer.disconnect();
+    observer.observe(document.body, { childList: true, subtree: true, attributes: true });
+    window.addEventListener('message', apply);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener('message', apply);
+    };
   }, [opacity]);
 
   const changeOpacity = (event: React.ChangeEvent<HTMLInputElement>) => {
