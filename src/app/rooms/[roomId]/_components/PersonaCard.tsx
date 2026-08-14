@@ -15,6 +15,9 @@ export type PersonaMetadata = {
   bot?: boolean;
   voice?: boolean;
   research?: boolean;
+  wakeNames?: string[];
+  aliases?: string[];
+  previousNames?: string[];
 };
 
 export function parsePersonaMetadata(metadata?: string): PersonaMetadata | null {
