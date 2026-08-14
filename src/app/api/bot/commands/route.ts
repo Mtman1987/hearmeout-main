@@ -12,6 +12,7 @@ type BotCommandBody = {
   message?: unknown;
   transcript?: unknown;
   roomId?: unknown;
+  targetTenantId?: unknown;
   speak?: unknown;
   voice?: unknown;
 };
@@ -32,6 +33,7 @@ async function forwardToSpmt(accessToken: string, body: BotCommandBody) {
     body: JSON.stringify({
       command,
       roomId: text(body.roomId, 160) || undefined,
+      targetTenantId: text(body.targetTenantId, 128) || undefined,
       speak: body.speak !== false,
       voice: text(body.voice, 128) || undefined,
     }),
