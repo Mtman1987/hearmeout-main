@@ -5,14 +5,10 @@ import { db, ensureDb } from '@/lib/db';
 import { config } from '@/lib/config';
 import { isDjWorkerRequest } from '@/lib/dj-worker-auth';
 
-// Mints LiveKit access tokens. Two security properties enforced here:
-//   1. (audit S8) Caller MUST be authenticated. The session uid is bound into
-//      the LiveKit identity so a malicious client can't impersonate someone
-//      else by picking a userId.
-//   2. (audit S9 + A1) Only the room owner / admins / users marked djWhitelist
-//      may publish music as a DJ. Listeners get subscribe-only tokens.
-//      DJ identity is `dj-<uid>` (per-user) instead of the old hardcoded
-//      'HearMeOutDJ' so multiple rooms can DJ in parallel without colliding.
+// Mints LiveKit access tokens. Browser users are bound to their verified
+// HearMeOut session. Internal worker identities are separately authenticated
+// with HMO_WORKER_SHARED_SECRET and may mint DJ, Discord bridge, or persona
+// participants for the requested room.
 
 async function isRoomDJ(uid: string, roomId: string): Promise<{
   ok: boolean;
@@ -36,9 +32,25 @@ export async function POST(request: NextRequest) {
 
   try {
     const body = await request.json();
-    const { roomId, userName, musicRoom, isDJ, voiceBridge, bridgeIdentity, bridgeMetadata } = body;
+    const {
+      roomId,
+      userName,
+      musicRoom,
+      isDJ,
+      voiceBridge,
+      bridgeIdentity,
+      bridgeMetadata,
+      persona,
+      personaId,
+      personaMetadata,
+    } = body;
 
-    if (!session && !(musicRoom && isDJ) && !(voiceBridge && fromDjWorker)) {
+    if (
+      !session
+      && !(musicRoom && isDJ && fromDjWorker)
+      && !(voiceBridge && fromDjWorker)
+      && !(persona && fromDjWorker)
+    ) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
@@ -51,6 +63,27 @@ export async function POST(request: NextRequest) {
 
     if (!apiKey || !apiSecret) {
       return NextResponse.json({ error: 'LiveKit credentials not configured' }, { status: 500 });
+    }
+
+    if (persona && fromDjWorker) {
+      const cleanPersonaId = String(personaId || '').trim().replace(/[^A-Za-z0-9_.:-]/g, '').slice(0, 96);
+      if (!cleanPersonaId) {
+        return NextResponse.json({ error: 'Missing personaId' }, { status: 400 });
+      }
+      const identity = `persona:${cleanPersonaId}`;
+      const metadata = typeof personaMetadata === 'string'
+        ? personaMetadata.slice(0, 4096)
+        : JSON.stringify(personaMetadata || {}).slice(0, 4096);
+      const at = new AccessToken(apiKey, apiSecret, {
+        identity,
+        name: typeof userName === 'string' && userName.trim()
+          ? userName.trim().slice(0, 64)
+          : cleanPersonaId,
+        metadata,
+        ttl: '6h',
+      });
+      at.addGrant({ roomJoin: true, room: roomId, canPublish: true, canSubscribe: true });
+      return NextResponse.json({ token: await at.toJwt() });
     }
 
     // Voice bridge: the DJ worker publishes Discord speakers into the plain
