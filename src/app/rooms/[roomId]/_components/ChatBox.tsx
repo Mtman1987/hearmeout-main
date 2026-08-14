@@ -40,24 +40,46 @@ type BotInvocation = {
   displayName: string;
 };
 
+const ATHENA_COMPAT_WAKE_NAMES = ["Athena OS", "Athena", "Annie"];
+
 function escapeRegex(value: string) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-function matchesWakeName(value: string, wakeName: string) {
+function wakeNameMatchIndex(value: string, wakeName: string) {
   const normalized = String(wakeName || "").trim().replace(/^@/, "");
-  if (!normalized) return false;
-  return new RegExp(`^\\s*@?${escapeRegex(normalized)}\\b`, "i").test(value);
+  if (!normalized) return -1;
+  const match = new RegExp(`(^|[^a-z0-9_])@?${escapeRegex(normalized)}([^a-z0-9_]|$)`, "i").exec(value);
+  return match?.index ?? -1;
+}
+
+function matchesWakeName(value: string, wakeName: string) {
+  return wakeNameMatchIndex(value, wakeName) >= 0;
 }
 
 export function resolveBotInvocation(
   value: string,
   bots: RoomBotDescriptor[] = [],
 ): BotInvocation | null {
+  let bestMatch: { displayName: string; index: number; wakeNameLength: number } | null = null;
+
   for (const bot of bots) {
-    if (bot.wakeNames.some((wakeName) => matchesWakeName(value, wakeName))) {
-      return { displayName: bot.displayName };
+    for (const wakeName of bot.wakeNames) {
+      const index = wakeNameMatchIndex(value, wakeName);
+      if (index < 0) continue;
+      const wakeNameLength = String(wakeName || "").trim().length;
+      if (
+        !bestMatch
+        || index < bestMatch.index
+        || (index === bestMatch.index && wakeNameLength > bestMatch.wakeNameLength)
+      ) {
+        bestMatch = { displayName: bot.displayName, index, wakeNameLength };
+      }
     }
+  }
+
+  if (bestMatch) {
+    return { displayName: bestMatch.displayName };
   }
 
   if (bots.length === 1 && matchesWakeName(value, "bot")) {
@@ -67,7 +89,7 @@ export function resolveBotInvocation(
   // Compatibility only. Existing rooms and bookmarks may still address Athena
   // before a bot participant is connected. The request itself still goes
   // through the same tenant-generic SPMT/StreamWeaver bot runtime.
-  if (/^\s*@?athena(?:\s*os)?\b/i.test(value)) {
+  if (ATHENA_COMPAT_WAKE_NAMES.some((wakeName) => matchesWakeName(value, wakeName))) {
     return { displayName: "Athena" };
   }
 
@@ -89,6 +111,9 @@ function participantDescriptors(participants: RemoteParticipant[]): RoomBotDescr
         metadata.personaId,
         participant.name,
         identityName,
+        ...(metadata.wakeNames || []),
+        ...(metadata.aliases || []),
+        ...(metadata.previousNames || []),
       ].map((entry) => String(entry || "").trim()).filter(Boolean)));
       return { displayName, wakeNames };
     });
