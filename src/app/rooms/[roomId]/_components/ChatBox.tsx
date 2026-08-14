@@ -14,6 +14,11 @@ import { runModeration } from "@/app/actions";
 import type { ModerateContentOutput } from "@/ai/flows/sentiment-based-moderation";
 import { useSession } from "@/hooks/use-session";
 import { isPersonaParticipant, parsePersonaMetadata } from "./PersonaCard";
+import BotPicker, {
+  changeRoomBotSession,
+  fetchAvailableRoomBots,
+  type AvailableRoomBot,
+} from "./BotPicker";
 
 interface AdminChatMessage {
   id: string;
@@ -25,6 +30,7 @@ interface AdminChatMessage {
 export type RoomBotDescriptor = {
   displayName: string;
   wakeNames: string[];
+  targetTenantId?: string;
 };
 
 interface ChatBoxProps {
@@ -38,6 +44,7 @@ interface ChatBoxProps {
 
 type BotInvocation = {
   displayName: string;
+  targetTenantId?: string;
 };
 
 const ATHENA_COMPAT_WAKE_NAMES = ["Athena OS", "Athena", "Annie"];
@@ -61,7 +68,12 @@ export function resolveBotInvocation(
   value: string,
   bots: RoomBotDescriptor[] = [],
 ): BotInvocation | null {
-  let bestMatch: { displayName: string; index: number; wakeNameLength: number } | null = null;
+  let bestMatch: {
+    displayName: string;
+    targetTenantId?: string;
+    index: number;
+    wakeNameLength: number;
+  } | null = null;
 
   for (const bot of bots) {
     for (const wakeName of bot.wakeNames) {
@@ -73,17 +85,28 @@ export function resolveBotInvocation(
         || index < bestMatch.index
         || (index === bestMatch.index && wakeNameLength > bestMatch.wakeNameLength)
       ) {
-        bestMatch = { displayName: bot.displayName, index, wakeNameLength };
+        bestMatch = {
+          displayName: bot.displayName,
+          targetTenantId: bot.targetTenantId,
+          index,
+          wakeNameLength,
+        };
       }
     }
   }
 
   if (bestMatch) {
-    return { displayName: bestMatch.displayName };
+    return {
+      displayName: bestMatch.displayName,
+      targetTenantId: bestMatch.targetTenantId,
+    };
   }
 
   if (bots.length === 1 && matchesWakeName(value, "bot")) {
-    return { displayName: bots[0].displayName };
+    return {
+      displayName: bots[0].displayName,
+      targetTenantId: bots[0].targetTenantId,
+    };
   }
 
   // Compatibility only. Existing rooms and bookmarks may still address Athena
@@ -115,8 +138,28 @@ function participantDescriptors(participants: RemoteParticipant[]): RoomBotDescr
         ...(metadata.aliases || []),
         ...(metadata.previousNames || []),
       ].map((entry) => String(entry || "").trim()).filter(Boolean)));
-      return { displayName, wakeNames };
+      return {
+        displayName,
+        wakeNames,
+        targetTenantId: metadata.ownerTenantId || metadata.personaId || identityName || undefined,
+      };
     });
+}
+
+function botManagementCommand(value: string): { action: "list" | "join" | "leave"; selector?: string } | null {
+  const trimmed = value.trim();
+  if (/^!bots\s*$/i.test(trimmed)) return { action: "list" };
+  const match = /^!(join|leave)\s+(.+)$/i.exec(trimmed);
+  if (!match) return null;
+  return { action: match[1].toLowerCase() as "join" | "leave", selector: match[2].trim() };
+}
+
+function formatAvailableBots(bots: AvailableRoomBot[]) {
+  if (!bots.length) return "No bots are available to invite right now.";
+  const labels = bots.map((bot) => bot.isOwner
+    ? `${bot.name} (yours)`
+    : `${bot.name} (owned by ${bot.ownerName || "another user"})`);
+  return `Available bots: ${labels.join(", ")}. Use !join <name> or the Bots button.`;
 }
 
 export default function ChatBox({ roomId, compact = false, onOpenSpaceChat, onOpenTwitchChat, onOpenDiscordChat, botParticipants }: ChatBoxProps) {
@@ -184,13 +227,27 @@ export default function ChatBox({ roomId, compact = false, onOpenSpaceChat, onOp
     }
   };
 
-  const sendToBot = async (command: string, fallbackDisplayName: string) => {
+  const postRoomNotice = async (text: string) => {
+    await sendToAdminChat({
+      id: `bots_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+      username: "Bots",
+      text,
+      timestamp: new Date().toISOString(),
+    });
+  };
+
+  const sendToBot = async (
+    command: string,
+    fallbackDisplayName: string,
+    targetTenantId?: string,
+  ) => {
     const response = await fetch("/api/bot/commands", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         command,
         roomId: activeRoomId,
+        targetTenantId: targetTenantId || undefined,
         // Text chat only needs the response text. Voice callers can request
         // synthesized audio from the same canonical SPMT bot route.
         speak: false,
@@ -198,7 +255,7 @@ export default function ChatBox({ roomId, compact = false, onOpenSpaceChat, onOp
     });
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) {
-      throw new Error(String(payload?.error || `Bot runtime returned ${response.status}`));
+      throw new Error(String(payload?.error?.message || payload?.error || `Bot runtime returned ${response.status}`));
     }
     return {
       reply: String(payload?.response || payload?.data?.response || "").trim(),
@@ -236,16 +293,44 @@ export default function ChatBox({ roomId, compact = false, onOpenSpaceChat, onOp
 
     await sendToAdminChat(newMessage);
     setInput("");
+    setIsPending(true);
+
+    const management = botManagementCommand(submittedText);
+    if (management) {
+      try {
+        if (!activeRoomId) throw new Error("Room is not ready yet");
+        if (management.action === "list") {
+          const bots = await fetchAvailableRoomBots();
+          await postRoomNotice(formatAvailableBots(bots));
+        } else {
+          const result = await changeRoomBotSession(activeRoomId, management.selector || "", management.action);
+          const botName = result.bot?.name || management.selector || "Bot";
+          await postRoomNotice(
+            management.action === "join"
+              ? `${botName} joined the room.`
+              : `${botName} left the room.`,
+          );
+        }
+      } catch (error) {
+        await postRoomNotice(error instanceof Error ? error.message : String(error));
+      } finally {
+        setIsPending(false);
+      }
+      return;
+    }
 
     const conversationHistory = [...messages, newMessage]
       .map((msg) => `${msg.username}: ${msg.text}`).join("\n");
 
-    setIsPending(true);
     try {
       const botInvocation = resolveBotInvocation(submittedText, activeBotParticipants);
       if (botInvocation) {
         try {
-          const { reply, botName } = await sendToBot(submittedText, botInvocation.displayName);
+          const { reply, botName } = await sendToBot(
+            submittedText,
+            botInvocation.displayName,
+            botInvocation.targetTenantId,
+          );
           if (reply) {
             await sendToAdminChat({
               id: `bot_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
@@ -282,19 +367,27 @@ export default function ChatBox({ roomId, compact = false, onOpenSpaceChat, onOp
       <CardHeader className="px-4 py-3">
         <div className="flex items-center justify-between gap-3">
           <CardTitle className="font-headline text-base flex items-center gap-2">Space Mountain Chat</CardTitle>
-          {!compact && (
-            <div className="flex items-center gap-1">
-              <Button variant="ghost" size="icon" className="h-8 w-8" onClick={onOpenSpaceChat} title="Pop out Space Mountain chat">
-                <MessageSquare className="h-4 w-4" />
-              </Button>
-              <Button variant="ghost" size="icon" className="h-8 w-8" onClick={onOpenTwitchChat} title="Pop out Twitch chat">
-                <Radio className="h-4 w-4" />
-              </Button>
-              <Button variant="ghost" size="icon" className="h-8 w-8" onClick={onOpenDiscordChat} title="Pop out Discord chat">
-                <Hash className="h-4 w-4" />
-              </Button>
-            </div>
-          )}
+          <div className="flex items-center gap-1">
+            {activeRoomId && (
+              <BotPicker
+                roomId={activeRoomId}
+                onJoined={(bot) => { void postRoomNotice(`${bot.name} joined the room.`); }}
+              />
+            )}
+            {!compact && (
+              <>
+                <Button variant="ghost" size="icon" className="h-8 w-8" onClick={onOpenSpaceChat} title="Pop out Space Mountain chat">
+                  <MessageSquare className="h-4 w-4" />
+                </Button>
+                <Button variant="ghost" size="icon" className="h-8 w-8" onClick={onOpenTwitchChat} title="Pop out Twitch chat">
+                  <Radio className="h-4 w-4" />
+                </Button>
+                <Button variant="ghost" size="icon" className="h-8 w-8" onClick={onOpenDiscordChat} title="Pop out Discord chat">
+                  <Hash className="h-4 w-4" />
+                </Button>
+              </>
+            )}
+          </div>
         </div>
       </CardHeader>
       <CardContent className="flex-1 flex flex-col gap-3 overflow-hidden px-4 pb-0 pt-0">
