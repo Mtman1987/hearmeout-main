@@ -5,6 +5,7 @@ import { test } from 'node:test';
 const botApiRoute = new URL('../src/app/api/bot/commands/route.ts', import.meta.url);
 const athenaAliasRoute = new URL('../src/app/api/athena/commands/route.ts', import.meta.url);
 const chatBox = new URL('../src/app/rooms/[roomId]/_components/ChatBox.tsx', import.meta.url);
+const personaCard = new URL('../src/app/rooms/[roomId]/_components/PersonaCard.tsx', import.meta.url);
 
 test('HearMeOut forwards generic bot commands with its existing SPMT OAuth session', async () => {
   const source = await readFile(botApiRoute, 'utf8');
@@ -50,8 +51,30 @@ test('room chat uses the generic bot API and server-returned bot name', async ()
   assert.doesNotMatch(source, /sendToAthena/);
 });
 
+test('room bot mentions use whole-word matching anywhere in the sentence', async () => {
+  const source = await readFile(chatBox, 'utf8');
+  assert.match(source, /wakeNameMatchIndex/);
+  assert.match(source, /\(\^\|\[\^a-z0-9_\]\)@\?/);
+  assert.doesNotMatch(source, /new RegExp\(`\^\\\\s\*@\?/);
+  assert.match(source, /index < bestMatch\.index/);
+  assert.match(source, /ATHENA_COMPAT_WAKE_NAMES/);
+  assert.match(source, /"Athena"/);
+  assert.match(source, /"Annie"/);
+});
+
+test('connected personas can publish aliases and historical wake names', async () => {
+  const chatSource = await readFile(chatBox, 'utf8');
+  const personaSource = await readFile(personaCard, 'utf8');
+  assert.match(chatSource, /\.\.\.\(metadata\.wakeNames \|\| \[\]\)/);
+  assert.match(chatSource, /\.\.\.\(metadata\.aliases \|\| \[\]\)/);
+  assert.match(chatSource, /\.\.\.\(metadata\.previousNames \|\| \[\]\)/);
+  assert.match(personaSource, /wakeNames\?: string\[\]/);
+  assert.match(personaSource, /aliases\?: string\[\]/);
+  assert.match(personaSource, /previousNames\?: string\[\]/);
+});
+
 test('Athena wake names remain backward-compatible without owning a separate command path', async () => {
   const source = await readFile(chatBox, 'utf8');
-  assert.match(source, /@\?athena/);
+  assert.match(source, /ATHENA_COMPAT_WAKE_NAMES/);
   assert.match(source, /Compatibility only/);
 });
