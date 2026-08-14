@@ -13,11 +13,13 @@ export type PersonaMetadata = {
   avatar?: string;
   source?: string;
   bot?: boolean;
-  voice?: boolean;
+  voice?: boolean | string;
   research?: boolean;
   wakeNames?: string[];
   aliases?: string[];
   previousNames?: string[];
+  ownerTenantId?: string;
+  ownerName?: string;
 };
 
 export function parsePersonaMetadata(metadata?: string): PersonaMetadata | null {
@@ -56,6 +58,9 @@ export default function PersonaCard({ participant }: { participant: Participant 
             <p className="truncate text-lg font-bold">{displayName}</p>
             <Badge variant="secondary" className="gap-1"><Bot className="h-3 w-3" />BOT</Badge>
           </div>
+          {metadata.ownerName && (
+            <p className="mt-1 truncate text-xs text-muted-foreground">Owned by {metadata.ownerName}</p>
+          )}
           <p className="mt-1 flex items-center gap-1.5 text-xs text-muted-foreground">
             <Radio className={`h-3.5 w-3.5 ${isSpeaking ? 'animate-pulse text-green-500' : ''}`} />
             {isSpeaking ? 'Speaking' : 'StreamWeaver persona connected'}
