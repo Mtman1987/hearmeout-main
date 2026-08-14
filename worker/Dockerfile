@@ -34,4 +34,4 @@ ENV NODE_ENV=production
 ENV PORT=3002
 ENV MUSIC_CACHE_DIR=/tmp/music
 
-CMD ["node", "src/server.js"]
+CMD ["node", "-r", "./src/persona-bootstrap.js", "src/server.js"]
