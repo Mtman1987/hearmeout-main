@@ -4,8 +4,8 @@
   "description": "DJ Worker for HearMeOut — browser DJ orchestration via LiveKit + ffmpeg",
   "main": "src/server.js",
   "scripts": {
-    "start": "node src/server.js",
-    "dev": "nodemon src/server.js"
+    "start": "node -r ./src/persona-bootstrap.js src/server.js",
+    "dev": "nodemon --exec \"node -r ./src/persona-bootstrap.js\" src/server.js"
   },
   "dependencies": {
     "@discordjs/opus": "^0.10.0",
