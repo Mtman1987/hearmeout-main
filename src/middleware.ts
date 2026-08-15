@@ -12,6 +12,7 @@ const PUBLIC_PREFIXES = [
   '/api/discord/',
   '/api/worker/',
   '/api/livekit/webhook',
+  '/api/livekit-token',
   '/overlay',
   '/embed',
   '/room-overlay',
