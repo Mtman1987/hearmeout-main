@@ -3,6 +3,7 @@
 import UserCard from "./UserCard";
 import PersonaCard, { isPersonaParticipant } from './PersonaCard';
 import DJCard from "./DJCard";
+import MobileVoiceControl from './MobileVoiceControl';
 import React from "react";
 import { useSession } from '@/hooks/use-session';
 import { useCollection, useDoc } from '@/hooks/use-db';
@@ -24,7 +25,6 @@ export interface RoomData {
 interface UserListProps {
   roomId: string;
   localVolume: number;
-  // eslint-disable-next-line no-unused-vars
   onVolumeChange: (volume: number) => void;
   showDJ: boolean;
   onOpenQueue: () => void;
@@ -83,8 +83,6 @@ function PeerPresenceParticipants({ roomId, localUserId, connectedPeerIds }: { r
   );
 }
 
-// The voice-bridge "listener" participant only exists to pipe app audio into
-// Discord — it publishes nothing and must never render a card.
 const isHiddenBridgeParticipant = (identity?: string) =>
   !!identity && identity.startsWith('discord-bridge-listener');
 
@@ -102,6 +100,7 @@ function LiveKitParticipants({ isHost, roomId }: { isHost: boolean; roomId: stri
 
   return (
     <>
+      <MobileVoiceControl roomId={roomId} remoteParticipants={remoteParticipants} />
       {allAudioTracks.map((trackRef) => (
         <AudioTrack key={trackRef.publication.trackSid} trackRef={trackRef} volume={1.0} muted={false} />
       ))}
@@ -131,7 +130,6 @@ export default function UserList({ roomId, localVolume, onVolumeChange, showDJ, 
           </div>
         )}
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
-          {/* DJ Card — toggled via header music note */}
           {showDJ && (
             <DJCard
               roomId={roomId}
@@ -143,7 +141,6 @@ export default function UserList({ roomId, localVolume, onVolumeChange, showDJ, 
               onOpenWatch={onOpenWatch}
             />
           )}
-          {/* Real users and StreamWeaver personas */}
           {voiceEnabled && <LiveKitParticipants isHost={isHost} roomId={roomId} />}
           {voicePeerFallback && <PeerPresenceParticipants roomId={roomId} localUserId={user?.uid} connectedPeerIds={peerConnectedPeerIds} />}
         </div>
