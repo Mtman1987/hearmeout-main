@@ -133,7 +133,7 @@ function getDiscordClient(token) {
 
 // ── One bridge per HearMeOut room ─────────────────────────────────────────
 class VoiceBridge {
-  constructor({ roomId, guildId, voiceChannelId, token, appUrl, workerHeaders, livekitUrl }) {
+  constructor({ roomId, guildId, voiceChannelId, token, appUrl, workerHeaders, livekitUrl, roomVoiceOutboundEnabled = false }) {
     this.roomId = roomId;
     this.guildId = guildId;
     this.voiceChannelId = voiceChannelId;
@@ -141,6 +141,10 @@ class VoiceBridge {
     this.appUrl = appUrl;
     this.workerHeaders = workerHeaders || {};
     this.livekitUrl = livekitUrl;
+    // Privacy-safe default. The main app applies the room's persisted setting
+    // immediately after start; until then Discord can be heard but cannot hear
+    // HearMeOut room microphones.
+    this.roomVoiceOutboundEnabled = roomVoiceOutboundEnabled === true;
 
     this.startedAt = new Date();
     this.client = null;
@@ -354,11 +358,36 @@ class VoiceBridge {
     this.mixSources.delete(sourceKey);
   }
 
+  setRoomVoiceOutboundEnabled(enabled) {
+    this.roomVoiceOutboundEnabled = enabled === true;
+    if (!this.roomVoiceOutboundEnabled) {
+      // Drop buffered room speech immediately so reopening the gate can never
+      // leak a phrase that was spoken while the gate was closed.
+      for (const [sourceKey, src] of this.mixSources.entries()) {
+        if (sourceKey.startsWith('voice:')) src.buf = Buffer.alloc(0);
+      }
+    }
+    console.log(
+      `[VoiceBridge:${this.roomId}] HearMeOut -> Discord room voice gate ${this.roomVoiceOutboundEnabled ? 'OPEN' : 'CLOSED'}`,
+    );
+    return this.status();
+  }
+
   appMixTick() {
     if (this.stopped || !this.mixStream) return;
 
     const frames = [];
-    for (const src of this.mixSources.values()) {
+    let hasForwardableSource = false;
+    for (const [sourceKey, src] of this.mixSources.entries()) {
+      const isRoomVoice = sourceKey.startsWith('voice:');
+      if (isRoomVoice && !this.roomVoiceOutboundEnabled) {
+        // Keep consuming/dropping while closed so no private-room backlog can
+        // be emitted later. Discord -> HearMeOut is handled by discordMixTick
+        // and remains fully active.
+        if (src.buf.length) src.buf = Buffer.alloc(0);
+        continue;
+      }
+      hasForwardableSource = true;
       if (src.buf.length >= BYTES_PER_FRAME) {
         frames.push(src.buf.subarray(0, BYTES_PER_FRAME));
         src.buf = src.buf.subarray(BYTES_PER_FRAME);
@@ -368,8 +397,7 @@ class VoiceBridge {
     let out;
     if (frames.length === 0) {
       const now = Date.now();
-      const hasAnySource = this.mixSources.size > 0;
-      const withinTail = hasAnySource && now - this.lastAppAudioAt < APP_SILENCE_TAIL_MS;
+      const withinTail = hasForwardableSource && now - this.lastAppAudioAt < APP_SILENCE_TAIL_MS;
       const canHeartbeat = now - this.lastSilenceAt >= SILENCE_HEARTBEAT_MS;
       if (!withinTail || !canHeartbeat) return;
       this.lastSilenceAt = now;
@@ -678,6 +706,8 @@ class VoiceBridge {
       startedAt: this.startedAt,
       discordSpeakers: this.userDecoders.size,
       appSources: this.mixSources.size,
+      roomVoiceOutboundEnabled: this.roomVoiceOutboundEnabled,
+      mode: this.roomVoiceOutboundEnabled ? 'two-way' : 'listen-only',
     };
   }
 
@@ -732,6 +762,9 @@ async function startVoiceBridge(opts) {
   const existing = bridges.get(opts.roomId);
   if (existing) {
     if (existing.voiceChannelId === opts.voiceChannelId && existing.guildId === opts.guildId) {
+      if (typeof opts.roomVoiceOutboundEnabled === 'boolean') {
+        existing.setRoomVoiceOutboundEnabled(opts.roomVoiceOutboundEnabled);
+      }
       return { success: true, message: 'Bridge already running', status: existing.status() };
     }
     await existing.stop();
@@ -766,6 +799,22 @@ async function stopVoiceBridge(roomId) {
   return { success: true, message: 'Bridge stopped' };
 }
 
+function setVoiceBridgeRoomOutbound(roomId, enabled) {
+  const bridge = bridges.get(roomId);
+  if (!bridge) {
+    return {
+      success: true,
+      message: 'Bridge is not running; privacy preference can be applied on the next start.',
+      status: { running: false, roomVoiceOutboundEnabled: enabled === true, mode: enabled === true ? 'two-way' : 'listen-only' },
+    };
+  }
+  return {
+    success: true,
+    message: enabled === true ? 'HearMeOut room voices are now sent to Discord.' : 'HearMeOut room voices are private; Discord remains audible in HearMeOut.',
+    status: bridge.setRoomVoiceOutboundEnabled(enabled),
+  };
+}
+
 function getVoiceBridgeStatus(roomId) {
   const bridge = bridges.get(roomId);
   if (!bridge) return { running: false };
@@ -779,6 +828,7 @@ function listVoiceBridges() {
 module.exports = {
   startVoiceBridge,
   stopVoiceBridge,
+  setVoiceBridgeRoomOutbound,
   getVoiceBridgeStatus,
   listVoiceBridges,
 };
