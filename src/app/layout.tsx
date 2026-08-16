@@ -41,6 +41,7 @@ export default function RootLayout({
       </head>
       <body className="font-body antialiased bg-background min-h-screen">
         <Script src="https://spmt.live/shared/ecosystem-header.js" data-app="hearmeout" strategy="afterInteractive" />
+        <Script src="https://spmt.live/shared/workspace-controller.js" strategy="afterInteractive" />
         <PopoutProvider>
           <SessionProvider>
             <WorkspaceTruthProvider>
