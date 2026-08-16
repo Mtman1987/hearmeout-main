@@ -5,13 +5,17 @@
 // it holds a deep playout buffer, ramps speech in, and synthesizes a clean
 // release to zero instead of repeating the final speech frame at an underrun.
 
+const MIN_TARGET_FRAMES = 30; // at least ~600 ms at the bridge's 20 ms frame size
+const MIN_MAX_FRAMES = 80; // at least ~1.6 s of headroom
+const MIN_STARTUP_WAIT_MS = 800;
+
 class DiscordPcmJitterSource {
   constructor({
     frameBytes,
     channels = 2,
-    targetFrames = 30,
-    maxFrames = 80,
-    maxStartupWaitMs = 800,
+    targetFrames = MIN_TARGET_FRAMES,
+    maxFrames = MIN_MAX_FRAMES,
+    maxStartupWaitMs = MIN_STARTUP_WAIT_MS,
     attackFrames = 4,
     releaseFrames = 4,
   } = {}) {
@@ -20,9 +24,12 @@ class DiscordPcmJitterSource {
     }
     this.frameBytes = frameBytes;
     this.channels = Math.max(1, Number(channels) || 2);
-    this.targetFrames = Math.max(1, Number(targetFrames) || 30);
-    this.maxFrames = Math.max(this.targetFrames + 1, Number(maxFrames) || 80);
-    this.maxStartupWaitMs = Math.max(0, Number(maxStartupWaitMs) || 0);
+    // The bridge used to pass 3/10 here. Clamp old callers to the new
+    // quality-first policy so a stale constant cannot silently restore the
+    // click-prone 60 ms playout window.
+    this.targetFrames = Math.max(MIN_TARGET_FRAMES, Number(targetFrames) || MIN_TARGET_FRAMES);
+    this.maxFrames = Math.max(MIN_MAX_FRAMES, this.targetFrames + 1, Number(maxFrames) || MIN_MAX_FRAMES);
+    this.maxStartupWaitMs = Math.max(MIN_STARTUP_WAIT_MS, Number(maxStartupWaitMs) || MIN_STARTUP_WAIT_MS);
     this.attackFrames = Math.max(0, Number(attackFrames) || 0);
     this.releaseFrames = Math.max(0, Number(releaseFrames) || 0);
 
@@ -37,6 +44,10 @@ class DiscordPcmJitterSource {
       releases: 0,
       rebuffers: 0,
       droppedFrames: 0,
+      // Kept for status compatibility with the first smoothing pass. We no
+      // longer conceal by replaying speech because that repetition itself can
+      // sound like a machine gun at Discord voice-activity edges.
+      concealedFrames: 0,
     };
   }
 
@@ -64,7 +75,7 @@ class DiscordPcmJitterSource {
     const buffered = this.bufferedFrames();
     if (buffered <= 0) return false;
     if (buffered >= this.targetFrames) return true;
-    return !!this.firstPacketAt && this.maxStartupWaitMs > 0 && now - this.firstPacketAt >= this.maxStartupWaitMs;
+    return !!this.firstPacketAt && now - this.firstPacketAt >= this.maxStartupWaitMs;
   }
 
   beginPlayout() {
@@ -140,6 +151,7 @@ class DiscordPcmJitterSource {
       started: this.started,
       releasing: this.releaseStep >= 0,
       targetFrames: this.targetFrames,
+      maxFrames: this.maxFrames,
       maxStartupWaitMs: this.maxStartupWaitMs,
       ...this.stats,
     };
