@@ -58,16 +58,17 @@ jobs:
 
   validate:
     needs: branch-housekeeping
-    name: Validate bridge privacy contract
+    name: Validate voice bridge contracts
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
       - name: Check worker JavaScript syntax
         run: |
+          node --check worker/src/discord-pcm-jitter.js
           node --check worker/src/discord-voice-bridge.js
           node --check worker/src/persona-bootstrap.js
-      - name: Test Discord bridge privacy and bot isolation
-        run: node --test tests/voice-bridge-privacy-gate.test.cjs
+      - name: Test Discord bridge privacy and audio smoothing
+        run: node --test tests/voice-bridge-privacy-gate.test.cjs tests/discord-voice-jitter-buffer.test.cjs
 
   deploy-main:
     needs: [branch-housekeeping, validate]
