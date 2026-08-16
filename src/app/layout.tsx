@@ -1,5 +1,6 @@
 import type {Metadata} from 'next';
 import type { ReactNode } from 'react';
+import Script from 'next/script';
 import './globals.css';
 import './workspace-parity.css';
 import { Toaster } from "@/components/ui/toaster";
@@ -39,6 +40,7 @@ export default function RootLayout({
         <link href="https://fonts.googleapis.com/css2?family=PT+Sans:ital,wght@0,400;0,700;1,400;1,700&display=swap" rel="stylesheet" />
       </head>
       <body className="font-body antialiased bg-background min-h-screen">
+        <Script src="https://spmt.live/shared/ecosystem-header.js" data-app="hearmeout" strategy="afterInteractive" />
         <PopoutProvider>
           <SessionProvider>
             <WorkspaceTruthProvider>
