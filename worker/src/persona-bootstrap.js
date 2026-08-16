@@ -2,6 +2,7 @@
 
 const { timingSafeEqual } = require('crypto');
 const { PersonaSession } = require('./persona-session');
+const { PersonaRuntimeAdapter, audioDataUriToPcm } = require('./persona-runtime-adapter');
 const { setVoiceBridgeRoomOutbound } = require('./discord-voice-bridge');
 
 const LOCAL_DEV_WORKER_SECRET = 'hearmeout-local-worker-development-only';
@@ -33,6 +34,20 @@ function clean(value, max = 160) {
 
 function sessionKey(roomId, personaId) {
   return `${roomId}:${personaId}`;
+}
+
+function personaCountForRoom(roomId) {
+  let count = 0;
+  for (const record of sessions.values()) {
+    if (record.roomId === roomId) count += 1;
+  }
+  return count;
+}
+
+async function stopRecord(record) {
+  if (!record) return;
+  try { record.runtime?.stop(); } catch {}
+  await record.persona?.stop().catch(() => {});
 }
 
 async function mintPersonaToken({ roomId, personaId, displayName, metadata }) {
@@ -71,7 +86,7 @@ async function handlePersona(req, res) {
   if (action === 'leave' || action === 'stop') {
     const existing = sessions.get(key);
     if (existing) {
-      await existing.stop().catch(() => {});
+      await stopRecord(existing);
       sessions.delete(key);
     }
     return res.json({ success: true, action: 'leave', roomId, personaId, displayName });
@@ -82,21 +97,34 @@ async function handlePersona(req, res) {
   }
 
   if (sessions.has(key)) {
-    return res.json({ success: true, action: 'join', alreadyJoined: true, roomId, personaId, displayName });
+    const existing = sessions.get(key);
+    if (req.body?.spmtAccessToken) existing.runtime.accessToken = clean(req.body.spmtAccessToken, 10000);
+    if (req.body?.spmtRefreshToken) existing.runtime.refreshToken = clean(req.body.spmtRefreshToken, 10000);
+    return res.json({
+      success: true,
+      action: 'join',
+      alreadyJoined: true,
+      roomId,
+      personaId,
+      displayName,
+      runtime: existing.runtime.status(),
+    });
   }
 
   const wakeNames = Array.isArray(req.body?.wakeNames) ? req.body.wakeNames.map((v) => clean(v, 96)).filter(Boolean) : [];
   const aliases = Array.isArray(req.body?.aliases) ? req.body.aliases.map((v) => clean(v, 96)).filter(Boolean) : [];
+  const ownerTenantId = clean(req.body?.ownerTenantId, 128) || personaId;
+  const voice = clean(req.body?.voice, 128);
   const metadata = {
     type: 'persona',
     bot: true,
     personaId,
     displayName,
-    ownerTenantId: clean(req.body?.ownerTenantId, 128) || personaId,
+    ownerTenantId,
     ownerName: clean(req.body?.ownerName, 96),
     wakeNames,
     aliases,
-    voice: clean(req.body?.voice, 128),
+    voice,
     source: 'streamweaver',
   };
 
@@ -117,8 +145,35 @@ async function handlePersona(req, res) {
       research: req.body?.research !== false,
     });
     await persona.start();
-    sessions.set(key, persona);
-    return res.json({ success: true, action: 'join', roomId, personaId, displayName });
+
+    const appUrl = String(process.env.APP_URL || 'https://hearmeout-main.fly.dev').replace(/\/$/, '');
+    const secret = workerSecret();
+    const runtime = new PersonaRuntimeAdapter({
+      persona,
+      roomId,
+      personaId,
+      displayName,
+      ownerTenantId,
+      wakeNames,
+      aliases,
+      voice,
+      appUrl,
+      workerHeaders: { Authorization: `Bearer ${secret}` },
+      accessToken: clean(req.body?.spmtAccessToken, 10000),
+      refreshToken: clean(req.body?.spmtRefreshToken, 10000),
+      isOnlyPersona: () => personaCountForRoom(roomId) <= 1,
+    });
+    runtime.start();
+
+    sessions.set(key, { roomId, personaId, persona, runtime, metadata });
+    return res.json({
+      success: true,
+      action: 'join',
+      roomId,
+      personaId,
+      displayName,
+      runtime: runtime.status(),
+    });
   } catch (error) {
     return res.status(502).json({
       success: false,
@@ -129,22 +184,50 @@ async function handlePersona(req, res) {
   }
 }
 
+async function handlePersonaSpeak(req, res) {
+  const roomId = clean(req.body?.roomId, 160);
+  const personaId = clean(req.body?.personaId, 96).replace(/[^A-Za-z0-9_.:-]/g, '');
+  const audioDataUri = String(req.body?.audioDataUri || '').trim();
+  if (!roomId || !personaId || !audioDataUri) {
+    return res.status(400).json({ success: false, error: 'roomId, personaId, and audioDataUri are required' });
+  }
+  const record = sessions.get(sessionKey(roomId, personaId));
+  if (!record) return res.status(404).json({ success: false, error: 'Persona is not active in this room' });
+  try {
+    const pcm = await audioDataUriToPcm(audioDataUri);
+    await record.persona.pushPcm(pcm);
+    return res.json({ success: true, roomId, personaId, bytes: pcm.length });
+  } catch (error) {
+    return res.status(502).json({
+      success: false,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
 function installRoutes(app, express) {
   if (app.__hmoPersonaRoutesInstalled) return;
   app.__hmoPersonaRoutesInstalled = true;
-  const jsonBody = express.json({ limit: '64kb' });
+  const jsonBody = express.json({ limit: '32mb' });
   app.post('/persona', jsonBody, authorize, (req, res) => {
     handlePersona(req, res).catch((error) => {
       console.error('[Persona] route failed:', error);
       if (!res.headersSent) res.status(500).json({ success: false, error: 'Persona route failed' });
     });
   });
+  app.post('/persona/speak', jsonBody, authorize, (req, res) => {
+    handlePersonaSpeak(req, res).catch((error) => {
+      console.error('[Persona] speak failed:', error);
+      if (!res.headersSent) res.status(500).json({ success: false, error: 'Persona speak failed' });
+    });
+  });
   app.get('/persona', authorize, (_req, res) => {
     res.json({
-      instances: Array.from(sessions.keys()).map((key) => {
-        const split = key.indexOf(':');
-        return { roomId: key.slice(0, split), personaId: key.slice(split + 1) };
-      }),
+      instances: Array.from(sessions.values()).map((record) => ({
+        roomId: record.roomId,
+        personaId: record.personaId,
+        runtime: record.runtime.status(),
+      })),
     });
   });
 
