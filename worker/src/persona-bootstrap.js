@@ -2,6 +2,7 @@
 
 const { timingSafeEqual } = require('crypto');
 const { PersonaSession } = require('./persona-session');
+const { setVoiceBridgeRoomOutbound } = require('./discord-voice-bridge');
 
 const LOCAL_DEV_WORKER_SECRET = 'hearmeout-local-worker-development-only';
 const sessions = new Map();
@@ -145,6 +146,19 @@ function installRoutes(app, express) {
         return { roomId: key.slice(0, split), personaId: key.slice(split + 1) };
       }),
     });
+  });
+
+  // Voice-bridge privacy is intentionally separate from persona/bot joining.
+  // This route only changes whether HearMeOut room microphones are returned to
+  // Discord. Discord -> HearMeOut and the music lane remain connected.
+  app.post('/voice-bridge/gate', jsonBody, authorize, (req, res) => {
+    const roomId = clean(req.body?.roomId, 160);
+    const enabled = req.body?.roomVoiceOutboundEnabled;
+    if (!roomId) return res.status(400).json({ success: false, error: 'roomId is required' });
+    if (typeof enabled !== 'boolean') {
+      return res.status(400).json({ success: false, error: 'roomVoiceOutboundEnabled must be boolean' });
+    }
+    return res.json(setVoiceBridgeRoomOutbound(roomId, enabled));
   });
 }
 
