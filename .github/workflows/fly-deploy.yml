@@ -55,8 +55,22 @@ jobs:
                 throw error;
               }
             }
-  deploy-main:
+
+  validate:
     needs: branch-housekeeping
+    name: Validate bridge privacy contract
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Check worker JavaScript syntax
+        run: |
+          node --check worker/src/discord-voice-bridge.js
+          node --check worker/src/persona-bootstrap.js
+      - name: Test Discord bridge privacy and bot isolation
+        run: node --test tests/voice-bridge-privacy-gate.test.cjs
+
+  deploy-main:
+    needs: [branch-housekeeping, validate]
     name: Deploy main app
     runs-on: ubuntu-latest
     steps:
@@ -68,7 +82,7 @@ jobs:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN_MAIN || secrets.FLY_API_TOKEN }}
 
   deploy-worker:
-    needs: branch-housekeeping
+    needs: [branch-housekeeping, validate]
     name: Deploy DJ worker
     runs-on: ubuntu-latest
     steps:
