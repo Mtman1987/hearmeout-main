@@ -58,7 +58,7 @@ jobs:
 
   validate:
     needs: branch-housekeeping
-    name: Validate voice bridge contracts
+    name: Validate voice and persona contracts
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -66,9 +66,10 @@ jobs:
         run: |
           node --check worker/src/discord-pcm-jitter.js
           node --check worker/src/discord-voice-bridge.js
+          node --check worker/src/persona-runtime-adapter.js
           node --check worker/src/persona-bootstrap.js
-      - name: Test Discord bridge privacy and audio smoothing
-        run: node --test tests/voice-bridge-privacy-gate.test.cjs tests/discord-voice-jitter-buffer.test.cjs
+      - name: Test Discord bridge and HearMeOut persona runtime
+        run: node --test tests/voice-bridge-privacy-gate.test.cjs tests/discord-voice-jitter-buffer.test.cjs tests/persona-runtime.test.cjs
 
   deploy-main:
     needs: [branch-housekeeping, validate]
