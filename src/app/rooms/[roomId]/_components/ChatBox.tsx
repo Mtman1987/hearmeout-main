@@ -102,7 +102,11 @@ export function resolveBotInvocation(
     };
   }
 
-  if (bots.length === 1 && matchesWakeName(value, "bot")) {
+  // Once one persona is explicitly invited, it is the active conversation
+  // partner for normal room chat. Commands beginning with ! remain room/app
+  // controls and are not swallowed by the persona. With multiple personas,
+  // explicit wake names continue to select which bot should answer.
+  if (bots.length === 1 && value.trim() && !value.trim().startsWith("!")) {
     return {
       displayName: bots[0].displayName,
       targetTenantId: bots[0].targetTenantId,
@@ -248,9 +252,9 @@ export default function ChatBox({ roomId, compact = false, onOpenSpaceChat, onOp
         command,
         roomId: activeRoomId,
         targetTenantId: targetTenantId || undefined,
-        // Text chat only needs the response text. Voice callers can request
-        // synthesized audio from the same canonical SPMT bot route.
-        speak: false,
+        // An invited persona should answer as a room participant. The server
+        // hands synthesized audio to that persona's LiveKit microphone.
+        speak: true,
       }),
     });
     const payload = await response.json().catch(() => ({}));
