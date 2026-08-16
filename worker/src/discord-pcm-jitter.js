@@ -1,37 +1,49 @@
 'use strict';
 
-// Discord voice packets do not arrive on the exact same 20 ms cadence as the
-// LiveKit publisher clock. Feeding the publisher directly from the decoder can
-// therefore alternate real PCM with hard zero-silence during tiny network or
-// scheduler gaps, which is heard as sharp clicks. This source adds a small
-// playout buffer and soft concealment without changing codecs or gain.
+// Discord voice arrives in bursty Opus/PCM chunks while LiveKit consumes a
+// strict 20 ms clock. This source deliberately trades latency for smoothness:
+// it holds a deep playout buffer, ramps speech in, and synthesizes a clean
+// release to zero instead of repeating the final speech frame at an underrun.
 
 class DiscordPcmJitterSource {
-  constructor({ frameBytes, targetFrames = 3, maxFrames = 10, concealFrames = 2, fadeSamples = 240 } = {}) {
+  constructor({
+    frameBytes,
+    channels = 2,
+    targetFrames = 30,
+    maxFrames = 80,
+    maxStartupWaitMs = 800,
+    attackFrames = 4,
+    releaseFrames = 4,
+  } = {}) {
     if (!Number.isInteger(frameBytes) || frameBytes <= 0 || frameBytes % 2 !== 0) {
       throw new Error('frameBytes must be a positive even integer');
     }
     this.frameBytes = frameBytes;
-    this.targetFrames = Math.max(1, Number(targetFrames) || 3);
-    this.maxFrames = Math.max(this.targetFrames + 1, Number(maxFrames) || 10);
-    this.concealFrames = Math.max(0, Number(concealFrames) || 0);
-    this.fadeSamples = Math.max(0, Number(fadeSamples) || 0);
+    this.channels = Math.max(1, Number(channels) || 2);
+    this.targetFrames = Math.max(1, Number(targetFrames) || 30);
+    this.maxFrames = Math.max(this.targetFrames + 1, Number(maxFrames) || 80);
+    this.maxStartupWaitMs = Math.max(0, Number(maxStartupWaitMs) || 0);
+    this.attackFrames = Math.max(0, Number(attackFrames) || 0);
+    this.releaseFrames = Math.max(0, Number(releaseFrames) || 0);
 
     this.buf = Buffer.alloc(0);
     this.started = false;
+    this.firstPacketAt = 0;
     this.lastFrame = null;
-    this.concealRemaining = this.concealFrames;
-    this.fadeInPending = true;
+    this.attackStep = 0;
+    this.releaseStep = -1;
     this.stats = {
-      concealedFrames: 0,
+      starts: 0,
+      releases: 0,
       rebuffers: 0,
       droppedFrames: 0,
     };
   }
 
-  push(pcm) {
+  push(pcm, now = Date.now()) {
     if (!pcm || pcm.length === 0) return;
     const bytes = Buffer.isBuffer(pcm) ? pcm : Buffer.from(pcm);
+    if (!this.firstPacketAt) this.firstPacketAt = now;
     this.buf = this.buf.length ? Buffer.concat([this.buf, bytes]) : Buffer.from(bytes);
 
     const maxBytes = this.maxFrames * this.frameBytes;
@@ -48,39 +60,77 @@ class DiscordPcmJitterSource {
     return Math.floor(this.buf.length / this.frameBytes);
   }
 
-  nextFrame() {
+  shouldStart(now) {
+    const buffered = this.bufferedFrames();
+    if (buffered <= 0) return false;
+    if (buffered >= this.targetFrames) return true;
+    return !!this.firstPacketAt && this.maxStartupWaitMs > 0 && now - this.firstPacketAt >= this.maxStartupWaitMs;
+  }
+
+  beginPlayout() {
+    this.started = true;
+    this.attackStep = 0;
+    this.releaseStep = -1;
+    this.stats.starts += 1;
+  }
+
+  beginRelease() {
+    this.releaseStep = 0;
+    // Any packets arriving while the release ramp is playing are a new burst.
+    this.firstPacketAt = 0;
+    this.stats.releases += 1;
+  }
+
+  finishRelease() {
+    this.started = false;
+    this.lastFrame = null;
+    this.attackStep = 0;
+    this.releaseStep = -1;
+    this.stats.rebuffers += 1;
+  }
+
+  nextFrame(now = Date.now()) {
+    // Once a release begins, finish that short ramp before starting a newly
+    // arrived burst. That avoids snapping from a fade-out straight back into
+    // arbitrary speech PCM.
+    if (this.releaseStep >= 0) {
+      if (!this.lastFrame || this.releaseFrames <= 0 || this.releaseStep >= this.releaseFrames) {
+        this.finishRelease();
+        return null;
+      }
+      const frame = releasePcm16(
+        this.lastFrame,
+        this.releaseStep,
+        this.releaseFrames,
+        this.channels,
+      );
+      this.releaseStep += 1;
+      if (this.releaseStep >= this.releaseFrames) this.finishRelease();
+      return frame;
+    }
+
     if (!this.started) {
-      if (this.bufferedFrames() < this.targetFrames) return null;
-      this.started = true;
-      this.fadeInPending = true;
-      this.concealRemaining = this.concealFrames;
+      if (!this.shouldStart(now)) return null;
+      this.beginPlayout();
     }
 
     if (this.buf.length >= this.frameBytes) {
       let frame = Buffer.from(this.buf.subarray(0, this.frameBytes));
       this.buf = this.buf.subarray(this.frameBytes);
-      if (this.fadeInPending) {
-        frame = fadeInPcm16(frame, this.fadeSamples);
-        this.fadeInPending = false;
+      if (this.attackFrames > 0 && this.attackStep < this.attackFrames) {
+        frame = attackPcm16(frame, this.attackStep, this.attackFrames);
+        this.attackStep += 1;
       }
       this.lastFrame = frame;
-      this.concealRemaining = this.concealFrames;
       return frame;
     }
 
-    if (this.lastFrame && this.concealRemaining > 0) {
-      const step = this.concealFrames - this.concealRemaining;
-      this.concealRemaining -= 1;
-      this.stats.concealedFrames += 1;
-      this.fadeInPending = true;
-      return concealPcm16(this.lastFrame, step, this.concealFrames);
+    if (this.lastFrame && this.releaseFrames > 0) {
+      this.beginRelease();
+      return this.nextFrame(now);
     }
 
-    this.started = false;
-    this.lastFrame = null;
-    this.fadeInPending = true;
-    this.concealRemaining = this.concealFrames;
-    this.stats.rebuffers += 1;
+    this.finishRelease();
     return null;
   }
 
@@ -88,29 +138,20 @@ class DiscordPcmJitterSource {
     return {
       bufferedFrames: this.bufferedFrames(),
       started: this.started,
+      releasing: this.releaseStep >= 0,
+      targetFrames: this.targetFrames,
+      maxStartupWaitMs: this.maxStartupWaitMs,
       ...this.stats,
     };
   }
 }
 
-function fadeInPcm16(frame, fadeSamples) {
-  const out = Buffer.from(frame);
-  const sampleCount = out.length / 2;
-  const rampSamples = Math.min(sampleCount, Math.max(0, fadeSamples));
-  if (!rampSamples) return out;
-  for (let i = 0; i < rampSamples; i += 1) {
-    const gain = (i + 1) / rampSamples;
-    out.writeInt16LE(Math.round(out.readInt16LE(i * 2) * gain), i * 2);
-  }
-  return out;
-}
-
-function concealPcm16(frame, step, totalSteps) {
+function attackPcm16(frame, step, totalSteps) {
   const out = Buffer.from(frame);
   const sampleCount = out.length / 2;
   const total = Math.max(1, totalSteps);
-  const startGain = Math.max(0, 0.65 * (1 - step / total));
-  const endGain = Math.max(0, 0.65 * (1 - (step + 1) / total));
+  const startGain = Math.max(0, Math.min(1, step / total));
+  const endGain = Math.max(0, Math.min(1, (step + 1) / total));
   for (let i = 0; i < sampleCount; i += 1) {
     const progress = sampleCount <= 1 ? 1 : i / (sampleCount - 1);
     const gain = startGain + (endGain - startGain) * progress;
@@ -119,8 +160,34 @@ function concealPcm16(frame, step, totalSteps) {
   return out;
 }
 
+function releasePcm16(lastFrame, step, totalSteps, channels = 2) {
+  const out = Buffer.alloc(lastFrame.length);
+  const sampleCount = out.length / 2;
+  const channelCount = Math.max(1, Math.min(Number(channels) || 1, sampleCount));
+  const samplesPerChannel = Math.floor(sampleCount / channelCount);
+  const total = Math.max(1, totalSteps);
+  const startGain = Math.max(0, 1 - step / total);
+  const endGain = Math.max(0, 1 - (step + 1) / total);
+
+  const lastValues = [];
+  for (let channel = 0; channel < channelCount; channel += 1) {
+    const lastIndex = (samplesPerChannel - 1) * channelCount + channel;
+    lastValues.push(lastFrame.readInt16LE(lastIndex * 2));
+  }
+
+  for (let sample = 0; sample < samplesPerChannel; sample += 1) {
+    const progress = samplesPerChannel <= 1 ? 1 : sample / (samplesPerChannel - 1);
+    const gain = startGain + (endGain - startGain) * progress;
+    for (let channel = 0; channel < channelCount; channel += 1) {
+      const index = sample * channelCount + channel;
+      out.writeInt16LE(Math.round(lastValues[channel] * gain), index * 2);
+    }
+  }
+  return out;
+}
+
 module.exports = {
   DiscordPcmJitterSource,
-  fadeInPcm16,
-  concealPcm16,
+  attackPcm16,
+  releasePcm16,
 };
