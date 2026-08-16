@@ -22,8 +22,19 @@ type Guild = { id: string; name: string };
 type Channel = { id: string; name: string; type: number };
 
 type BridgeState = {
-  config: { enabled: boolean; guildId: string; voiceChannelId: string };
-  worker?: { running?: boolean; discordSpeakers?: number; appSources?: number };
+  config: {
+    enabled: boolean;
+    guildId: string;
+    voiceChannelId: string;
+    roomVoiceOutboundEnabled?: boolean;
+  };
+  worker?: {
+    running?: boolean;
+    discordSpeakers?: number;
+    appSources?: number;
+    roomVoiceOutboundEnabled?: boolean;
+    mode?: 'two-way' | 'listen-only';
+  };
 };
 
 export function VoiceBridgeCard({ roomId }: { roomId: string }) {
@@ -33,6 +44,7 @@ export function VoiceBridgeCard({ roomId }: { roomId: string }) {
   const [guildId, setGuildId] = React.useState('');
   const [voiceChannelId, setVoiceChannelId] = React.useState('');
   const [running, setRunning] = React.useState(false);
+  const [roomVoiceOutboundEnabled, setRoomVoiceOutboundEnabled] = React.useState(true);
   const [status, setStatus] = React.useState<BridgeState['worker']>();
   const [loadingChannels, setLoadingChannels] = React.useState(false);
   const [busy, setBusy] = React.useState(false);
@@ -71,6 +83,9 @@ export function VoiceBridgeCard({ roomId }: { roomId: string }) {
           setGuildId(cfg.guildId || '');
           setVoiceChannelId(cfg.voiceChannelId || '');
           setRunning(Boolean(state?.worker?.running || cfg.enabled));
+          setRoomVoiceOutboundEnabled(
+            state?.worker?.roomVoiceOutboundEnabled ?? cfg.roomVoiceOutboundEnabled ?? true,
+          );
           setStatus(state?.worker);
           if (cfg.guildId) loadChannels(cfg.guildId);
         }
@@ -110,10 +125,46 @@ export function VoiceBridgeCard({ roomId }: { roomId: string }) {
       }
       setRunning(enable);
       setStatus(data.status);
+      if (typeof data.status?.roomVoiceOutboundEnabled === 'boolean') {
+        setRoomVoiceOutboundEnabled(data.status.roomVoiceOutboundEnabled);
+      }
       toast({ title: enable ? 'Discord voice bridge started' : 'Discord voice bridge stopped' });
     } catch (err: any) {
       toast({ title: 'Voice bridge error', description: err?.message, variant: 'destructive' });
       setRunning(!enable);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const setRoomOutbound = async (enable: boolean) => {
+    const previous = roomVoiceOutboundEnabled;
+    setBusy(true);
+    try {
+      const res = await fetch('/api/discord/voice-bridge', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          roomId,
+          action: 'set-room-outbound',
+          roomVoiceOutboundEnabled: enable,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || data.success === false) {
+        throw new Error(data.message || data.error || 'Privacy gate change was not confirmed');
+      }
+      setRoomVoiceOutboundEnabled(enable);
+      setStatus(data.status || status);
+      toast({
+        title: enable ? 'Room voice return is on' : 'Listen-only privacy is on',
+        description: enable
+          ? 'People in Discord can hear HearMeOut room voices.'
+          : 'You still hear Discord here, but HearMeOut room voices are not sent back.',
+      });
+    } catch (err: any) {
+      setRoomVoiceOutboundEnabled(previous);
+      toast({ title: 'Privacy gate error', description: err?.message, variant: 'destructive' });
     } finally {
       setBusy(false);
     }
@@ -130,8 +181,9 @@ export function VoiceBridgeCard({ roomId }: { roomId: string }) {
       </CardHeader>
       <CardContent className="space-y-4">
         <p className="text-sm text-muted-foreground">
-          Bring a Discord voice channel into this room. Each Discord speaker shows up as their own
-          card, and everyone in the room is mixed back into Discord through the bot.
+          The bridge bot stays in Discord and carries that voice channel into this room. You do not
+          need to join the Discord voice channel yourself. Use the privacy gate below when you want
+          to hear Discord without sending this room&apos;s conversation back.
         </p>
 
         <div className="grid gap-3 sm:grid-cols-2">
@@ -184,6 +236,26 @@ export function VoiceBridgeCard({ roomId }: { roomId: string }) {
             checked={running}
             disabled={busy}
             onCheckedChange={(checked) => setBridge(checked)}
+          />
+        </div>
+
+        <div className="flex items-center justify-between gap-4 rounded-md border p-3">
+          <div className="min-w-0">
+            <Label className="cursor-pointer">Let Discord hear this room</Label>
+            <p className="mt-1 text-xs text-muted-foreground">
+              {roomVoiceOutboundEnabled
+                ? 'Two-way: HearMeOut room voices are sent to Discord.'
+                : 'Listen-only: Discord stays audible here, but this room stays private.'}
+            </p>
+            <p className="mt-1 text-xs text-muted-foreground">
+              Music uses its own bridge lane and is not muted by this room-voice gate.
+            </p>
+          </div>
+          <Switch
+            checked={roomVoiceOutboundEnabled}
+            disabled={busy}
+            aria-label="Let Discord hear this HearMeOut room"
+            onCheckedChange={(checked) => setRoomOutbound(checked)}
           />
         </div>
       </CardContent>
