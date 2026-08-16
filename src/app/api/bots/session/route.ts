@@ -80,6 +80,7 @@ export async function POST(request: NextRequest) {
   }
 
   let accessToken = String(request.cookies.get(HMO_SPMT_COOKIE)?.value || '').trim();
+  let refreshToken = String(request.cookies.get(HMO_SPMT_REFRESH_COOKIE)?.value || '').trim();
   if (!accessToken) {
     return NextResponse.json({ error: 'Sign in with SPMT to manage bots' }, { status: 401 });
   }
@@ -87,10 +88,10 @@ export async function POST(request: NextRequest) {
   let catalog = await fetchCatalog(accessToken);
   let refreshed: Awaited<ReturnType<typeof refreshHmoSpmtSession>> = null;
   if (catalog.response.status === 401) {
-    const refreshToken = String(request.cookies.get(HMO_SPMT_REFRESH_COOKIE)?.value || '').trim();
     refreshed = refreshToken ? await refreshHmoSpmtSession(refreshToken) : null;
     if (refreshed) {
       accessToken = refreshed.accessToken;
+      refreshToken = refreshed.refreshToken;
       catalog = await fetchCatalog(accessToken);
     }
   }
@@ -124,6 +125,11 @@ export async function POST(request: NextRequest) {
       wakeNames: matched.wakeNames || [matched.name, ...(matched.aliases || [])],
       aliases: matched.aliases || [],
       voice: matched.voice || '',
+      // These OAuth credentials stay server-to-server and only live in the
+      // worker's in-memory active persona runtime. They are never returned to
+      // the browser, logged, or persisted by the worker.
+      spmtAccessToken: action === 'join' ? accessToken : undefined,
+      spmtRefreshToken: action === 'join' ? refreshToken : undefined,
     }),
     cache: 'no-store',
     signal: typeof AbortSignal.timeout === 'function' ? AbortSignal.timeout(20000) : undefined,
