@@ -1,6 +1,8 @@
 'use strict';
 
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
 const test = require('node:test');
 const {
   DiscordPcmJitterSource,
@@ -77,4 +79,13 @@ test('caps excessive jitter backlog by dropping whole PCM frames, preserving sam
   assert.ok(source.snapshot().bufferedFrames <= 4);
   assert.ok(source.snapshot().droppedFrames >= 5);
   assert.equal(source.buf.length % 8, 0);
+});
+
+test('keeps each Discord receive subscription alive until the member leaves the VC', () => {
+  const bridgeSource = fs.readFileSync(
+    path.join(__dirname, '..', 'worker', 'src', 'discord-voice-bridge.js'),
+    'utf8',
+  );
+  assert.match(bridgeSource, /behavior:\s*EndBehaviorType\.Manual/);
+  assert.doesNotMatch(bridgeSource, /behavior:\s*EndBehaviorType\.AfterSilence/);
 });
