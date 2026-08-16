@@ -50,8 +50,7 @@ const MAX_SOURCE_BACKLOG = BYTES_PER_FRAME * 10; // ~200ms jitter cap per source
 const DISCORD_JITTER_TARGET_FRAMES = 3; // ~60ms playout buffer
 const DISCORD_JITTER_MAX_FRAMES = 10;
 const DISCORD_JITTER_CONCEAL_FRAMES = 2; // soften up to ~40ms of transient underflow
-const DISCORD_JITTER_FADE_SAMPLES = 240; // 5ms at 48kHz
-const DISCORD_RECEIVER_SILENCE_MS = 1200;
+const DISCORD_JITTER_FADE_SAMPLES = 480; // 5ms across interleaved stereo at 48kHz
 const APP_SILENCE_TAIL_MS = 1200;
 const SILENCE_HEARTBEAT_MS = 250;
 const LIVEKIT_RECONNECT_BASE_MS = 1500;
@@ -242,7 +241,9 @@ class VoiceBridge {
     if (this.userDecoders.has(userId)) return;
 
     const opusStream = this.connection.receiver.subscribe(userId, {
-      end: { behavior: EndBehaviorType.AfterSilence, duration: DISCORD_RECEIVER_SILENCE_MS },
+      // Keep one decoder alive for the member's whole VC stay. Recreating the
+      // receive stream between speech bursts creates avoidable PCM edges.
+      end: { behavior: EndBehaviorType.Manual },
     });
     const decoder = new prism.opus.Decoder({
       rate: SAMPLE_RATE,
