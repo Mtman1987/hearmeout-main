@@ -12,6 +12,9 @@ import { getDjWorkerRequestHeaders } from '@/lib/dj-worker-auth';
 //   POST { roomId, action: 'start' | 'stop', guildId?, voiceChannelId? }
 //     - Persists the selected guild/voice-channel on the room doc.
 //     - Tells the DJ worker (which holds the gateway bot) to join/leave the VC.
+//   POST { roomId, action: 'set-room-outbound', roomVoiceOutboundEnabled }
+//     - Opens/closes only the HearMeOut room-microphone return path to Discord.
+//     - Discord audio continues into HearMeOut while the gate is closed.
 //   GET ?roomId=...
 //     - Returns the persisted config plus the worker's live status.
 //
@@ -22,6 +25,7 @@ type VoiceBridgeConfig = {
   enabled: boolean;
   guildId: string;
   voiceChannelId: string;
+  roomVoiceOutboundEnabled: boolean;
   updatedBy?: string;
   updatedAt?: string;
 };
@@ -32,6 +36,9 @@ function readConfig(room: any): VoiceBridgeConfig {
     enabled: Boolean(raw.enabled),
     guildId: String(raw.guildId || ''),
     voiceChannelId: String(raw.voiceChannelId || ''),
+    // Existing rooms were historically two-way, so preserve that behavior
+    // until the owner explicitly closes the privacy gate.
+    roomVoiceOutboundEnabled: raw.roomVoiceOutboundEnabled !== false,
     updatedBy: raw.updatedBy,
     updatedAt: raw.updatedAt,
   };
@@ -85,7 +92,7 @@ export async function POST(req: NextRequest) {
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   await ensureDb();
 
-  const { roomId, action, guildId, voiceChannelId } = await req.json();
+  const { roomId, action, guildId, voiceChannelId, roomVoiceOutboundEnabled } = await req.json();
   if (!roomId || !action) return NextResponse.json({ error: 'Missing roomId or action' }, { status: 400 });
   if (isActivityRoomId(roomId)) await ensureDiscordActivityRoom();
 
@@ -100,35 +107,108 @@ export async function POST(req: NextRequest) {
     if (!nextGuildId || !nextChannelId) {
       return NextResponse.json({ error: 'Select a server and a voice channel first' }, { status: 400 });
     }
-    db.set('rooms', roomId, {
-      voiceBridge: {
-        enabled: true,
-        guildId: nextGuildId,
-        voiceChannelId: nextChannelId,
-        updatedBy: session.uid,
-        updatedAt: new Date().toISOString(),
-      } satisfies VoiceBridgeConfig,
-    }, { merge: true });
+    const nextConfig: VoiceBridgeConfig = {
+      enabled: true,
+      guildId: nextGuildId,
+      voiceChannelId: nextChannelId,
+      roomVoiceOutboundEnabled: current.roomVoiceOutboundEnabled,
+      updatedBy: session.uid,
+      updatedAt: new Date().toISOString(),
+    };
+    db.set('rooms', roomId, { voiceBridge: nextConfig }, { merge: true });
 
     const result = await callWorker('/voice-bridge', {
       method: 'POST',
       body: JSON.stringify({ action: 'start', roomId, guildId: nextGuildId, voiceChannelId: nextChannelId }),
     });
     if (!result.ok) {
-      db.set('rooms', roomId, { voiceBridge: { ...readConfig(db.get('rooms', roomId)), enabled: false } }, { merge: true });
+      db.set('rooms', roomId, { voiceBridge: { ...nextConfig, enabled: false } }, { merge: true });
+      return NextResponse.json({ success: false, ...result.body }, { status: result.status });
     }
-    return NextResponse.json({ success: result.ok, ...result.body }, { status: result.ok ? 200 : result.status });
+
+    // The worker starts listen-only by default. Apply the persisted room gate
+    // only after the bridge is up, so a restart can never briefly expose a
+    // room that the owner previously set private.
+    const gateResult = await callWorker('/voice-bridge/gate', {
+      method: 'POST',
+      body: JSON.stringify({
+        roomId,
+        roomVoiceOutboundEnabled: current.roomVoiceOutboundEnabled,
+      }),
+    });
+    if (!gateResult.ok || gateResult.body?.success === false) {
+      await callWorker('/voice-bridge', {
+        method: 'POST',
+        body: JSON.stringify({ action: 'stop', roomId }),
+      });
+      db.set('rooms', roomId, { voiceBridge: { ...nextConfig, enabled: false } }, { merge: true });
+      return NextResponse.json({
+        success: false,
+        error: gateResult.body?.error || gateResult.body?.message || 'Bridge privacy gate could not be confirmed',
+      }, { status: gateResult.ok ? 502 : gateResult.status });
+    }
+
+    return NextResponse.json({
+      success: true,
+      ...result.body,
+      status: gateResult.body?.status || result.body?.status,
+      config: nextConfig,
+    });
+  }
+
+  if (action === 'set-room-outbound') {
+    if (typeof roomVoiceOutboundEnabled !== 'boolean') {
+      return NextResponse.json({ error: 'roomVoiceOutboundEnabled must be boolean' }, { status: 400 });
+    }
+
+    const nextConfig: VoiceBridgeConfig = {
+      ...current,
+      roomVoiceOutboundEnabled,
+      updatedBy: session.uid,
+      updatedAt: new Date().toISOString(),
+    };
+    db.set('rooms', roomId, { voiceBridge: nextConfig }, { merge: true });
+
+    if (!current.enabled) {
+      return NextResponse.json({
+        success: true,
+        config: nextConfig,
+        status: {
+          running: false,
+          roomVoiceOutboundEnabled,
+          mode: roomVoiceOutboundEnabled ? 'two-way' : 'listen-only',
+        },
+      });
+    }
+
+    const result = await callWorker('/voice-bridge/gate', {
+      method: 'POST',
+      body: JSON.stringify({ roomId, roomVoiceOutboundEnabled }),
+    });
+    if (!result.ok || result.body?.success === false) {
+      return NextResponse.json({
+        success: false,
+        error: result.body?.error || result.body?.message || 'Live bridge did not confirm privacy gate change',
+        config: nextConfig,
+      }, { status: result.ok ? 502 : result.status });
+    }
+
+    return NextResponse.json({ success: true, ...result.body, config: nextConfig });
   }
 
   if (action === 'stop') {
-    db.set('rooms', roomId, {
-      voiceBridge: { ...current, enabled: false, updatedBy: session.uid, updatedAt: new Date().toISOString() },
-    }, { merge: true });
+    const nextConfig: VoiceBridgeConfig = {
+      ...current,
+      enabled: false,
+      updatedBy: session.uid,
+      updatedAt: new Date().toISOString(),
+    };
+    db.set('rooms', roomId, { voiceBridge: nextConfig }, { merge: true });
     const result = await callWorker('/voice-bridge', {
       method: 'POST',
       body: JSON.stringify({ action: 'stop', roomId }),
     });
-    return NextResponse.json({ success: result.ok, ...result.body }, { status: result.ok ? 200 : result.status });
+    return NextResponse.json({ success: result.ok, ...result.body, config: nextConfig }, { status: result.ok ? 200 : result.status });
   }
 
   return NextResponse.json({ error: 'Invalid action' }, { status: 400 });
