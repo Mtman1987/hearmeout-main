@@ -39,6 +39,7 @@ const {
   NoSubscriberBehavior,
 } = require('@discordjs/voice');
 const prism = require('prism-media');
+const { DiscordPcmJitterSource } = require('./discord-pcm-jitter');
 
 const SAMPLE_RATE = 48000;
 const CHANNELS = 2;
@@ -46,6 +47,11 @@ const SAMPLES_PER_FRAME = (SAMPLE_RATE * 20) / 1000; // 960 samples per 20ms
 const BYTES_PER_FRAME = SAMPLES_PER_FRAME * CHANNELS * 2; // 3840 bytes (s16le stereo)
 const SILENCE_FRAME = Buffer.alloc(BYTES_PER_FRAME);
 const MAX_SOURCE_BACKLOG = BYTES_PER_FRAME * 10; // ~200ms jitter cap per source
+const DISCORD_JITTER_TARGET_FRAMES = 3; // ~60ms playout buffer
+const DISCORD_JITTER_MAX_FRAMES = 10;
+const DISCORD_JITTER_CONCEAL_FRAMES = 2; // soften up to ~40ms of transient underflow
+const DISCORD_JITTER_FADE_SAMPLES = 240; // 5ms at 48kHz
+const DISCORD_RECEIVER_SILENCE_MS = 1200;
 const APP_SILENCE_TAIL_MS = 1200;
 const SILENCE_HEARTBEAT_MS = 250;
 const LIVEKIT_RECONNECT_BASE_MS = 1500;
@@ -157,10 +163,10 @@ class VoiceBridge {
     this.mixedTrack = null;
 
     // Per-user decoder state (no Room per user — just opus decode + PCM mix)
-    this.userDecoders = new Map(); // userId -> { opusStream, decoder, buf, stopped }
+    this.userDecoders = new Map(); // userId -> { opusStream, decoder, stopped }
 
-    // Discord mix tick — combines all user PCM buffers into one frame
-    this.discordMixSources = new Map(); // userId -> { buf }
+    // Discord mix tick — combines jitter-buffered user PCM into one frame.
+    this.discordMixSources = new Map(); // userId -> DiscordPcmJitterSource
     this.discordMixTimer = null;
 
     // App audio -> Discord playback
@@ -236,7 +242,7 @@ class VoiceBridge {
     if (this.userDecoders.has(userId)) return;
 
     const opusStream = this.connection.receiver.subscribe(userId, {
-      end: { behavior: EndBehaviorType.AfterSilence, duration: 500 },
+      end: { behavior: EndBehaviorType.AfterSilence, duration: DISCORD_RECEIVER_SILENCE_MS },
     });
     const decoder = new prism.opus.Decoder({
       rate: SAMPLE_RATE,
@@ -246,7 +252,13 @@ class VoiceBridge {
 
     const userState = { opusStream, decoder, stopped: false };
     this.userDecoders.set(userId, userState);
-    this.discordMixSources.set(userId, { buf: Buffer.alloc(0) });
+    this.discordMixSources.set(userId, new DiscordPcmJitterSource({
+      frameBytes: BYTES_PER_FRAME,
+      targetFrames: DISCORD_JITTER_TARGET_FRAMES,
+      maxFrames: DISCORD_JITTER_MAX_FRAMES,
+      concealFrames: DISCORD_JITTER_CONCEAL_FRAMES,
+      fadeSamples: DISCORD_JITTER_FADE_SAMPLES,
+    }));
 
     opusStream.on('error', () => {});
     decoder.on('error', () => {});
@@ -254,10 +266,7 @@ class VoiceBridge {
       if (userState.stopped) return;
       const src = this.discordMixSources.get(userId);
       if (!src) return;
-      src.buf = src.buf.length ? Buffer.concat([src.buf, pcm]) : pcm;
-      if (src.buf.length > MAX_SOURCE_BACKLOG) {
-        src.buf = src.buf.subarray(src.buf.length - MAX_SOURCE_BACKLOG);
-      }
+      src.push(pcm);
     });
     opusStream.on('close', () => this.handleMemberLeft(userId));
     opusStream.pipe(decoder);
@@ -291,16 +300,16 @@ class VoiceBridge {
     bridges.delete(this.roomId);
   }
 
-  // Mix all Discord user PCM buffers into one frame and push to LiveKit
+  // Mix all Discord user PCM buffers into one frame and push to LiveKit.
+  // Each source owns a small playout buffer so packet scheduling jitter does
+  // not turn into hard speech/silence edges on the 20ms LiveKit clock.
   discordMixTick() {
     if (this.stopped || !this.mixedSource) return;
 
     const frames = [];
     for (const src of this.discordMixSources.values()) {
-      if (src.buf.length >= BYTES_PER_FRAME) {
-        frames.push(src.buf.subarray(0, BYTES_PER_FRAME));
-        src.buf = src.buf.subarray(BYTES_PER_FRAME);
-      }
+      const frame = src.nextFrame();
+      if (frame) frames.push(frame);
     }
 
     let out;
@@ -698,6 +707,14 @@ class VoiceBridge {
   }
 
   status() {
+    const jitterSources = Array.from(this.discordMixSources.values()).map((src) => src.snapshot());
+    const discordJitter = jitterSources.reduce((summary, source) => ({
+      bufferedFrames: summary.bufferedFrames + source.bufferedFrames,
+      concealedFrames: summary.concealedFrames + source.concealedFrames,
+      rebuffers: summary.rebuffers + source.rebuffers,
+      droppedFrames: summary.droppedFrames + source.droppedFrames,
+    }), { bufferedFrames: 0, concealedFrames: 0, rebuffers: 0, droppedFrames: 0 });
+
     return {
       running: true,
       roomId: this.roomId,
@@ -708,6 +725,7 @@ class VoiceBridge {
       appSources: this.mixSources.size,
       roomVoiceOutboundEnabled: this.roomVoiceOutboundEnabled,
       mode: this.roomVoiceOutboundEnabled ? 'two-way' : 'listen-only',
+      discordJitter,
     };
   }
 
