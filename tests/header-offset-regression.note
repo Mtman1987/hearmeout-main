@@ -1,0 +1,1 @@
+Regression guard: HearMeOut sticky headers must remain below --spmt-ecosystem-header-height so room controls stay clickable under the canonical ecosystem strip.
