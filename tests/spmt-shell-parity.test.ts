@@ -9,14 +9,28 @@ const theme = readFileSync(resolve(process.cwd(), 'src/app/api/spmt/workspace-th
 const layout = readFileSync(resolve(process.cwd(), 'src/app/layout.tsx'), 'utf8');
 const sidebar = readFileSync(resolve(process.cwd(), 'src/app/components/LeftSidebar.tsx'), 'utf8');
 
-test('HearMeOut keeps a persistent three-slot Worktray', () => {
-  assert.match(text, /aria-label="SPMT workspace tray"/);
+test('HearMeOut collapses Workspace fully into the ecosystem header', () => {
+  assert.match(text, /spmt:workspace-toggle/);
+  assert.match(text, /spmt:workspace-open-app/);
+  assert.match(text, /spmt:workspace-state/);
+  assert.match(text, /if \(!open\) return null/);
   assert.match(text, /\(\[1, 2, 3\] as const\)/);
-  assert.doesNotMatch(text, /if \(hiddenRoute \|\| embedded \|\| !connected\) return null/);
+  assert.doesNotMatch(text, /data-workspace-footer="true"/);
+  assert.doesNotMatch(text, /workspace-footer-visible/);
+  assert.doesNotMatch(text, /event\.altKey && event\.shiftKey/);
+});
+
+test('HearMeOut persists header-opened apps into canonical Workspace slots', () => {
+  assert.match(text, /method: 'PATCH'/);
+  assert.match(text, /slotId: targetSlot\.id/);
+  assert.match(theme, /export async function PATCH/);
+  assert.match(theme, /api\/workspace-profile/);
+  assert.match(theme, /If-Match/);
+  assert.match(theme, /target\.collapsed = false/);
 });
 
 test('HearMeOut offers a reconnect path and refreshes shared state', () => {
-  assert.match(text, /\/login\?next=/);
+  assert.match(text, /\/api\/auth\/spmt\/login\?next=/);
   assert.match(text, /Reconnect SPMT workspace/);
   assert.match(text, /window\.setInterval\(\(\) => void refresh\(\), 30_000\)/);
   assert.match(text, /visibilitychange/);
@@ -31,7 +45,6 @@ test('HearMeOut uses one canonical Personal renderer instead of rebuilding widge
   assert.match(text, /Personal overlay \{personalOverlayVisible \? 'On' : 'Off'\}/);
   assert.match(text, /Copy Public URL/);
   assert.match(text, /Copy Personal URL/);
-  assert.match(text, /event\.altKey && event\.shiftKey && event\.key\.toLowerCase\(\) === 'f'/);
 });
 
 test('HearMeOut uses the SPMT signed launch URL while exposing clean canonical copy URLs', () => {
