@@ -9,6 +9,14 @@
   background-attachment: fixed !important;
 }
 
+/* The canonical ecosystem strip is fixed at the top of the viewport. HearMeOut
+   owns a sticky native topbar directly underneath it, so keep that sticky edge
+   anchored below the shared strip instead of allowing Tailwind's top-0 to slide
+   underneath it after the page scrolls. */
+[data-workspace-topbar] {
+  top: var(--spmt-ecosystem-header-height, 40px) !important;
+}
+
 :root[data-workspace-theme] [data-workspace-shell],
 :root[data-workspace-theme] [data-workspace-main] {
   background: transparent !important;
