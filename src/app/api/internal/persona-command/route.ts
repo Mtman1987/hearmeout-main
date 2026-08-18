@@ -1,13 +1,17 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { isDjWorkerRequest } from '@/lib/dj-worker-auth';
-import { SPMT_BASE_URL, refreshHmoSpmtSession } from '@/lib/spmt-session';
+import { refreshHmoSpmtSession } from '@/lib/spmt-session';
+
+const STREAMWEAVER_BASE_URL = String(
+  process.env.STREAMWEAVER_BASE_URL || 'https://streamweaver-new.fly.dev',
+).replace(/\/$/, '');
 
 function text(value: unknown, max: number) {
   return String(value || '').trim().slice(0, max);
 }
 
 async function forward(accessToken: string, body: any) {
-  const response = await fetch(`${SPMT_BASE_URL}/api/bot/commands`, {
+  const response = await fetch(`${STREAMWEAVER_BASE_URL}/api/spmt/bot/commands`, {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${accessToken}`,
@@ -16,6 +20,7 @@ async function forward(accessToken: string, body: any) {
     },
     body: JSON.stringify({
       command: text(body.command || body.transcript, 5000),
+      source: 'hearmeout-persona',
       roomId: text(body.roomId, 160) || undefined,
       targetTenantId: text(body.targetTenantId, 128) || undefined,
       speak: true,
@@ -26,7 +31,7 @@ async function forward(accessToken: string, body: any) {
   });
   const raw = await response.text();
   let payload: any = {};
-  try { payload = raw ? JSON.parse(raw) : {}; } catch { payload = { error: raw || 'Invalid SPMT response' }; }
+  try { payload = raw ? JSON.parse(raw) : {}; } catch { payload = { error: raw || 'Invalid StreamWeaver response' }; }
   return { response, payload };
 }
 

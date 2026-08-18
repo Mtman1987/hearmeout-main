@@ -3,6 +3,7 @@ import { readFile } from 'node:fs/promises';
 import { test } from 'node:test';
 
 const botApiRoute = new URL('../src/app/api/bot/commands/route.ts', import.meta.url);
+const personaCommandRoute = new URL('../src/app/api/internal/persona-command/route.ts', import.meta.url);
 const botsApiRoute = new URL('../src/app/api/bots/route.ts', import.meta.url);
 const botSessionRoute = new URL('../src/app/api/bots/session/route.ts', import.meta.url);
 const livekitTokenRoute = new URL('../src/app/api/livekit-token/route.ts', import.meta.url);
@@ -13,18 +14,30 @@ const personaCard = new URL('../src/app/rooms/[roomId]/_components/PersonaCard.t
 const personaBootstrap = new URL('../worker/src/persona-bootstrap.js', import.meta.url);
 const workerPackage = new URL('../worker/package.json', import.meta.url);
 
-test('HearMeOut forwards generic bot commands with its existing SPMT OAuth session', async () => {
+test('HearMeOut sends bot conversation directly to StreamWeaver with its SPMT OAuth session', async () => {
   const source = await readFile(botApiRoute, 'utf8');
   assert.match(source, /HMO_SPMT_COOKIE/);
   assert.match(source, /HMO_SPMT_REFRESH_COOKIE/);
   assert.match(source, /refreshHmoSpmtSession/);
-  assert.match(source, /\/api\/bot\/commands/);
+  assert.match(source, /STREAMWEAVER_BASE_URL/);
+  assert.match(source, /\/api\/spmt\/bot\/commands/);
+  assert.match(source, /source: 'hearmeout'/);
   assert.match(source, /Authorization: `Bearer \$\{accessToken\}`/);
   assert.match(source, /targetTenantId/);
 
   for (const deprecated of ['SYSTEM_API_KEY', 'SPMT_API_KEY', 'x-spmt-key', 'x-bot-secret']) {
     assert.equal(source.includes(deprecated), false, `HearMeOut bot route must not use ${deprecated}`);
   }
+});
+
+test('persona voice commands use the same direct StreamWeaver OAuth path', async () => {
+  const source = await readFile(personaCommandRoute, 'utf8');
+  assert.match(source, /isDjWorkerRequest/);
+  assert.match(source, /STREAMWEAVER_BASE_URL/);
+  assert.match(source, /\/api\/spmt\/bot\/commands/);
+  assert.match(source, /source: 'hearmeout-persona'/);
+  assert.match(source, /Authorization: `Bearer \$\{accessToken\}`/);
+  assert.match(source, /refreshHmoSpmtSession/);
 });
 
 test('old Athena API is only a compatibility alias to the generic bot route', async () => {
@@ -50,12 +63,14 @@ test('room chat discovers actual LiveKit bot participants without requiring Live
   assert.match(source, /if \(!room\)/);
 });
 
-test('room chat uses the generic bot API and server-returned bot name', async () => {
+test('room chat uses the generic bot API and asks the joined persona to speak', async () => {
   const source = await readFile(chatBox, 'utf8');
   assert.match(source, /fetch\("\/api\/bot\/commands"/);
   assert.match(source, /payload\?\.bot\?\.name/);
   assert.match(source, /targetTenantId/);
-  assert.match(source, /speak: false/);
+  assert.match(source, /speak: true/);
+  assert.match(source, /could not respond/);
+  assert.match(source, /voice playback failed/);
   assert.doesNotMatch(source, /fetch\("\/api\/athena\/commands"/);
   assert.doesNotMatch(source, /sendToAthena/);
 });
@@ -95,7 +110,7 @@ test('room chat exposes short bot management commands and a picker', async () =>
   assert.match(pickerSource, /\/api\/bots/);
   assert.match(pickerSource, /\/api\/bots\/session/);
   assert.match(pickerSource, />Bots</);
-  assert.match(pickerSource, />Join</);
+  assert.match(pickerSource, /\bJoin\b/);
 });
 
 test('bot join API enforces room management and delegates to the authenticated persona worker', async () => {
@@ -133,5 +148,7 @@ test('persona worker joins the plain voice room with worker-authenticated LiveKi
 test('Athena wake names remain backward-compatible without owning a separate command path', async () => {
   const source = await readFile(chatBox, 'utf8');
   assert.match(source, /ATHENA_COMPAT_WAKE_NAMES/);
-  assert.match(source, /Compatibility only/);
+  assert.match(source, /"Athena OS"/);
+  assert.match(source, /"Athena"/);
+  assert.match(source, /"Annie"/);
 });

@@ -21,6 +21,8 @@ jobs:
         run: npm ci --no-audit --no-fund
       - name: Test SPMT bot command routing
         run: node --import tsx --test tests/spmt-athena-route.test.ts
+      - name: Test SPMT OAuth callback routing
+        run: node --import tsx --test tests/spmt-auth-callback.test.ts
       - name: Test workspace shell parity
         run: node --import tsx --test tests/spmt-shell-parity.test.ts
       - name: Test workspace theme contract
