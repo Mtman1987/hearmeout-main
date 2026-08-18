@@ -21,8 +21,8 @@ test('HearMeOut collapses Workspace fully into the ecosystem header', () => {
   assert.doesNotMatch(text, /event\.altKey && event\.shiftKey/);
 });
 
-test('HearMeOut keeps its sticky topbar below the shared ecosystem header', () => {
-  assert.match(parityCss, /\[data-workspace-topbar\][\s\S]*top:\s*var\(--spmt-ecosystem-header-height,\s*40px\)\s*!important/);
+test('HearMeOut keeps dashboard, room, and settings sticky chrome below the shared ecosystem header', () => {
+  assert.match(parityCss, /\[data-workspace-topbar\],[\s\S]*header\.sticky[\s\S]*top:\s*var\(--spmt-ecosystem-header-height,\s*40px\)\s*!important/);
 });
 
 test('HearMeOut persists header-opened apps into canonical Workspace slots', () => {
