@@ -8,6 +8,7 @@ const personal = readFileSync(resolve(process.cwd(), 'src/components/personal-ov
 const theme = readFileSync(resolve(process.cwd(), 'src/app/api/spmt/workspace-theme/route.ts'), 'utf8');
 const layout = readFileSync(resolve(process.cwd(), 'src/app/layout.tsx'), 'utf8');
 const sidebar = readFileSync(resolve(process.cwd(), 'src/app/components/LeftSidebar.tsx'), 'utf8');
+const parityCss = readFileSync(resolve(process.cwd(), 'src/app/workspace-parity.css'), 'utf8');
 
 test('HearMeOut collapses Workspace fully into the ecosystem header', () => {
   assert.match(text, /spmt:workspace-toggle/);
@@ -18,6 +19,10 @@ test('HearMeOut collapses Workspace fully into the ecosystem header', () => {
   assert.doesNotMatch(text, /data-workspace-footer="true"/);
   assert.doesNotMatch(text, /workspace-footer-visible/);
   assert.doesNotMatch(text, /event\.altKey && event\.shiftKey/);
+});
+
+test('HearMeOut keeps its sticky topbar below the shared ecosystem header', () => {
+  assert.match(parityCss, /\[data-workspace-topbar\][\s\S]*top:\s*var\(--spmt-ecosystem-header-height,\s*40px\)\s*!important/);
 });
 
 test('HearMeOut persists header-opened apps into canonical Workspace slots', () => {
