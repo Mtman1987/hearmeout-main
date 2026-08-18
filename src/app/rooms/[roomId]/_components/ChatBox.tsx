@@ -102,10 +102,6 @@ export function resolveBotInvocation(
     };
   }
 
-  // Once one persona is explicitly invited, it is the active conversation
-  // partner for normal room chat. Commands beginning with ! remain room/app
-  // controls and are not swallowed by the persona. With multiple personas,
-  // explicit wake names continue to select which bot should answer.
   if (bots.length === 1 && value.trim() && !value.trim().startsWith("!")) {
     return {
       displayName: bots[0].displayName,
@@ -113,9 +109,6 @@ export function resolveBotInvocation(
     };
   }
 
-  // Compatibility only. Existing rooms and bookmarks may still address Athena
-  // before a bot participant is connected. The request itself still goes
-  // through the same tenant-generic SPMT/StreamWeaver bot runtime.
   if (ATHENA_COMPAT_WAKE_NAMES.some((wakeName) => matchesWakeName(value, wakeName))) {
     return { displayName: "Athena" };
   }
@@ -252,8 +245,6 @@ export default function ChatBox({ roomId, compact = false, onOpenSpaceChat, onOp
         command,
         roomId: activeRoomId,
         targetTenantId: targetTenantId || undefined,
-        // An invited persona should answer as a room participant. The server
-        // hands synthesized audio to that persona's LiveKit microphone.
         speak: true,
       }),
     });
@@ -261,6 +252,7 @@ export default function ChatBox({ roomId, compact = false, onOpenSpaceChat, onOp
     if (!response.ok) {
       throw new Error(String(payload?.error?.message || payload?.error || `Bot runtime returned ${response.status}`));
     }
+    const speech = payload?.personaSpeech;
     return {
       reply: String(payload?.response || payload?.data?.response || "").trim(),
       botName: String(
@@ -269,6 +261,9 @@ export default function ChatBox({ roomId, compact = false, onOpenSpaceChat, onOp
         || fallbackDisplayName
         || "StreamWeaver Bot",
       ).trim(),
+      speechError: speech?.attempted && speech?.ok === false
+        ? String(speech?.error || `voice handoff returned ${speech?.status || 'an error'}`)
+        : "",
     };
   };
 
@@ -330,7 +325,7 @@ export default function ChatBox({ roomId, compact = false, onOpenSpaceChat, onOp
       const botInvocation = resolveBotInvocation(submittedText, activeBotParticipants);
       if (botInvocation) {
         try {
-          const { reply, botName } = await sendToBot(
+          const { reply, botName, speechError } = await sendToBot(
             submittedText,
             botInvocation.displayName,
             botInvocation.targetTenantId,
@@ -342,9 +337,15 @@ export default function ChatBox({ roomId, compact = false, onOpenSpaceChat, onOp
               text: reply,
               timestamp: new Date().toISOString(),
             });
+          } else {
+            await postRoomNotice(`${botName} returned no text response.`);
+          }
+          if (speechError) {
+            await postRoomNotice(`${botName} replied in text, but voice playback failed: ${speechError}`);
           }
         } catch (error) {
           console.error("StreamWeaver bot command failed", error);
+          await postRoomNotice(`${botInvocation.displayName} could not respond: ${error instanceof Error ? error.message : String(error)}`);
         }
       }
 
@@ -370,7 +371,7 @@ export default function ChatBox({ roomId, compact = false, onOpenSpaceChat, onOp
     <Card className="flex flex-col h-full w-full border-0 shadow-none rounded-none bg-transparent" data-workspace-chat-surface>
       <CardHeader className="px-4 py-3">
         <div className="flex items-center justify-between gap-3">
-          <CardTitle className="font-headline text-base flex items-center gap-2">Space Mountain Chat</CardTitle>
+          <CardTitle className="font-headline text-base flex items-center gap-2">HearMeOut Chat</CardTitle>
           <div className="flex items-center gap-1">
             {activeRoomId && (
               <BotPicker
@@ -380,7 +381,7 @@ export default function ChatBox({ roomId, compact = false, onOpenSpaceChat, onOp
             )}
             {!compact && (
               <>
-                <Button variant="ghost" size="icon" className="h-8 w-8" onClick={onOpenSpaceChat} title="Pop out Space Mountain chat">
+                <Button variant="ghost" size="icon" className="h-8 w-8" onClick={onOpenSpaceChat} title="Pop out HearMeOut chat">
                   <MessageSquare className="h-4 w-4" />
                 </Button>
                 <Button variant="ghost" size="icon" className="h-8 w-8" onClick={onOpenTwitchChat} title="Pop out Twitch chat">
