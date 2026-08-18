@@ -10,10 +10,12 @@
 }
 
 /* The canonical ecosystem strip is fixed at the top of the viewport. HearMeOut
-   owns a sticky native topbar directly underneath it, so keep that sticky edge
-   anchored below the shared strip instead of allowing Tailwind's top-0 to slide
-   underneath it after the page scrolls. */
-[data-workspace-topbar] {
+   has sticky native headers on dashboard, room, and settings screens. Keep every
+   one anchored below the shared strip instead of allowing Tailwind's top-0 to
+   slide underneath it after scrolling. data-workspace-topbar remains the
+   semantic contract; header.sticky covers older room/settings chrome too. */
+[data-workspace-topbar],
+header.sticky {
   top: var(--spmt-ecosystem-header-height, 40px) !important;
 }
 
