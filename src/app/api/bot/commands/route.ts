@@ -4,10 +4,13 @@ import { getDjWorkerRequestHeaders } from '@/lib/dj-worker-auth';
 import {
   HMO_SPMT_COOKIE,
   HMO_SPMT_REFRESH_COOKIE,
-  SPMT_BASE_URL,
   hmoSpmtCookieOptions,
   refreshHmoSpmtSession,
 } from '@/lib/spmt-session';
+
+const STREAMWEAVER_BASE_URL = String(
+  process.env.STREAMWEAVER_BASE_URL || 'https://streamweaver-new.fly.dev',
+).replace(/\/$/, '');
 
 type BotCommandBody = {
   command?: unknown;
@@ -23,9 +26,9 @@ function text(value: unknown, max: number) {
   return String(value || '').trim().slice(0, max);
 }
 
-async function forwardToSpmt(accessToken: string, body: BotCommandBody) {
+async function forwardToStreamWeaver(accessToken: string, body: BotCommandBody) {
   const command = text(body.command || body.message || body.transcript, 5000);
-  const response = await fetch(`${SPMT_BASE_URL}/api/bot/commands`, {
+  const response = await fetch(`${STREAMWEAVER_BASE_URL}/api/spmt/bot/commands`, {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${accessToken}`,
@@ -34,6 +37,7 @@ async function forwardToSpmt(accessToken: string, body: BotCommandBody) {
     },
     body: JSON.stringify({
       command,
+      source: 'hearmeout',
       roomId: text(body.roomId, 160) || undefined,
       targetTenantId: text(body.targetTenantId, 128) || undefined,
       speak: body.speak !== false,
@@ -44,7 +48,7 @@ async function forwardToSpmt(accessToken: string, body: BotCommandBody) {
   });
   const raw = await response.text();
   let payload: any = {};
-  try { payload = raw ? JSON.parse(raw) : {}; } catch { payload = { error: raw || 'Invalid SPMT response' }; }
+  try { payload = raw ? JSON.parse(raw) : {}; } catch { payload = { error: raw || 'Invalid StreamWeaver response' }; }
   return { response, payload };
 }
 
@@ -96,7 +100,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'Sign in with SPMT to use your StreamWeaver bot' }, { status: 401 });
   }
 
-  let upstream = await forwardToSpmt(accessToken, { ...body, command });
+  let upstream = await forwardToStreamWeaver(accessToken, { ...body, command });
   let refreshed: Awaited<ReturnType<typeof refreshHmoSpmtSession>> = null;
 
   if (upstream.response.status === 401) {
@@ -104,7 +108,7 @@ export async function POST(request: NextRequest) {
     refreshed = refreshToken ? await refreshHmoSpmtSession(refreshToken) : null;
     if (refreshed) {
       accessToken = refreshed.accessToken;
-      upstream = await forwardToSpmt(accessToken, { ...body, command });
+      upstream = await forwardToStreamWeaver(accessToken, { ...body, command });
     }
   }
 
