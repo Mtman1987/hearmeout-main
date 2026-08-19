@@ -25,6 +25,20 @@ type WatchState = {
   events: Array<{ id: string; at: string; message: string }>;
 };
 
+type WatchSearchResult = {
+  id: string;
+  title: string;
+  year: number;
+  runtime: string;
+  source: string;
+  poster?: string;
+  recommended?: boolean;
+  matchReasons?: string[];
+  audio?: { multiTrack?: boolean; languages?: string[] };
+  quality?: string | null;
+  container?: string | null;
+};
+
 const MAX_MOVIE_VOLUME = 0.16;
 const MAX_MUSIC_VOLUME = 0.10;
 
@@ -110,7 +124,7 @@ function hlsFallbackUrlFor(item: any) {
   const match = playbackUrl.match(/^\/activity-provider\/xtream\/(vod|series)\/(\d+)$/i);
   const episodeMatch = playbackUrl.match(/^\/activity-provider\/xtream\/episode\/(\d+-[a-z0-9]+)$/i);
   if (episodeMatch) return `/api/watch/xtream/hls/episode-${episodeMatch[1].toLowerCase()}/index.m3u8`;
-  if (!match || !isBrowserLimitedVideo(item)) return playbackUrl;
+  if (!match) return playbackUrl;
   return `/api/watch/xtream/hls/${match[1].toLowerCase()}-${match[2]}/index.m3u8`;
 }
 
@@ -263,6 +277,9 @@ export default function WatchRoomClient({ sessionId, activityMode = false, canPa
   const [currentRequestId, setCurrentRequestId] = useState<string | null>(null);
   const [mediaStatus, setMediaStatus] = useState('Waiting for media');
   const [requestError, setRequestError] = useState<string | null>(null);
+  const [searchResults, setSearchResults] = useState<WatchSearchResult[]>([]);
+  const [searching, setSearching] = useState(false);
+  const [queuingId, setQueuingId] = useState<string | null>(null);
   const [controlError, setControlError] = useState<string | null>(null);
   const [volume, setVolume] = useState(activityMode ? 1 : 0.85);
   const [muted, setMuted] = useState(activityMode);
@@ -270,6 +287,8 @@ export default function WatchRoomClient({ sessionId, activityMode = false, canPa
   const [musicPlaybackMode, setMusicPlaybackMode] = useState<'audio' | 'video'>('video');
   const [ttsOverlayEnabled, setTtsOverlayEnabled] = useState(false);
   const [embedFallback, setEmbedFallback] = useState<{ requestId: string; url: string } | null>(null);
+  const [audioTracks, setAudioTracks] = useState<Array<{ index: number; name: string; language: string }>>([]);
+  const [selectedAudioTrack, setSelectedAudioTrack] = useState(-1);
 
   const currentItem = state?.current?.item;
   const activeEmbedFallback = embedFallback?.requestId === state?.current?.requestId ? embedFallback : null;
@@ -714,6 +733,8 @@ export default function WatchRoomClient({ sessionId, activityMode = false, canPa
     let cancelled = false;
     let youtubeFallbackTimer: number | null = null;
     setEmbedFallback(null);
+    setAudioTracks([]);
+    setSelectedAudioTrack(-1);
 
     async function loadMedia() {
       if (shouldResolveYoutubeInBrowser(item)) {
@@ -765,6 +786,19 @@ export default function WatchRoomClient({ sessionId, activityMode = false, canPa
             if (cancelled) return;
             if (state?.current?.requestId === loadingRequestId && Hls.isSupported()) {
               hlsRef.current = new Hls();
+              const updateAudioTracks = () => {
+                const tracks = (hlsRef.current?.audioTracks || []).map((track: any, index: number) => ({
+                  index,
+                  name: String(track?.name || track?.lang || `Audio ${index + 1}`),
+                  language: String(track?.lang || track?.language || ''),
+                }));
+                setAudioTracks(tracks);
+                if (!tracks.length) return;
+                const english = tracks.find((track: { name: string; language: string }) => /\benglish\b/i.test(track.name) || /^(?:en|eng)$/i.test(track.language));
+                const preferred = english?.index ?? Math.max(0, Number(hlsRef.current?.audioTrack || 0));
+                hlsRef.current.audioTrack = preferred;
+                setSelectedAudioTrack(preferred);
+              };
               hlsRef.current.on(Hls.Events.ERROR, (_event: unknown, data: any) => {
                 const detail = data?.details || data?.type || 'HLS playback error';
                 setMediaStatus(`HLS error: ${detail}`);
@@ -783,6 +817,7 @@ export default function WatchRoomClient({ sessionId, activityMode = false, canPa
                 }
               });
               hlsRef.current.on(Hls.Events.MANIFEST_PARSED, () => {
+                updateAudioTracks();
                 if (youtubeFallbackTimer !== null) {
                   window.clearTimeout(youtubeFallbackTimer);
                   youtubeFallbackTimer = null;
@@ -795,6 +830,7 @@ export default function WatchRoomClient({ sessionId, activityMode = false, canPa
                   video.currentTime = targetPos;
                 }
               });
+              hlsRef.current.on(Hls.Events.AUDIO_TRACKS_UPDATED, updateAudioTracks);
               hlsRef.current.loadSource(mediaUrl);
               hlsRef.current.attachMedia(video);
               const fallbackUrl = youtubeEmbedUrlForItem(item);
@@ -901,7 +937,15 @@ export default function WatchRoomClient({ sessionId, activityMode = false, canPa
     const trimmed = query.trim();
     if (!trimmed) return;
     setRequestError(null);
+    setSearching(true);
     try {
+      const isMusic = sessionId === 'discord-music-room' || sessionId.toLowerCase().includes('music');
+      if (!isMusic) {
+        const search = await api(`/api/watch/search?q=${encodeURIComponent(trimmed)}`);
+        setSearchResults(Array.isArray(search.results) ? search.results : []);
+        if (!search.results?.length) setRequestError('No playable provider result found. Try the exact title and year.');
+        return;
+      }
       const result = await api(`/api/watch/sessions/${sessionId}/request`, {
         method: 'POST',
         body: JSON.stringify({
@@ -912,9 +956,36 @@ export default function WatchRoomClient({ sessionId, activityMode = false, canPa
         }),
       });
       setQuery('');
+      setSearchResults([]);
       setState(result.session);
     } catch (error: any) {
       setRequestError(`${error.message || 'Request failed'}. Try Big Buck Bunny, Sintel, Tears of Steel, or HLS.`);
+    } finally {
+      setSearching(false);
+    }
+  }
+
+  async function queueSearchResult(item: WatchSearchResult) {
+    setRequestError(null);
+    setQueuingId(item.id);
+    try {
+      const result = await api(`/api/watch/sessions/${sessionId}/request`, {
+        method: 'POST',
+        body: JSON.stringify({
+          itemId: item.id,
+          query: `${item.title} ${item.year || ''}`.trim(),
+          username: 'local tester',
+          mediaType: 'video',
+          announceDiscord: sessionId === 'discord-watch-room',
+        }),
+      });
+      setQuery('');
+      setSearchResults([]);
+      setState(result.session);
+    } catch (error: any) {
+      setRequestError(error.message || 'Could not queue this provider result');
+    } finally {
+      setQueuingId(null);
     }
   }
 
@@ -1100,6 +1171,27 @@ export default function WatchRoomClient({ sessionId, activityMode = false, canPa
                 {musicPlaybackMode === 'audio' ? 'Audio' : 'Video'}
               </button>
             )}
+            {audioTracks.length > 1 && (
+              <label className="flex items-center gap-2 rounded-md border border-cyan-500/40 bg-cyan-950/20 px-3 py-2 text-sm text-cyan-100">
+                Audio
+                <select
+                  className="max-w-[190px] rounded border border-slate-600 bg-slate-950 px-2 py-1 text-slate-100"
+                  value={selectedAudioTrack}
+                  onChange={(event) => {
+                    const next = Number(event.target.value);
+                    if (hlsRef.current) hlsRef.current.audioTrack = next;
+                    setSelectedAudioTrack(next);
+                  }}
+                  aria-label="Movie audio language"
+                >
+                  {audioTracks.map((track) => (
+                    <option key={`${track.index}-${track.name}`} value={track.index}>
+                      {track.name}{track.language ? ` (${track.language})` : ''}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
             {state?.current?.item && downloadUrlForItem(state.current.item) && (
               <button
                 type="button"
@@ -1150,12 +1242,41 @@ export default function WatchRoomClient({ sessionId, activityMode = false, canPa
                 onChange={(event) => setQuery(event.target.value)}
                 placeholder="Try Big Buck Bunny, Sintel, HLS"
               />
-              <button className="rounded-md border border-slate-700 bg-slate-800 px-3 py-2 hover:border-emerald-400" type="submit">Request</button>
+              <button className="rounded-md border border-slate-700 bg-slate-800 px-3 py-2 hover:border-emerald-400 disabled:opacity-50" type="submit" disabled={searching}>
+                {searching ? 'Searching…' : sessionId.toLowerCase().includes('music') ? 'Request' : 'Search'}
+              </button>
             </form>
             {requestError && (
               <p className="mt-3 rounded-md border border-red-500/40 bg-red-950/40 p-2 text-sm text-red-200">{requestError}</p>
             )}
-            <p className="mt-3 text-sm text-slate-400">This uses the same queue API as the Discord command handler.</p>
+            {searchResults.length > 0 && (
+              <div className="mt-3 grid max-h-[52vh] gap-2 overflow-y-auto pr-1">
+                <p className="text-xs text-slate-400">Select the exact file. Search no longer auto-queues the first result.</p>
+                {searchResults.map((item) => (
+                  <div key={item.id} className="flex gap-3 rounded-md border border-slate-700 bg-slate-950 p-3">
+                    {item.poster ? <img src={item.poster} alt="" className="h-20 w-14 shrink-0 rounded object-cover" /> : null}
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-start justify-between gap-2">
+                        <strong className="text-sm leading-5">{item.title}</strong>
+                        {item.recommended ? <span className="shrink-0 rounded bg-emerald-500/15 px-2 py-0.5 text-[10px] text-emerald-300">Best match</span> : null}
+                      </div>
+                      <p className="mt-1 text-xs text-slate-400">{item.year || 'Unknown year'} · {item.quality || item.container || item.runtime} · {item.source}</p>
+                      {item.audio?.multiTrack ? <p className="mt-1 text-xs text-cyan-300">Multi-audio: choose English from the player after loading</p> : null}
+                      {item.matchReasons?.length ? <p className="mt-1 text-[11px] text-slate-500">{item.matchReasons.join(' · ')}</p> : null}
+                      <button
+                        type="button"
+                        className="mt-2 rounded border border-emerald-500/50 bg-emerald-950/30 px-2.5 py-1.5 text-xs text-emerald-100 hover:border-emerald-300 disabled:opacity-50"
+                        disabled={Boolean(queuingId)}
+                        onClick={() => queueSearchResult(item)}
+                      >
+                        {queuingId === item.id ? 'Adding…' : 'Add this version'}
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+            <p className="mt-3 text-sm text-slate-400">Search ranks title, year, format, and playable provider variants before you choose.</p>
           </section>
 
           <section className="rounded-lg border border-slate-700 bg-[#171b20] p-4">

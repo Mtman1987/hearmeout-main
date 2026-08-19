@@ -1,4 +1,12 @@
-import { findXtreamSeriesEpisode, getNextXtreamSeriesEpisode, isXtreamConfigured, isXtreamMockEnabled, searchXtreamCatalog } from './xtream-provider';
+import {
+  findXtreamCatalogItemById,
+  findXtreamSeriesEpisode,
+  getNextXtreamSeriesEpisode,
+  isXtreamConfigured,
+  isXtreamMockEnabled,
+  searchXtreamCatalog,
+  searchXtreamCatalogRanked,
+} from './xtream-provider';
 import { findInternetArchiveRecommendation } from './internet-archive-provider';
 import { findWatchmodeRecommendation } from './watchmode-provider';
 import { autoRadioNext, getRoomState, rememberAutoRadioTrack, resolveSongRequest, setAutoRadioEnabled } from '@/lib/bot-actions';
@@ -729,6 +737,43 @@ export async function searchWatchProviders(query: string | null | undefined) {
   return searchWatchCatalog(query);
 }
 
+export async function searchWatchProviderOptions(query: string | null | undefined) {
+  const normalizedQuery = String(query || '').trim();
+  if (!normalizedQuery) return [];
+  const ranked = await searchXtreamCatalogRanked(normalizedQuery).catch((error) => {
+    console.error('[WatchRequest] Ranked Xtream search failed:', error);
+    return [];
+  });
+  if (ranked.length) {
+    return ranked.slice(0, 24).map((entry, index) => ({
+      ...entry.item,
+      rank: index + 1,
+      score: entry.score,
+      matchReasons: entry.reasons,
+      recommended: index === 0,
+      selectable: true,
+      audio: {
+        multiTrack: entry.item.metadata?.multiAudio === true,
+        languages: entry.item.metadata?.languages || [],
+      },
+      quality: entry.item.metadata?.quality || null,
+      container: entry.item.metadata?.containerExtension || null,
+    }));
+  }
+
+  return searchWatchCatalog(normalizedQuery).slice(0, 12).map((item, index) => ({
+    ...item,
+    rank: index + 1,
+    score: 50 - index,
+    matchReasons: ['public test catalog'],
+    recommended: index === 0,
+    selectable: true,
+    audio: { multiTrack: false, languages: [] as string[] },
+    quality: null,
+    container: item.playbackUrl.split('?')[0].split('.').at(-1) || null,
+  }));
+}
+
 function progressKey(userId: string, seriesId: string) {
   return `${userId || 'discord'}:xtream:${seriesId}`;
 }
@@ -908,7 +953,13 @@ export async function requestWatchItem(params: {
     console.error('[WatchRequest] Xtream episode lookup failed:', error);
     return null;
   });
-  let item = getWatchCatalogItem(params.itemId) || explicitEpisode || (await searchWatchProviders(params.query))[0];
+  const selectedProviderItem = params.itemId
+    ? await findXtreamCatalogItemById(params.itemId).catch((error) => {
+        console.error('[WatchRequest] Exact provider item lookup failed:', error);
+        return null;
+      })
+    : null;
+  let item = getWatchCatalogItem(params.itemId) || selectedProviderItem || explicitEpisode || (await searchWatchProviders(params.query))[0];
   if (item?.id.startsWith('xtream-series-') && !item.metadata) {
     const seriesTitle = item.title.replace(/\s+-\s+first episode$/i, '');
     item = await findXtreamSeriesEpisode(`${seriesTitle} episode 1`).catch(() => null) || item;

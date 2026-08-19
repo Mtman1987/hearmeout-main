@@ -26,6 +26,7 @@ type VoiceBridgeConfig = {
   guildId: string;
   voiceChannelId: string;
   roomVoiceOutboundEnabled: boolean;
+  audioProfile: 'low-latency' | 'balanced' | 'resilient';
   updatedBy?: string;
   updatedAt?: string;
 };
@@ -36,9 +37,12 @@ function readConfig(room: any): VoiceBridgeConfig {
     enabled: Boolean(raw.enabled),
     guildId: String(raw.guildId || ''),
     voiceChannelId: String(raw.voiceChannelId || ''),
-    // Existing rooms were historically two-way, so preserve that behavior
-    // until the owner explicitly closes the privacy gate.
-    roomVoiceOutboundEnabled: raw.roomVoiceOutboundEnabled !== false,
+    // Privacy-safe default: Discord remains audible in HearMeOut, while room
+    // microphones stay off the Discord return path until the owner opts in.
+    roomVoiceOutboundEnabled: raw.roomVoiceOutboundEnabled === true,
+    audioProfile: ['low-latency', 'balanced', 'resilient'].includes(String(raw.audioProfile))
+      ? raw.audioProfile
+      : 'balanced',
     updatedBy: raw.updatedBy,
     updatedAt: raw.updatedAt,
   };
@@ -92,7 +96,7 @@ export async function POST(req: NextRequest) {
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   await ensureDb();
 
-  const { roomId, action, guildId, voiceChannelId, roomVoiceOutboundEnabled } = await req.json();
+  const { roomId, action, guildId, voiceChannelId, roomVoiceOutboundEnabled, audioProfile } = await req.json();
   if (!roomId || !action) return NextResponse.json({ error: 'Missing roomId or action' }, { status: 400 });
   if (isActivityRoomId(roomId)) await ensureDiscordActivityRoom();
 
@@ -112,6 +116,7 @@ export async function POST(req: NextRequest) {
       guildId: nextGuildId,
       voiceChannelId: nextChannelId,
       roomVoiceOutboundEnabled: current.roomVoiceOutboundEnabled,
+      audioProfile: current.audioProfile,
       updatedBy: session.uid,
       updatedAt: new Date().toISOString(),
     };
@@ -119,7 +124,13 @@ export async function POST(req: NextRequest) {
 
     const result = await callWorker('/voice-bridge', {
       method: 'POST',
-      body: JSON.stringify({ action: 'start', roomId, guildId: nextGuildId, voiceChannelId: nextChannelId }),
+      body: JSON.stringify({
+        action: 'start',
+        roomId,
+        guildId: nextGuildId,
+        voiceChannelId: nextChannelId,
+        audioProfile: current.audioProfile,
+      }),
     });
     if (!result.ok) {
       db.set('rooms', roomId, { voiceBridge: { ...nextConfig, enabled: false } }, { merge: true });
@@ -194,6 +205,25 @@ export async function POST(req: NextRequest) {
     }
 
     return NextResponse.json({ success: true, ...result.body, config: nextConfig });
+  }
+
+  if (action === 'set-audio-profile') {
+    const normalizedProfile = String(audioProfile || '').trim().toLowerCase();
+    if (!['low-latency', 'balanced', 'resilient'].includes(normalizedProfile)) {
+      return NextResponse.json({ error: 'Invalid audio profile' }, { status: 400 });
+    }
+    const nextConfig: VoiceBridgeConfig = {
+      ...current,
+      audioProfile: normalizedProfile as VoiceBridgeConfig['audioProfile'],
+      updatedBy: session.uid,
+      updatedAt: new Date().toISOString(),
+    };
+    db.set('rooms', roomId, { voiceBridge: nextConfig }, { merge: true });
+    const result = await callWorker('/voice-bridge/audio-profile', {
+      method: 'POST',
+      body: JSON.stringify({ roomId, audioProfile: normalizedProfile }),
+    });
+    return NextResponse.json({ success: result.ok, ...result.body, config: nextConfig }, { status: result.ok ? 200 : result.status });
   }
 
   if (action === 'stop') {

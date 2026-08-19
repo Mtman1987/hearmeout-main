@@ -5,12 +5,10 @@ const { PersonaSession } = require('./persona-session');
 const { PersonaRuntimeAdapter, audioDataUriToPcm } = require('./persona-runtime-adapter');
 const { setVoiceBridgeRoomOutbound } = require('./discord-voice-bridge');
 
-const LOCAL_DEV_WORKER_SECRET = 'hearmeout-local-worker-development-only';
 const sessions = new Map();
 
 function workerSecret() {
-  return String(process.env.HMO_WORKER_SHARED_SECRET || '').trim()
-    || (process.env.NODE_ENV !== 'production' ? LOCAL_DEV_WORKER_SECRET : '');
+  return String(process.env.HMO_WORKER_SHARED_SECRET || '').trim();
 }
 
 function secretsMatch(actual, expected) {
@@ -113,8 +111,13 @@ async function handlePersona(req, res) {
 
   const wakeNames = Array.isArray(req.body?.wakeNames) ? req.body.wakeNames.map((v) => clean(v, 96)).filter(Boolean) : [];
   const aliases = Array.isArray(req.body?.aliases) ? req.body.aliases.map((v) => clean(v, 96)).filter(Boolean) : [];
+  const interests = Array.isArray(req.body?.interests) ? req.body.interests.map((v) => clean(v, 96)).filter(Boolean) : [];
   const ownerTenantId = clean(req.body?.ownerTenantId, 128) || personaId;
   const voice = clean(req.body?.voice, 128);
+  const livekitTtsDescriptor = clean(req.body?.livekitTtsDescriptor, 128);
+  const avatar = clean(req.body?.avatar, 1000);
+  const idleAvatar = clean(req.body?.idleAvatar, 1000) || avatar;
+  const talkingAvatar = clean(req.body?.talkingAvatar, 1000) || idleAvatar;
   const metadata = {
     type: 'persona',
     bot: true,
@@ -124,7 +127,13 @@ async function handlePersona(req, res) {
     ownerName: clean(req.body?.ownerName, 96),
     wakeNames,
     aliases,
+    interests,
     voice,
+    livekitTtsDescriptor,
+    avatar,
+    idleAvatar,
+    talkingAvatar,
+    research: req.body?.research !== false,
     source: 'streamweaver',
   };
 
@@ -139,7 +148,7 @@ async function handlePersona(req, res) {
       roomId,
       personaId,
       displayName,
-      avatar: clean(req.body?.avatar, 1000),
+      avatar,
       livekitUrl,
       token,
       research: req.body?.research !== false,
@@ -156,12 +165,13 @@ async function handlePersona(req, res) {
       ownerTenantId,
       wakeNames,
       aliases,
+      interests,
       voice,
       appUrl,
       workerHeaders: { Authorization: `Bearer ${secret}` },
       accessToken: clean(req.body?.spmtAccessToken, 10000),
       refreshToken: clean(req.body?.spmtRefreshToken, 10000),
-      isOnlyPersona: () => personaCountForRoom(roomId) <= 1,
+      personaCount: () => personaCountForRoom(roomId),
     });
     runtime.start();
 

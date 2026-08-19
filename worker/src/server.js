@@ -14,7 +14,7 @@ const cors = require('cors');
 const { execFile, spawn } = require('child_process');
 const { promisify } = require('util');
 const { timingSafeEqual } = require('crypto');
-const { existsSync, mkdirSync, unlinkSync, statSync, readdirSync, readFileSync, writeFileSync, createReadStream, mkdtempSync, rmSync, openSync, readSync, closeSync } = require('fs');
+const { existsSync, mkdirSync, unlinkSync, statSync, readdirSync, readFileSync, writeFileSync, createReadStream, mkdtempSync, rmSync, openSync, readSync, closeSync, utimesSync } = require('fs');
 let AudioSource, AudioFrame, LocalAudioTrack, Room, RoomEvent, TrackPublishOptions, TrackSource;
 try {
   ({ AudioSource, AudioFrame, LocalAudioTrack, Room, RoomEvent, TrackPublishOptions, TrackSource } = require('@livekit/rtc-node'));
@@ -35,6 +35,8 @@ const { Peer } = require('peerjs');
 const {
   startVoiceBridge,
   stopVoiceBridge,
+  setVoiceBridgeRoomOutbound,
+  setVoiceBridgeAudioProfile,
   getVoiceBridgeStatus,
   listVoiceBridges,
 } = require('./discord-voice-bridge');
@@ -51,10 +53,7 @@ function redactSensitiveLogText(value) {
 const app = express();
 const PORT = process.env.PORT || 3002;
 const APP_URL = process.env.APP_URL || 'https://hearmeout-main.fly.dev';
-const LOCAL_DEV_WORKER_SECRET = 'hearmeout-local-worker-development-only';
-const WORKER_SHARED_SECRET =
-  String(process.env.HMO_WORKER_SHARED_SECRET || '').trim() ||
-  (process.env.NODE_ENV !== 'production' ? LOCAL_DEV_WORKER_SECRET : '');
+const WORKER_SHARED_SECRET = String(process.env.HMO_WORKER_SHARED_SECRET || '').trim();
 const WORKER_CALLBACK_HEADERS = WORKER_SHARED_SECRET
   ? { Authorization: `Bearer ${WORKER_SHARED_SECRET}` }
   : {};
@@ -1058,6 +1057,7 @@ app.get('/cache-stats', authorizeWorker, (req, res) => {
 
 // ── Watch HLS Transcoder ────────────────────────────────────────────────
 const watchHlsJobs = new Map();
+const watchHlsJobMeta = new Map();
 const watchHlsFailures = new Map();
 const WATCH_HLS_FAILURE_TTL_MS = 2 * 60 * 1000;
 
@@ -1065,8 +1065,17 @@ function cleanWatchStreamId(streamId) {
   const raw = String(streamId || '').trim();
   const youtubeMatch = raw.match(/^yt-([A-Za-z0-9_-]{11})$/) || raw.match(/^youtube-([A-Za-z0-9_-]{11})$/);
   if (youtubeMatch) return youtubeWatchHlsId(youtubeMatch[1]);
+  const typedMatch = raw.toLowerCase().match(/^(vod|series|live)-(\d+)$/)
+    || raw.toLowerCase().match(/^(episode)-(\d+)-([a-z0-9]+)$/);
+  if (typedMatch) return `${typedMatch[1]}-${typedMatch[2]}${typedMatch[3] ? `-${typedMatch[3]}` : ''}-multiaudio-v2`;
   const clean = raw.replace(/[^0-9]/g, '');
   if (!clean) throw new Error('Invalid stream id');
+  return `vod-${clean}-multiaudio-v2`;
+}
+
+function cleanXtreamNumericId(streamId) {
+  const clean = String(streamId || '').replace(/[^0-9]/g, '');
+  if (!clean) throw new Error('Invalid Xtream stream id');
   return clean;
 }
 
@@ -1133,19 +1142,26 @@ function pinManifestSegmentsToMachine(manifest) {
     .split(/\r?\n/)
     .map((line) => {
       const trimmed = line.trim();
+      if (/^#EXT-X-MEDIA:/i.test(trimmed) && /URI="[^"]+"/i.test(line)) {
+        return line.replace(/URI="([^"]+)"/i, (_match, uri) => {
+          if (/[?&]machine=/.test(uri)) return `URI="${uri}"`;
+          return `URI="${uri}${uri.includes('?') ? '&' : '?'}${machineParam}"`;
+        });
+      }
       if (!trimmed || trimmed.startsWith('#') || /[?&]machine=/.test(trimmed)) return line;
       return `${line}${line.includes('?') ? '&' : '?'}${machineParam}`;
     })
     .join('\n');
 }
 
-function pruneWatchHlsRoot() {
-  if (!Number.isFinite(WATCH_HLS_BUDGET_BYTES) || WATCH_HLS_BUDGET_BYTES <= 0) return;
+function pruneWatchHlsRoot(targetBytes = WATCH_HLS_BUDGET_BYTES) {
+  if (!Number.isFinite(targetBytes) || targetBytes < 0) return { bytes: 0, removed: [] };
   mkdirSync(WATCH_HLS_DIR, { recursive: true });
 
   const dirs = [];
   for (const entry of readdirSync(WATCH_HLS_DIR, { withFileTypes: true })) {
     if (!entry.isDirectory()) continue;
+    if (watchHlsJobs.has(entry.name)) continue;
     const dir = join(WATCH_HLS_DIR, entry.name);
     let size = 0;
     let mtimeMs = 0;
@@ -1157,17 +1173,59 @@ function pruneWatchHlsRoot() {
       size += stats.size;
       mtimeMs = Math.max(mtimeMs, stats.mtimeMs);
     }
-    dirs.push({ dir, size, mtimeMs });
+    dirs.push({ streamId: entry.name, dir, size, mtimeMs });
   }
 
   let total = dirs.reduce((sum, dir) => sum + dir.size, 0);
+  const removed = [];
   for (const hlsDir of dirs.sort((left, right) => left.mtimeMs - right.mtimeMs)) {
-    if (total <= WATCH_HLS_BUDGET_BYTES) break;
+    if (total <= targetBytes) break;
     try {
       rmSync(hlsDir.dir, { recursive: true, force: true });
       total -= hlsDir.size;
+      removed.push({ streamId: hlsDir.streamId, bytes: hlsDir.size });
     } catch {}
   }
+  return { bytes: total, removed };
+}
+
+function watchHlsCacheSnapshot() {
+  mkdirSync(WATCH_HLS_DIR, { recursive: true });
+  const entries = [];
+  for (const entry of readdirSync(WATCH_HLS_DIR, { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue;
+    const dir = join(WATCH_HLS_DIR, entry.name);
+    let bytes = 0;
+    let updatedAt = 0;
+    let files = 0;
+    for (const name of readdirSync(dir)) {
+      let stats;
+      try { stats = statSync(join(dir, name)); } catch { continue; }
+      if (!stats.isFile()) continue;
+      bytes += stats.size;
+      files += 1;
+      updatedAt = Math.max(updatedAt, stats.mtimeMs);
+    }
+    entries.push({
+      streamId: entry.name,
+      bytes,
+      files,
+      ready: hasUsableWatchHlsIndex(dir, join(dir, 'index.m3u8')),
+      active: watchHlsJobs.has(entry.name),
+      updatedAt: updatedAt ? new Date(updatedAt).toISOString() : null,
+    });
+  }
+  entries.sort((left, right) => String(right.updatedAt || '').localeCompare(String(left.updatedAt || '')));
+  return {
+    root: 'worker-managed',
+    bytes: entries.reduce((sum, entry) => sum + entry.bytes, 0),
+    budgetBytes: WATCH_HLS_BUDGET_BYTES,
+    segmentSeconds: WATCH_HLS_SEGMENT_SECONDS,
+    playlistWindow: WATCH_HLS_LIST_SIZE === 0 ? 'full' : `${WATCH_HLS_LIST_SIZE} segments`,
+    jobs: Array.from(watchHlsJobMeta.values()),
+    failures: Array.from(watchHlsFailures.entries()).map(([streamId, failure]) => ({ streamId, ...failure })),
+    entries,
+  };
 }
 
 function waitForWatchHlsIndex(streamId, timeoutMs = 45000) {
@@ -1225,9 +1283,11 @@ function ensureWatchHls(streamId, sourceUrl) {
     })
     .finally(() => {
       watchHlsJobs.delete(clean);
+      watchHlsJobMeta.delete(clean);
     });
 
   watchHlsJobs.set(clean, promise);
+  watchHlsJobMeta.set(clean, { streamId: clean, kind: 'xtream', startedAt: new Date().toISOString() });
   return promise;
 }
 
@@ -1277,9 +1337,11 @@ function ensureYoutubeWatchHls(videoId, clientResolved = null) {
     })
     .finally(() => {
       watchHlsJobs.delete(clean);
+      watchHlsJobMeta.delete(clean);
     });
 
   watchHlsJobs.set(clean, promise);
+  watchHlsJobMeta.set(clean, { streamId: clean, kind: 'youtube', startedAt: new Date().toISOString() });
   return promise;
 }
 
@@ -1300,11 +1362,67 @@ try {
   console.error('[WatchHLS] Startup prune failed:', error?.message || error);
 }
 
-function runWatchHlsFfmpeg(streamId, sourceUrl, dir, indexPath) {
-  const segmentPattern = join(dir, 'seg_%05d.ts');
+async function probeWatchMediaStreams(sourceUrl) {
+  try {
+    const { stdout } = await execFileAsync('ffprobe', [
+      '-v', 'error',
+      '-user_agent', 'DiscordStreamHub/1.0',
+      '-show_entries', 'stream=index,codec_type:stream_tags=language,title',
+      '-of', 'json',
+      sourceUrl,
+    ], { maxBuffer: 2 * 1024 * 1024 });
+    const streams = JSON.parse(stdout || '{}').streams || [];
+    return {
+      hasVideo: streams.some((stream) => stream.codec_type === 'video'),
+      audio: streams
+        .filter((stream) => stream.codec_type === 'audio')
+        .slice(0, 8)
+        .map((stream, index) => ({
+          sourceIndex: Number(stream.index),
+          language: String(stream.tags?.language || '').trim().toLowerCase(),
+          title: String(stream.tags?.title || '').trim(),
+          index,
+        })),
+    };
+  } catch (error) {
+    console.warn(`[WatchHLS] ffprobe failed for ${sourceUrl}: ${error?.message || error}`);
+    return { hasVideo: true, audio: [{ sourceSpecifier: 'a:0', language: '', title: '', index: 0 }] };
+  }
+}
+
+function audioTrackName(track) {
+  const language = String(track.language || '').toLowerCase();
+  const title = String(track.title || '').trim();
+  const fallback = language || `track-${track.index + 1}`;
+  return (title || fallback).replace(/[^a-zA-Z0-9_-]+/g, '-').slice(0, 40) || `track-${track.index + 1}`;
+}
+
+function isEnglishAudioTrack(track) {
+  return /^(?:en|eng|english)$/i.test(track.language) || /\benglish\b/i.test(track.title);
+}
+
+async function runWatchHlsFfmpeg(streamId, sourceUrl, dir, indexPath) {
+  const media = await probeWatchMediaStreams(sourceUrl);
+  const audioTracks = media.audio;
+  const segmentPattern = join(dir, 'stream_%v_seg_%05d.ts');
   console.log(`[WatchHLS] Starting HLS conversion for VOD ${streamId}`);
 
   return new Promise((resolve, reject) => {
+    const defaultAudioIndex = Math.max(0, audioTracks.findIndex(isEnglishAudioTrack));
+    const mapArgs = [
+      ...(media.hasVideo ? ['-map', '0:v:0?'] : []),
+      ...audioTracks.flatMap((track) => ['-map', `0:${track.sourceSpecifier || track.sourceIndex}?`]),
+    ];
+    const streamMap = [
+      ...(media.hasVideo ? [audioTracks.length ? 'v:0,agroup:audio,name:video' : 'v:0,name:video'] : []),
+      ...audioTracks.map((track, index) => [
+        `a:${index}`,
+        'agroup:audio',
+        `name:${audioTrackName(track)}`,
+        track.language ? `language:${track.language.replace(/[^a-z0-9-]/g, '')}` : '',
+        index === defaultAudioIndex ? 'default:yes' : '',
+      ].filter(Boolean).join(',')),
+    ].join(' ');
     const ffmpegArgs = [
       '-hide_banner',
       '-loglevel', 'warning',
@@ -1316,8 +1434,7 @@ function runWatchHlsFfmpeg(streamId, sourceUrl, dir, indexPath) {
       '-reconnect_at_eof', '1',
       '-reconnect_delay_max', '5',
       '-i', sourceUrl,
-      '-map', '0:v:0?',
-      '-map', '0:a:0?',
+      ...mapArgs,
       '-c:v', 'copy',
       '-c:a', 'aac',
       '-ac', '2',
@@ -1326,8 +1443,9 @@ function runWatchHlsFfmpeg(streamId, sourceUrl, dir, indexPath) {
       '-hls_list_size', String(WATCH_HLS_LIST_SIZE),
       ...(WATCH_HLS_LIST_SIZE > 0 ? ['-hls_delete_threshold', String(WATCH_HLS_DELETE_THRESHOLD)] : []),
       '-hls_flags', WATCH_HLS_LIST_SIZE > 0 ? 'delete_segments+independent_segments' : 'independent_segments',
+      ...(streamMap ? ['-var_stream_map', streamMap, '-master_pl_name', 'index.m3u8'] : []),
       '-hls_segment_filename', segmentPattern,
-      indexPath,
+      streamMap ? join(dir, 'stream_%v.m3u8') : indexPath,
     ];
 
     const command = process.platform === 'win32' ? 'ffmpeg' : 'nice';
@@ -1497,6 +1615,10 @@ app.get('/watch/youtube/hls/:videoId/:file', authorizeWorker, async (req, res) =
     const filePath = join(dir, file);
     const resolvedPath = existsSync(filePath) ? filePath : await waitForWatchHlsFile(streamId, file);
     if (!resolvedPath) return res.status(404).json({ error: 'HLS file not found' });
+    try {
+      const indexPath = join(dir, 'index.m3u8');
+      if (existsSync(indexPath)) utimesSync(indexPath, new Date(), new Date());
+    } catch {}
 
     const stats = statSync(resolvedPath);
     const contentType = file.endsWith('.m3u8')
@@ -1601,7 +1723,7 @@ app.post(
 
 app.get('/watch/xtream/hls/:streamId/:file', authorizeWorker, async (req, res) => {
   try {
-    const streamId = cleanWatchStreamId(req.params.streamId);
+    const streamId = String(req.params.streamId || '');
     const file = cleanHlsFileName(req.params.file);
     const requestedMachine = cleanFlyMachineId(req.query.machine);
     if (requestedMachine && FLY_MACHINE_ID && requestedMachine !== FLY_MACHINE_ID) {
@@ -1622,6 +1744,10 @@ app.get('/watch/xtream/hls/:streamId/:file', authorizeWorker, async (req, res) =
     const filePath = join(dir, file);
     const resolvedPath = existsSync(filePath) ? filePath : await waitForWatchHlsFile(streamId, file);
     if (!resolvedPath) return res.status(404).json({ error: 'HLS file not found' });
+    try {
+      const activeIndexPath = join(dir, 'index.m3u8');
+      if (existsSync(activeIndexPath)) utimesSync(activeIndexPath, new Date(), new Date());
+    } catch {}
 
     const stats = statSync(resolvedPath);
     const contentType = file.endsWith('.m3u8')
@@ -1646,11 +1772,51 @@ app.get('/watch/xtream/hls/:streamId/:file', authorizeWorker, async (req, res) =
   }
 });
 
+app.get('/watch/cache/status', authorizeWorker, (_req, res) => {
+  return res.json(watchHlsCacheSnapshot());
+});
+
+app.post('/watch/cache/control', authorizeWorker, (req, res) => {
+  try {
+    const action = String(req.body?.action || '');
+    if (action === 'prepare') {
+      const streamId = String(req.body?.streamId || '');
+      const sourceUrl = String(req.body?.sourceUrl || '');
+      if (!streamId || !/^https?:\/\//i.test(sourceUrl)) {
+        return res.status(400).json({ error: 'prepare requires a streamId and HTTP(S) sourceUrl' });
+      }
+      ensureWatchHls(streamId, sourceUrl).catch((error) => {
+        const clean = cleanWatchStreamId(streamId);
+        watchHlsFailures.set(clean, { at: Date.now(), message: error?.message || String(error) });
+      });
+      return res.status(202).json({ accepted: true, streamId: cleanWatchStreamId(streamId), cache: watchHlsCacheSnapshot() });
+    }
+    if (action === 'prune') {
+      const requestedTarget = Number(req.body?.targetBytes);
+      const targetBytes = Number.isFinite(requestedTarget) && requestedTarget >= 0
+        ? Math.min(requestedTarget, WATCH_HLS_BUDGET_BYTES)
+        : Math.floor(WATCH_HLS_BUDGET_BYTES * 0.8);
+      const result = pruneWatchHlsRoot(targetBytes);
+      return res.json({ ok: true, ...result, cache: watchHlsCacheSnapshot() });
+    }
+    if (action === 'clear') {
+      const clean = cleanWatchStreamId(req.body?.streamId);
+      if (watchHlsJobs.has(clean)) return res.status(409).json({ error: 'Cannot clear an active cache job' });
+      rmSync(join(WATCH_HLS_DIR, clean), { recursive: true, force: true });
+      watchHlsFailures.delete(clean);
+      return res.json({ ok: true, streamId: clean, cache: watchHlsCacheSnapshot() });
+    }
+    return res.status(400).json({ error: 'Unsupported cache action' });
+  } catch (error) {
+    return res.status(400).json({ error: error?.message || 'Cache control failed' });
+  }
+});
+
 app.get('/watch/xtream/direct/:kind/:streamId', authorizeWorker, async (req, res) => {
   try {
     const kind = String(req.params.kind || '');
     if (!['vod', 'live', 'series'].includes(kind)) return res.status(400).json({ error: 'Unsupported stream kind' });
-    const streamId = cleanWatchStreamId(req.params.streamId);
+    const streamId = cleanXtreamNumericId(req.params.streamId);
     const sourceResponse = await fetch(`${APP_URL}/api/watch/xtream/source/${encodeURIComponent(kind)}/${encodeURIComponent(streamId)}`, {
       headers: WORKER_CALLBACK_HEADERS,
     });
@@ -2453,7 +2619,7 @@ async function resolveDiscordBotToken() {
 }
 
 app.post('/voice-bridge', authorizeWorker, async (req, res) => {
-  const { action, roomId, guildId, voiceChannelId } = req.body || {};
+  const { action, roomId, guildId, voiceChannelId, audioProfile } = req.body || {};
   if (!roomId) return res.status(400).json({ success: false, message: 'Missing roomId' });
 
   try {
@@ -2473,6 +2639,7 @@ app.post('/voice-bridge', authorizeWorker, async (req, res) => {
         appUrl: APP_URL,
         workerHeaders: WORKER_CALLBACK_HEADERS,
         livekitUrl: BRIDGE_LIVEKIT_URL,
+        audioProfile,
       });
       return res.json(result);
     }
@@ -2493,6 +2660,20 @@ app.get('/voice-bridge', authorizeWorker, (req, res) => {
   const { roomId } = req.query;
   if (roomId) return res.json(getVoiceBridgeStatus(roomId));
   return res.json({ instances: listVoiceBridges() });
+});
+
+app.post('/voice-bridge/gate', authorizeWorker, (req, res) => {
+  const { roomId, roomVoiceOutboundEnabled } = req.body || {};
+  if (!roomId || typeof roomVoiceOutboundEnabled !== 'boolean') {
+    return res.status(400).json({ success: false, message: 'Missing roomId or boolean roomVoiceOutboundEnabled' });
+  }
+  return res.json(setVoiceBridgeRoomOutbound(roomId, roomVoiceOutboundEnabled));
+});
+
+app.post('/voice-bridge/audio-profile', authorizeWorker, (req, res) => {
+  const { roomId, audioProfile } = req.body || {};
+  if (!roomId) return res.status(400).json({ success: false, message: 'Missing roomId' });
+  return res.json(setVoiceBridgeAudioProfile(roomId, audioProfile));
 });
 
 // ── Health ──────────────────────────────────────────────────────────────

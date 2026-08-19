@@ -15,15 +15,17 @@ function source(relative) {
   return fs.readFileSync(path.join(__dirname, '..', relative), 'utf8');
 }
 
-test('single invited persona accepts ordinary room conversation', () => {
-  assert.equal(shouldRouteTranscript('hey', ['Athena', 'Annie'], true), true);
-  assert.equal(shouldRouteTranscript('what do you think?', ['Athena'], true), true);
-  assert.equal(shouldRouteTranscript('Could not understand audio.', ['Athena'], true), false);
+test('a persona only answers explicit wake names or a successful interest roll', () => {
+  assert.equal(shouldRouteTranscript('hey', ['Athena', 'Annie']), false);
+  assert.equal(shouldRouteTranscript('what do you think?', ['Athena']), false);
+  assert.equal(shouldRouteTranscript('I love space exploration', ['Athena'], ['space'], 0.35, () => 0.2), true);
+  assert.equal(shouldRouteTranscript('I love space exploration', ['Athena'], ['space'], 0.35, () => 0.8), false);
+  assert.equal(shouldRouteTranscript('Could not understand audio.', ['Athena']), false);
 });
 
 test('multiple personas require an explicit wake name', () => {
-  assert.equal(shouldRouteTranscript('hey', ['Athena', 'Annie'], false), false);
-  assert.equal(shouldRouteTranscript('hey Athena, are you there?', ['Athena', 'Annie'], false), true);
+  assert.equal(shouldRouteTranscript('hey', ['Athena', 'Annie']), false);
+  assert.equal(shouldRouteTranscript('hey Athena, are you there?', ['Athena', 'Annie']), true);
   assert.equal(wakeNameMatches('@Annie hello', ['Athena', 'Annie']), true);
 });
 
@@ -42,9 +44,10 @@ test('voice activity energy helper distinguishes silence from speech PCM', () =>
   assert.ok(rmsPcm16(speech) > 1000);
 });
 
-test('room chat defaults to one invited persona and asks it to speak', () => {
+test('room chat does not default every message to a single persona and asks invoked bots to speak', () => {
   const chat = source('src/app/rooms/[roomId]/_components/ChatBox.tsx');
-  assert.match(chat, /bots\.length === 1[\s\S]{0,160}!value\.trim\(\)\.startsWith\("!"\)/);
+  assert.doesNotMatch(chat, /bots\.length === 1[\s\S]{0,160}!value\.trim\(\)\.startsWith\("!"\)/);
+  assert.match(chat, /bot\.interests/);
   assert.match(chat, /speak:\s*true/);
   assert.doesNotMatch(chat, /speak:\s*false/);
 });
@@ -57,4 +60,10 @@ test('persona invite passes SPMT session only server-to-server and worker has a 
   assert.match(sessionRoute, /spmtRefreshToken:/);
   assert.match(bootstrap, /app\.post\('\/persona\/speak'/);
   assert.match(commandRoute, /\/persona\/speak/);
+});
+
+test('mobile wake mode relies on the LiveKit persona track instead of layering browser speech synthesis', () => {
+  const mobile = source('src/app/rooms/[roomId]/_components/MobileVoiceControl.tsx');
+  assert.match(mobile, /payload\?\.personaSpeech/);
+  assert.doesNotMatch(mobile, /SpeechSynthesisUtterance|speechSynthesis/);
 });

@@ -33,7 +33,7 @@ type XtreamSeriesInfo = {
   };
 };
 
-type XtreamCatalogItem = {
+export type XtreamCatalogItem = {
   id: string;
   type: 'movie' | 'live';
   title: string;
@@ -53,7 +53,17 @@ type XtreamCatalogItem = {
     episodeId?: string;
     episodeExtension?: string;
     episodeTitle?: string;
+    containerExtension?: string;
+    languages?: string[];
+    multiAudio?: boolean;
+    quality?: string;
   };
+};
+
+export type XtreamRankedResult = {
+  item: XtreamCatalogItem;
+  score: number;
+  reasons: string[];
 };
 
 let cachedStreams: { expiresAt: number; items: XtreamCatalogItem[] } | null = null;
@@ -190,6 +200,46 @@ const SEARCH_STOP_WORDS = new Set([
   'please',
 ]);
 
+const LANGUAGE_PATTERNS: Array<[RegExp, string]> = [
+  [/\benglish\b|\beng\b/i, 'English'],
+  [/\bhindi\b|\bhin\b/i, 'Hindi'],
+  [/\bspanish\b|\bespanol\b|\blatino\b/i, 'Spanish'],
+  [/\bfrench\b|\bfre\b|\bfra\b/i, 'French'],
+  [/\bgerman\b|\bger\b|\bdeu\b/i, 'German'],
+  [/\bjapanese\b|\bjpn\b/i, 'Japanese'],
+  [/\bkorean\b|\bkor\b/i, 'Korean'],
+  [/\btamil\b/i, 'Tamil'],
+  [/\btelugu\b/i, 'Telugu'],
+];
+
+function yearFromText(value: unknown) {
+  const matches = String(value || '').match(/\b(?:19|20)\d{2}\b/g) || [];
+  const year = Number(matches.at(-1));
+  return Number.isFinite(year) ? year : undefined;
+}
+
+function mediaFeatures(title: string, extension = '') {
+  const languages = LANGUAGE_PATTERNS
+    .filter(([pattern]) => pattern.test(title))
+    .map(([, language]) => language);
+  const multiAudio = /\b(?:multi[\s-]?audio|dual[\s-]?audio|multi[\s-]?lang(?:uage)?)\b/i.test(title);
+  const quality = /\b(?:2160p|4k|uhd)\b/i.test(title)
+    ? '4K'
+    : /\b1080p\b/i.test(title)
+      ? '1080p'
+      : /\b720p\b/i.test(title)
+        ? '720p'
+        : /\b(?:cam|hdcam|telesync|tsrip)\b/i.test(title)
+          ? 'CAM'
+          : undefined;
+  return {
+    languages: Array.from(new Set(languages)),
+    multiAudio,
+    quality,
+    containerExtension: extension || undefined,
+  };
+}
+
 function parseSeriesIntent(query: string | null | undefined) {
   const raw = String(query || '').trim();
   const normalized = normalize(raw);
@@ -245,6 +295,7 @@ function scoreItem(item: XtreamCatalogItem, query: string) {
   const isVod = item.id.startsWith('xtream-vod-');
   const isSeries = item.id.startsWith('xtream-series-');
   const isSeriesSearch = intent.explicit || /\b(show|series|season|episode|episodes)\b/.test(normalize(query)) || /\bs\d{1,2}\s*e\d{1,2}\b/i.test(normalize(query));
+  const requestedYear = yearFromText(query);
   const exactTitle = title === needle || (compactNeedle.length >= 3 && compactTitle === compactNeedle);
   const containsTitle = title.includes(needle) || (compactNeedle.length >= 4 && compactTitle.includes(compactNeedle));
   const matchedTitleWords = titleIntentWords.filter((word) => title.includes(word) || compactTitle.includes(compact(word))).length;
@@ -286,13 +337,39 @@ function scoreItem(item: XtreamCatalogItem, query: string) {
   if (overview.includes('(mp4)')) score += 12;
   if (overview.includes('(mkv)')) score -= 20;
   if (isSeries && !isSeriesSearch) score -= 30;
+  if (requestedYear) {
+    const itemYear = yearFromText(item.title) || item.year;
+    if (itemYear === requestedYear) score += 85;
+    else if (itemYear && Math.abs(itemYear - requestedYear) <= 1) score += 5;
+    else score -= 60;
+  }
+  if (item.metadata?.multiAudio) score += 4;
+  if (item.metadata?.quality === 'CAM') score -= 45;
   return score;
+}
+
+function matchReasons(item: XtreamCatalogItem, query: string, score: number) {
+  const reasons: string[] = [];
+  const intent = parseSeriesIntent(query);
+  const titleQuery = intent.explicit && intent.titleQuery ? intent.titleQuery : query;
+  if (compact(item.title).includes(compact(titleQuery))) reasons.push('title');
+  const requestedYear = yearFromText(query);
+  if (requestedYear && (yearFromText(item.title) || item.year) === requestedYear) reasons.push(`year ${requestedYear}`);
+  if (item.metadata?.multiAudio) reasons.push('multiple audio tracks');
+  if (item.metadata?.languages?.length) reasons.push(item.metadata.languages.join(', '));
+  if (item.metadata?.quality) reasons.push(item.metadata.quality);
+  if (item.id.startsWith('xtream-vod-')) reasons.push('playable VOD');
+  if (item.id.startsWith('xtream-series-')) reasons.push('series');
+  if (score >= 200) reasons.unshift('strong match');
+  return Array.from(new Set(reasons));
 }
 
 function streamYear(stream: XtreamStream) {
   const parsed = Number(stream.year);
   if (Number.isFinite(parsed) && parsed > 1900) return parsed;
-  return new Date().getFullYear();
+  const titleYear = yearFromText(stream.name || stream.title);
+  if (titleYear) return titleYear;
+  return 0;
 }
 
 function toCatalogItem(stream: XtreamStream, kind: XtreamKind): XtreamCatalogItem | null {
@@ -303,6 +380,7 @@ function toCatalogItem(stream: XtreamStream, kind: XtreamKind): XtreamCatalogIte
   const extension = String(stream.container_extension || (kind === 'live' ? 'ts' : 'mp4')).toLowerCase();
   if (kind === 'vod' && !['mp4', 'm4v', 'mov', 'm3u8', 'ts', 'mkv'].includes(extension)) return null;
   if (kind === 'vod') vodExtensions.set(String(streamId), extension);
+  const features = mediaFeatures(title, extension);
 
   return {
     id: `xtream-${kind}-${streamId}`,
@@ -314,6 +392,10 @@ function toCatalogItem(stream: XtreamStream, kind: XtreamKind): XtreamCatalogIte
     poster: stream.stream_icon || stream.cover || '',
     playbackUrl: `/activity-provider/xtream/${kind}/${streamId}`,
     overview: kind === 'series' ? 'Xtream SERIES result; starts from the first available episode.' : `Xtream ${kind.toUpperCase()} stream${extension ? ` (${extension})` : ''}.`,
+    metadata: kind === 'series' ? undefined : {
+      provider: 'xtream',
+      ...features,
+    },
   };
 }
 
@@ -323,6 +405,7 @@ function toEpisodeCatalogItem(episode: XtreamEpisode): XtreamCatalogItem {
   const episodeTitle = episode.title && !compact(episode.title).includes(compact(episodeLabel))
     ? `${episodeLabel}: ${episode.title}`
     : episodeLabel;
+  const features = mediaFeatures(`${episode.seriesTitle} ${episode.title}`, episode.extension);
 
   return {
     id: `xtream-episode-${episode.episodeId}`,
@@ -344,6 +427,7 @@ function toEpisodeCatalogItem(episode: XtreamEpisode): XtreamCatalogItem {
       episodeId: episode.episodeId,
       episodeExtension: episode.extension,
       episodeTitle: episode.title,
+      ...features,
     },
   };
 }
@@ -392,16 +476,24 @@ function m3uEntryKind(entry: M3uEntry): 'movie' | 'live' | 'series' {
 function m3uCatalogItem(entry: M3uEntry, index: number): XtreamCatalogItem | null {
   if (!/^https?:\/\//i.test(entry.url)) return null;
   const kind = m3uEntryKind(entry);
+  const extension = (() => {
+    try { return new URL(entry.url).pathname.split('.').at(-1)?.toLowerCase() || ''; } catch { return ''; }
+  })();
+  const features = mediaFeatures(`${entry.title} ${entry.group || ''}`, extension);
   return {
     id: `m3u-${kind}-${index}`,
     type: kind === 'live' ? 'live' : 'movie',
     title: entry.title,
-    year: new Date().getFullYear(),
+    year: yearFromText(entry.title) || 0,
     runtime: kind === 'live' ? 'live' : kind === 'series' ? 'series' : 'unknown',
     source: entry.group ? `M3U playlist: ${entry.group}` : 'M3U playlist',
     poster: entry.logo || '',
     playbackUrl: entry.url,
     overview: kind === 'series' ? 'M3U playlist series result.' : `M3U playlist ${kind} result.`,
+    metadata: {
+      provider: 'xtream',
+      ...features,
+    },
   };
 }
 
@@ -519,44 +611,59 @@ export async function getXtreamCatalogDiagnostics(query?: string | null) {
   };
 }
 
-export async function searchXtreamCatalog(query: string | null | undefined) {
+export async function searchXtreamCatalogRanked(query: string | null | undefined): Promise<XtreamRankedResult[]> {
   const needle = normalize(query);
   if (!needle) return [];
   const items = await getXtreamCatalog();
   const matches = items
     .map((item) => ({ item, score: scoreItem(item, needle) }))
     .filter((entry) => entry.score >= 30)
-    .sort((a, b) => b.score - a.score)
-    .slice(0, 50)
-    .map((entry) => entry.item);
+    .sort((a, b) => b.score - a.score || a.item.title.localeCompare(b.item.title))
+    .slice(0, 60);
 
-  const playable: XtreamCatalogItem[] = [];
-  for (const item of matches) {
+  const playable: XtreamRankedResult[] = [];
+  const seen = new Set<string>();
+  for (const entry of matches) {
+    const { item, score } = entry;
+    const dedupeKey = `${item.id}|${item.playbackUrl}`;
+    if (seen.has(dedupeKey)) continue;
+    seen.add(dedupeKey);
     if (item.id.startsWith('m3u-')) {
-      playable.push(item);
+      playable.push({ item, score, reasons: matchReasons(item, needle, score) });
       continue;
     }
 
     if (item.id.startsWith('xtream-vod-')) {
-      playable.push(item);
+      playable.push({ item, score, reasons: matchReasons(item, needle, score) });
       continue;
     }
 
     if (!item.id.startsWith('xtream-series-')) {
-      playable.push(item);
+      playable.push({ item, score, reasons: matchReasons(item, needle, score) });
       continue;
     }
 
     const seriesId = item.id.replace('xtream-series-', '');
     const hasEpisode = await getFirstSeriesEpisodeUrl(seriesId).then(() => true).catch(() => false);
     if (hasEpisode) {
-      playable.push(item);
+      playable.push({ item, score, reasons: matchReasons(item, needle, score) });
     } else {
       console.warn(`[Xtream] Skipping unplayable series result: ${item.title} (${seriesId})`);
     }
   }
 
   return playable;
+}
+
+export async function searchXtreamCatalog(query: string | null | undefined) {
+  return (await searchXtreamCatalogRanked(query)).map((entry) => entry.item);
+}
+
+export async function findXtreamCatalogItemById(itemId: string | null | undefined) {
+  const id = String(itemId || '').trim();
+  if (!id || !/^(?:xtream-(?:vod|live|series)-\d+|xtream-mock-[a-z0-9-]+|m3u-(?:movie|live|series)-\d+)$/.test(id)) return null;
+  const items = await getXtreamCatalog();
+  return items.find((item) => item.id === id) || null;
 }
 
 export async function findXtreamSeriesEpisode(

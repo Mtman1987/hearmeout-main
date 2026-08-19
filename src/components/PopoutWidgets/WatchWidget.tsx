@@ -37,6 +37,21 @@ type WatchState = {
   events: Array<{ id: string; at: string; message: string }>;
 };
 
+type WatchSearchResult = {
+  id: string;
+  title: string;
+  year: number;
+  runtime: string;
+  source: string;
+  poster?: string;
+  overview?: string;
+  recommended?: boolean;
+  matchReasons?: string[];
+  audio?: { multiTrack?: boolean; languages?: string[] };
+  quality?: string | null;
+  container?: string | null;
+};
+
 function watchRequestErrorMessage(data: any) {
   if (data?.discovery) {
     const title = data.discovery.title || 'that title';
@@ -63,6 +78,10 @@ export function WatchWidget({
   const [query, setQuery] = useState('');
   const [tab, setTab] = useState<'movie' | 'music'>(initialTab);
   const [searching, setSearching] = useState(false);
+  const [searchResults, setSearchResults] = useState<WatchSearchResult[]>([]);
+  const [queuingId, setQueuingId] = useState<string | null>(null);
+  const [cacheStatus, setCacheStatus] = useState<any>(null);
+  const [serviceBusy, setServiceBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const movieSessionId = getRoomWatchSessionId(roomId, 'movie');
@@ -83,6 +102,39 @@ export function WatchWidget({
     return () => clearInterval(interval);
   }, [refresh]);
 
+  const refreshService = useCallback(async () => {
+    if (!canControl || !roomId) return;
+    const response = await fetch(`/api/watch/service?roomId=${encodeURIComponent(roomId)}`, { cache: 'no-store' }).catch(() => null);
+    if (response?.ok) setCacheStatus(await response.json().catch(() => null));
+  }, [canControl, roomId]);
+
+  useEffect(() => {
+    refreshService();
+    if (!canControl) return;
+    const interval = window.setInterval(refreshService, 5000);
+    return () => window.clearInterval(interval);
+  }, [canControl, refreshService]);
+
+  const serviceAction = async (action: 'prepare' | 'prune', item?: WatchSearchResult) => {
+    setServiceBusy(item?.id || action);
+    setError(null);
+    try {
+      const response = await fetch('/api/watch/service', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action, roomId, sessionId, itemId: item?.id }),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(payload.error || 'Service control failed');
+      setCacheStatus(payload.cache || payload);
+    } catch (cause: any) {
+      setError(cause?.message || 'Service control failed');
+    } finally {
+      setServiceBusy(null);
+      window.setTimeout(refreshService, 700);
+    }
+  };
+
   const handleSearch = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!roomId) {
@@ -93,6 +145,14 @@ export function WatchWidget({
     setSearching(true);
     setError(null);
     try {
+      if (tab === 'movie') {
+        const response = await fetch(`/api/watch/search?q=${encodeURIComponent(query.trim())}`, { cache: 'no-store' });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(payload.error || 'Search failed');
+        setSearchResults(Array.isArray(payload.results) ? payload.results : []);
+        if (!payload.results?.length) setError('No playable results found. Try the exact title and year.');
+        return;
+      }
       const res = await fetch(`/api/watch/sessions/${sessionId}/request`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -110,11 +170,40 @@ export function WatchWidget({
       } else {
         setState(data.session);
         setQuery('');
+        setSearchResults([]);
       }
-    } catch {
-      setError('Request failed');
+    } catch (cause: any) {
+      setError(cause?.message || 'Request failed');
     } finally {
       setSearching(false);
+    }
+  };
+
+  const queueSearchResult = async (item: WatchSearchResult) => {
+    setQueuingId(item.id);
+    setError(null);
+    try {
+      const res = await fetch(`/api/watch/sessions/${sessionId}/request`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          itemId: item.id,
+          query: `${item.title} ${item.year || ''}`.trim(),
+          username: 'local viewer',
+          mediaType: 'video',
+          roomId,
+          announceDiscord: isActivityRoomId(roomId),
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(watchRequestErrorMessage(data));
+      setState(data.session);
+      setQuery('');
+      setSearchResults([]);
+    } catch (cause: any) {
+      setError(cause?.message || 'Could not queue this result');
+    } finally {
+      setQueuingId(null);
     }
   };
 
@@ -151,10 +240,10 @@ export function WatchWidget({
     >
       <div className="flex-1 overflow-y-auto p-3 space-y-3">
         <div className="grid grid-cols-2 gap-2">
-          <Button type="button" variant={tab === 'movie' ? 'secondary' : 'outline'} size="sm" onClick={() => { setTab('movie'); setError(null); }}>
+          <Button type="button" variant={tab === 'movie' ? 'secondary' : 'outline'} size="sm" onClick={() => { setTab('movie'); setError(null); setSearchResults([]); }}>
             <Film className="mr-1 h-3.5 w-3.5" /> Movies
           </Button>
-          <Button type="button" variant={tab === 'music' ? 'secondary' : 'outline'} size="sm" onClick={() => { setTab('music'); setError(null); }}>
+          <Button type="button" variant={tab === 'music' ? 'secondary' : 'outline'} size="sm" onClick={() => { setTab('music'); setError(null); setSearchResults([]); }}>
             <Music className="mr-1 h-3.5 w-3.5" /> Music
           </Button>
         </div>
@@ -232,6 +321,52 @@ export function WatchWidget({
             {searching ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : <Search className="h-3.5 w-3.5" />}
           </Button>
         </form>
+
+        {tab === 'movie' && searchResults.length > 0 && (
+          <div className="space-y-2 rounded-md border border-border bg-background/60 p-2">
+            <p className="text-xs text-muted-foreground">Choose the exact provider file. Nothing is queued until you select one.</p>
+            {searchResults.map((item) => (
+              <div key={item.id} className="flex gap-2 rounded-md border border-border bg-card p-2">
+                {item.poster ? <img src={item.poster} alt="" className="h-16 w-11 shrink-0 rounded object-cover" /> : null}
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-start justify-between gap-2">
+                    <strong className="line-clamp-2 text-sm">{item.title}</strong>
+                    {item.recommended ? <span className="rounded bg-emerald-500/15 px-1.5 py-0.5 text-[10px] text-emerald-300">Best match</span> : null}
+                  </div>
+                  <p className="mt-1 text-[11px] text-muted-foreground">
+                    {item.year || 'Unknown year'} · {item.quality || item.container || item.runtime} · {item.source}
+                  </p>
+                  {item.audio?.multiTrack ? (
+                    <p className="mt-1 text-[11px] text-cyan-300">Multiple audio tracks — language selector available in player</p>
+                  ) : null}
+                  <Button type="button" size="sm" className="mt-2 h-7" disabled={Boolean(queuingId)} onClick={() => queueSearchResult(item)}>
+                    {queuingId === item.id ? <LoaderCircle className="mr-1 h-3 w-3 animate-spin" /> : null}
+                    Add this version
+                  </Button>
+                  {canControl && /^xtream-vod-\d+$/.test(item.id) ? (
+                    <Button type="button" variant="outline" size="sm" className="ml-2 mt-2 h-7" disabled={Boolean(serviceBusy)} onClick={() => serviceAction('prepare', item)}>
+                      {serviceBusy === item.id ? 'Preparing…' : 'Pre-cache'}
+                    </Button>
+                  ) : null}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {canControl && cacheStatus && (
+          <div className="rounded-md border border-border bg-background/60 p-2 text-xs text-muted-foreground">
+            <div className="flex items-center justify-between gap-2">
+              <span>
+                Media cache {Math.round(Number(cacheStatus.bytes || 0) / 1024 / 1024)} MB / {Math.round(Number(cacheStatus.budgetBytes || 0) / 1024 / 1024)} MB · {cacheStatus.jobs?.length || 0} active
+              </span>
+              <Button type="button" variant="outline" size="sm" className="h-7" disabled={Boolean(serviceBusy)} onClick={() => serviceAction('prune')}>
+                {serviceBusy === 'prune' ? 'Pruning…' : 'Prune LRU'}
+              </Button>
+            </div>
+            <p className="mt-1">{cacheStatus.entries?.length || 0} prepared streams · {cacheStatus.playlistWindow || 'rolling cache'}</p>
+          </div>
+        )}
         {error && <p className="text-xs text-red-400">{error}</p>}
 
         {state?.queue && state.queue.length > 0 && (

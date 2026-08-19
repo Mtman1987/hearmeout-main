@@ -53,6 +53,7 @@ type OverlayProfile = {
   displayName?: string;
   photoURL?: string;
   lastSeen?: number;
+  bot?: boolean;
 };
 
 type OverlayViewState = {
@@ -168,6 +169,8 @@ export default function OverlayPage() {
   const [isMuted, setIsMuted] = useState(false);
   const [audioReady, setAudioReady] = useState(false);
   const [mediaStatus, setMediaStatus] = useState('Waiting for media');
+  const [audioTracks, setAudioTracks] = useState<Array<{ index: number; name: string; language: string }>>([]);
+  const [selectedAudioTrack, setSelectedAudioTrack] = useState(0);
   const [musicPlaybackMode, setMusicPlaybackMode] = useState<'video' | 'audio'>('video');
   const [showNowPlaying, setShowNowPlaying] = useState(true);
   const [showMusicQueue, setShowMusicQueue] = useState(true);
@@ -176,6 +179,7 @@ export default function OverlayPage() {
   const { data: roomProfiles } = useCollection<OverlayProfile>(`rooms/${roomId}/users`, { pollInterval: 3000 });
 
   const activeProfiles = useMemo(() => (roomProfiles || []).filter((profile) => {
+    if (profile.bot) return true;
     const lastSeen = Number(profile.lastSeen || 0);
     return lastSeen > 0 && Date.now() - lastSeen < 45_000;
   }), [roomProfiles]);
@@ -381,6 +385,8 @@ export default function OverlayPage() {
     const item = activeState?.current?.item;
     if (!item || !requestId) {
       currentRequestIdRef.current = null;
+      setAudioTracks([]);
+      setSelectedAudioTrack(0);
       videoRef.current?.pause();
       if (videoRef.current) {
         videoRef.current.removeAttribute('src');
@@ -404,6 +410,8 @@ export default function OverlayPage() {
       hlsRef.current.destroy();
       hlsRef.current = null;
     }
+    setAudioTracks([]);
+    setSelectedAudioTrack(0);
 
     const video = videoRef.current;
     if (video) {
@@ -444,6 +452,16 @@ export default function OverlayPage() {
               fragLoadingMaxRetryTimeout: 8000,
             });
             hlsRef.current.on(Hls.Events.MANIFEST_PARSED, () => {
+              const tracks = (hlsRef.current?.audioTracks || []).map((track: any, index: number) => ({
+                index,
+                name: String(track?.name || track?.lang || `Audio ${index + 1}`),
+                language: String(track?.lang || '').toLowerCase(),
+              }));
+              setAudioTracks(tracks);
+              const english = tracks.find((track) => /^(?:en|eng|english)$/i.test(track.language) || /\benglish\b/i.test(track.name));
+              const preferred = english?.index ?? Math.max(0, Number(hlsRef.current?.audioTrack || 0));
+              hlsRef.current.audioTrack = preferred;
+              setSelectedAudioTrack(preferred);
               setMediaStatus('Overlay media ready');
               applyPlaybackState(activeState);
             });
@@ -788,6 +806,24 @@ export default function OverlayPage() {
               </TooltipTrigger>
               <TooltipContent><p>Switch music playback mode</p></TooltipContent>
             </Tooltip>
+          )}
+          {audioTracks.length > 1 && (
+            <select
+              aria-label="Overlay audio language"
+              className="h-8 max-w-36 rounded-md border border-white/20 bg-black/80 px-2 text-xs text-white"
+              value={selectedAudioTrack}
+              onChange={(event) => {
+                const nextTrack = Number(event.target.value);
+                setSelectedAudioTrack(nextTrack);
+                if (hlsRef.current) hlsRef.current.audioTrack = nextTrack;
+              }}
+            >
+              {audioTracks.map((track) => (
+                <option key={`${track.index}-${track.name}`} value={track.index}>
+                  {track.name}{track.language ? ` (${track.language})` : ''}
+                </option>
+              ))}
+            </select>
           )}
           <Tooltip>
             <TooltipTrigger asChild>

@@ -126,30 +126,16 @@ export default function MobileVoiceControl({ roomId, remoteParticipants }: Mobil
 
   const speakBotReply = React.useCallback(async (payload: any) => {
     const reply = String(payload?.response || payload?.data?.response || '').trim();
-    const audioDataUri = String(payload?.tts?.audioDataUri || payload?.data?.tts?.audioDataUri || '').trim();
-    if (!reply && !audioDataUri) return;
+    const handoff = payload?.personaSpeech;
+    if (!reply && !handoff?.attempted) return;
     speakingBotRef.current = true;
     try {
       recognitionRef.current?.stop?.();
-      if (audioDataUri) {
-        const audio = new Audio(audioDataUri);
-        await new Promise<void>((resolve, reject) => {
-          audio.onended = () => resolve();
-          audio.onerror = () => reject(new Error('TTS playback failed'));
-          audio.play().catch(reject);
-        });
-      } else if (reply && 'speechSynthesis' in window) {
-        await new Promise<void>((resolve) => {
-          const utterance = new SpeechSynthesisUtterance(reply);
-          utterance.onend = () => resolve();
-          utterance.onerror = () => resolve();
-          window.speechSynthesis.speak(utterance);
-        });
-      }
-    } catch {
-      if (reply && 'speechSynthesis' in window) {
-        window.speechSynthesis.speak(new SpeechSynthesisUtterance(reply));
-      }
+      if (handoff?.attempted && handoff?.ok === false) throw new Error(String(handoff.error || 'LiveKit persona playback failed'));
+      // The server already published the canonical persona audio through
+      // LiveKit. Do not play a second browser TTS voice over it. Keep browser
+      // recognition paused for approximately the spoken reply duration.
+      await new Promise<void>((resolve) => window.setTimeout(resolve, Math.min(12_000, Math.max(1_200, reply.length * 55))));
     } finally {
       speakingBotRef.current = false;
       setWakeStatus('Listening for a bot wake name…');
@@ -243,7 +229,6 @@ export default function MobileVoiceControl({ roomId, remoteParticipants }: Mobil
   React.useEffect(() => () => {
     shouldListenRef.current = false;
     recognitionRef.current?.abort?.();
-    window.speechSynthesis?.cancel?.();
   }, []);
 
   const startTouchPtt = React.useCallback((event: React.PointerEvent<HTMLButtonElement>) => {

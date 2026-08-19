@@ -48,11 +48,18 @@ function wakeNameMatches(transcript, wakeNames = []) {
   });
 }
 
-function shouldRouteTranscript(transcript, wakeNames, isOnlyPersona) {
+function shouldRouteTranscript(
+  transcript,
+  wakeNames,
+  interests = [],
+  interestChance = 0.35,
+  random = Math.random,
+) {
   const value = clean(transcript);
   if (!value || /^could not understand audio\.?$/i.test(value)) return false;
-  if (isOnlyPersona) return true;
-  return wakeNameMatches(value, wakeNames);
+  if (wakeNameMatches(value, wakeNames)) return true;
+  if (value.startsWith('!') || !wakeNameMatches(value, interests)) return false;
+  return random() < Math.max(0, Math.min(1, Number(interestChance) || 0));
 }
 
 function runFfmpeg(args, input, timeoutMs = 30_000) {
@@ -135,12 +142,13 @@ class PersonaRuntimeAdapter {
     ownerTenantId,
     wakeNames = [],
     aliases = [],
+    interests = [],
     voice = '',
     appUrl,
     workerHeaders = {},
     accessToken,
     refreshToken,
-    isOnlyPersona = () => true,
+    personaCount = () => 1,
   }) {
     this.persona = persona;
     this.roomId = roomId;
@@ -154,11 +162,14 @@ class PersonaRuntimeAdapter {
       ...aliases,
     ].map((entry) => clean(entry, 96)).filter(Boolean)));
     this.voice = clean(voice, 128);
+    this.interests = Array.from(new Set(
+      interests.map((entry) => clean(entry, 96)).filter(Boolean),
+    ));
     this.appUrl = String(appUrl || '').replace(/\/$/, '');
     this.workerHeaders = workerHeaders;
     this.accessToken = clean(accessToken, 10000);
     this.refreshToken = clean(refreshToken, 10000);
-    this.isOnlyPersona = isOnlyPersona;
+    this.personaCount = personaCount;
     this.unsubscribe = null;
     this.states = new Map();
     this.queue = Promise.resolve();
@@ -294,7 +305,9 @@ class PersonaRuntimeAdapter {
   async processUtterance(identity, pcm) {
     if (this.stopped) return;
     const transcript = await this.transcribe(pcm);
-    if (!shouldRouteTranscript(transcript, this.wakeNames, this.isOnlyPersona())) return;
+    const roomPersonaCount = Math.max(1, Number(this.personaCount()) || 1);
+    const interestChance = Math.min(0.35, 1 / Math.max(2, roomPersonaCount * 2));
+    if (!shouldRouteTranscript(transcript, this.wakeNames, this.interests, interestChance)) return;
     console.log(`[Persona:${this.personaId}] heard ${identity}: ${transcript.slice(0, 160)}`);
     const payload = await this.runCommand(transcript);
     const data = payload?.data && typeof payload.data === 'object' ? payload.data : payload;
@@ -311,6 +324,7 @@ class PersonaRuntimeAdapter {
       personaId: this.personaId,
       displayName: this.displayName,
       voice: this.voice || undefined,
+      interests: this.interests,
       listeners: this.states.size,
       authenticated: !!this.accessToken,
     };
