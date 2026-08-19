@@ -15,8 +15,7 @@ import {
 import { useToast } from '@/hooks/use-toast';
 import { LoaderCircle, Radio } from 'lucide-react';
 
-// Discord channel type ids we treat as "voice".
-const VOICE_CHANNEL_TYPES = new Set([2, 13]); // GUILD_VOICE, GUILD_STAGE_VOICE
+const VOICE_CHANNEL_TYPES = new Set([2, 13]);
 
 type Guild = { id: string; name: string };
 type Channel = { id: string; name: string; type: number };
@@ -36,6 +35,9 @@ type BridgeState = {
     roomVoiceOutboundEnabled?: boolean;
     mode?: 'two-way' | 'listen-only';
     audioProfile?: 'low-latency' | 'balanced' | 'resilient';
+    discordSelfMute?: boolean;
+    discordServerMute?: boolean;
+    discordSuppressed?: boolean;
     discordJitter?: {
       targetMs?: number;
       bufferedMs?: number;
@@ -55,11 +57,20 @@ export function VoiceBridgeCard({ roomId }: { roomId: string }) {
   const [guildId, setGuildId] = React.useState('');
   const [voiceChannelId, setVoiceChannelId] = React.useState('');
   const [running, setRunning] = React.useState(false);
-  const [roomVoiceOutboundEnabled, setRoomVoiceOutboundEnabled] = React.useState(false);
+  const [roomVoiceOutboundEnabled, setRoomVoiceOutboundEnabled] = React.useState(true);
   const [audioProfile, setAudioProfile] = React.useState<'low-latency' | 'balanced' | 'resilient'>('balanced');
   const [status, setStatus] = React.useState<BridgeState['worker']>();
   const [loadingChannels, setLoadingChannels] = React.useState(false);
   const [busy, setBusy] = React.useState(false);
+
+  const applyWorkerState = React.useCallback((worker?: BridgeState['worker']) => {
+    setStatus(worker);
+    if (typeof worker?.running === 'boolean') setRunning(worker.running);
+    if (typeof worker?.roomVoiceOutboundEnabled === 'boolean') {
+      setRoomVoiceOutboundEnabled(worker.roomVoiceOutboundEnabled);
+    }
+    if (worker?.audioProfile) setAudioProfile(worker.audioProfile);
+  }, []);
 
   const loadChannels = React.useCallback(async (gid: string) => {
     if (!gid) { setChannels([]); return; }
@@ -76,7 +87,6 @@ export function VoiceBridgeCard({ roomId }: { roomId: string }) {
     }
   }, []);
 
-  // Initial load: saved config + guild list.
   React.useEffect(() => {
     let alive = true;
     (async () => {
@@ -96,18 +106,18 @@ export function VoiceBridgeCard({ roomId }: { roomId: string }) {
           setVoiceChannelId(cfg.voiceChannelId || '');
           setRunning(Boolean(state?.worker?.running || cfg.enabled));
           setRoomVoiceOutboundEnabled(
-            state?.worker?.roomVoiceOutboundEnabled ?? cfg.roomVoiceOutboundEnabled ?? false,
+            state?.worker?.roomVoiceOutboundEnabled ?? cfg.roomVoiceOutboundEnabled ?? true,
           );
-          setStatus(state?.worker);
           setAudioProfile(state?.worker?.audioProfile || cfg.audioProfile || 'balanced');
           if (cfg.guildId) loadChannels(cfg.guildId);
         }
+        applyWorkerState(state?.worker);
       } catch {
         /* non-fatal */
       }
     })();
     return () => { alive = false; };
-  }, [roomId, loadChannels]);
+  }, [roomId, loadChannels, applyWorkerState]);
 
   React.useEffect(() => {
     if (!running) return;
@@ -115,11 +125,10 @@ export function VoiceBridgeCard({ roomId }: { roomId: string }) {
       const response = await fetch(`/api/discord/voice-bridge?roomId=${encodeURIComponent(roomId)}`, { cache: 'no-store' }).catch(() => null);
       if (!response?.ok) return;
       const next: BridgeState = await response.json().catch(() => ({} as BridgeState));
-      setStatus(next.worker);
-      if (next.worker?.audioProfile) setAudioProfile(next.worker.audioProfile);
+      applyWorkerState(next.worker);
     }, 3000);
     return () => window.clearInterval(interval);
-  }, [roomId, running]);
+  }, [roomId, running, applyWorkerState]);
 
   const onGuildChange = (value: string) => {
     setGuildId(value);
@@ -137,22 +146,12 @@ export function VoiceBridgeCard({ roomId }: { roomId: string }) {
       const res = await fetch('/api/discord/voice-bridge', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          roomId,
-          action: enable ? 'start' : 'stop',
-          guildId,
-          voiceChannelId,
-        }),
+        body: JSON.stringify({ roomId, action: enable ? 'start' : 'stop', guildId, voiceChannelId }),
       });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok || data.success === false) {
-        throw new Error(data.message || data.error || 'Request failed');
-      }
+      if (!res.ok || data.success === false) throw new Error(data.message || data.error || 'Request failed');
       setRunning(enable);
-      setStatus(data.status);
-      if (typeof data.status?.roomVoiceOutboundEnabled === 'boolean') {
-        setRoomVoiceOutboundEnabled(data.status.roomVoiceOutboundEnabled);
-      }
+      applyWorkerState(data.status);
       toast({ title: enable ? 'Discord voice bridge started' : 'Discord voice bridge stopped' });
     } catch (err: any) {
       toast({ title: 'Voice bridge error', description: err?.message, variant: 'destructive' });
@@ -169,18 +168,12 @@ export function VoiceBridgeCard({ roomId }: { roomId: string }) {
       const res = await fetch('/api/discord/voice-bridge', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          roomId,
-          action: 'set-room-outbound',
-          roomVoiceOutboundEnabled: enable,
-        }),
+        body: JSON.stringify({ roomId, action: 'set-room-outbound', roomVoiceOutboundEnabled: enable }),
       });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok || data.success === false) {
-        throw new Error(data.message || data.error || 'Privacy gate change was not confirmed');
-      }
+      if (!res.ok || data.success === false) throw new Error(data.message || data.error || 'Privacy gate change was not confirmed');
       setRoomVoiceOutboundEnabled(enable);
-      setStatus(data.status || status);
+      applyWorkerState(data.status || status);
       toast({
         title: enable ? 'Room voice return is on' : 'Listen-only privacy is on',
         description: enable
@@ -206,13 +199,15 @@ export function VoiceBridgeCard({ roomId }: { roomId: string }) {
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok || data.success === false) throw new Error(data.error || data.message || 'Audio profile change failed');
-      setStatus(data.status || status);
+      applyWorkerState(data.status || status);
       toast({ title: `Discord audio: ${profile}` });
     } catch (err: any) {
       setAudioProfile(previous);
       toast({ title: 'Audio profile error', description: err?.message, variant: 'destructive' });
     }
   };
+
+  const discordMuted = Boolean(status?.discordSelfMute || status?.discordServerMute || status?.discordSuppressed);
 
   return (
     <Card>
@@ -221,6 +216,7 @@ export function VoiceBridgeCard({ roomId }: { roomId: string }) {
           <Radio className="h-4 w-4" />
           Discord Voice Bridge
           {running && <Badge variant="secondary" className="ml-1">Live</Badge>}
+          {running && discordMuted && <Badge variant="destructive" className="ml-1">Discord muted</Badge>}
         </CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">
@@ -234,32 +230,15 @@ export function VoiceBridgeCard({ roomId }: { roomId: string }) {
           <div className="space-y-1.5">
             <Label>Server</Label>
             <Select value={guildId} onValueChange={onGuildChange} disabled={running || busy}>
-              <SelectTrigger>
-                <SelectValue placeholder="Select a server" />
-              </SelectTrigger>
-              <SelectContent>
-                {guilds.map((g) => (
-                  <SelectItem key={g.id} value={g.id}>{g.name}</SelectItem>
-                ))}
-              </SelectContent>
+              <SelectTrigger><SelectValue placeholder="Select a server" /></SelectTrigger>
+              <SelectContent>{guilds.map((g) => <SelectItem key={g.id} value={g.id}>{g.name}</SelectItem>)}</SelectContent>
             </Select>
           </div>
-
           <div className="space-y-1.5">
             <Label>Voice channel</Label>
-            <Select
-              value={voiceChannelId}
-              onValueChange={setVoiceChannelId}
-              disabled={running || busy || !guildId || loadingChannels}
-            >
-              <SelectTrigger>
-                <SelectValue placeholder={loadingChannels ? 'Loading…' : 'Select a voice channel'} />
-              </SelectTrigger>
-              <SelectContent>
-                {channels.map((c) => (
-                  <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
-                ))}
-              </SelectContent>
+            <Select value={voiceChannelId} onValueChange={setVoiceChannelId} disabled={running || busy || !guildId || loadingChannels}>
+              <SelectTrigger><SelectValue placeholder={loadingChannels ? 'Loading…' : 'Select a voice channel'} /></SelectTrigger>
+              <SelectContent>{channels.map((c) => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}</SelectContent>
             </Select>
           </div>
         </div>
@@ -269,46 +248,27 @@ export function VoiceBridgeCard({ roomId }: { roomId: string }) {
             {busy ? <LoaderCircle className="h-4 w-4 animate-spin" /> : null}
             <div>
               <Label className="cursor-pointer">Enable voice bridge</Label>
-              {running && status ? (
-                <p className="text-xs text-muted-foreground">
-                  {status.discordSpeakers ?? 0} Discord speaker(s) · {status.appSources ?? 0} app voice(s)
-                </p>
-              ) : null}
+              {running && status ? <p className="text-xs text-muted-foreground">{status.discordSpeakers ?? 0} Discord speaker(s) · {status.appSources ?? 0} app voice(s)</p> : null}
             </div>
           </div>
-          <Switch
-            checked={running}
-            disabled={busy}
-            onCheckedChange={(checked) => setBridge(checked)}
-          />
+          <Switch checked={running} disabled={busy} onCheckedChange={(checked) => setBridge(checked)} />
         </div>
 
         <div className="flex items-center justify-between gap-4 rounded-md border p-3">
           <div className="min-w-0">
             <Label className="cursor-pointer">Let Discord hear this room</Label>
             <p className="mt-1 text-xs text-muted-foreground">
-              {roomVoiceOutboundEnabled
-                ? 'Two-way: HearMeOut room voices are sent to Discord.'
-                : 'Listen-only: Discord stays audible here, but this room stays private.'}
+              {roomVoiceOutboundEnabled ? 'Two-way: HearMeOut room voices are sent to Discord.' : 'Listen-only: Discord stays audible here, but this room stays private.'}
             </p>
-            <p className="mt-1 text-xs text-muted-foreground">
-              Music uses its own bridge lane and is not muted by this room-voice gate.
-            </p>
+            <p className="mt-1 text-xs text-muted-foreground">Music uses its own bridge lane and is not muted by this room-voice gate.</p>
           </div>
-          <Switch
-            checked={roomVoiceOutboundEnabled}
-            disabled={busy}
-            aria-label="Let Discord hear this HearMeOut room"
-            onCheckedChange={(checked) => setRoomOutbound(checked)}
-          />
+          <Switch checked={roomVoiceOutboundEnabled} disabled={busy} aria-label="Let Discord hear this HearMeOut room" onCheckedChange={(checked) => setRoomOutbound(checked)} />
         </div>
 
         <div className="space-y-2 rounded-md border p-3">
           <div>
             <Label>Discord → LiveKit reliability</Label>
-            <p className="mt-1 text-xs text-muted-foreground">
-              Balanced adapts to normal jitter. Use Resilient when the connection is dropping packets; Low latency is best only on a clean route.
-            </p>
+            <p className="mt-1 text-xs text-muted-foreground">Balanced adapts to normal jitter. Use Resilient when the connection is dropping packets; Low latency is best only on a clean route.</p>
           </div>
           <Select value={audioProfile} onValueChange={(value) => changeAudioProfile(value as typeof audioProfile)} disabled={busy}>
             <SelectTrigger aria-label="Discord audio reliability profile"><SelectValue /></SelectTrigger>
@@ -318,14 +278,8 @@ export function VoiceBridgeCard({ roomId }: { roomId: string }) {
               <SelectItem value="resilient">Resilient / slow internet</SelectItem>
             </SelectContent>
           </Select>
-          {running && status?.discordJitter ? (
-            <p className="text-xs text-muted-foreground">
-              Buffer {status.discordJitter.bufferedMs ?? 0} ms / {status.discordJitter.targetMs ?? 0} ms · network jitter {status.discordJitter.arrivalJitterMs ?? 0} ms · underruns {status.discordJitter.underruns ?? 0} · dropped {status.discordJitter.droppedFrames ?? 0}
-            </p>
-          ) : null}
-          <p className="text-xs text-muted-foreground">
-            Krisp: not applied to this server-published Discord PCM track. Browser WebRTC echo/noise cancellation still applies to human microphones; the bridge fixes transport jitter before LiveKit ingest.
-          </p>
+          {running && status?.discordJitter ? <p className="text-xs text-muted-foreground">Buffer {status.discordJitter.bufferedMs ?? 0} ms / {status.discordJitter.targetMs ?? 0} ms · network jitter {status.discordJitter.arrivalJitterMs ?? 0} ms · underruns {status.discordJitter.underruns ?? 0} · dropped {status.discordJitter.droppedFrames ?? 0}</p> : null}
+          <p className="text-xs text-muted-foreground">Krisp: not applied to this server-published Discord PCM track. Browser WebRTC echo/noise cancellation still applies to human microphones; the bridge fixes transport jitter before LiveKit ingest.</p>
         </div>
       </CardContent>
     </Card>

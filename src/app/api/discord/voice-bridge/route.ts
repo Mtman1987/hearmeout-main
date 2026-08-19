@@ -37,9 +37,12 @@ function readConfig(room: any): VoiceBridgeConfig {
     enabled: Boolean(raw.enabled),
     guildId: String(raw.guildId || ''),
     voiceChannelId: String(raw.voiceChannelId || ''),
-    // Privacy-safe default: Discord remains audible in HearMeOut, while room
-    // microphones stay off the Discord return path until the owner opts in.
-    roomVoiceOutboundEnabled: raw.roomVoiceOutboundEnabled === true,
+    // The bridge was historically two-way. Preserve an explicit listen-only
+    // choice, but do not silently mute legacy rooms that predate this setting.
+    roomVoiceOutboundEnabled:
+      typeof raw.roomVoiceOutboundEnabled === 'boolean'
+        ? raw.roomVoiceOutboundEnabled
+        : true,
     audioProfile: ['low-latency', 'balanced', 'resilient'].includes(String(raw.audioProfile))
       ? raw.audioProfile
       : 'balanced',
@@ -138,8 +141,8 @@ export async function POST(req: NextRequest) {
     }
 
     // The worker starts listen-only by default. Apply the persisted room gate
-    // only after the bridge is up, so a restart can never briefly expose a
-    // room that the owner previously set private.
+    // only after the bridge is up. Legacy rooms resolve to two-way above;
+    // explicit listen-only rooms remain private.
     const gateResult = await callWorker('/voice-bridge/gate', {
       method: 'POST',
       body: JSON.stringify({
