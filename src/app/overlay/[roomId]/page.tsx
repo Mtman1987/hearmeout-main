@@ -452,11 +452,12 @@ export default function OverlayPage() {
               fragLoadingMaxRetryTimeout: 8000,
             });
             hlsRef.current.on(Hls.Events.MANIFEST_PARSED, () => {
-              const tracks = (hlsRef.current?.audioTracks || []).map((track: any, index: number) => ({
-                index,
-                name: String(track?.name || track?.lang || `Audio ${index + 1}`),
-                language: String(track?.lang || '').toLowerCase(),
-              }));
+              const tracks: Array<{ index: number; name: string; language: string }> =
+                (hlsRef.current?.audioTracks || []).map((track: any, index: number) => ({
+                  index,
+                  name: String(track?.name || track?.lang || `Audio ${index + 1}`),
+                  language: String(track?.lang || '').toLowerCase(),
+                }));
               setAudioTracks(tracks);
               const english = tracks.find((track) => /^(?:en|eng|english)$/i.test(track.language) || /\benglish\b/i.test(track.name));
               const preferred = english?.index ?? Math.max(0, Number(hlsRef.current?.audioTrack || 0));
