@@ -4,8 +4,11 @@ import React, { useState, useEffect } from 'react';
 import { useLocalParticipant, useRoomContext } from '@livekit/components-react';
 import { Participant } from 'livekit-client';
 import { Button } from '@/components/ui/button';
-import { Mic, MicOff, LogOut, Volume2 } from 'lucide-react';
+import { Bot, Mic, MicOff, LogOut, Volume2, VolumeX } from 'lucide-react';
 import { DraggableContainer } from './DraggableContainer';
+import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
+import { Slider } from '@/components/ui/slider';
+import { parsePersonaMetadata } from '@/app/rooms/[roomId]/_components/PersonaCard';
 
 interface VoiceRoomWidgetProps {
   id: string;
@@ -147,6 +150,18 @@ export function VoiceRoomWidget({
 function ParticipantItem({ participant }: { participant: Participant }) {
   const isSpeaking = participant.isSpeaking;
   const isMuted = !participant.isMicrophoneEnabled;
+  const persona = parsePersonaMetadata(participant.metadata);
+  const displayName = persona?.displayName || participant.name || 'User';
+  const avatar = (isSpeaking ? persona?.talkingAvatar : persona?.idleAvatar) || persona?.avatar || '';
+  const [volume, setVolume] = React.useState(1);
+  const lastVolume = React.useRef(1);
+
+  React.useEffect(() => {
+    if (participant.isLocal) return;
+    if (volume > 0) lastVolume.current = volume;
+    const remote = participant as import('livekit-client').RemoteParticipant;
+    if (typeof remote.setVolume === 'function') remote.setVolume(volume);
+  }, [participant, volume]);
 
   return (
     <div
@@ -157,10 +172,11 @@ function ParticipantItem({ participant }: { participant: Participant }) {
       }`}
     >
       <div className="flex items-center gap-2">
-        <span className="flex-shrink-0">
-          {isSpeaking ? '🎤' : '•'}
-        </span>
-        <span className="truncate font-medium flex-1">{participant.name || 'User'}</span>
+        <Avatar className={`h-8 w-8 ${isSpeaking ? 'ring-2 ring-green-500' : ''}`}>
+          {avatar ? <AvatarImage src={avatar} alt={displayName} /> : null}
+          <AvatarFallback>{persona ? <Bot className="h-4 w-4" /> : displayName.charAt(0).toUpperCase()}</AvatarFallback>
+        </Avatar>
+        <span className="truncate font-medium flex-1">{displayName}</span>
         {isMuted && (
           <span className="flex-shrink-0 text-red-500 text-xs" title="Muted">
             🔇
@@ -170,6 +186,14 @@ function ParticipantItem({ participant }: { participant: Participant }) {
           <Volume2 className="w-3 h-3 flex-shrink-0 text-green-500" />
         )}
       </div>
+      {!participant.isLocal && (
+        <div className="mt-1.5 flex items-center gap-2">
+          <button type="button" aria-label={`${displayName} local mute`} onClick={() => setVolume((current) => current > 0 ? 0 : lastVolume.current)}>
+            {volume > 0 ? <Volume2 className="h-3 w-3" /> : <VolumeX className="h-3 w-3" />}
+          </button>
+          <Slider aria-label={`${displayName} volume`} value={[volume]} onValueChange={(next) => setVolume(next[0])} max={1} step={0.05} />
+        </div>
+      )}
     </div>
   );
 }

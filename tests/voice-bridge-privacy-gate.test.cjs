@@ -32,8 +32,17 @@ test('worker exposes an authenticated privacy gate without coupling bridge start
   assert.doesNotMatch(bridgeStartBlock, /persona|athena/i);
 });
 
+test('worker authentication never falls back to a repository-embedded development secret', () => {
+  const server = read('worker/src/server.js');
+  const bootstrap = read('worker/src/persona-bootstrap.js');
+  for (const source of [server, bootstrap]) {
+    assert.match(source, /process\.env\.HMO_WORKER_SHARED_SECRET/);
+    assert.doesNotMatch(source, /LOCAL_DEV_WORKER_SECRET/);
+  }
+});
+
 test('main app persists privacy state and reapplies it after bridge start', () => {
-  assert.match(api, /roomVoiceOutboundEnabled: raw\.roomVoiceOutboundEnabled !== false/);
+  assert.match(api, /roomVoiceOutboundEnabled: raw\.roomVoiceOutboundEnabled === true/);
   assert.match(api, /action === 'set-room-outbound'/);
   assert.match(api, /callWorker\('\/voice-bridge\/gate'/);
   assert.match(api, /Bridge privacy gate could not be confirmed/);

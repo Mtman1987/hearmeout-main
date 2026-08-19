@@ -1,7 +1,8 @@
-import { spawn } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import { createReadStream, existsSync } from 'node:fs';
 import { mkdir, readFile, readdir, stat, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
+import { promisify } from 'node:util';
 import { getResolvedXtreamStreamUrl, type XtreamKind } from './xtream-provider';
 
 type HlsJob = {
@@ -14,6 +15,7 @@ const DEFAULT_HLS_BUDGET_BYTES = 1536 * 1024 * 1024;
 const HLS_SEGMENT_SECONDS = Number(process.env.WATCH_HLS_SEGMENT_SECONDS || 6);
 const HLS_LIST_SIZE = Number(process.env.WATCH_HLS_LIST_SIZE || 90);
 const HLS_DELETE_THRESHOLD = Number(process.env.WATCH_HLS_DELETE_THRESHOLD || 12);
+const execFileAsync = promisify(execFile);
 
 function hlsRootDir() {
   return process.env.WATCH_HLS_DIR || (process.env.FLY_APP_NAME ? '/data/watch-hls' : join(process.cwd(), 'logs', 'watch-hls'));
@@ -136,10 +138,63 @@ async function hasUsableHlsIndex(dir: string, indexPath: string) {
   return Boolean(segmentStats?.isFile() && segmentStats.size > 0);
 }
 
+type ProbedAudioTrack = { sourceIndex?: number; sourceSpecifier?: string; language: string; title: string; index: number };
+
+async function probeMediaStreams(upstreamUrl: string): Promise<{ hasVideo: boolean; audio: ProbedAudioTrack[] }> {
+  try {
+    const { stdout } = await execFileAsync('ffprobe', [
+      '-v', 'error',
+      '-user_agent', 'DiscordStreamHub/1.0',
+      '-show_entries', 'stream=index,codec_type:stream_tags=language,title',
+      '-of', 'json',
+      upstreamUrl,
+    ], { maxBuffer: 2 * 1024 * 1024 });
+    const streams = (JSON.parse(stdout || '{}').streams || []) as Array<{ index?: number; codec_type?: string; tags?: Record<string, string> }>;
+    return {
+      hasVideo: streams.some((entry) => entry.codec_type === 'video'),
+      audio: streams.filter((entry) => entry.codec_type === 'audio').slice(0, 8).map((entry, index) => ({
+        sourceIndex: Number(entry.index),
+        language: String(entry.tags?.language || '').trim().toLowerCase(),
+        title: String(entry.tags?.title || '').trim(),
+        index,
+      })),
+    };
+  } catch (error: any) {
+    console.warn(`[XtreamHLS] ffprobe failed; using first audio track: ${error?.message || error}`);
+    return { hasVideo: true, audio: [{ sourceSpecifier: 'a:0', language: '', title: '', index: 0 }] };
+  }
+}
+
+function audioTrackName(track: ProbedAudioTrack) {
+  return (track.title || track.language || `track-${track.index + 1}`)
+    .replace(/[^a-zA-Z0-9_-]+/g, '-')
+    .slice(0, 40) || `track-${track.index + 1}`;
+}
+
+function isEnglishTrack(track: ProbedAudioTrack) {
+  return /^(?:en|eng|english)$/i.test(track.language) || /\benglish\b/i.test(track.title);
+}
+
 async function runFfmpegHls(streamId: string, dir: string, indexPath: string) {
   const stream = parseStreamKey(streamId);
   const upstreamUrl = await getResolvedXtreamStreamUrl(stream.kind, stream.id);
-  const segmentPattern = join(dir, 'seg_%05d.ts');
+  const media = await probeMediaStreams(upstreamUrl.toString());
+  const defaultAudioIndex = Math.max(0, media.audio.findIndex(isEnglishTrack));
+  const segmentPattern = join(dir, 'stream_%v_seg_%05d.ts');
+  const mapArgs = [
+    ...(media.hasVideo ? ['-map', '0:v:0?'] : []),
+    ...media.audio.flatMap((track) => ['-map', `0:${track.sourceSpecifier || track.sourceIndex}?`]),
+  ];
+  const streamMap = [
+    ...(media.hasVideo ? [media.audio.length ? 'v:0,agroup:audio,name:video' : 'v:0,name:video'] : []),
+    ...media.audio.map((track, index) => [
+      `a:${index}`,
+      'agroup:audio',
+      `name:${audioTrackName(track)}`,
+      track.language ? `language:${track.language.replace(/[^a-z0-9-]/g, '')}` : '',
+      index === defaultAudioIndex ? 'default:yes' : '',
+    ].filter(Boolean).join(',')),
+  ].join(' ');
   console.log(`[XtreamHLS] Starting HLS conversion for ${stream.kind} ${stream.id}`);
 
   await new Promise<void>((resolve, reject) => {
@@ -162,10 +217,7 @@ async function runFfmpegHls(streamId: string, dir: string, indexPath: string) {
       '5',
       '-i',
       upstreamUrl.toString(),
-      '-map',
-      '0:v:0?',
-      '-map',
-      '0:a:0?',
+      ...mapArgs,
       '-c:v',
       'copy',
       '-c:a',
@@ -178,13 +230,16 @@ async function runFfmpegHls(streamId: string, dir: string, indexPath: string) {
       String(HLS_SEGMENT_SECONDS),
       '-hls_list_size',
       String(HLS_LIST_SIZE),
-      '-hls_delete_threshold',
-      String(HLS_DELETE_THRESHOLD),
+      ...(HLS_LIST_SIZE > 0 ? ['-hls_delete_threshold', String(HLS_DELETE_THRESHOLD)] : []),
       '-hls_flags',
-      'delete_segments+independent_segments',
+      HLS_LIST_SIZE > 0 ? 'delete_segments+independent_segments' : 'independent_segments',
+      '-var_stream_map',
+      streamMap,
+      '-master_pl_name',
+      'index.m3u8',
       '-hls_segment_filename',
       segmentPattern,
-      indexPath,
+      join(dir, 'stream_%v.m3u8'),
     ];
     const command = process.platform === 'win32' ? 'ffmpeg' : 'nice';
     const args = process.platform === 'win32' ? ffmpegArgs : ['-n', '15', 'ffmpeg', ...ffmpegArgs];

@@ -95,7 +95,7 @@ async function html(request: Request) {
     .room-tab.active { border-color: rgba(52,211,153,.85); background: rgba(16,185,129,.18); color: #bbf7d0; }
     .toolbar { position: fixed; left: 50%; bottom: 10px; z-index: 11; display: flex; width: min(980px, calc(100vw - 20px)); align-items: center; gap: 6px; overflow-x: auto; padding: 8px; border: 1px solid rgba(148,163,184,.35); border-radius: 8px; background: rgba(2,6,23,.82); backdrop-filter: blur(8px); transform: translateX(-50%); }
     body.controls-hidden .toolbar { transform: translate(-50%, 8px); }
-    button, input { min-height: 38px; border-radius: 6px; border: 1px solid #475569; background: #172033; color: #e5edf5; padding: 8px 10px; font: inherit; }
+    button, input, select { min-height: 38px; border-radius: 6px; border: 1px solid #475569; background: #172033; color: #e5edf5; padding: 8px 10px; font: inherit; }
     button { cursor: pointer; }
     button:disabled { opacity: .45; cursor: not-allowed; }
     button:hover:not(:disabled), .download:hover { border-color: #34d399; }
@@ -170,6 +170,7 @@ async function html(request: Request) {
         <button class="icon-btn" id="popout" type="button" disabled title="Pop out" aria-label="Pop out">↗</button>
         <button class="icon-btn" id="fullscreen" type="button" title="Fullscreen" aria-label="Fullscreen">⛶</button>
         <button id="media-mode" type="button" hidden>Video</button>
+        <select id="audio-track" hidden aria-label="Movie audio language" title="Audio language"></select>
         <button class="icon-btn" id="mute" type="button" title="Mute" aria-label="Mute">🔊</button>
         <div class="volume" title="Volume">
           <input id="volume" type="range" min="0" max="100" value="85" aria-label="Video volume" />

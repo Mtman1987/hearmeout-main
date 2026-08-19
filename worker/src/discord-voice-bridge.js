@@ -39,7 +39,7 @@ const {
   NoSubscriberBehavior,
 } = require('@discordjs/voice');
 const prism = require('prism-media');
-const { DiscordPcmJitterSource } = require('./discord-pcm-jitter');
+const { DiscordPcmJitterSource, normalizeAudioProfile } = require('./discord-pcm-jitter');
 
 const SAMPLE_RATE = 48000;
 const CHANNELS = 2;
@@ -47,10 +47,6 @@ const SAMPLES_PER_FRAME = (SAMPLE_RATE * 20) / 1000; // 960 samples per 20ms
 const BYTES_PER_FRAME = SAMPLES_PER_FRAME * CHANNELS * 2; // 3840 bytes (s16le stereo)
 const SILENCE_FRAME = Buffer.alloc(BYTES_PER_FRAME);
 const MAX_SOURCE_BACKLOG = BYTES_PER_FRAME * 10; // ~200ms jitter cap per source
-const DISCORD_JITTER_TARGET_FRAMES = 3; // ~60ms playout buffer
-const DISCORD_JITTER_MAX_FRAMES = 10;
-const DISCORD_JITTER_CONCEAL_FRAMES = 2; // soften up to ~40ms of transient underflow
-const DISCORD_JITTER_FADE_SAMPLES = 480; // 5ms across interleaved stereo at 48kHz
 const APP_SILENCE_TAIL_MS = 1200;
 const SILENCE_HEARTBEAT_MS = 250;
 const LIVEKIT_RECONNECT_BASE_MS = 1500;
@@ -138,7 +134,7 @@ function getDiscordClient(token) {
 
 // ── One bridge per HearMeOut room ─────────────────────────────────────────
 class VoiceBridge {
-  constructor({ roomId, guildId, voiceChannelId, token, appUrl, workerHeaders, livekitUrl, roomVoiceOutboundEnabled = false }) {
+  constructor({ roomId, guildId, voiceChannelId, token, appUrl, workerHeaders, livekitUrl, roomVoiceOutboundEnabled = false, audioProfile = 'balanced' }) {
     this.roomId = roomId;
     this.guildId = guildId;
     this.voiceChannelId = voiceChannelId;
@@ -150,6 +146,7 @@ class VoiceBridge {
     // immediately after start; until then Discord can be heard but cannot hear
     // HearMeOut room microphones.
     this.roomVoiceOutboundEnabled = roomVoiceOutboundEnabled === true;
+    this.audioProfile = normalizeAudioProfile(audioProfile);
 
     this.startedAt = new Date();
     this.client = null;
@@ -166,7 +163,8 @@ class VoiceBridge {
 
     // Discord mix tick — combines jitter-buffered user PCM into one frame.
     this.discordMixSources = new Map(); // userId -> DiscordPcmJitterSource
-    this.discordMixTimer = null;
+    this.discordMixLoop = null;
+    this.discordCaptureErrors = 0;
 
     // App audio -> Discord playback
     this.listenerSpecs = [];
@@ -255,10 +253,8 @@ class VoiceBridge {
     this.userDecoders.set(userId, userState);
     this.discordMixSources.set(userId, new DiscordPcmJitterSource({
       frameBytes: BYTES_PER_FRAME,
-      targetFrames: DISCORD_JITTER_TARGET_FRAMES,
-      maxFrames: DISCORD_JITTER_MAX_FRAMES,
-      concealFrames: DISCORD_JITTER_CONCEAL_FRAMES,
-      fadeSamples: DISCORD_JITTER_FADE_SAMPLES,
+      channels: CHANNELS,
+      profile: this.audioProfile,
     }));
 
     opusStream.on('error', () => {});
@@ -304,7 +300,7 @@ class VoiceBridge {
   // Mix all Discord user PCM buffers into one frame and push to LiveKit.
   // Each source owns a small playout buffer so packet scheduling jitter does
   // not turn into hard speech/silence edges on the 20ms LiveKit clock.
-  discordMixTick() {
+  async discordMixTick() {
     if (this.stopped || !this.mixedSource) return;
 
     const frames = [];
@@ -331,7 +327,31 @@ class VoiceBridge {
 
     const samples = new Int16Array(out.buffer, out.byteOffset, out.length / 2);
     const audioFrame = new AudioFrame(samples, SAMPLE_RATE, CHANNELS, SAMPLES_PER_FRAME);
-    this.mixedSource.captureFrame(audioFrame).catch(() => {});
+    try {
+      // Backpressure from AudioSource is part of the clock. Await it instead of
+      // stacking capture promises from setInterval when the event loop or
+      // network is slow.
+      await this.mixedSource.captureFrame(audioFrame);
+    } catch {
+      this.discordCaptureErrors += 1;
+    }
+  }
+
+  runDiscordMixLoop() {
+    if (this.discordMixLoop) return this.discordMixLoop;
+    this.discordMixLoop = (async () => {
+      let nextTickAt = Date.now();
+      while (!this.stopped) {
+        await this.discordMixTick();
+        nextTickAt += 20;
+        if (Date.now() - nextTickAt > 200) nextTickAt = Date.now();
+        const waitMs = Math.max(0, nextTickAt - Date.now());
+        await new Promise((resolve) => setTimeout(resolve, waitMs));
+      }
+    })().finally(() => {
+      this.discordMixLoop = null;
+    });
+    return this.discordMixLoop;
   }
 
   // ── App audio -> Discord playback ────────────────────────────────────────
@@ -380,6 +400,13 @@ class VoiceBridge {
     console.log(
       `[VoiceBridge:${this.roomId}] HearMeOut -> Discord room voice gate ${this.roomVoiceOutboundEnabled ? 'OPEN' : 'CLOSED'}`,
     );
+    return this.status();
+  }
+
+  setAudioProfile(profile) {
+    this.audioProfile = normalizeAudioProfile(profile);
+    for (const source of this.discordMixSources.values()) source.setProfile(this.audioProfile);
+    console.log(`[VoiceBridge:${this.roomId}] Discord playout profile set to ${this.audioProfile}`);
     return this.status();
   }
 
@@ -660,7 +687,7 @@ class VoiceBridge {
     for (const userId of this.currentMemberIds()) this.handleMemberJoined(userId);
 
     // Start mix timers
-    this.discordMixTimer = setInterval(() => this.discordMixTick(), 20);
+    this.runDiscordMixLoop();
     this.appMixTimer = setInterval(() => this.appMixTick(), 20);
   }
 
@@ -711,10 +738,15 @@ class VoiceBridge {
     const jitterSources = Array.from(this.discordMixSources.values()).map((src) => src.snapshot());
     const discordJitter = jitterSources.reduce((summary, source) => ({
       bufferedFrames: summary.bufferedFrames + source.bufferedFrames,
+      bufferedMs: summary.bufferedMs + source.bufferedMs,
       concealedFrames: summary.concealedFrames + source.concealedFrames,
+      underruns: summary.underruns + source.underruns,
       rebuffers: summary.rebuffers + source.rebuffers,
+      lateFrames: summary.lateFrames + source.lateFrames,
       droppedFrames: summary.droppedFrames + source.droppedFrames,
-    }), { bufferedFrames: 0, concealedFrames: 0, rebuffers: 0, droppedFrames: 0 });
+      arrivalJitterMs: Math.max(summary.arrivalJitterMs, source.arrivalJitterMs),
+      targetMs: Math.max(summary.targetMs, source.targetMs),
+    }), { bufferedFrames: 0, bufferedMs: 0, concealedFrames: 0, underruns: 0, rebuffers: 0, lateFrames: 0, droppedFrames: 0, arrivalJitterMs: 0, targetMs: 0 });
 
     return {
       running: true,
@@ -726,13 +758,18 @@ class VoiceBridge {
       appSources: this.mixSources.size,
       roomVoiceOutboundEnabled: this.roomVoiceOutboundEnabled,
       mode: this.roomVoiceOutboundEnabled ? 'two-way' : 'listen-only',
-      discordJitter,
+      audioProfile: this.audioProfile,
+      discordJitter: { ...discordJitter, captureErrors: this.discordCaptureErrors },
+      noiseCancellation: {
+        krispEnabled: false,
+        captureProcessing: 'not-applicable',
+        reason: 'Discord is decoded server-side and published as PCM; browser microphone Krisp does not process this track.',
+      },
     };
   }
 
   async stop() {
     this.stopped = true;
-    if (this.discordMixTimer) { clearInterval(this.discordMixTimer); this.discordMixTimer = null; }
     if (this.appMixTimer) { clearInterval(this.appMixTimer); this.appMixTimer = null; }
     if (this.publishReconnectTimer) { clearTimeout(this.publishReconnectTimer); this.publishReconnectTimer = null; }
     bridgesByChannel.delete(this.voiceChannelId);
@@ -834,6 +871,23 @@ function setVoiceBridgeRoomOutbound(roomId, enabled) {
   };
 }
 
+function setVoiceBridgeAudioProfile(roomId, profile) {
+  const normalized = normalizeAudioProfile(profile);
+  const bridge = bridges.get(roomId);
+  if (!bridge) {
+    return {
+      success: true,
+      message: 'Bridge is not running; the audio profile can be applied on the next start.',
+      status: { running: false, audioProfile: normalized },
+    };
+  }
+  return {
+    success: true,
+    message: `Discord playout profile changed to ${normalized}.`,
+    status: bridge.setAudioProfile(normalized),
+  };
+}
+
 function getVoiceBridgeStatus(roomId) {
   const bridge = bridges.get(roomId);
   if (!bridge) return { running: false };
@@ -848,6 +902,7 @@ module.exports = {
   startVoiceBridge,
   stopVoiceBridge,
   setVoiceBridgeRoomOutbound,
+  setVoiceBridgeAudioProfile,
   getVoiceBridgeStatus,
   listVoiceBridges,
 };

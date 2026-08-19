@@ -54,6 +54,7 @@ const popoutBtn = document.getElementById('popout');
 const playPauseBtn = document.getElementById('play-pause');
 const downloadLink = document.getElementById('download');
 const mediaModeBtn = document.getElementById('media-mode');
+const audioTrackSelect = document.getElementById('audio-track');
 const visualTestBtn = document.getElementById('visual-test');
 const ttsToggleBtn = document.getElementById('tts-toggle');
 const muteBtn = document.getElementById('mute');
@@ -72,7 +73,6 @@ const VISUAL_TESTS = [
 ];
 const YOUTUBE_CLIENT_RESOLVE_WAIT_MS = 9000;
 const YOUTUBE_VIDEO_ID_RE = /^[A-Za-z0-9_-]{11}$/;
-const INNERTUBE_API_KEY = 'AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8';
 // Prefer clients that return plain, unciphered direct URLs (ANDROID_VR, then
 // IOS); WEB is a last resort since its formats are usually signature-ciphered.
 const INNERTUBE_CLIENTS = [
@@ -114,6 +114,26 @@ const ttsQueue = [];
 const seenTtsIds = new Set();
 const CONTROL_HIDE_DELAY_MS = 30000;
 let controlsHideTimer = null;
+
+function updateHlsAudioTracks() {
+  if (!audioTrackSelect || !hls) return;
+  const tracks = Array.isArray(hls.audioTracks) ? hls.audioTracks : [];
+  audioTrackSelect.innerHTML = '';
+  tracks.forEach((track, index) => {
+    const option = document.createElement('option');
+    option.value = String(index);
+    const name = String(track && (track.name || track.lang) || 'Audio ' + (index + 1));
+    const language = String(track && (track.lang || track.language) || '');
+    option.textContent = language && !name.toLowerCase().includes(language.toLowerCase()) ? name + ' (' + language + ')' : name;
+    audioTrackSelect.appendChild(option);
+  });
+  audioTrackSelect.hidden = tracks.length <= 1;
+  if (!tracks.length) return;
+  const englishIndex = tracks.findIndex((track) => /\benglish\b/i.test(String(track && track.name || '')) || /^(?:en|eng)$/i.test(String(track && (track.lang || track.language) || '')));
+  const preferred = englishIndex >= 0 ? englishIndex : Math.max(0, Number(hls.audioTrack || 0));
+  hls.audioTrack = preferred;
+  audioTrackSelect.value = String(preferred);
+}
 
 try {
   ttsEnabled = localStorage.getItem('hmo_activity_tts_overlay') === '1';
@@ -318,14 +338,12 @@ function pickBestYoutubeFormat(formats, type) {
 }
 
 async function resolveYoutubeWithClient(videoId, client) {
-  const response = await fetch('https://www.youtube.com/youtubei/v1/player?key=' + encodeURIComponent(INNERTUBE_API_KEY), {
+  const response = await fetch('/api/watch/youtube/player', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       videoId,
-      context: { client: client.context },
-      contentCheckOk: true,
-      racyCheckOk: true,
+      client: client.name,
     }),
   });
   if (!response.ok) throw new Error('YouTube API returned ' + response.status);
@@ -415,16 +433,12 @@ function playbackUrlForItem(item) {
   return item?.playbackUrl || '';
 }
 
-function isBrowserLimitedVideo(item) {
-  return String((item && item.overview) || '').toLowerCase().includes('(mkv)');
-}
-
 function hlsFallbackUrlForItem(item) {
   const playbackUrl = String(playbackUrlForItem(item) || '');
   const match = playbackUrl.match(/^\\/activity-provider\\/xtream\\/(vod|series)\\/(\\d+)$/i);
   const episodeMatch = playbackUrl.match(/^\\/activity-provider\\/xtream\\/episode\\/(\\d+-[a-z0-9]+)$/i);
   if (episodeMatch) return '/api/watch/xtream/hls/episode-' + episodeMatch[1].toLowerCase() + '/index.m3u8';
-  if (!match || !isBrowserLimitedVideo(item)) return playbackUrl;
+  if (!match) return playbackUrl;
   return '/api/watch/xtream/hls/' + match[1].toLowerCase() + '-' + match[2] + '/index.m3u8';
 }
 
@@ -905,6 +919,7 @@ async function loadMedia(item) {
       fragLoadingMaxRetryTimeout: 8000,
     });
     hls.on(window.Hls.Events.MANIFEST_PARSED, () => {
+      updateHlsAudioTracks();
       if (youtubeHlsFallbackTimer) {
         clearTimeout(youtubeHlsFallbackTimer);
         youtubeHlsFallbackTimer = null;
@@ -915,6 +930,7 @@ async function loadMedia(item) {
       mediaIsBuffering = false;
       if (state && state.playback && state.playback.status === 'playing') startVideoPlayback();
     });
+    hls.on(window.Hls.Events.AUDIO_TRACKS_UPDATED, updateHlsAudioTracks);
     hls.on(window.Hls.Events.ERROR, (_event, data) => {
       const details = data && (data.details || data.type || data.reason || data.response && data.response.code);
       mediaEl.textContent = data && data.fatal
@@ -1363,6 +1379,13 @@ volumeInput.addEventListener('input', () => {
   if (shouldUnmute) muted = false;
   applyVolume();
   mediaEl.textContent = 'Media: volume ' + volumeLabel.textContent;
+});
+audioTrackSelect?.addEventListener('change', () => {
+  if (!hls) return;
+  const next = Number(audioTrackSelect.value);
+  if (!Number.isInteger(next) || next < 0) return;
+  hls.audioTrack = next;
+  mediaEl.textContent = 'Media: audio track ' + (audioTrackSelect.selectedOptions[0]?.textContent || String(next + 1));
 });
 
 volumeInput.addEventListener('change', () => {

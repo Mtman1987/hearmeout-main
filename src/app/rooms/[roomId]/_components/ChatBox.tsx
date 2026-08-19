@@ -30,6 +30,7 @@ interface AdminChatMessage {
 export type RoomBotDescriptor = {
   displayName: string;
   wakeNames: string[];
+  interests?: string[];
   targetTenantId?: string;
 };
 
@@ -67,6 +68,7 @@ function matchesWakeName(value: string, wakeName: string) {
 export function resolveBotInvocation(
   value: string,
   bots: RoomBotDescriptor[] = [],
+  random: () => number = Math.random,
 ): BotInvocation | null {
   let bestMatch: {
     displayName: string;
@@ -102,15 +104,25 @@ export function resolveBotInvocation(
     };
   }
 
-  if (bots.length === 1 && value.trim() && !value.trim().startsWith("!")) {
-    return {
-      displayName: bots[0].displayName,
-      targetTenantId: bots[0].targetTenantId,
-    };
-  }
-
   if (ATHENA_COMPAT_WAKE_NAMES.some((wakeName) => matchesWakeName(value, wakeName))) {
     return { displayName: "Athena" };
+  }
+
+  const trimmed = value.trim();
+  if (!trimmed || trimmed.startsWith("!")) return null;
+
+  const interestedBots = bots.filter((bot) => (
+    (bot.interests || []).some((interest) => matchesWakeName(value, interest))
+  ));
+  if (interestedBots.length && random() < 0.35) {
+    const selected = interestedBots[Math.min(
+      interestedBots.length - 1,
+      Math.floor(random() * interestedBots.length),
+    )];
+    return {
+      displayName: selected.displayName,
+      targetTenantId: selected.targetTenantId,
+    };
   }
 
   return null;
@@ -138,6 +150,7 @@ function participantDescriptors(participants: RemoteParticipant[]): RoomBotDescr
       return {
         displayName,
         wakeNames,
+        interests: metadata.interests || [],
         targetTenantId: metadata.ownerTenantId || metadata.personaId || identityName || undefined,
       };
     });

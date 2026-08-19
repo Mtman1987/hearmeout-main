@@ -27,6 +27,7 @@ type BridgeState = {
     guildId: string;
     voiceChannelId: string;
     roomVoiceOutboundEnabled?: boolean;
+    audioProfile?: 'low-latency' | 'balanced' | 'resilient';
   };
   worker?: {
     running?: boolean;
@@ -34,6 +35,16 @@ type BridgeState = {
     appSources?: number;
     roomVoiceOutboundEnabled?: boolean;
     mode?: 'two-way' | 'listen-only';
+    audioProfile?: 'low-latency' | 'balanced' | 'resilient';
+    discordJitter?: {
+      targetMs?: number;
+      bufferedMs?: number;
+      arrivalJitterMs?: number;
+      underruns?: number;
+      droppedFrames?: number;
+      captureErrors?: number;
+    };
+    noiseCancellation?: { krispEnabled?: boolean; captureProcessing?: string; reason?: string };
   };
 };
 
@@ -44,7 +55,8 @@ export function VoiceBridgeCard({ roomId }: { roomId: string }) {
   const [guildId, setGuildId] = React.useState('');
   const [voiceChannelId, setVoiceChannelId] = React.useState('');
   const [running, setRunning] = React.useState(false);
-  const [roomVoiceOutboundEnabled, setRoomVoiceOutboundEnabled] = React.useState(true);
+  const [roomVoiceOutboundEnabled, setRoomVoiceOutboundEnabled] = React.useState(false);
+  const [audioProfile, setAudioProfile] = React.useState<'low-latency' | 'balanced' | 'resilient'>('balanced');
   const [status, setStatus] = React.useState<BridgeState['worker']>();
   const [loadingChannels, setLoadingChannels] = React.useState(false);
   const [busy, setBusy] = React.useState(false);
@@ -84,9 +96,10 @@ export function VoiceBridgeCard({ roomId }: { roomId: string }) {
           setVoiceChannelId(cfg.voiceChannelId || '');
           setRunning(Boolean(state?.worker?.running || cfg.enabled));
           setRoomVoiceOutboundEnabled(
-            state?.worker?.roomVoiceOutboundEnabled ?? cfg.roomVoiceOutboundEnabled ?? true,
+            state?.worker?.roomVoiceOutboundEnabled ?? cfg.roomVoiceOutboundEnabled ?? false,
           );
           setStatus(state?.worker);
+          setAudioProfile(state?.worker?.audioProfile || cfg.audioProfile || 'balanced');
           if (cfg.guildId) loadChannels(cfg.guildId);
         }
       } catch {
@@ -95,6 +108,18 @@ export function VoiceBridgeCard({ roomId }: { roomId: string }) {
     })();
     return () => { alive = false; };
   }, [roomId, loadChannels]);
+
+  React.useEffect(() => {
+    if (!running) return;
+    const interval = window.setInterval(async () => {
+      const response = await fetch(`/api/discord/voice-bridge?roomId=${encodeURIComponent(roomId)}`, { cache: 'no-store' }).catch(() => null);
+      if (!response?.ok) return;
+      const next: BridgeState = await response.json().catch(() => ({} as BridgeState));
+      setStatus(next.worker);
+      if (next.worker?.audioProfile) setAudioProfile(next.worker.audioProfile);
+    }, 3000);
+    return () => window.clearInterval(interval);
+  }, [roomId, running]);
 
   const onGuildChange = (value: string) => {
     setGuildId(value);
@@ -167,6 +192,25 @@ export function VoiceBridgeCard({ roomId }: { roomId: string }) {
       toast({ title: 'Privacy gate error', description: err?.message, variant: 'destructive' });
     } finally {
       setBusy(false);
+    }
+  };
+
+  const changeAudioProfile = async (profile: 'low-latency' | 'balanced' | 'resilient') => {
+    const previous = audioProfile;
+    setAudioProfile(profile);
+    try {
+      const res = await fetch('/api/discord/voice-bridge', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ roomId, action: 'set-audio-profile', audioProfile: profile }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || data.success === false) throw new Error(data.error || data.message || 'Audio profile change failed');
+      setStatus(data.status || status);
+      toast({ title: `Discord audio: ${profile}` });
+    } catch (err: any) {
+      setAudioProfile(previous);
+      toast({ title: 'Audio profile error', description: err?.message, variant: 'destructive' });
     }
   };
 
@@ -257,6 +301,31 @@ export function VoiceBridgeCard({ roomId }: { roomId: string }) {
             aria-label="Let Discord hear this HearMeOut room"
             onCheckedChange={(checked) => setRoomOutbound(checked)}
           />
+        </div>
+
+        <div className="space-y-2 rounded-md border p-3">
+          <div>
+            <Label>Discord → LiveKit reliability</Label>
+            <p className="mt-1 text-xs text-muted-foreground">
+              Balanced adapts to normal jitter. Use Resilient when the connection is dropping packets; Low latency is best only on a clean route.
+            </p>
+          </div>
+          <Select value={audioProfile} onValueChange={(value) => changeAudioProfile(value as typeof audioProfile)} disabled={busy}>
+            <SelectTrigger aria-label="Discord audio reliability profile"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="low-latency">Low latency</SelectItem>
+              <SelectItem value="balanced">Balanced</SelectItem>
+              <SelectItem value="resilient">Resilient / slow internet</SelectItem>
+            </SelectContent>
+          </Select>
+          {running && status?.discordJitter ? (
+            <p className="text-xs text-muted-foreground">
+              Buffer {status.discordJitter.bufferedMs ?? 0} ms / {status.discordJitter.targetMs ?? 0} ms · network jitter {status.discordJitter.arrivalJitterMs ?? 0} ms · underruns {status.discordJitter.underruns ?? 0} · dropped {status.discordJitter.droppedFrames ?? 0}
+            </p>
+          ) : null}
+          <p className="text-xs text-muted-foreground">
+            Krisp: not applied to this server-published Discord PCM track. Browser WebRTC echo/noise cancellation still applies to human microphones; the bridge fixes transport jitter before LiveKit ingest.
+          </p>
         </div>
       </CardContent>
     </Card>

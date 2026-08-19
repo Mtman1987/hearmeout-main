@@ -106,7 +106,7 @@ function LiveKitParticipants({ isHost, roomId }: { isHost: boolean; roomId: stri
       ))}
       {allParticipants.map((participant) => (
         isPersonaParticipant(participant)
-          ? <PersonaCard key={participant.sid} participant={participant} />
+          ? <PersonaCard key={participant.sid} participant={participant} roomId={roomId} isHost={isHost} />
           : <UserCard key={participant.sid} participant={participant} isLocal={participant.isLocal} isHost={isHost} roomId={roomId} />
       ))}
     </>

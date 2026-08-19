@@ -22,7 +22,12 @@ type SharedBot = {
   ownerTenantId: string;
   aliases?: string[];
   wakeNames?: string[];
+  interests?: string[];
   voice?: string;
+  livekitTtsDescriptor?: string;
+  avatar?: string;
+  idleAvatar?: string;
+  talkingAvatar?: string;
   canInvite?: boolean;
 };
 
@@ -78,7 +83,6 @@ export async function POST(request: NextRequest) {
   if (!canManageRoom(session.user as any, room.ownerId || room.createdBy || room.hostId)) {
     return NextResponse.json({ error: 'Only the room owner or room staff can manage bots' }, { status: 403 });
   }
-
   let accessToken = String(request.cookies.get(HMO_SPMT_COOKIE)?.value || '').trim();
   let refreshToken = String(request.cookies.get(HMO_SPMT_REFRESH_COOKIE)?.value || '').trim();
   if (!accessToken) {
@@ -110,6 +114,9 @@ export async function POST(request: NextRequest) {
   if (!matched.canInvite) {
     return NextResponse.json({ error: `${matched.name} is not available for room invites` }, { status: 403 });
   }
+  if (action === 'join' && db.get(`rooms/${roomId}/banned`, `persona:${matched.ownerTenantId}`)) {
+    return NextResponse.json({ error: `${matched.name} is banned from this room` }, { status: 403 });
+  }
 
   const workerUrl = getDjWorkerUrl();
   const workerResponse = await fetch(`${workerUrl}/persona`, {
@@ -124,7 +131,12 @@ export async function POST(request: NextRequest) {
       ownerName: matched.ownerName || '',
       wakeNames: matched.wakeNames || [matched.name, ...(matched.aliases || [])],
       aliases: matched.aliases || [],
+      interests: matched.interests || [],
       voice: matched.voice || '',
+      livekitTtsDescriptor: matched.livekitTtsDescriptor || '',
+      avatar: matched.avatar || '',
+      idleAvatar: matched.idleAvatar || matched.avatar || '',
+      talkingAvatar: matched.talkingAvatar || matched.idleAvatar || matched.avatar || '',
       // These OAuth credentials stay server-to-server and only live in the
       // worker's in-memory active persona runtime. They are never returned to
       // the browser, logged, or persisted by the worker.
@@ -139,6 +151,22 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'Persona worker is unavailable' }, { status: 502 });
   }
   const workerPayload = await workerResponse.json().catch(() => ({}));
+  if (workerResponse.ok) {
+    const presenceId = `persona:${matched.ownerTenantId}`;
+    if (action === 'join') {
+      db.set(`rooms/${roomId}/users`, presenceId, {
+        id: presenceId,
+        uid: presenceId,
+        displayName: matched.name,
+        photoURL: matched.idleAvatar || matched.avatar || '',
+        bot: true,
+        personaId: matched.ownerTenantId,
+        lastSeen: Date.now(),
+      }, { merge: true });
+    } else {
+      db.delete(`rooms/${roomId}/users`, presenceId);
+    }
+  }
   const response = NextResponse.json({ ...workerPayload, bot: matched }, { status: workerResponse.status });
 
   if (refreshed) {
