@@ -19,7 +19,10 @@ test('private Athena room routes coding intents through Rotator with SPMT bearer
   assert.match(helper, /action: 'publish'/);
   assert.match(helper, /confirmed: false/);
   assert.match(helper, /confirmed: true/);
-  assert.match(helper, /pendingPublishByUser/);
+  assert.match(helper, /privateAthenaControl/);
+  assert.match(helper, /lastJobId/);
+  assert.match(helper, /pendingPublish/);
+  assert.match(helper, /that fix|that repair/);
   assert.match(route, /maybeHandlePrivateAthenaCoder/);
   assert.match(route, /caller-local-tts/);
 });
