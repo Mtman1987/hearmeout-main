@@ -7,7 +7,7 @@ const route = readFileSync(new URL('../src/app/api/private-assistant/route.ts', 
 
 test('private assistant bypasses browser-session middleware but keeps launch-code auth', () => {
   assert.match(middleware, /['"]\/api\/private-assistant['"]/);
-  assert.match(route, /if \(!launchCode\).*launchCode is required/s);
+  assert.ok(route.includes("if (!launchCode) return NextResponse.json({ ok: false, error: 'launchCode is required'"));
   assert.match(route, /exchangeLaunchCode\(launchCode\)/);
   assert.match(route, /\/api\/embed\/exchange/);
 });
