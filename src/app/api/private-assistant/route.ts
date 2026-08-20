@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { db, ensureDb } from '@/lib/db';
 import { getDjWorkerUrl } from '@/lib/dj-worker-config';
 import { getDjWorkerRequestHeaders } from '@/lib/dj-worker-auth';
+import { maybeHandlePrivateAthenaCoder } from '@/lib/private-athena-coder';
 import { SPMT_BASE_URL, refreshHmoSpmtSession } from '@/lib/spmt-session';
 
 export const dynamic = 'force-dynamic';
@@ -275,6 +276,26 @@ export async function POST(request: NextRequest) {
       }, { headers: { 'cache-control': 'private, no-store' } });
     }
 
+    const coder = await maybeHandlePrivateAthenaCoder({
+      userId: user.id,
+      text: command,
+      accessToken: tokens.accessToken,
+    });
+    if (coder.handled) {
+      return NextResponse.json({
+        ok: true,
+        status: 'ready',
+        roomId: room.id,
+        roomName: room.name,
+        persistent: true,
+        private: true,
+        persona: { id: bot.ownerTenantId, name: bot.name },
+        reply: coder.reply || '',
+        response: { coder: coder.result || null },
+        speech: { spoken: false, delivery: 'caller-local-tts' },
+      }, { headers: { 'cache-control': 'private, no-store' } });
+    }
+
     const result = await forwardCommand(command, room.id, bot, tokens);
     // Re-joining is idempotent and refreshes the active worker runtime's OAuth
     // credentials if the command path rotated them.
@@ -294,7 +315,7 @@ export async function POST(request: NextRequest) {
     }, { headers: { 'cache-control': 'private, no-store' } });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    const status = /launch|exchange|unauthor|expired/i.test(message) ? 401 : 502;
+    const status = /launch|exchange|unauthor|expired|authorization required/i.test(message) ? 401 : /required|invalid|unsupported/i.test(message) ? 400 : /Only completed|Manual publication|GitHub PR/i.test(message) ? 409 : 502;
     return NextResponse.json({ ok: false, error: message }, { status, headers: { 'cache-control': 'private, no-store' } });
   }
 }
