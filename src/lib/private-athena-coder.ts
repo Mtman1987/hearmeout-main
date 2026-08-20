@@ -1,3 +1,5 @@
+import { db } from '@/lib/db';
+
 type CoderJob = {
   id?: string;
   status?: string;
@@ -23,18 +25,39 @@ type CoderControlResponse = {
   error?: string;
 };
 
+type RoomControlState = {
+  lastJobId?: string;
+  pendingPublish?: { jobId: string; expiresAt: number } | null;
+  updatedAt?: string;
+};
+
 const ROTATOR_BASE_URL = String(
   process.env.ROTATOR_BASE_URL || process.env.MOUNTAINVIEW_BASE_URL || 'https://mtman-machine-rotator.fly.dev',
 ).replace(/\/$/, '');
-
-const pendingPublishByUser = new Map<string, { jobId: string; expiresAt: number }>();
 
 function clean(value: unknown, max = 5000) {
   return String(value || '').trim().slice(0, max);
 }
 
-function latestJobId(text: string) {
+function explicitJobId(text: string) {
   return text.match(/\bmtfix_[a-zA-Z0-9_-]+\b/)?.[0] || '';
+}
+
+function readRoomState(roomId: string): RoomControlState {
+  const room = db.get('rooms', roomId) || {};
+  const state = room?.privateAthenaControl;
+  return state && typeof state === 'object' ? state as RoomControlState : {};
+}
+
+function writeRoomState(roomId: string, patch: Partial<RoomControlState>) {
+  const current = readRoomState(roomId);
+  db.set('rooms', roomId, {
+    privateAthenaControl: {
+      ...current,
+      ...patch,
+      updatedAt: new Date().toISOString(),
+    },
+  }, { merge: true });
 }
 
 function looksLikeCoderRequest(text: string) {
@@ -84,51 +107,60 @@ function summarizeJob(job?: CoderJob) {
 
 export async function maybeHandlePrivateAthenaCoder(input: {
   userId: string;
+  roomId: string;
   text: string;
   accessToken: string;
 }): Promise<{ handled: boolean; reply?: string; result?: CoderControlResponse }> {
   const text = clean(input.text, 5000);
   const userId = clean(input.userId, 160);
-  if (!text || !userId || !input.accessToken) return { handled: false };
+  const roomId = clean(input.roomId, 160);
+  if (!text || !userId || !roomId || !input.accessToken) return { handled: false };
 
-  const pending = pendingPublishByUser.get(userId);
-  if (pending && pending.expiresAt <= Date.now()) pendingPublishByUser.delete(userId);
-  const confirm = /^(?:yes|confirm|confirmed|do it|publish it|make the pr|create the pr|create it|go ahead)[.! ]*$/i.test(text);
+  const state = readRoomState(roomId);
+  const pending = state.pendingPublish;
+  if (pending && pending.expiresAt <= Date.now()) writeRoomState(roomId, { pendingPublish: null });
+  const confirm = /^(?:yes|confirm|confirmed|do it|publish it|make the pr|create the pr|create it|go ahead)(?:\s+mtfix_[a-zA-Z0-9_-]+)?[.! ]*$/i.test(text);
   if (pending && pending.expiresAt > Date.now() && confirm) {
     const result = await callRotator(input.accessToken, { action: 'publish', jobId: pending.jobId, confirmed: true });
-    pendingPublishByUser.delete(userId);
+    writeRoomState(roomId, { lastJobId: pending.jobId, pendingPublish: null });
     const url = result.pullRequest?.url || result.job?.pullRequest?.url || '';
     return { handled: true, result, reply: url ? `Draft pull request created: ${url}. I did not merge or deploy it.` : 'Draft pull request created. I did not merge or deploy it.' };
   }
 
-  const jobId = latestJobId(text);
+  const mentionedJobId = explicitJobId(text);
+  const jobId = mentionedJobId || clean(state.lastJobId, 120);
   if (/\b(?:list|show|what(?:'s| is)? running|recent)\b.*\b(?:coder|jobs?|repairs?)\b/i.test(text)) {
     const result = await callRotator(input.accessToken, { action: 'list' });
     const jobs = result.jobs || [];
+    if (jobs[0]?.id) writeRoomState(roomId, { lastJobId: jobs[0].id });
     const reply = jobs.length
       ? jobs.slice(0, 5).map((job) => summarizeJob(job)).join('\n')
       : 'There are no recent Athena Coder jobs.';
     return { handled: true, result, reply };
   }
 
-  if (jobId && /\b(?:status|progress|how(?:'s| is)|what happened|result)\b/i.test(text)) {
+  const asksStatus = /\b(?:status|progress|how(?:'s| is)|what happened|result|that fix|that repair|the fix|the repair)\b/i.test(text);
+  if (jobId && asksStatus) {
     const result = await callRotator(input.accessToken, { action: 'status', jobId });
+    writeRoomState(roomId, { lastJobId: jobId });
     return { handled: true, result, reply: summarizeJob(result.job) };
   }
 
-  if (jobId && /\b(?:diff|changes|changed files|what did you change)\b/i.test(text)) {
+  if (jobId && /\b(?:diff|changes|changed files|what did you change|show me the patch)\b/i.test(text)) {
     const result = await callRotator(input.accessToken, { action: 'artifact', jobId, artifact: 'diff' });
+    writeRoomState(roomId, { lastJobId: jobId });
     return { handled: true, result, reply: `Here is the saved diff for ${jobId}:\n${clean(result.content, 7000)}` };
   }
 
   if (jobId && /\b(?:checks?|tests?|validation|typecheck|build results?)\b/i.test(text)) {
     const result = await callRotator(input.accessToken, { action: 'artifact', jobId, artifact: 'checks' });
+    writeRoomState(roomId, { lastJobId: jobId });
     return { handled: true, result, reply: `Validation for ${jobId}:\n${clean(result.content, 7000)}` };
   }
 
   if (jobId && /\b(?:publish|pull request|\bpr\b)\b/i.test(text)) {
     const result = await callRotator(input.accessToken, { action: 'publish', jobId, confirmed: false });
-    pendingPublishByUser.set(userId, { jobId, expiresAt: Date.now() + 5 * 60_000 });
+    writeRoomState(roomId, { lastJobId: jobId, pendingPublish: { jobId, expiresAt: Date.now() + 5 * 60_000 } });
     return {
       handled: true,
       result,
@@ -151,11 +183,12 @@ export async function maybeHandlePrivateAthenaCoder(input: {
     reporterId: userId,
   });
   const created = result.job;
+  if (created?.id) writeRoomState(roomId, { lastJobId: created.id, pendingPublish: null });
   return {
     handled: true,
     result,
     reply: created?.id
-      ? `I queued Athena Coder job ${created.id} for ${created.appName || created.repoId || 'the matching repository'}. I’ll keep the room as the control surface; ask me for its status, diff, checks, or say “publish ${created.id}” when it is validated.`
+      ? `I queued Athena Coder job ${created.id} for ${created.appName || created.repoId || 'the matching repository'}. This room will remember that job across reconnects; ask me for its status, diff, checks, or say “publish it” when it is validated.`
       : (result.message || 'I queued the Athena Coder job.'),
   };
 }
