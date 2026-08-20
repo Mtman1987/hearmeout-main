@@ -13,6 +13,10 @@ const PUBLIC_PREFIXES = [
   '/api/worker/',
   '/api/livekit/webhook',
   '/api/livekit-token',
+  // This route has its own server-to-server SPMT launch-code exchange. It must
+  // be reachable before a HearMeOut browser/session cookie exists; otherwise
+  // MountainView's authenticated private-Athena bootstrap is rejected here.
+  '/api/private-assistant',
   '/overlay',
   '/embed',
   '/room-overlay',

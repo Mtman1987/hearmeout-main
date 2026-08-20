@@ -23,6 +23,8 @@ jobs:
         run: node --import tsx --test tests/spmt-athena-route.test.ts
       - name: Test SPMT OAuth callback routing
         run: node --import tsx --test tests/spmt-auth-callback.test.ts
+      - name: Test private Athena bootstrap routing
+        run: node --import tsx --test tests/private-assistant-middleware.test.ts
       - name: Test workspace shell parity
         run: node --import tsx --test tests/spmt-shell-parity.test.ts
       - name: Test workspace theme contract
