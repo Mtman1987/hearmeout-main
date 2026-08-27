@@ -2,8 +2,8 @@
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useParams, useRouter } from 'next/navigation';
-import { LiveKitRoom, RoomContext, useConnectionState } from '@livekit/components-react';
-import { ConnectionState, DisconnectReason, Room as LKRoom } from 'livekit-client';
+import { LiveKitRoom, RoomAudioRenderer, RoomContext, useConnectionState, useRoomContext } from '@livekit/components-react';
+import { ConnectionState, DisconnectReason, Room as LKRoom, RoomEvent } from 'livekit-client';
 import { SidebarProvider, SidebarInset, SidebarTrigger, useSidebar } from '@/components/ui/sidebar';
 import { Button } from "@/components/ui/button";
 import { Copy, X, LoaderCircle, FrameIcon, Music, Monitor, Film, ExternalLink, Radio } from 'lucide-react';
@@ -57,6 +57,64 @@ type WatchCardState = {
   } | null;
   playback?: { status?: string };
 };
+
+
+function RoomAudioPlayback({ volume }: { volume: number }) {
+    const room = useRoomContext();
+    const audioRootRef = useRef<HTMLDivElement>(null);
+    const [audioBlocked, setAudioBlocked] = useState(false);
+
+    const applyVolume = useCallback(() => {
+        const normalizedVolume = Math.max(0, Math.min(1, Number(volume) || 0));
+        audioRootRef.current?.querySelectorAll<HTMLAudioElement>('audio').forEach((audio) => {
+            audio.volume = normalizedVolume;
+        });
+    }, [volume]);
+
+    useEffect(() => {
+        const updatePlaybackStatus = (canPlayback: boolean) => setAudioBlocked(!canPlayback);
+        setAudioBlocked(room.canPlaybackAudio === false);
+        room.on(RoomEvent.AudioPlaybackStatusChanged, updatePlaybackStatus);
+        return () => {
+            room.off(RoomEvent.AudioPlaybackStatusChanged, updatePlaybackStatus);
+        };
+    }, [room]);
+
+    useEffect(() => {
+        applyVolume();
+        const root = audioRootRef.current;
+        if (!root) return;
+        const observer = new MutationObserver(applyVolume);
+        observer.observe(root, { childList: true, subtree: true });
+        return () => observer.disconnect();
+    }, [applyVolume]);
+
+    const enableAudio = async () => {
+        try {
+            await room.startAudio();
+            applyVolume();
+            setAudioBlocked(false);
+        } catch (error) {
+            setAudioBlocked(true);
+            console.error('[LiveKit] Could not start room audio playback:', error);
+        }
+    };
+
+    return (
+        <>
+            <div ref={audioRootRef} aria-hidden="true" data-room-audio-renderer>
+                <RoomAudioRenderer />
+            </div>
+            {audioBlocked && (
+                <div className="fixed bottom-4 left-1/2 z-[100] -translate-x-1/2 rounded-lg border bg-background/95 p-3 shadow-xl backdrop-blur">
+                    <Button type="button" onClick={enableAudio}>
+                        Enable room and bot audio
+                    </Button>
+                </div>
+            )}
+        </>
+    );
+}
 
 function watchUrlForRoom(url: string, canPause: boolean) {
     try {
@@ -878,6 +936,7 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
             }).catch(() => {});
             void startPeerVoiceFallback(err);
           }}>
+        <RoomAudioPlayback volume={localVolume} />
         {renderRoomUI()}
       </LiveKitRoom>
       ) : fallbackRoom ? (
