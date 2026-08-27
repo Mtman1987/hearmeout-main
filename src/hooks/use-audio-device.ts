@@ -53,26 +53,40 @@ export function useAudioDevice({ kind }: UseAudioDeviceProps) {
     };
   }, [getDevices, room, kind]);
 
+  const applyOutputDevice = useCallback(async (deviceId: string) => {
+    const audioElements = document.querySelectorAll<HTMLAudioElement>('audio');
+    await Promise.allSettled(Array.from(audioElements).map(async (element) => {
+      if ('setSinkId' in element && typeof (element as any).setSinkId === 'function') {
+        await (element as any).setSinkId(deviceId);
+      }
+    }));
+  }, []);
+
+  useEffect(() => {
+    if (kind !== 'audiooutput' || !activeDeviceId) return;
+    void applyOutputDevice(activeDeviceId);
+    // RoomAudioRenderer creates audio elements when remote tracks arrive.
+    // Reapply the chosen sink so late bot/persona tracks use the same output.
+    const observer = new MutationObserver(() => {
+      void applyOutputDevice(activeDeviceId);
+    });
+    observer.observe(document.body, { childList: true, subtree: true });
+    return () => observer.disconnect();
+  }, [activeDeviceId, applyOutputDevice, kind]);
+
   const setDevice = useCallback(async (deviceId: string) => {
     if (kind === 'audioinput') {
       await room.switchActiveDevice(kind, deviceId);
       setActiveDeviceId(deviceId);
     } else if (kind === 'audiooutput') {
-      // Set audio output device for HTML audio elements
       try {
-        const audioElements = document.querySelectorAll('audio');
-        for (const element of audioElements) {
-          // Use setSinkId for audio output (browser API)
-          if ('setSinkId' in element && typeof element.setSinkId === 'function') {
-            await (element as any).setSinkId(deviceId);
-          }
-        }
+        await applyOutputDevice(deviceId);
         setActiveDeviceId(deviceId);
       } catch (error) {
         console.error('Error setting audio output device:', error);
       }
     }
-  }, [kind, room]);
+  }, [applyOutputDevice, kind, room]);
 
   return { devices, activeDeviceId, setDevice };
 }
