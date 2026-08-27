@@ -1000,7 +1000,7 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
                               </p>
                               <p className="text-xs text-muted-foreground">
                                 {voiceFallbackActive
-                                  ? 'You are still listening. Your microphone starts muted; use the existing Unmute button when you want to talk.'
+                                  ? 'Human room voice is using P2P. Bot/persona speech stays on LiveKit; reconnect LiveKit below to hear Athena and other bots.'
                                   : voiceFailureMessage || 'Voice is currently disconnected.'}
                               </p>
                             </div>
