@@ -17,6 +17,9 @@ const PUBLIC_PREFIXES = [
   // be reachable before a HearMeOut browser/session cookie exists; otherwise
   // MountainView's authenticated private-Athena bootstrap is rejected here.
   '/api/private-assistant',
+  // Authenticated with the StreamWeaver/HearMeOut service credential inside
+  // the route; SPMT user middleware must not consume that bearer first.
+  '/api/internal/bot/actions',
   '/overlay',
   '/embed',
   '/room-overlay',
