@@ -5,6 +5,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
 const {
+  PersonaRuntimeAdapter,
   isHumanRoomIdentity,
   rmsPcm16,
   shouldRouteTranscript,
@@ -66,4 +67,35 @@ test('mobile wake mode relies on the LiveKit persona track instead of layering b
   const mobile = source('src/app/rooms/[roomId]/_components/MobileVoiceControl.tsx');
   assert.match(mobile, /payload\?\.personaSpeech/);
   assert.doesNotMatch(mobile, /SpeechSynthesisUtterance|speechSynthesis/);
+});
+
+test('a service persona can call the command runtime without a borrowed SPMT token', async () => {
+  const originalFetch = global.fetch;
+  let requestBody;
+  global.fetch = async (_url, init) => {
+    requestBody = JSON.parse(init.body);
+    return new Response(JSON.stringify({ response: 'Ready.' }), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    });
+  };
+  try {
+    const runtime = new PersonaRuntimeAdapter({
+      persona: { onAudioFrame: () => () => {}, pushPcm: async () => {} },
+      roomId: 'studio',
+      personaId: 'mamafeisty',
+      displayName: 'Moonbeam',
+      ownerTenantId: 'mamafeisty',
+      appUrl: 'https://hearmeout.example',
+      serviceSession: true,
+    });
+    assert.equal(runtime.status().authenticationMode, 'service');
+    await runtime.runCommand('Moonbeam, who is live?', 'spmt-user-1');
+    assert.equal(requestBody.serviceSession, true);
+    assert.equal(requestBody.targetTenantId, 'mamafeisty');
+    assert.equal(requestBody.accessToken, '');
+    assert.equal(requestBody.actorIdentity, 'spmt-user-1');
+  } finally {
+    global.fetch = originalFetch;
+  }
 });

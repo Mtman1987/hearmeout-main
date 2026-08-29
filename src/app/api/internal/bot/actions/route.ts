@@ -7,11 +7,32 @@ import {
   requestWatchMusicItem,
 } from '@/lib/watch-request-service';
 import { getMusicWatchSessionId, getRoomWatchSessionId } from '@/lib/watch-session';
+import {
+  changeRoomPersonaForBotAction,
+  controlVoiceBridgeForBotAction,
+  listRoomsForBotAction,
+  readVoiceBridgeForBotAction,
+} from '@/lib/bot-room-action-service';
 
 export const dynamic = 'force-dynamic';
 
-type HearMeOutAction = 'hmo.media.state.read' | 'hmo.media.request' | 'hmo.media.control';
-const ACTIONS = new Set<HearMeOutAction>(['hmo.media.state.read', 'hmo.media.request', 'hmo.media.control']);
+type HearMeOutAction =
+  | 'hmo.media.state.read'
+  | 'hmo.media.request'
+  | 'hmo.media.control'
+  | 'hmo.rooms.read'
+  | 'hmo.bot.control'
+  | 'hmo.voice.bridge.state'
+  | 'hmo.voice.bridge.control';
+const ACTIONS = new Set<HearMeOutAction>([
+  'hmo.media.state.read',
+  'hmo.media.request',
+  'hmo.media.control',
+  'hmo.rooms.read',
+  'hmo.bot.control',
+  'hmo.voice.bridge.state',
+  'hmo.voice.bridge.control',
+]);
 const CONTROLS = new Set(['play', 'pause', 'next', 'clear', 'mute', 'unmute', 'volume']);
 
 function text(value: unknown, max = 500) {
@@ -34,9 +55,50 @@ export async function POST(request: NextRequest) {
   const action = text(body?.action, 80) as HearMeOutAction;
   if (!ACTIONS.has(action)) return NextResponse.json({ error: 'Unknown HearMeOut bot action' }, { status: 400 });
   const roomId = text(body?.roomId, 160);
+  const room = roomId || text(body?.room, 160) || undefined;
   const sessionId = text(body?.sessionId, 160) || (roomId ? getRoomWatchSessionId(roomId, 'music') : getMusicWatchSessionId());
 
   try {
+    const actor = {
+      actorUserId: text(body?.actorUserId, 160),
+      tenantId: text(body?.tenantId, 160),
+      actorRole: text(body?.actorRole, 40),
+    };
+
+    if (action === 'hmo.rooms.read') {
+      const rooms = await listRoomsForBotAction(actor);
+      return NextResponse.json({ success: true, action, count: rooms.length, rooms });
+    }
+
+    if (action === 'hmo.bot.control') {
+      const control = text(body?.control, 20).toLowerCase();
+      if (control !== 'join' && control !== 'leave') {
+        return NextResponse.json({ error: 'Bot control must be join or leave' }, { status: 400 });
+      }
+      const result = await changeRoomPersonaForBotAction({ ...actor, room, control, bot: body?.bot });
+      return NextResponse.json({ action, ...result });
+    }
+
+    if (action === 'hmo.voice.bridge.state') {
+      return NextResponse.json({ action, ...(await readVoiceBridgeForBotAction({ ...actor, room })) });
+    }
+
+    if (action === 'hmo.voice.bridge.control') {
+      const control = text(body?.control, 40).toLowerCase() as any;
+      if (!['start', 'stop', 'listen-only', 'two-way', 'profile'].includes(control)) {
+        return NextResponse.json({ error: 'Unsupported voice bridge control' }, { status: 400 });
+      }
+      const result = await controlVoiceBridgeForBotAction({
+        ...actor,
+        room,
+        control,
+        guildId: text(body?.guildId, 80),
+        voiceChannel: text(body?.voiceChannel, 120),
+        audioProfile: text(body?.audioProfile, 40),
+      });
+      return NextResponse.json({ action, ...result });
+    }
+
     if (action === 'hmo.media.state.read') {
       const session = getPublicWatchSession(getWatchSession(sessionId, undefined, undefined, 'music'), publicBaseUrl(request));
       return NextResponse.json({ success: true, action, session });
@@ -82,6 +144,17 @@ export async function POST(request: NextRequest) {
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     console.error(`[HearMeOutBotAction] ${action} failed:`, error);
-    return NextResponse.json({ error: message, action }, { status: 500 });
+    const status = /not shared|banned|manage/i.test(message)
+      ? 403
+      : /not found|no manageable|no available/i.test(message)
+        ? 404
+        : /more than one/i.test(message)
+          ? 409
+          : /required|must be|unsupported|profile/i.test(message)
+            ? 400
+            : /unavailable|unreachable|worker|discord/i.test(message)
+              ? 502
+              : 500;
+    return NextResponse.json({ error: message, action }, { status });
   }
 }

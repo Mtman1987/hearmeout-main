@@ -20,3 +20,11 @@ export function isBotActionServiceRequest(request: Request): boolean {
   const supplied = authorization.slice(7).trim();
   return !!supplied && configuredSecrets().some((secret) => equal(supplied, secret));
 }
+
+export function getStreamWeaverServiceSecret(): string {
+  const secret = String(process.env.STREAMWEAVER_SECRET || process.env.BOT_SECRET_KEY || '').trim();
+  if (!secret && process.env.NODE_ENV === 'production') {
+    throw new Error('STREAMWEAVER_SECRET is required for service-invited room personas');
+  }
+  return secret;
+}

@@ -148,6 +148,7 @@ class PersonaRuntimeAdapter {
     workerHeaders = {},
     accessToken,
     refreshToken,
+    serviceSession = false,
     personaCount = () => 1,
   }) {
     this.persona = persona;
@@ -169,6 +170,7 @@ class PersonaRuntimeAdapter {
     this.workerHeaders = workerHeaders;
     this.accessToken = clean(accessToken, 10000);
     this.refreshToken = clean(refreshToken, 10000);
+    this.serviceSession = !!serviceSession;
     this.personaCount = personaCount;
     this.unsubscribe = null;
     this.states = new Map();
@@ -271,8 +273,8 @@ class PersonaRuntimeAdapter {
     return clean(payload?.transcription || payload?.data?.transcription, 5000);
   }
 
-  async runCommand(transcript) {
-    if (!this.accessToken) throw new Error('Persona has no SPMT access token; re-invite the bot');
+  async runCommand(transcript, actorIdentity = '') {
+    if (!this.accessToken && !this.serviceSession) throw new Error('Persona has no SPMT or service session; re-invite the bot');
     const response = await fetch(`${this.appUrl}/api/internal/persona-command`, {
       method: 'POST',
       headers: { ...this.workerHeaders, 'Content-Type': 'application/json', Accept: 'application/json' },
@@ -283,6 +285,8 @@ class PersonaRuntimeAdapter {
         voice: this.voice || undefined,
         accessToken: this.accessToken,
         refreshToken: this.refreshToken || undefined,
+        serviceSession: this.serviceSession || undefined,
+        actorIdentity: clean(actorIdentity, 160) || undefined,
       }),
       signal: typeof AbortSignal.timeout === 'function' ? AbortSignal.timeout(70_000) : undefined,
     });
@@ -309,7 +313,7 @@ class PersonaRuntimeAdapter {
     const interestChance = Math.min(0.35, 1 / Math.max(2, roomPersonaCount * 2));
     if (!shouldRouteTranscript(transcript, this.wakeNames, this.interests, interestChance)) return;
     console.log(`[Persona:${this.personaId}] heard ${identity}: ${transcript.slice(0, 160)}`);
-    const payload = await this.runCommand(transcript);
+    const payload = await this.runCommand(transcript, identity);
     const data = payload?.data && typeof payload.data === 'object' ? payload.data : payload;
     const responseText = clean(data?.response, 5000);
     const audioDataUri = clean(data?.tts?.audioDataUri || payload?.tts?.audioDataUri, 30_000_000);
@@ -326,7 +330,8 @@ class PersonaRuntimeAdapter {
       voice: this.voice || undefined,
       interests: this.interests,
       listeners: this.states.size,
-      authenticated: !!this.accessToken,
+      authenticated: !!this.accessToken || this.serviceSession,
+      authenticationMode: this.accessToken ? 'spmt' : this.serviceSession ? 'service' : 'none',
     };
   }
 }

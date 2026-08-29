@@ -98,6 +98,7 @@ async function handlePersona(req, res) {
     const existing = sessions.get(key);
     if (req.body?.spmtAccessToken) existing.runtime.accessToken = clean(req.body.spmtAccessToken, 10000);
     if (req.body?.spmtRefreshToken) existing.runtime.refreshToken = clean(req.body.spmtRefreshToken, 10000);
+    if (req.body?.serviceSession === true) existing.runtime.serviceSession = true;
     return res.json({
       success: true,
       action: 'join',
@@ -171,6 +172,7 @@ async function handlePersona(req, res) {
       workerHeaders: { Authorization: `Bearer ${secret}` },
       accessToken: clean(req.body?.spmtAccessToken, 10000),
       refreshToken: clean(req.body?.spmtRefreshToken, 10000),
+      serviceSession: req.body?.serviceSession === true,
       personaCount: () => personaCountForRoom(roomId),
     });
     runtime.start();

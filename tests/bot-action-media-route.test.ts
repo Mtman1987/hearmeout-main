@@ -33,3 +33,49 @@ test('media controls are restricted to the explicit safe control set', () => {
   assert.match(route, /new Set\(\['play', 'pause', 'next', 'clear', 'mute', 'unmute', 'volume'\]\)/);
   assert.match(route, /Unsupported media control/);
 });
+
+test('the internal adapter exposes room, tenant persona, and voice bridge actions', () => {
+  const route = source('src/app/api/internal/bot/actions/route.ts');
+  for (const action of [
+    'hmo.rooms.read',
+    'hmo.bot.control',
+    'hmo.voice.bridge.state',
+    'hmo.voice.bridge.control',
+  ]) assert.match(route, new RegExp(action.replaceAll('.', '\\.')));
+  assert.match(route, /listRoomsForBotAction\(/);
+  assert.match(route, /changeRoomPersonaForBotAction\(/);
+  assert.match(route, /readVoiceBridgeForBotAction\(/);
+  assert.match(route, /controlVoiceBridgeForBotAction\(/);
+});
+
+test('room actions enforce management, hide unrelated private rooms, and use worker authentication', () => {
+  const service = source('src/lib/bot-room-action-service.ts');
+  assert.match(service, /!room\.isPrivate \|\| canActorManageRoom/);
+  assert.match(service, /resolveManagedRoomForBotAction/);
+  assert.match(service, /canManageRoom\(actor, ownerId\)/);
+  assert.doesNotMatch(service, /isActivityRoomId\(text\(room\?\.id/);
+  assert.match(service, /getDjWorkerRequestHeaders/);
+  assert.match(service, /serviceSession: input\.control === 'join'/);
+});
+
+test('voice bridge bot actions apply the privacy gate and roll back a failed start', () => {
+  const service = source('src/lib/bot-room-action-service.ts');
+  assert.match(service, /'\/voice-bridge\/gate'/);
+  assert.match(service, /roomVoiceOutboundEnabled/);
+  assert.match(service, /body: JSON\.stringify\(\{ action: 'stop', roomId: room\.id \}\)/);
+  assert.match(service, /voiceBridge: \{ \.\.\.next, enabled: false \}/);
+});
+
+test('service personas forward speech to StreamWeaver without borrowing a user token', () => {
+  const route = source('src/app/api/internal/persona-command/route.ts');
+  const runtime = source('worker/src/persona-runtime-adapter.js');
+  const bootstrap = source('worker/src/persona-bootstrap.js');
+  assert.match(route, /serviceSession && !accessToken/);
+  assert.match(route, /\/api\/internal\/hearmeout\/persona-command/);
+  assert.match(route, /Authorization: `Bearer \$\{secret\}`/);
+  assert.match(route, /resolveServiceActor\(text\(body\.actorIdentity/);
+  assert.match(route, /ownerIdentities\.includes\(target\)/);
+  assert.match(runtime, /!this\.accessToken && !this\.serviceSession/);
+  assert.match(runtime, /serviceSession: this\.serviceSession \|\| undefined/);
+  assert.match(bootstrap, /serviceSession: req\.body\?\.serviceSession === true/);
+});
