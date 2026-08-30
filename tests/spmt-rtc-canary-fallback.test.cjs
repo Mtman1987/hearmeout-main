@@ -27,16 +27,13 @@ function message(socket) { return new Promise((resolve, reject) => { const timer
 function listen(server) { return new Promise((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', () => { server.off('error', reject); resolve(server.address().port); }); }); }
 function stop(server) { return new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve())); }
 
-test('worker RTC canary remains disabled unless explicitly enabled', async () => {
+test('worker RTC canary remains inert unless explicitly enabled', () => {
   const server = http.createServer((req, res) => res.end('ok'));
+  const before = server.listenerCount('upgrade');
   const relay = attachSpmtRtcCanary(server, { enabled: false });
   assert.equal(relay.enabled, false);
-  const port = await listen(server);
-  try {
-    const socket = open(port, 'disabled-client', 'browser');
-    await closed(socket);
-    assert.deepEqual(relay.snapshot(), []);
-  } finally { await stop(server); }
+  assert.equal(server.listenerCount('upgrade'), before);
+  assert.deepEqual(relay.snapshot(), []);
 });
 
 test('worker RTC canary relays binary frames on the existing HTTP listener', async () => {
