@@ -40,16 +40,25 @@ test('worker RTC canary relays binary frames on the existing HTTP listener', asy
   const server = http.createServer((req, res) => res.end('ok'));
   const relay = attachSpmtRtcCanary(server, { enabled: true, secret, tenantId, roomId });
   const port = await listen(server);
+  let browser;
+  let persona;
   try {
-    const browser = open(port, 'browser-a', 'browser');
-    const persona = open(port, 'persona-a', 'persona');
+    browser = open(port, 'browser-a', 'browser');
+    persona = open(port, 'persona-a', 'persona');
     await Promise.all([opened(browser), opened(persona)]);
     const received = message(persona);
     browser.send(new Uint8Array([9, 8, 7, 6]));
     assert.deepEqual([...await received], [9, 8, 7, 6]);
     assert.equal(relay.snapshot()[0].participantCount, 2);
+    const browserClosed = closed(browser), personaClosed = closed(persona);
     browser.close(); persona.close();
-  } finally { relay.close(); await stop(server); }
+    await Promise.all([browserClosed, personaClosed]);
+  } finally {
+    if (browser && browser.readyState < 2) browser.close();
+    if (persona && persona.readyState < 2) persona.close();
+    relay.close();
+    await stop(server);
+  }
 });
 
 test('worker RTC canary refuses a tenant outside the explicit fence', async () => {
