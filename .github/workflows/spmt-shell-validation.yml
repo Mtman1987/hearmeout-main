@@ -17,6 +17,11 @@ jobs:
         with:
           node-version: 22
           cache: npm
+      - name: Validate fenced SPMT RTC fallback
+        run: |
+          node --check worker/src/spmt-rtc-canary.js
+          node --check worker/src/spmt-rtc-canary-bootstrap.js
+          node --test tests/spmt-rtc-canary-fallback.test.cjs
       - name: Install dependencies
         run: npm ci --no-audit --no-fund
       - name: Test SPMT bot command routing
