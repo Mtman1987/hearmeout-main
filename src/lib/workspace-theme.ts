@@ -53,9 +53,22 @@ export function hexToHslComponents(hex: string): string {
   return `${Math.round(hue)} ${Math.round(saturation * 100)}% ${Math.round(lightness * 100)}%`;
 }
 
+function isDarkWorkspaceBackground(hex: string): boolean {
+  const normalized = hex.trim().replace(/^#/, '');
+  if (!/^[0-9a-f]{6}$/i.test(normalized)) return true;
+  const channels = [0, 2, 4].map((offset) => {
+    const channel = parseInt(normalized.slice(offset, offset + 2), 16) / 255;
+    return channel <= 0.03928 ? channel / 12.92 : Math.pow((channel + 0.055) / 1.055, 2.4);
+  });
+  const luminance = 0.2126 * channels[0]! + 0.7152 * channels[1]! + 0.0722 * channels[2]!;
+  return luminance < 0.42;
+}
+
 export function clearWorkspaceThemeTokens(root: HTMLElement): void {
   for (const property of WORKSPACE_PROPERTIES) root.style.removeProperty(property);
+  root.classList.remove('dark');
   delete root.dataset.workspaceTheme;
+  delete root.dataset.workspaceColorScheme;
   delete root.dataset.workspaceDensity;
   delete root.dataset.workspaceMotion;
   delete root.dataset.workspaceSidebarCollapsed;
@@ -81,7 +94,9 @@ export function applyWorkspaceThemeTokens(root: HTMLElement, tokens: WorkspaceTh
   const surface = hexToHslComponents(tokens.surface);
   const text = hexToHslComponents(tokens.text);
   const accent = hexToHslComponents(tokens.accent);
-  root.classList.add('dark');
+  const dark = isDarkWorkspaceBackground(tokens.background);
+  root.classList.toggle('dark', dark);
+  root.dataset.workspaceColorScheme = dark ? 'dark' : 'light';
   root.style.setProperty('--background', background);
   root.style.setProperty('--foreground', text);
   root.style.setProperty('--card', surface);
