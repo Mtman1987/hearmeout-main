@@ -12,7 +12,17 @@ function fixtureRoot() {
       setProperty: (key: string, value: string) => values.set(key, value),
       removeProperty: (key: string) => values.delete(key),
     },
-    classList: { add: (value: string) => classes.add(value) },
+    classList: {
+      add: (value: string) => classes.add(value),
+      remove: (value: string) => classes.delete(value),
+      toggle: (value: string, force?: boolean) => {
+        if (force === true) classes.add(value);
+        else if (force === false) classes.delete(value);
+        else if (classes.has(value)) classes.delete(value);
+        else classes.add(value);
+        return classes.has(value);
+      },
+    },
   } as unknown as HTMLElement;
   return { root, values, classes };
 }
@@ -50,16 +60,27 @@ test('applies the full workspace appearance contract', () => {
   assert.equal(root.dataset.workspaceSidebarStyle, 'glass');
   assert.equal(root.dataset.workspaceOverlayEnabled, 'true');
   assert.equal(root.dataset.workspaceTtsSubscriptions, 'alerts');
+  assert.equal(root.dataset.workspaceColorScheme, 'dark');
   assert.equal(classes.has('dark'), true);
 });
 
+test('light workspace tokens remove the dark class', () => {
+  const { root, classes } = fixtureRoot();
+  classes.add('dark');
+  applyWorkspaceThemeTokens(root, { ...tokens, background: '#f5f7fb', surface: '#ffffff', text: '#111827' } as WorkspaceThemeTokensV1);
+  assert.equal(root.dataset.workspaceColorScheme, 'light');
+  assert.equal(classes.has('dark'), false);
+});
+
 test('clears workspace-only values when returning to a local theme', () => {
-  const { root, values } = fixtureRoot();
+  const { root, values, classes } = fixtureRoot();
   applyWorkspaceThemeTokens(root, tokens);
   clearWorkspaceThemeTokens(root);
   assert.equal(values.has('--workspace-glow-intensity'), false);
   assert.equal(values.has('--workspace-background-image'), false);
   assert.equal(values.has('--background'), false);
   assert.equal(root.dataset.workspaceTheme, undefined);
+  assert.equal(root.dataset.workspaceColorScheme, undefined);
   assert.equal(root.dataset.workspaceOverlayWidgets, undefined);
+  assert.equal(classes.has('dark'), false);
 });
