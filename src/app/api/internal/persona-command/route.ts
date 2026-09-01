@@ -11,7 +11,7 @@ function text(value: unknown, max: number) {
 }
 
 async function forwardService(body: any) {
-  const actor = await resolveServiceActor(text(body.actorIdentity, 160), text(body.targetTenantId, 128));
+  const actor = await resolveServiceActor(text(body.actorIdentity, 160));
   const response = await fetch(`${STREAMWEAVER_BASE_URL}/api/internal/hearmeout/persona-command`, {
     method: 'POST',
     headers: {
@@ -34,7 +34,7 @@ async function forwardService(body: any) {
   return { response, payload };
 }
 
-async function resolveServiceActor(identity: string, targetTenantId: string) {
+async function resolveServiceActor(identity: string) {
   if (!identity) {
     return {
       actorUserId: '',
