@@ -63,6 +63,17 @@ test('persona invite passes SPMT session only server-to-server and worker has a 
   assert.match(commandRoute, /\/persona\/speak/);
 });
 
+test('persona LiveKit transport rejects stale sessions and re-invite replaces them', () => {
+  const session = source('worker/src/persona-session.js');
+  const bootstrap = source('worker/src/persona-bootstrap.js');
+  assert.match(session, /isHealthy\(\)/);
+  assert.match(session, /Persona session is not connected to a publishable LiveKit track/);
+  assert.match(session, /Math\.ceil\(input\.length \/ bytesPerFrame\)/);
+  assert.match(bootstrap, /replacing stale LiveKit session/);
+  assert.match(bootstrap, /transportHealthy/);
+  assert.match(bootstrap, /Persona LiveKit transport is stale; re-invite the persona/);
+});
+
 test('mobile wake mode relies on the LiveKit persona track instead of layering browser speech synthesis', () => {
   const mobile = source('src/app/rooms/[roomId]/_components/MobileVoiceControl.tsx');
   assert.match(mobile, /payload\?\.personaSpeech/);
