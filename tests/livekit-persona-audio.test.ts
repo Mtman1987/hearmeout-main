@@ -33,6 +33,9 @@ test('room exposes a visible direct-TTS versus LiveKit diagnostic pipeline', asy
   assert.match(host, /audio\.play\(\)/);
   assert.match(host, /data-room-audio-renderer/);
   assert.match(host, /Exact generated TTS/);
+  assert.match(host, /tts\?\.error/);
+  assert.match(host, /tts\?\.source/);
+  assert.match(host, /TTS failed:/);
   assert.match(route, /transportHealthy/);
   assert.match(route, /workerBytes|bytes/);
 });
