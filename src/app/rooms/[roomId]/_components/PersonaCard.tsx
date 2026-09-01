@@ -10,6 +10,7 @@ import { Button } from '@/components/ui/button';
 import { Slider } from '@/components/ui/slider';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { useToast } from '@/hooks/use-toast';
+import { sendRoomPersonaCommand, transcribeRoomPersonaAudio } from '@/lib/room-persona-client';
 
 export type PersonaMetadata = {
   type?: string;
@@ -32,20 +33,6 @@ export type PersonaMetadata = {
 };
 
 type TalkStatus = 'idle' | 'recording' | 'transcribing' | 'sending' | 'done' | 'error';
-
-function blobToDataUrl(blob: Blob): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onloadend = () => resolve(String(reader.result || ''));
-    reader.onerror = () => reject(reader.error || new Error('Failed to read microphone audio.'));
-    reader.readAsDataURL(blob);
-  });
-}
-
-function responseError(payload: any, fallback: string) {
-  const value = payload?.data?.error || payload?.error?.message || payload?.error;
-  return typeof value === 'string' && value.trim() ? value.trim() : fallback;
-}
 
 export function parsePersonaMetadata(metadata?: string): PersonaMetadata | null {
   if (!metadata) return null;
@@ -95,21 +82,16 @@ export default function PersonaCard({ participant, roomId, isHost = false }: { p
   const personaTargetId = metadata.ownerTenantId || metadata.personaId || participant.identity.replace(/^persona:/, '');
 
   const sendTranscript = React.useCallback(async (transcript: string) => {
+    if (!personaTargetId) throw new Error(`${displayName} does not have a persona target ID.`);
     setTalkStatus('sending');
-    const response = await fetch('/api/bot/commands', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        command: transcript,
-        roomId,
-        targetTenantId: personaTargetId,
-        speak: true,
-      }),
+    const result = await sendRoomPersonaCommand({
+      roomId,
+      transcript,
+      targetTenantId: personaTargetId,
+      fallbackDisplayName: displayName,
     });
-    const payload = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(responseError(payload, `Could not send speech to ${displayName}.`));
-    const data = payload?.data && typeof payload.data === 'object' ? payload.data : payload;
-    setTalkReply(String(data?.response || payload?.response || '').trim());
+    setTalkReply(result.reply);
+    if (result.speechError) throw new Error(result.speechError);
     setTalkStatus('done');
   }, [displayName, personaTargetId, roomId]);
 
@@ -125,21 +107,7 @@ export default function PersonaCard({ participant, roomId, isHost = false }: { p
     try {
       setTalkStatus('transcribing');
       const audioBlob = new Blob(chunks, { type: mimeType || 'audio/webm' });
-      const dataUrl = await blobToDataUrl(audioBlob);
-      const base64Audio = dataUrl.split(',')[1] || '';
-      if (!base64Audio) throw new Error('No microphone audio was captured.');
-
-      const response = await fetch('/api/internal/persona-transcribe', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ base64Audio }),
-      });
-      const payload = await response.json().catch(() => ({}));
-      const transcription = String(payload?.data?.transcription || payload?.transcription || '').trim();
-      const transcriptionError = responseError(payload, 'Transcription failed.');
-      if (!response.ok || (!transcription && (payload?.data?.error || payload?.error))) {
-        throw new Error(transcriptionError);
-      }
+      const transcription = await transcribeRoomPersonaAudio(audioBlob);
       if (!transcription) throw new Error('I did not hear any words. Try again and speak after the button turns red.');
 
       setTalkTranscript(transcription);
@@ -279,7 +247,7 @@ export default function PersonaCard({ participant, roomId, isHost = false }: { p
           <p className="mt-2 text-center text-xs text-muted-foreground">
             {talkStatus === 'recording'
               ? 'Listening now. Speak normally; click again to send now, or it sends automatically after 8 seconds.'
-              : 'Click once, speak, see exactly what was heard, then the text is sent to this bot.'}
+              : 'Fallback button: click once, speak, see exactly what was heard, then the same canonical text route is sent to this bot.'}
           </p>
           {talkTranscript ? (
             <div className="mt-3 rounded-md border bg-background/70 p-2 text-sm">
