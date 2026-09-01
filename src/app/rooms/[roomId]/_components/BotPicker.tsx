@@ -19,8 +19,14 @@ export type AvailableRoomBot = {
   ownerTenantId: string;
   aliases?: string[];
   wakeNames?: string[];
+  interests?: string[];
+  avatar?: string;
+  idleAvatar?: string;
+  talkingAvatar?: string;
   isOwner?: boolean;
   canInvite?: boolean;
+  canTalk?: boolean;
+  blockedReason?: string;
 };
 
 type BotPickerProps = {
@@ -91,22 +97,22 @@ export default function BotPicker({ roomId, onJoined }: BotPickerProps) {
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>
-        <Button variant="ghost" size="sm" className="h-8 gap-1.5" title="Invite a bot">
+        <Button variant="ghost" size="sm" className="h-8 gap-1.5" title="Meet an SPMT bot">
           <Bot className="h-4 w-4" />
           <span className="hidden sm:inline">Bots</span>
         </Button>
       </DialogTrigger>
-      <DialogContent className="max-w-md">
+      <DialogContent className="max-w-lg">
         <DialogHeader>
-          <DialogTitle>Invite a bot</DialogTitle>
+          <DialogTitle>Meet the SPMT bots</DialogTitle>
           <DialogDescription>
-            Bots shown here are yours or have been shared for public room use.
+            Invite any SPMT persona, talk with it, and get to know the streamer behind it. Bot Share does not control human conversation.
           </DialogDescription>
         </DialogHeader>
 
         {loading && (
           <div className="flex items-center justify-center gap-2 py-8 text-sm text-muted-foreground">
-            <LoaderCircle className="h-4 w-4 animate-spin" /> Loading bots…
+            <LoaderCircle className="h-4 w-4 animate-spin" /> Loading SPMT personas…
           </div>
         )}
 
@@ -117,35 +123,48 @@ export default function BotPicker({ roomId, onJoined }: BotPickerProps) {
         )}
 
         {!loading && !error && bots.length === 0 && (
-          <p className="py-6 text-center text-sm text-muted-foreground">No bots are available to invite.</p>
+          <p className="py-6 text-center text-sm text-muted-foreground">No SPMT personas are configured yet.</p>
         )}
 
         {!loading && bots.length > 0 && (
-          <div className="max-h-[55vh] space-y-2 overflow-y-auto pr-1">
-            {bots.map((bot) => (
-              <div key={bot.id} className="flex items-center gap-3 rounded-md border p-3">
-                <div className="flex h-9 w-9 items-center justify-center rounded-full bg-primary/10">
-                  <Bot className="h-5 w-5" />
+          <div className="max-h-[60vh] space-y-2 overflow-y-auto pr-1">
+            {bots.map((bot) => {
+              const avatar = bot.idleAvatar || bot.avatar;
+              const interestLine = (bot.interests || []).slice(0, 3).join(' • ');
+              const blocked = bot.canInvite === false || bot.canTalk === false;
+              return (
+                <div key={bot.id} className="flex items-center gap-3 rounded-md border p-3">
+                  <div className="flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden rounded-full bg-primary/10">
+                    {avatar
+                      ? <img src={avatar} alt="" className="h-full w-full object-cover" />
+                      : <Bot className="h-5 w-5" />}
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate font-medium">{bot.name}</p>
+                    <p className="truncate text-xs text-muted-foreground">
+                      Streamer: {bot.ownerName || bot.ownerTenantId}
+                    </p>
+                    {interestLine && (
+                      <p className="mt-0.5 truncate text-xs text-muted-foreground">{interestLine}</p>
+                    )}
+                    {blocked && bot.blockedReason && (
+                      <p className="mt-1 text-xs text-muted-foreground">{bot.blockedReason}</p>
+                    )}
+                  </div>
+                  <Button
+                    size="sm"
+                    className="gap-1.5"
+                    disabled={blocked || joiningId === bot.id}
+                    onClick={() => joinBot(bot)}
+                  >
+                    {joiningId === bot.id
+                      ? <LoaderCircle className="h-4 w-4 animate-spin" />
+                      : <LogIn className="h-4 w-4" />}
+                    {blocked ? 'Unavailable' : 'Invite'}
+                  </Button>
                 </div>
-                <div className="min-w-0 flex-1">
-                  <p className="truncate font-medium">{bot.name}</p>
-                  <p className="truncate text-xs text-muted-foreground">
-                    {bot.isOwner ? 'Your bot' : `Owned by ${bot.ownerName || 'another user'}`}
-                  </p>
-                </div>
-                <Button
-                  size="sm"
-                  className="gap-1.5"
-                  disabled={!bot.canInvite || joiningId === bot.id}
-                  onClick={() => joinBot(bot)}
-                >
-                  {joiningId === bot.id
-                    ? <LoaderCircle className="h-4 w-4 animate-spin" />
-                    : <LogIn className="h-4 w-4" />}
-                  Join
-                </Button>
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </DialogContent>

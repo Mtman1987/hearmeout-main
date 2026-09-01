@@ -14,30 +14,26 @@ const personaCard = new URL('../src/app/rooms/[roomId]/_components/PersonaCard.t
 const personaBootstrap = new URL('../worker/src/persona-bootstrap.js', import.meta.url);
 const workerPackage = new URL('../worker/package.json', import.meta.url);
 
-test('HearMeOut sends bot conversation directly to StreamWeaver with its SPMT OAuth session', async () => {
+test('HearMeOut human bot conversation never depends on a user SPMT session or bot-share', async () => {
   const source = await readFile(botApiRoute, 'utf8');
-  assert.match(source, /HMO_SPMT_COOKIE/);
-  assert.match(source, /HMO_SPMT_REFRESH_COOKIE/);
-  assert.match(source, /refreshHmoSpmtSession/);
-  assert.match(source, /STREAMWEAVER_BASE_URL/);
-  assert.match(source, /\/api\/spmt\/bot\/commands/);
-  assert.match(source, /source: 'hearmeout'/);
-  assert.match(source, /Authorization: `Bearer \$\{accessToken\}`/);
-  assert.match(source, /targetTenantId/);
-
-  for (const deprecated of ['SYSTEM_API_KEY', 'SPMT_API_KEY', 'x-spmt-key', 'x-bot-secret']) {
-    assert.equal(source.includes(deprecated), false, `HearMeOut bot route must not use ${deprecated}`);
-  }
+  assert.match(source, /publicPersonaIsInRoom/);
+  assert.match(source, /\/api\/internal\/hearmeout\/persona-command/);
+  assert.match(source, /Bot Share is bot-to-bot only/);
+  assert.doesNotMatch(source, /HMO_SPMT_COOKIE/);
+  assert.doesNotMatch(source, /HMO_SPMT_REFRESH_COOKIE/);
+  assert.doesNotMatch(source, /refreshHmoSpmtSession/);
+  assert.doesNotMatch(source, /\/api\/spmt\/bot\/commands/);
+  assert.doesNotMatch(source, /getBotShareMode|BOT_NOT_SHARED/);
 });
 
-test('persona voice commands use the same direct StreamWeaver OAuth path', async () => {
+test('spoken persona commands use the worker-authenticated public service path only', async () => {
   const source = await readFile(personaCommandRoute, 'utf8');
   assert.match(source, /isDjWorkerRequest/);
-  assert.match(source, /STREAMWEAVER_BASE_URL/);
-  assert.match(source, /\/api\/spmt\/bot\/commands/);
-  assert.match(source, /source: 'hearmeout-persona'/);
-  assert.match(source, /Authorization: `Bearer \$\{accessToken\}`/);
-  assert.match(source, /refreshHmoSpmtSession/);
+  assert.match(source, /\/api\/internal\/hearmeout\/persona-command/);
+  assert.match(source, /forwardService/);
+  assert.doesNotMatch(source, /refreshHmoSpmtSession/);
+  assert.doesNotMatch(source, /accessToken|refreshToken/);
+  assert.doesNotMatch(source, /\/api\/spmt\/bot\/commands/);
 });
 
 test('old Athena API is only a compatibility alias to the generic bot route', async () => {
@@ -99,36 +95,37 @@ test('connected personas can publish aliases, ownership, and historical wake nam
   assert.match(personaSource, /Owned by/);
 });
 
-test('room chat exposes short bot management commands and a picker', async () => {
+test('room bot picker is an all-SPMT public persona gallery', async () => {
   const chatSource = await readFile(chatBox, 'utf8');
   const pickerSource = await readFile(botPicker, 'utf8');
   assert.match(chatSource, /\^!bots/);
   assert.match(chatSource, /\^!\(join\|leave\)/);
   assert.match(chatSource, /<BotPicker/);
-  assert.match(chatSource, /fetchAvailableRoomBots/);
-  assert.match(chatSource, /changeRoomBotSession/);
   assert.match(pickerSource, /\/api\/bots/);
   assert.match(pickerSource, /\/api\/bots\/session/);
-  assert.match(pickerSource, />Bots</);
-  assert.match(pickerSource, /\bJoin\b/);
+  assert.match(pickerSource, /Meet the SPMT bots/);
+  assert.match(pickerSource, /Streamer:/);
+  assert.match(pickerSource, /Bot Share does not control human conversation/);
+  assert.match(pickerSource, /blockedReason/);
+  assert.match(pickerSource, /Invite/);
 });
 
-test('bot join API enforces room management and delegates to the authenticated persona worker', async () => {
+test('bot join API uses room management plus the public persona catalog, never SPMT bot-share auth', async () => {
   const source = await readFile(botSessionRoute, 'utf8');
   assert.match(source, /canManageRoom/);
   assert.match(source, /Only the room owner or room staff can manage bots/);
+  assert.match(source, /\/api\/internal\/hearmeout\/bots/);
   assert.match(source, /getDjWorkerRequestHeaders/);
   assert.match(source, /\/persona/);
-  assert.match(source, /ownerTenantId/);
-  assert.match(source, /wakeNames/);
+  assert.match(source, /serviceSession: action === 'join'/);
+  assert.doesNotMatch(source, /HMO_SPMT_COOKIE|refreshHmoSpmtSession|getBotShareMode/);
 });
 
-test('available bot list is proxied through the existing HMO SPMT session', async () => {
+test('available bot list is the trusted all-SPMT public persona catalog', async () => {
   const source = await readFile(botsApiRoute, 'utf8');
-  assert.match(source, /HMO_SPMT_COOKIE/);
-  assert.match(source, /refreshHmoSpmtSession/);
-  assert.match(source, /\/api\/spmt\/bots/);
-  assert.match(source, /Authorization: `Bearer \$\{accessToken\}`/);
+  assert.match(source, /getStreamWeaverServiceSecret/);
+  assert.match(source, /\/api\/internal\/hearmeout\/bots/);
+  assert.doesNotMatch(source, /HMO_SPMT_COOKIE|refreshHmoSpmtSession|\/api\/spmt\/bots/);
 });
 
 test('persona worker joins the plain voice room with worker-authenticated LiveKit tokens', async () => {

@@ -4,18 +4,13 @@ import { db, ensureDb } from '@/lib/db';
 import { canManageRoom } from '@/lib/room-access';
 import { getDjWorkerUrl } from '@/lib/dj-worker-config';
 import { getDjWorkerRequestHeaders } from '@/lib/dj-worker-auth';
-import {
-  HMO_SPMT_COOKIE,
-  HMO_SPMT_REFRESH_COOKIE,
-  hmoSpmtCookieOptions,
-  refreshHmoSpmtSession,
-} from '@/lib/spmt-session';
+import { getStreamWeaverServiceSecret } from '@/lib/bot-action-service-auth';
 
 const STREAMWEAVER_BASE_URL = String(
   process.env.STREAMWEAVER_BASE_URL || 'https://streamweaver-new.fly.dev',
 ).replace(/\/$/, '');
 
-type SharedBot = {
+type PublicBot = {
   id: string;
   name: string;
   ownerName?: string;
@@ -29,11 +24,14 @@ type SharedBot = {
   idleAvatar?: string;
   talkingAvatar?: string;
   canInvite?: boolean;
+  canTalk?: boolean;
+  blockedReason?: string;
 };
 
-async function fetchCatalog(accessToken: string) {
-  const response = await fetch(`${STREAMWEAVER_BASE_URL}/api/spmt/bots`, {
-    headers: { Authorization: `Bearer ${accessToken}`, Accept: 'application/json' },
+async function fetchCatalog() {
+  const secret = getStreamWeaverServiceSecret();
+  const response = await fetch(`${STREAMWEAVER_BASE_URL}/api/internal/hearmeout/bots`, {
+    headers: { Authorization: `Bearer ${secret}`, Accept: 'application/json' },
     cache: 'no-store',
     signal: typeof AbortSignal.timeout === 'function' ? AbortSignal.timeout(12000) : undefined,
   });
@@ -47,7 +45,7 @@ function normalize(value: unknown) {
   return String(value || '').trim().toLowerCase();
 }
 
-function findBot(bots: SharedBot[], selector: string): SharedBot | null | 'ambiguous' {
+function findBot(bots: PublicBot[], selector: string): PublicBot | null | 'ambiguous' {
   const needle = normalize(selector);
   if (!needle) return null;
   const exact = bots.filter((bot) =>
@@ -83,27 +81,21 @@ export async function POST(request: NextRequest) {
   if (!canManageRoom(session.user as any, room.ownerId || room.createdBy || room.hostId)) {
     return NextResponse.json({ error: 'Only the room owner or room staff can manage bots' }, { status: 403 });
   }
-  let accessToken = String(request.cookies.get(HMO_SPMT_COOKIE)?.value || '').trim();
-  let refreshToken = String(request.cookies.get(HMO_SPMT_REFRESH_COOKIE)?.value || '').trim();
-  if (!accessToken) {
-    return NextResponse.json({ error: 'Sign in with SPMT to manage bots' }, { status: 401 });
-  }
 
-  let catalog = await fetchCatalog(accessToken);
-  let refreshed: Awaited<ReturnType<typeof refreshHmoSpmtSession>> = null;
-  if (catalog.response.status === 401) {
-    refreshed = refreshToken ? await refreshHmoSpmtSession(refreshToken) : null;
-    if (refreshed) {
-      accessToken = refreshed.accessToken;
-      refreshToken = refreshed.refreshToken;
-      catalog = await fetchCatalog(accessToken);
-    }
+  let catalog: Awaited<ReturnType<typeof fetchCatalog>>;
+  try {
+    catalog = await fetchCatalog();
+  } catch (error) {
+    return NextResponse.json(
+      { error: error instanceof Error ? error.message : 'Persona catalog is unavailable' },
+      { status: 502 },
+    );
   }
   if (!catalog.response.ok) {
     return NextResponse.json(catalog.payload, { status: catalog.response.status });
   }
 
-  const bots = (catalog.payload?.data?.bots || catalog.payload?.bots || []) as SharedBot[];
+  const bots = (catalog.payload?.data?.bots || catalog.payload?.bots || []) as PublicBot[];
   const matched = findBot(bots, selector);
   if (matched === 'ambiguous') {
     return NextResponse.json({ error: `More than one available bot matches ${selector}` }, { status: 409 });
@@ -111,8 +103,11 @@ export async function POST(request: NextRequest) {
   if (!matched) {
     return NextResponse.json({ error: `No available bot matches ${selector}` }, { status: 404 });
   }
-  if (!matched.canInvite) {
-    return NextResponse.json({ error: `${matched.name} is not available for room invites` }, { status: 403 });
+  if (action === 'join' && !matched.canInvite) {
+    return NextResponse.json(
+      { error: matched.blockedReason || `${matched.name} is not available for room invites` },
+      { status: 403 },
+    );
   }
   if (action === 'join' && db.get(`rooms/${roomId}/banned`, `persona:${matched.ownerTenantId}`)) {
     return NextResponse.json({ error: `${matched.name} is banned from this room` }, { status: 403 });
@@ -137,11 +132,7 @@ export async function POST(request: NextRequest) {
       avatar: matched.avatar || '',
       idleAvatar: matched.idleAvatar || matched.avatar || '',
       talkingAvatar: matched.talkingAvatar || matched.idleAvatar || matched.avatar || '',
-      // These OAuth credentials stay server-to-server and only live in the
-      // worker's in-memory active persona runtime. They are never returned to
-      // the browser, logged, or persisted by the worker.
-      spmtAccessToken: action === 'join' ? accessToken : undefined,
-      spmtRefreshToken: action === 'join' ? refreshToken : undefined,
+      serviceSession: action === 'join',
     }),
     cache: 'no-store',
     signal: typeof AbortSignal.timeout === 'function' ? AbortSignal.timeout(20000) : undefined,
@@ -161,24 +152,16 @@ export async function POST(request: NextRequest) {
         photoURL: matched.idleAvatar || matched.avatar || '',
         bot: true,
         personaId: matched.ownerTenantId,
+        ownerName: matched.ownerName || '',
         lastSeen: Date.now(),
       }, { merge: true });
     } else {
       db.delete(`rooms/${roomId}/users`, presenceId);
     }
   }
-  const response = NextResponse.json({ ...workerPayload, bot: matched }, { status: workerResponse.status });
 
-  if (refreshed) {
-    response.cookies.set(HMO_SPMT_COOKIE, refreshed.accessToken, {
-      ...hmoSpmtCookieOptions,
-      maxAge: refreshed.expiresIn,
-    });
-    response.cookies.set(HMO_SPMT_REFRESH_COOKIE, refreshed.refreshToken, {
-      ...hmoSpmtCookieOptions,
-      maxAge: refreshed.refreshExpiresIn,
-    });
-  }
-
-  return response;
+  return NextResponse.json({ ...workerPayload, bot: matched }, {
+    status: workerResponse.status,
+    headers: { 'cache-control': 'private, no-store' },
+  });
 }
