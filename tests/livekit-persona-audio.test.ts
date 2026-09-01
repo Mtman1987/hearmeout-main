@@ -23,6 +23,20 @@ test('typed bot messages request TTS and hand it to the persona room track', asy
   assert.match(worker, /record\.persona\.pushPcm\(pcm\)/);
 });
 
+test('room exposes a visible direct-TTS versus LiveKit diagnostic pipeline', async () => {
+  const layout = await readFile('src/app/layout.tsx', 'utf8');
+  const host = await readFile('src/components/tts-diagnostic-host.tsx', 'utf8');
+  const route = await readFile('src/app/api/bot/commands/route.ts', 'utf8');
+
+  assert.match(layout, /<TtsDiagnosticHost\s*\/>/);
+  assert.match(host, /\/api\/bot\/commands/);
+  assert.match(host, /audio\.play\(\)/);
+  assert.match(host, /data-room-audio-renderer/);
+  assert.match(host, /Exact generated TTS/);
+  assert.match(route, /transportHealthy/);
+  assert.match(route, /workerBytes|bytes/);
+});
+
 test('late LiveKit audio elements inherit the selected output device', async () => {
   const source = await readFile('src/hooks/use-audio-device.ts', 'utf8');
   assert.match(source, /MutationObserver/);

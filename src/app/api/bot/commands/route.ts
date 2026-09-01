@@ -56,6 +56,16 @@ function payloadData(payload: any) {
   return payload?.data && typeof payload.data === 'object' ? payload.data : payload;
 }
 
+function workerSpeechDiagnostic(result: any, roomId: string, personaId: string) {
+  const bytes = Number(result?.bytes);
+  return {
+    roomId: text(result?.roomId, 160) || roomId,
+    personaId: text(result?.personaId, 128) || personaId,
+    bytes: Number.isFinite(bytes) && bytes >= 0 ? bytes : undefined,
+    transportHealthy: result?.transportHealthy === true,
+  };
+}
+
 async function speakThroughPersona(body: BotCommandBody, payload: any) {
   if (body.speak === false) return { attempted: false, reason: 'speech-disabled' };
   const roomId = text(body.roomId, 160);
@@ -69,7 +79,15 @@ async function speakThroughPersona(body: BotCommandBody, payload: any) {
     30_000_000,
   );
   if (!roomId || !personaId || !audioDataUri) {
-    return { attempted: false, reason: 'persona-or-audio-missing' };
+    return {
+      attempted: false,
+      reason: 'persona-or-audio-missing',
+      diagnostic: {
+        roomIdPresent: !!roomId,
+        personaIdPresent: !!personaId,
+        audioPresent: !!audioDataUri,
+      },
+    };
   }
 
   const workerUrl = getDjWorkerUrl();
@@ -83,9 +101,16 @@ async function speakThroughPersona(body: BotCommandBody, payload: any) {
 
   if (!workerResponse) return { attempted: true, ok: false, error: 'Persona worker unavailable' };
   const result = await workerResponse.json().catch(() => ({}));
+  const worker = workerSpeechDiagnostic(result, roomId, personaId);
   return workerResponse.ok
-    ? { attempted: true, ok: true }
-    : { attempted: true, ok: false, status: workerResponse.status, error: text(result?.error, 500) };
+    ? { attempted: true, ok: true, status: workerResponse.status, worker }
+    : {
+        attempted: true,
+        ok: false,
+        status: workerResponse.status,
+        error: text(result?.error, 500),
+        worker,
+      };
 }
 
 export async function POST(request: NextRequest) {
