@@ -23,6 +23,7 @@ export type AvailableRoomBot = {
   avatar?: string;
   idleAvatar?: string;
   talkingAvatar?: string;
+  isOwner?: boolean;
   canInvite?: boolean;
   canTalk?: boolean;
   blockedReason?: string;
