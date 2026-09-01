@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { isDjWorkerRequest } from '@/lib/dj-worker-auth';
-import { refreshHmoSpmtSession } from '@/lib/spmt-session';
 import { getStreamWeaverServiceSecret } from '@/lib/bot-action-service-auth';
 import { db, ensureDb } from '@/lib/db';
 
@@ -10,31 +9,6 @@ const STREAMWEAVER_BASE_URL = String(
 
 function text(value: unknown, max: number) {
   return String(value || '').trim().slice(0, max);
-}
-
-async function forward(accessToken: string, body: any) {
-  const response = await fetch(`${STREAMWEAVER_BASE_URL}/api/spmt/bot/commands`, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${accessToken}`,
-      'Content-Type': 'application/json',
-      Accept: 'application/json',
-    },
-    body: JSON.stringify({
-      command: text(body.command || body.transcript, 5000),
-      source: 'hearmeout-persona',
-      roomId: text(body.roomId, 160) || undefined,
-      targetTenantId: text(body.targetTenantId, 128) || undefined,
-      speak: true,
-      voice: text(body.voice, 128) || undefined,
-    }),
-    cache: 'no-store',
-    signal: typeof AbortSignal.timeout === 'function' ? AbortSignal.timeout(65000) : undefined,
-  });
-  const raw = await response.text();
-  let payload: any = {};
-  try { payload = raw ? JSON.parse(raw) : {}; } catch { payload = { error: raw || 'Invalid StreamWeaver response' }; }
-  return { response, payload };
 }
 
 async function forwardService(body: any) {
@@ -100,40 +74,16 @@ export async function POST(request: NextRequest) {
 
   const body = await request.json().catch(() => null) as any;
   const command = text(body?.command || body?.transcript, 5000);
-  let accessToken = text(body?.accessToken, 10000);
-  let refreshToken = text(body?.refreshToken, 10000);
-  const serviceSession = body?.serviceSession === true;
-  if (!command || (!accessToken && !serviceSession)) {
-    return NextResponse.json({ error: 'command and an SPMT or service session are required' }, { status: 400 });
+  if (!command) {
+    return NextResponse.json({ error: 'command is required' }, { status: 400 });
   }
 
-  if (serviceSession && !accessToken) {
-    const upstream = await forwardService({ ...body, command });
-    return NextResponse.json(upstream.payload, {
-      status: upstream.response.status,
-      headers: { 'cache-control': 'private, no-store' },
-    });
-  }
-
-  let upstream = await forward(accessToken, { ...body, command });
-  let refreshed: Awaited<ReturnType<typeof refreshHmoSpmtSession>> = null;
-  if (upstream.response.status === 401 && refreshToken) {
-    refreshed = await refreshHmoSpmtSession(refreshToken);
-    if (refreshed) {
-      accessToken = refreshed.accessToken;
-      refreshToken = refreshed.refreshToken;
-      upstream = await forward(accessToken, { ...body, command });
-    }
-  }
-
-  return NextResponse.json({
-    ...upstream.payload,
-    personaSession: {
-      accessToken,
-      refreshToken,
-      refreshed: !!refreshed,
-    },
-  }, {
+  // GLOBAL INVARIANT: this is a human conversation delivered by the trusted
+  // HearMeOut worker. It must never require, refresh, or inspect a user's SPMT
+  // session. Bot Share is also irrelevant; it only controls autonomous
+  // bot-to-bot talk.
+  const upstream = await forwardService({ ...body, command });
+  return NextResponse.json(upstream.payload, {
     status: upstream.response.status,
     headers: { 'cache-control': 'private, no-store' },
   });
