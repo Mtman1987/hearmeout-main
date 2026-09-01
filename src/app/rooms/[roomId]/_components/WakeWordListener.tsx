@@ -13,8 +13,10 @@ import {
 } from '@/lib/room-persona-client';
 
 const ANALYSE_EVERY_MS = 50;
-const START_RMS = 0.018;
-const CONTINUE_RMS = 0.010;
+const MIN_START_RMS = 0.006;
+const MIN_CONTINUE_RMS = 0.0035;
+const NOISE_START_MULTIPLIER = 3;
+const NOISE_CONTINUE_MULTIPLIER = 1.7;
 const SILENCE_TO_SEND_MS = 700;
 const MIN_SPEECH_MS = 220;
 const MAX_UTTERANCE_MS = 12_000;
@@ -24,6 +26,7 @@ const SELF_ECHO_MIN_MS = 1_500;
 const SELF_ECHO_MAX_MS = 12_000;
 
 function chooseMimeType() {
+  if (typeof MediaRecorder === 'undefined') return '';
   if (MediaRecorder.isTypeSupported('audio/webm;codecs=opus')) return 'audio/webm;codecs=opus';
   if (MediaRecorder.isTypeSupported('audio/webm')) return 'audio/webm';
   return '';
@@ -54,7 +57,9 @@ function currentMicMediaTrack(localParticipant: any): MediaStreamTrack | null {
   const mediaTrack = publication?.audioTrack?.mediaStreamTrack
     || publication?.track?.mediaStreamTrack
     || null;
-  return mediaTrack instanceof MediaStreamTrack && mediaTrack.readyState === 'live' ? mediaTrack : null;
+  return mediaTrack && mediaTrack.readyState === 'live' && typeof mediaTrack.clone === 'function'
+    ? mediaTrack as MediaStreamTrack
+    : null;
 }
 
 function analyserRms(analyser: AnalyserNode, samples: Float32Array) {
@@ -90,6 +95,7 @@ export default function WakeWordListener({ roomId, remoteParticipants }: { roomI
     () => targets.map((target) => `${target.targetTenantId}:${target.wakeNames.join('|')}`).join('::'),
     [targets],
   );
+  const humanName = String(user?.displayName || (user as any)?.username || 'HearMeOut User').trim();
 
   React.useEffect(() => {
     if (!localParticipant) return;
@@ -108,8 +114,18 @@ export default function WakeWordListener({ roomId, remoteParticipants }: { roomI
 
   React.useEffect(() => {
     if (!localParticipant || !localParticipant.isMicrophoneEnabled || targets.length === 0) return;
+    if (typeof MediaRecorder === 'undefined') {
+      console.warn('[WakeWord] MediaRecorder is unavailable in this browser.');
+      return;
+    }
     const sourceTrack = currentMicMediaTrack(localParticipant);
     if (!sourceTrack) return;
+
+    const AudioContextCtor = window.AudioContext || (window as any).webkitAudioContext;
+    if (!AudioContextCtor) {
+      console.warn('[WakeWord] Web Audio is unavailable in this browser.');
+      return;
+    }
 
     let disposed = false;
     let recorder: MediaRecorder | null = null;
@@ -117,10 +133,10 @@ export default function WakeWordListener({ roomId, remoteParticipants }: { roomI
     let speechActive = false;
     let speechStartedAt = 0;
     let lastSpeechAt = 0;
+    let noiseFloor = 0.004;
     const mimeType = chooseMimeType();
     const clonedTrack = sourceTrack.clone();
     const stream = new MediaStream([clonedTrack]);
-    const AudioContextCtor = window.AudioContext || (window as any).webkitAudioContext;
     const audioContext: AudioContext = new AudioContextCtor();
     const analyser = audioContext.createAnalyser();
     analyser.fftSize = 1024;
@@ -151,7 +167,6 @@ export default function WakeWordListener({ roomId, remoteParticipants }: { roomI
       commandInFlightRef.current = true;
       suppressUntilRef.current = Date.now() + SELF_ECHO_MIN_MS;
 
-      const humanName = String(user?.displayName || (user as any)?.username || 'HearMeOut User').trim();
       const humanMessage = chatMessage(humanName, transcript, 'wake_user');
       try {
         await postRoomChatMessage(humanMessage);
@@ -235,6 +250,11 @@ export default function WakeWordListener({ roomId, remoteParticipants }: { roomI
       const now = Date.now();
       const suppressed = commandInFlightRef.current || now < suppressUntilRef.current;
       const rms = analyserRms(analyser, samples);
+      const startThreshold = Math.max(MIN_START_RMS, Math.min(0.06, noiseFloor * NOISE_START_MULTIPLIER));
+      const continueThreshold = Math.max(
+        MIN_CONTINUE_RMS,
+        Math.min(startThreshold * 0.8, noiseFloor * NOISE_CONTINUE_MULTIPLIER),
+      );
 
       if (suppressed) {
         if (speechActive) resetSpeechState();
@@ -243,17 +263,21 @@ export default function WakeWordListener({ roomId, remoteParticipants }: { roomI
       }
 
       if (!speechActive) {
-        if (rms >= START_RMS) {
+        if (rms >= startThreshold) {
           speechActive = true;
           speechStartedAt = now;
           lastSpeechAt = now;
           return;
         }
+        // Learn the actual room/microphone floor only while no speech is active.
+        // This keeps quiet mics sensitive without letting a noisy room constantly
+        // trigger STT.
+        noiseFloor = Math.max(0.0005, Math.min(0.03, noiseFloor * 0.96 + rms * 0.04));
         if (recorder && now - recorderStartedAt >= IDLE_RECORDER_RESET_MS) stopRecorder(false);
         return;
       }
 
-      if (rms >= CONTINUE_RMS) lastSpeechAt = now;
+      if (rms >= continueThreshold) lastSpeechAt = now;
       const speechMs = now - speechStartedAt;
       if (now - lastSpeechAt >= SILENCE_TO_SEND_MS || speechMs >= MAX_UTTERANCE_MS) {
         stopRecorder(true, speechMs);
@@ -270,7 +294,10 @@ export default function WakeWordListener({ roomId, remoteParticipants }: { roomI
       stream.getTracks().forEach((track) => track.stop());
       void audioContext.close().catch(() => {});
     };
-  }, [localParticipant, micRevision, roomId, targetSignature, targets, user]);
+  // targetSignature is the stable dependency for target metadata; the captured
+  // targets array is rebuilt only when that signature changes.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [localParticipant, micRevision, roomId, targetSignature, humanName]);
 
   return null;
 }
