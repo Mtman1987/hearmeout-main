@@ -15,7 +15,7 @@ import type { ModerateContentOutput } from "@/ai/flows/sentiment-based-moderatio
 import { useSession } from "@/hooks/use-session";
 import { isPersonaParticipant, parsePersonaMetadata } from "./PersonaCard";
 import { resolveBotInvocation, type RoomBotDescriptor } from '@/lib/room-persona-routing';
-import { sendRoomPersonaCommand } from '@/lib/room-persona-client';
+import { ROOM_CHAT_MESSAGE_EVENT, sendRoomPersonaCommand, type RoomChatMessage } from '@/lib/room-persona-client';
 import BotPicker, {
   changeRoomBotSession,
   fetchAvailableRoomBots,
@@ -160,6 +160,18 @@ export default function ChatBox({ roomId, compact = false, onOpenSpaceChat, onOp
     fetchAdminChat();
     const interval = setInterval(fetchAdminChat, 5000);
     return () => clearInterval(interval);
+  }, []);
+
+  useEffect(() => {
+    const onWakeMessage = (event: Event) => {
+      const message = (event as CustomEvent<RoomChatMessage>).detail;
+      if (!message?.id) return;
+      setMessages((current) => current.some((entry) => entry.id === message.id)
+        ? current
+        : [...current, message].slice(-100));
+    };
+    window.addEventListener(ROOM_CHAT_MESSAGE_EVENT, onWakeMessage);
+    return () => window.removeEventListener(ROOM_CHAT_MESSAGE_EVENT, onWakeMessage);
   }, []);
 
   useEffect(() => {
