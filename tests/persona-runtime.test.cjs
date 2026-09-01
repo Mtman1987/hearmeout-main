@@ -28,6 +28,13 @@ test('typed chat and automatic room voice use the same explicit wake-name resolv
   assert.match(wake, /resolveBotInvocation\(transcript, targets\)/);
 });
 
+test('Athena explicitly accepts Hey Athena through the shared typed-and-voice resolver', () => {
+  const routing = source('src/lib/room-persona-routing.ts');
+  assert.match(routing, /expandedWakeNames/);
+  assert.match(routing, /names\.push\('Hey Athena'\)/);
+  assert.match(routing, /expandedWakeNames\(bot\)/);
+});
+
 test('automatic wake word records the already-published LiveKit microphone and reuses the proven STT path', () => {
   const wake = source('src/app/rooms/[roomId]/_components/WakeWordListener.tsx');
   const client = source('src/lib/room-persona-client.ts');
@@ -44,6 +51,20 @@ test('automatic wake word records the already-published LiveKit microphone and r
   assert.match(wake, /sendRoomPersonaCommand/);
   assert.match(client, /\/api\/internal\/persona-transcribe/);
   assert.match(client, /\/api\/bot\/commands/);
+});
+
+test('persona commands use the real participant identity and never generic room actor labels', () => {
+  const client = source('src/lib/room-persona-client.ts');
+  const command = source('src/app/api/bot/commands/route.ts');
+  const compatibility = source('src/app/api/internal/persona-command/route.ts');
+
+  assert.match(client, /actorIdentity/);
+  assert.match(client, /actorDisplayName/);
+  assert.match(command, /resolvePublicActor/);
+  assert.match(command, /getSession/);
+  assert.match(command, /\.\.\.actor/);
+  assert.doesNotMatch(command, /HearMeOut visitor|HearMeOut room/);
+  assert.doesNotMatch(compatibility, /HearMeOut room/);
 });
 
 test('push-to-talk and browser SpeechRecognition are removed from the room voice path', () => {
