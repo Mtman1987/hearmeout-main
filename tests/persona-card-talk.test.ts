@@ -48,3 +48,20 @@ test('public room persona chat uses the public service route with no user token 
   assert.doesNotMatch(route, /\/api\/spmt\/bot\/commands/);
   assert.doesNotMatch(route, /Sign in with SPMT/);
 });
+
+test('HearMeOut middleware never asks for SPMT again on public persona interaction', () => {
+  const middleware = source('src/middleware.ts');
+  const publicCheck = middleware.indexOf('PUBLIC_PREFIXES.some');
+  const identityCheck = middleware.indexOf('resolveIdentity(request)');
+
+  assert.ok(publicCheck >= 0 && identityCheck > publicCheck, 'public route bypass must run before SPMT identity lookup');
+  for (const route of [
+    '/api/bots',
+    '/api/bot/commands',
+    '/api/athena/commands',
+    '/api/internal/persona-transcribe',
+    '/api/internal/persona-command',
+  ]) {
+    assert.ok(middleware.includes(`'${route}'`), `${route} must bypass SPMT user-session middleware`);
+  }
+});

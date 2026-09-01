@@ -13,12 +13,20 @@ const PUBLIC_PREFIXES = [
   '/api/worker/',
   '/api/livekit/webhook',
   '/api/livekit-token',
+  // Public chatbot interaction must never be stopped by the SPMT user-session
+  // middleware. These routes perform only room/persona interaction; account,
+  // owner, and administrator controls remain protected elsewhere.
+  '/api/bots',
+  '/api/bot/commands',
+  '/api/athena/commands',
+  '/api/internal/persona-transcribe',
+  '/api/internal/persona-command',
   // This route has its own server-to-server SPMT launch-code exchange. It must
   // be reachable before a HearMeOut browser/session cookie exists; otherwise
   // MountainView's authenticated private-Athena bootstrap is rejected here.
   '/api/private-assistant',
-  // Authenticated with the StreamWeaver/HearMeOut service credential inside
-  // the route; SPMT user middleware must not consume that bearer first.
+  // This route performs its own service-auth check; SPMT user middleware must
+  // not consume its machine credential first.
   '/api/internal/bot/actions',
   '/overlay',
   '/embed',
