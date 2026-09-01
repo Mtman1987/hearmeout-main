@@ -269,8 +269,8 @@ export async function POST(request: NextRequest) {
 
   // GLOBAL INVARIANT: a persona that is present in the room is a public
   // chatbot. A browser session may enrich the actor's real display name, but
-  // missing SPMT auth, Bot Share mode, or owner credentials never blocks the
-  // human from talking to the joined persona.
+  // missing SPMT auth, Bot Share mode, owner credentials, or a StreamWeaver bearer secret
+  // never blocks the human from talking to the joined persona.
   let upstream: Awaited<ReturnType<typeof forwardPublicRoomPersona>>;
   try {
     upstream = await forwardPublicRoomPersona(commandBody);
