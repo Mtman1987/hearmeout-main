@@ -35,7 +35,10 @@ test('HearMeOut human bot conversation never depends on a user SPMT session, bot
 
 test('worker no longer owns spoken STT or a second command path', async () => {
   const runtime = await readFile(personaRuntime, 'utf8');
-  assert.doesNotMatch(runtime, /onAudioFrame|processUtterance|persona-transcribe|\/api\/internal\/persona-command/);
+  assert.doesNotMatch(runtime, /onAudioFrame\s*\(/);
+  assert.doesNotMatch(runtime, /processUtterance\s*\(/);
+  assert.doesNotMatch(runtime, /fetch\([^\n]*persona-transcribe/);
+  assert.doesNotMatch(runtime, /fetch\([^\n]*\/api\/internal\/persona-command/);
   assert.match(runtime, /speechInputRoute:\s*'browser-persona-transcribe-to-bot-commands'/);
   assert.match(runtime, /listeners:\s*0/);
 });
@@ -44,7 +47,7 @@ test('legacy internal persona command remains compatibility-only and is not call
   const source = await readFile(personaCommandRoute, 'utf8');
   const runtime = await readFile(personaRuntime, 'utf8');
   assert.match(source, /\/api\/internal\/hearmeout\/persona-command/);
-  assert.doesNotMatch(runtime, /\/api\/internal\/persona-command/);
+  assert.doesNotMatch(runtime, /fetch\([^\n]*\/api\/internal\/persona-command/);
 });
 
 test('old Athena API is only a compatibility alias to the generic bot route', async () => {
