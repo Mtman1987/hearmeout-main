@@ -4,11 +4,14 @@ import React, { useCallback, useEffect, useRef, useState } from "react";
 import { usePathname } from "next/navigation";
 import { CheckCircle2, CircleAlert, CircleDashed, Volume2, X } from "lucide-react";
 
- type ProbeState = {
+type ProbeState = {
   botName: string;
   responseText: string;
   audioDataUri: string;
   ttsGenerated: boolean;
+  ttsOk?: boolean;
+  ttsError?: string;
+  ttsSource?: string;
   directPlayback: "idle" | "playing" | "failed" | "ended";
   directPlaybackError?: string;
   handoffAttempted: boolean;
@@ -45,6 +48,9 @@ function extractPayload(payload: any): ProbeState {
     responseText: String(data?.response || payload?.response || ""),
     audioDataUri,
     ttsGenerated: audioDataUri.startsWith("data:audio/"),
+    ttsOk: typeof tts?.ok === "boolean" ? tts.ok : undefined,
+    ttsError: String(tts?.error || "").trim().slice(0, 1000) || undefined,
+    ttsSource: String(tts?.source || "").trim().slice(0, 80) || undefined,
     directPlayback: "idle",
     handoffAttempted: speech?.attempted === true,
     handoffOk: speech?.ok === true,
@@ -121,13 +127,21 @@ export function TtsDiagnosticHost() {
   if (!active || !probe || dismissed) return null;
 
   const directOk = probe.directPlayback === "playing" || probe.directPlayback === "ended";
-  const directDetail = probe.directPlayback === "playing"
-    ? "You are hearing the exact generated TTS directly from the browser player now."
-    : probe.directPlayback === "ended"
-      ? "Direct playback completed successfully."
-      : probe.directPlayback === "failed"
-        ? `Direct playback failed: ${probe.directPlaybackError || "unknown browser audio error"}`
-        : "Waiting for direct browser playback.";
+  const directDetail = !probe.ttsGenerated
+    ? "Not attempted because no TTS audio payload reached HearMeOut."
+    : probe.directPlayback === "playing"
+      ? "You are hearing the exact generated TTS directly from the browser player now."
+      : probe.directPlayback === "ended"
+        ? "Direct playback completed successfully."
+        : probe.directPlayback === "failed"
+          ? `Direct playback failed: ${probe.directPlaybackError || "unknown browser audio error"}`
+          : "Waiting for direct browser playback.";
+
+  const ttsFailureDetail = probe.ttsError
+    ? `${probe.ttsSource ? `${probe.ttsSource} TTS failed: ` : "TTS failed: "}${probe.ttsError}`
+    : probe.ttsOk === false
+      ? `${probe.ttsSource ? `${probe.ttsSource} TTS` : "TTS"} returned no audio payload.`
+      : "No audioDataUri came back from StreamWeaver.";
 
   return (
     <aside className="fixed bottom-3 right-3 z-[180] w-[min(430px,calc(100vw-24px))] max-h-[78vh] overflow-auto rounded-xl border border-primary/45 bg-background/95 p-3 shadow-2xl backdrop-blur" data-hmo-tts-diagnostic-host>
@@ -154,34 +168,38 @@ export function TtsDiagnosticHost() {
           ok={probe.ttsGenerated}
           label="1 · TTS generated"
           detail={probe.ttsGenerated
-            ? `${Math.max(1, Math.round(probe.audioDataUri.length / 1024))} KB audio data URI reached HearMeOut.`
-            : "No audioDataUri came back from StreamWeaver."}
+            ? `${Math.max(1, Math.round(probe.audioDataUri.length / 1024))} KB audio data URI reached HearMeOut${probe.ttsSource ? ` via ${probe.ttsSource} synthesis` : ""}.`
+            : ttsFailureDetail}
         />
         <Stage
           ok={directOk}
-          pending={probe.directPlayback === "idle"}
+          pending={probe.ttsGenerated && probe.directPlayback === "idle"}
           label="2 · Direct browser TTS"
           detail={directDetail}
         />
         <Stage
           ok={probe.handoffAttempted && probe.handoffOk}
-          pending={!probe.handoffAttempted}
+          pending={!probe.handoffAttempted && probe.ttsGenerated}
           label="3 · /persona/speak"
           detail={probe.handoffAttempted
             ? probe.handoffOk
               ? `Worker accepted the TTS${probe.workerBytes === undefined ? "" : ` and decoded ${probe.workerBytes.toLocaleString()} PCM bytes`}.`
               : `Handoff failed${probe.handoffStatus ? ` (${probe.handoffStatus})` : ""}: ${probe.handoffError || "unknown error"}`
-            : "HearMeOut never attempted the persona speech handoff."}
+            : probe.ttsGenerated
+              ? "TTS exists, but HearMeOut never attempted the persona speech handoff."
+              : "Not attempted because StreamWeaver did not return TTS audio."}
         />
         <Stage
           ok={probe.transportHealthy === true}
-          pending={probe.transportHealthy === undefined}
+          pending={probe.transportHealthy === undefined && probe.handoffAttempted}
           label="4 · Worker LiveKit transport"
           detail={probe.transportHealthy === true
             ? "Worker says the persona LiveKit transport and publish source are healthy."
             : probe.transportHealthy === false
               ? "Worker says the persona LiveKit transport is unhealthy."
-              : "No transport health result returned."}
+              : probe.handoffAttempted
+                ? "No transport health result returned."
+                : "Not checked because no persona speech handoff occurred."}
         />
         <Stage
           ok={probe.roomAudioElements > 0}
