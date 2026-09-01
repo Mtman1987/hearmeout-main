@@ -17,19 +17,79 @@ type BotCommandBody = {
   voice?: unknown;
 };
 
+type WorkerPersonaInstance = {
+  roomId?: unknown;
+  personaId?: unknown;
+  transportHealthy?: unknown;
+  runtime?: {
+    displayName?: unknown;
+    wakeNames?: unknown;
+    wakePolicy?: unknown;
+  };
+};
+
 function text(value: unknown, max: number) {
   return String(value || '').trim().slice(0, max);
+}
+
+function validPersonaPresence(presence: any, targetTenantId: string) {
+  return Boolean(
+    presence
+    && presence.bot === true
+    && text(presence.personaId, 128) === targetTenantId,
+  );
+}
+
+async function healthyWorkerPersona(roomId: string, targetTenantId: string): Promise<WorkerPersonaInstance | null> {
+  const response = await fetch(`${getDjWorkerUrl()}/persona`, {
+    method: 'GET',
+    headers: getDjWorkerRequestHeaders({ Accept: 'application/json' }),
+    cache: 'no-store',
+    signal: typeof AbortSignal.timeout === 'function' ? AbortSignal.timeout(6000) : undefined,
+  }).catch(() => null);
+  if (!response?.ok) return null;
+  const payload = await response.json().catch(() => ({}));
+  const instances = Array.isArray(payload?.instances) ? payload.instances as WorkerPersonaInstance[] : [];
+  return instances.find((instance) =>
+    text(instance?.roomId, 160) === roomId
+    && text(instance?.personaId, 128) === targetTenantId
+    && instance?.transportHealthy === true,
+  ) || null;
 }
 
 async function publicPersonaIsInRoom(roomId: string, targetTenantId: string) {
   await ensureDb();
   const presenceId = `persona:${targetTenantId}`;
   const presence = db.get(`rooms/${roomId}/users`, presenceId) as any;
-  return Boolean(
-    presence
-    && presence.bot === true
-    && text(presence.personaId, 128) === targetTenantId,
-  );
+  if (validPersonaPresence(presence, targetTenantId)) {
+    // Upgrade older presence rows in-place so the human-presence pruner will
+    // never treat a joined persona like an expiring browser heartbeat.
+    db.set(`rooms/${roomId}/users`, presenceId, {
+      presenceKind: 'persona',
+      persistent: true,
+      lastSeen: Date.now(),
+    }, { merge: true });
+    return true;
+  }
+
+  // SQLite presence can be lost or pruned independently of the actual RTC
+  // participant. The worker is the authoritative source for whether a persona
+  // is really still connected and publishable, so self-heal the row when the
+  // transport is healthy instead of forcing a pointless re-invite.
+  const instance = await healthyWorkerPersona(roomId, targetTenantId);
+  if (!instance) return false;
+  db.set(`rooms/${roomId}/users`, presenceId, {
+    id: presenceId,
+    uid: presenceId,
+    displayName: text(instance.runtime?.displayName, 96) || targetTenantId,
+    bot: true,
+    personaId: targetTenantId,
+    presenceKind: 'persona',
+    persistent: true,
+    transportHealthy: true,
+    lastSeen: Date.now(),
+  }, { merge: true });
+  return true;
 }
 
 async function forwardPublicRoomPersona(body: BotCommandBody) {
@@ -73,6 +133,15 @@ function workerSpeechDiagnostic(result: any, roomId: string, personaId: string) 
   };
 }
 
+async function clearStalePersonaPresence(roomId: string, personaId: string) {
+  try {
+    await ensureDb();
+    db.delete(`rooms/${roomId}/users`, `persona:${personaId}`);
+  } catch (error) {
+    console.warn('[Bot Commands] Could not clear stale persona presence:', error);
+  }
+}
+
 async function speakThroughPersona(body: BotCommandBody, payload: any) {
   if (body.speak === false) return { attempted: false, reason: 'speech-disabled' };
   const roomId = text(body.roomId, 160);
@@ -109,6 +178,18 @@ async function speakThroughPersona(body: BotCommandBody, payload: any) {
   if (!workerResponse) return { attempted: true, ok: false, error: 'Persona worker unavailable' };
   const result = await workerResponse.json().catch(() => ({}));
   const worker = workerSpeechDiagnostic(result, roomId, personaId);
+  if (!workerResponse.ok && (workerResponse.status === 404 || workerResponse.status === 409)) {
+    await clearStalePersonaPresence(roomId, personaId);
+  }
+  if (workerResponse.ok) {
+    await ensureDb();
+    db.set(`rooms/${roomId}/users`, `persona:${personaId}`, {
+      presenceKind: 'persona',
+      persistent: true,
+      transportHealthy: true,
+      lastSeen: Date.now(),
+    }, { merge: true });
+  }
   return workerResponse.ok
     ? { attempted: true, ok: true, status: workerResponse.status, worker }
     : {
