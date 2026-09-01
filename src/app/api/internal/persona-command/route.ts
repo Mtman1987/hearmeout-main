@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { isDjWorkerRequest } from '@/lib/dj-worker-auth';
-import { getStreamWeaverServiceSecret } from '@/lib/bot-action-service-auth';
 import { db, ensureDb } from '@/lib/db';
 
 const STREAMWEAVER_BASE_URL = String(
@@ -12,12 +11,10 @@ function text(value: unknown, max: number) {
 }
 
 async function forwardService(body: any) {
-  const secret = getStreamWeaverServiceSecret();
   const actor = await resolveServiceActor(text(body.actorIdentity, 160), text(body.targetTenantId, 128));
   const response = await fetch(`${STREAMWEAVER_BASE_URL}/api/internal/hearmeout/persona-command`, {
     method: 'POST',
     headers: {
-      Authorization: `Bearer ${secret}`,
       'Content-Type': 'application/json',
       Accept: 'application/json',
     },
@@ -43,27 +40,14 @@ async function resolveServiceActor(identity: string, targetTenantId: string) {
       actorUserId: '',
       actorUsername: 'HearMeOut room',
       actorDisplayName: 'HearMeOut room',
-      actorRole: 'member',
     };
   }
   await ensureDb();
   const user = db.get('users', identity) || {};
-  const target = targetTenantId.toLowerCase();
-  const ownerIdentities = [user.twitchId, user.twitchUsername, user.spmtUserId]
-    .map((value) => text(value, 160).toLowerCase())
-    .filter(Boolean);
-  const actorRole = target && ownerIdentities.includes(target)
-    ? 'owner'
-    : user.isAdmin === true || user.group === 'Crew'
-      ? 'admin'
-      : user.isModerator === true
-        ? 'moderator'
-        : 'member';
   return {
     actorUserId: text(user.discordId || user.twitchId || user.spmtUserId || identity, 160),
     actorUsername: text(user.username || user.twitchUsername || user.displayName || identity, 100),
     actorDisplayName: text(user.displayName || user.username || user.twitchUsername || identity, 100),
-    actorRole,
   };
 }
 
@@ -80,8 +64,7 @@ export async function POST(request: NextRequest) {
 
   // GLOBAL INVARIANT: this is a human conversation delivered by the trusted
   // HearMeOut worker. It must never require, refresh, or inspect a user's SPMT
-  // session. Bot Share is also irrelevant; it only controls autonomous
-  // bot-to-bot talk.
+  // session, Bot Share, or a StreamWeaver bearer secret.
   const upstream = await forwardService({ ...body, command });
   return NextResponse.json(upstream.payload, {
     status: upstream.response.status,
