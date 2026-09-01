@@ -48,18 +48,12 @@ function wakeNameMatches(transcript, wakeNames = []) {
   });
 }
 
-function shouldRouteTranscript(
-  transcript,
-  wakeNames,
-  interests = [],
-  interestChance = 0.35,
-  random = Math.random,
-) {
+function shouldRouteTranscript(transcript, wakeNames) {
   const value = clean(transcript);
   if (!value || /^could not understand audio\.?$/i.test(value)) return false;
-  if (wakeNameMatches(value, wakeNames)) return true;
-  if (value.startsWith('!') || !wakeNameMatches(value, interests)) return false;
-  return random() < Math.max(0, Math.min(1, Number(interestChance) || 0));
+  // One deterministic policy for room text and room voice: a joined persona
+  // only responds when one of its explicit wake names is present.
+  return wakeNameMatches(value, wakeNames);
 }
 
 function runFfmpeg(args, input, timeoutMs = 30_000) {
@@ -309,9 +303,7 @@ class PersonaRuntimeAdapter {
   async processUtterance(identity, pcm) {
     if (this.stopped) return;
     const transcript = await this.transcribe(pcm);
-    const roomPersonaCount = Math.max(1, Number(this.personaCount()) || 1);
-    const interestChance = Math.min(0.35, 1 / Math.max(2, roomPersonaCount * 2));
-    if (!shouldRouteTranscript(transcript, this.wakeNames, this.interests, interestChance)) return;
+    if (!shouldRouteTranscript(transcript, this.wakeNames)) return;
     console.log(`[Persona:${this.personaId}] heard ${identity}: ${transcript.slice(0, 160)}`);
     const payload = await this.runCommand(transcript, identity);
     const data = payload?.data && typeof payload.data === 'object' ? payload.data : payload;
@@ -328,6 +320,8 @@ class PersonaRuntimeAdapter {
       personaId: this.personaId,
       displayName: this.displayName,
       voice: this.voice || undefined,
+      wakeNames: this.wakeNames,
+      wakePolicy: 'explicit-name-only',
       interests: this.interests,
       listeners: this.states.size,
       authenticated: !!this.accessToken || this.serviceSession,
