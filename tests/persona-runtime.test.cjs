@@ -37,7 +37,8 @@ test('automatic wake word records the already-published LiveKit microphone and r
   assert.match(wake, /getTrackPublication\?\.\(Track\.Source\.Microphone\)|getTrackPublication\(Track\.Source\.Microphone\)/);
   assert.match(wake, /sourceTrack\.clone\(\)/);
   assert.match(wake, /new MediaRecorder/);
-  assert.match(wake, /START_RMS/);
+  assert.match(wake, /MIC_PUBLICATION_RETRY_MS/);
+  assert.match(wake, /NOISE_START_MULTIPLIER/);
   assert.match(wake, /SILENCE_TO_SEND_MS/);
   assert.match(wake, /transcribeRoomPersonaAudio\(blob\)/);
   assert.match(wake, /sendRoomPersonaCommand/);
@@ -57,7 +58,10 @@ test('push-to-talk and browser SpeechRecognition are removed from the room voice
 test('worker owns persona RTC output but never runs a second STT or command listener', () => {
   const runtime = source('worker/src/persona-runtime-adapter.js');
   const bootstrap = source('worker/src/persona-bootstrap.js');
-  assert.doesNotMatch(runtime, /onAudioFrame|processUtterance|persona-transcribe|\/api\/internal\/persona-command/);
+  assert.doesNotMatch(runtime, /onAudioFrame\s*\(/);
+  assert.doesNotMatch(runtime, /processUtterance\s*\(/);
+  assert.doesNotMatch(runtime, /fetch\([^\n]*persona-transcribe/);
+  assert.doesNotMatch(runtime, /fetch\([^\n]*\/api\/internal\/persona-command/);
   assert.match(runtime, /speechInputRoute:\s*'browser-persona-transcribe-to-bot-commands'/);
   assert.match(runtime, /listeners:\s*0/);
   assert.match(bootstrap, /app\.post\('\/persona\/speak'/);
