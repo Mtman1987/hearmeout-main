@@ -63,7 +63,7 @@ function currentMicMediaTrack(localParticipant: any): MediaStreamTrack | null {
     : null;
 }
 
-function analyserRms(analyser: AnalyserNode, samples: Float32Array) {
+function analyserRms(analyser: AnalyserNode, samples: Float32Array<ArrayBuffer>) {
   analyser.getFloatTimeDomainData(samples);
   let squares = 0;
   for (let i = 0; i < samples.length; i += 1) squares += samples[i] * samples[i];
@@ -149,7 +149,7 @@ export default function WakeWordListener({ roomId, remoteParticipants }: { roomI
     analyser.smoothingTimeConstant = 0.15;
     const source = audioContext.createMediaStreamSource(stream);
     source.connect(analyser);
-    const samples = new Float32Array(analyser.fftSize);
+    const samples = new Float32Array(new ArrayBuffer(analyser.fftSize * Float32Array.BYTES_PER_ELEMENT));
     void audioContext.resume().catch(() => {});
 
     const processBlob = async (blob: Blob) => {
