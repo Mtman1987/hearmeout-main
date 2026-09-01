@@ -42,6 +42,10 @@ function personaCountForRoom(roomId) {
   return count;
 }
 
+function recordHealthy(record) {
+  return !!record?.persona?.isHealthy?.();
+}
+
 async function stopRecord(record) {
   if (!record) return;
   try { record.runtime?.stop(); } catch {}
@@ -96,18 +100,24 @@ async function handlePersona(req, res) {
 
   if (sessions.has(key)) {
     const existing = sessions.get(key);
-    if (req.body?.spmtAccessToken) existing.runtime.accessToken = clean(req.body.spmtAccessToken, 10000);
-    if (req.body?.spmtRefreshToken) existing.runtime.refreshToken = clean(req.body.spmtRefreshToken, 10000);
-    if (req.body?.serviceSession === true) existing.runtime.serviceSession = true;
-    return res.json({
-      success: true,
-      action: 'join',
-      alreadyJoined: true,
-      roomId,
-      personaId,
-      displayName,
-      runtime: existing.runtime.status(),
-    });
+    if (recordHealthy(existing)) {
+      if (req.body?.spmtAccessToken) existing.runtime.accessToken = clean(req.body.spmtAccessToken, 10000);
+      if (req.body?.spmtRefreshToken) existing.runtime.refreshToken = clean(req.body.spmtRefreshToken, 10000);
+      if (req.body?.serviceSession === true) existing.runtime.serviceSession = true;
+      return res.json({
+        success: true,
+        action: 'join',
+        alreadyJoined: true,
+        roomId,
+        personaId,
+        displayName,
+        transportHealthy: true,
+        runtime: existing.runtime.status(),
+      });
+    }
+    console.warn(`[Persona:${personaId}] replacing stale LiveKit session in room ${roomId}`);
+    await stopRecord(existing);
+    sessions.delete(key);
   }
 
   const wakeNames = Array.isArray(req.body?.wakeNames) ? req.body.wakeNames.map((v) => clean(v, 96)).filter(Boolean) : [];
@@ -184,6 +194,7 @@ async function handlePersona(req, res) {
       roomId,
       personaId,
       displayName,
+      transportHealthy: persona.isHealthy(),
       runtime: runtime.status(),
     });
   } catch (error) {
@@ -203,12 +214,18 @@ async function handlePersonaSpeak(req, res) {
   if (!roomId || !personaId || !audioDataUri) {
     return res.status(400).json({ success: false, error: 'roomId, personaId, and audioDataUri are required' });
   }
-  const record = sessions.get(sessionKey(roomId, personaId));
+  const key = sessionKey(roomId, personaId);
+  const record = sessions.get(key);
   if (!record) return res.status(404).json({ success: false, error: 'Persona is not active in this room' });
+  if (!recordHealthy(record)) {
+    await stopRecord(record);
+    sessions.delete(key);
+    return res.status(409).json({ success: false, error: 'Persona LiveKit transport is stale; re-invite the persona' });
+  }
   try {
     const pcm = await audioDataUriToPcm(audioDataUri);
     await record.persona.pushPcm(pcm);
-    return res.json({ success: true, roomId, personaId, bytes: pcm.length });
+    return res.json({ success: true, roomId, personaId, bytes: pcm.length, transportHealthy: true });
   } catch (error) {
     return res.status(502).json({
       success: false,
@@ -238,6 +255,7 @@ function installRoutes(app, express) {
       instances: Array.from(sessions.values()).map((record) => ({
         roomId: record.roomId,
         personaId: record.personaId,
+        transportHealthy: recordHealthy(record),
         runtime: record.runtime.status(),
       })),
     });

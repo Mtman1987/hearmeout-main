@@ -35,6 +35,7 @@ class PersonaSession {
     this.room = null;
     this.source = null;
     this.track = null;
+    this.connected = false;
     this.listeners = new Set();
     this.streams = new Map();
   }
@@ -44,8 +45,13 @@ class PersonaSession {
     return () => this.listeners.delete(listener);
   }
 
+  isHealthy() {
+    return !!(this.connected && this.room && this.source && this.track);
+  }
+
   async start() {
-    if (this.room) return;
+    if (this.isHealthy()) return;
+    if (this.room) await this.stop();
     const room = new Room();
     this.room = room;
 
@@ -61,8 +67,14 @@ class PersonaSession {
     room.on(RoomEvent.ParticipantDisconnected, (participant) => {
       this.closeStream(participant.identity);
     });
+    if (RoomEvent.Disconnected) {
+      room.on(RoomEvent.Disconnected, () => {
+        this.connected = false;
+      });
+    }
 
     await room.connect(this.livekitUrl, this.token);
+    this.connected = true;
 
     this.source = new AudioSource(SAMPLE_RATE, CHANNELS);
     this.track = LocalAudioTrack.createAudioTrack(`persona-${this.personaId}`, this.source);
@@ -117,18 +129,23 @@ class PersonaSession {
   }
 
   async pushPcm(pcm) {
-    if (!this.source) throw new Error('Persona session is not connected');
-    const buffer = Buffer.isBuffer(pcm) ? pcm : Buffer.from(pcm);
+    if (!this.isHealthy()) throw new Error('Persona session is not connected to a publishable LiveKit track');
+    const input = Buffer.isBuffer(pcm) ? pcm : Buffer.from(pcm);
     const bytesPerFrame = SAMPLES_PER_FRAME * CHANNELS * 2;
-    for (let offset = 0; offset + bytesPerFrame <= buffer.length; offset += bytesPerFrame) {
-      const slice = buffer.subarray(offset, offset + bytesPerFrame);
-      const samples = new Int16Array(slice.buffer, slice.byteOffset, slice.byteLength / 2);
+    const frameCount = Math.ceil(input.length / bytesPerFrame);
+    for (let frameIndex = 0; frameIndex < frameCount; frameIndex += 1) {
+      const offset = frameIndex * bytesPerFrame;
+      const remaining = Math.max(0, input.length - offset);
+      const frameBuffer = Buffer.alloc(bytesPerFrame);
+      if (remaining > 0) input.copy(frameBuffer, 0, offset, offset + Math.min(bytesPerFrame, remaining));
+      const samples = new Int16Array(frameBuffer.buffer, frameBuffer.byteOffset, frameBuffer.byteLength / 2);
       const frame = new AudioFrame(samples, SAMPLE_RATE, CHANNELS, SAMPLES_PER_FRAME);
       await this.source.captureFrame(frame);
     }
   }
 
   async stop() {
+    this.connected = false;
     for (const stream of this.streams.values()) {
       try { stream.close(); } catch {}
     }
