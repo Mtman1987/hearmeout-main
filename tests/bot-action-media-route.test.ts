@@ -66,16 +66,11 @@ test('voice bridge bot actions apply the privacy gate and roll back a failed sta
   assert.match(service, /voiceBridge: \{ \.\.\.next, enabled: false \}/);
 });
 
-test('service personas forward speech to StreamWeaver without borrowing a user token', () => {
-  const route = source('src/app/api/internal/persona-command/route.ts');
+test('room persona worker no longer forwards speech commands or owns STT', () => {
   const runtime = source('worker/src/persona-runtime-adapter.js');
   const bootstrap = source('worker/src/persona-bootstrap.js');
-  assert.match(route, /serviceSession && !accessToken/);
-  assert.match(route, /\/api\/internal\/hearmeout\/persona-command/);
-  assert.match(route, /Authorization: `Bearer \$\{secret\}`/);
-  assert.match(route, /resolveServiceActor\(text\(body\.actorIdentity/);
-  assert.match(route, /ownerIdentities\.includes\(target\)/);
-  assert.match(runtime, /!this\.accessToken && !this\.serviceSession/);
-  assert.match(runtime, /serviceSession: this\.serviceSession \|\| undefined/);
+  assert.doesNotMatch(runtime, /\/api\/internal\/persona-command|persona-transcribe|runCommand\(|processUtterance|onAudioFrame/);
+  assert.match(runtime, /speechInputRoute:\s*'browser-persona-transcribe-to-bot-commands'/);
   assert.match(bootstrap, /serviceSession: req\.body\?\.serviceSession === true/);
+  assert.match(bootstrap, /app\.post\('\/persona\/speak'/);
 });
