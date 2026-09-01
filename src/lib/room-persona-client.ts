@@ -1,5 +1,14 @@
 'use client';
 
+export const ROOM_CHAT_MESSAGE_EVENT = 'hmo-room-chat-message';
+
+export type RoomChatMessage = {
+  id: string;
+  username: string;
+  text: string;
+  timestamp: string;
+};
+
 export type RoomPersonaCommandResult = {
   payload: any;
   reply: string;
@@ -77,12 +86,7 @@ export async function sendRoomPersonaCommand(input: {
   };
 }
 
-export async function postRoomChatMessage(message: {
-  id: string;
-  username: string;
-  text: string;
-  timestamp: string;
-}) {
+export async function postRoomChatMessage(message: RoomChatMessage) {
   const response = await fetch('/api/admin-chat', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -91,5 +95,8 @@ export async function postRoomChatMessage(message: {
   if (!response.ok) {
     const payload = await response.json().catch(() => ({}));
     throw new Error(responseError(payload, `Could not post room chat (${response.status}).`));
+  }
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent<RoomChatMessage>(ROOM_CHAT_MESSAGE_EVENT, { detail: message }));
   }
 }
