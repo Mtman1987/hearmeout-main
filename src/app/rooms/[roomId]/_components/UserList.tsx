@@ -4,6 +4,7 @@ import UserCard from "./UserCard";
 import PersonaCard, { isPersonaParticipant } from './PersonaCard';
 import DJCard from "./DJCard";
 import MobileVoiceControl from './MobileVoiceControl';
+import WakeWordListener from './WakeWordListener';
 import React from "react";
 import { useSession } from '@/hooks/use-session';
 import { useCollection, useDoc } from '@/hooks/use-db';
@@ -100,6 +101,11 @@ function LiveKitParticipants({ isHost, roomId }: { isHost: boolean; roomId: stri
 
   return (
     <>
+      {/* One authoritative human-speech path for the entire room. It records
+          the already-published LiveKit mic, transcribes through the same STT as
+          the persona Talk button, applies the same wake-name resolver as typed
+          chat, and sends through /api/bot/commands. */}
+      <WakeWordListener roomId={roomId} remoteParticipants={remoteParticipants} />
       <MobileVoiceControl roomId={roomId} remoteParticipants={remoteParticipants} />
       {allAudioTracks.map((trackRef) => (
         <AudioTrack key={trackRef.publication.trackSid} trackRef={trackRef} volume={1.0} muted={false} />
