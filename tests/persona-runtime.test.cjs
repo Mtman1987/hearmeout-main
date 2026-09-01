@@ -53,12 +53,13 @@ test('room chat does not default every message to a single persona and asks invo
   assert.doesNotMatch(chat, /speak:\s*false/);
 });
 
-test('persona invite passes SPMT session only server-to-server and worker has a speech endpoint', () => {
+test('persona invite uses a service session without borrowed SPMT credentials and worker has a speech endpoint', () => {
   const sessionRoute = source('src/app/api/bots/session/route.ts');
   const bootstrap = source('worker/src/persona-bootstrap.js');
   const commandRoute = source('src/app/api/bot/commands/route.ts');
-  assert.match(sessionRoute, /spmtAccessToken:/);
-  assert.match(sessionRoute, /spmtRefreshToken:/);
+  assert.match(sessionRoute, /serviceSession:\s*action === 'join'/);
+  assert.doesNotMatch(sessionRoute, /spmtAccessToken:/);
+  assert.doesNotMatch(sessionRoute, /spmtRefreshToken:/);
   assert.match(bootstrap, /app\.post\('\/persona\/speak'/);
   assert.match(commandRoute, /\/persona\/speak/);
 });
