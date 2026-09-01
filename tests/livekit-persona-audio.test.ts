@@ -27,19 +27,15 @@ test('typed and spoken bot messages request TTS through the canonical client and
   assert.match(worker, /record\.persona\.pushPcm\(pcm\)/);
 });
 
-test('room exposes a visible direct-TTS versus LiveKit diagnostic pipeline', async () => {
+test('production has no direct browser TTS diagnostic player', async () => {
   const layout = await readFile('src/app/layout.tsx', 'utf8');
-  const host = await readFile('src/components/tts-diagnostic-host.tsx', 'utf8');
   const route = await readFile('src/app/api/bot/commands/route.ts', 'utf8');
 
-  assert.match(layout, /<TtsDiagnosticHost\s*\/>/);
-  assert.match(host, /\/api\/bot\/commands/);
-  assert.match(host, /audio\.play\(\)/);
-  assert.match(host, /data-room-audio-renderer/);
-  assert.match(host, /Exact generated TTS/);
-  assert.match(host, /tts\?\.error/);
-  assert.match(host, /tts\?\.source/);
-  assert.match(host, /TTS failed:/);
+  assert.doesNotMatch(layout, /TtsDiagnosticHost|tts-diagnostic-host/);
+  await assert.rejects(
+    readFile('src/components/tts-diagnostic-host.tsx', 'utf8'),
+    (error: any) => error?.code === 'ENOENT',
+  );
   assert.match(route, /transportHealthy/);
   assert.match(route, /workerBytes|bytes/);
 });
