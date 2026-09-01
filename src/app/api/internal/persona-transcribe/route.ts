@@ -1,24 +1,24 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth';
-import { isDjWorkerRequest } from '@/lib/dj-worker-auth';
 
 const STREAMWEAVER_BASE_URL = String(
   process.env.STREAMWEAVER_BASE_URL || 'https://streamweaver-new.fly.dev',
 ).replace(/\/$/, '');
 
-export async function POST(request: NextRequest) {
-  const workerRequest = isDjWorkerRequest(request);
-  const session = workerRequest ? null : await getSession();
-  if (!workerRequest && !session) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-  }
+const MAX_AUDIO_BASE64_LENGTH = 16_000_000;
 
+export async function POST(request: NextRequest) {
   const body = await request.json().catch(() => null) as any;
   const base64Audio = String(body?.base64Audio || '').trim();
   if (!base64Audio) {
     return NextResponse.json({ error: 'base64Audio is required' }, { status: 400 });
   }
+  if (base64Audio.length > MAX_AUDIO_BASE64_LENGTH) {
+    return NextResponse.json({ error: 'Recorded audio is too large' }, { status: 413 });
+  }
 
+  // Public room speech is intentionally not gated by SPMT authentication.
+  // Authentication already happens at the product/room boundary; talking to an
+  // invited public persona is ordinary room interaction, not an account action.
   const upstream = await fetch(`${STREAMWEAVER_BASE_URL}/api/speech/transcribe`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Accept: 'application/json' },

@@ -22,11 +22,25 @@ test('persona card reuses browser voice-reply capture and the working typed bot 
   assert.doesNotMatch(card, /\/api\/internal\/persona-command/);
 });
 
-test('existing persona transcription endpoint accepts signed-in room clients without removing worker auth', () => {
+test('public persona transcription does not demand another user session', () => {
   const route = source('src/app/api/internal/persona-transcribe/route.ts');
 
-  assert.match(route, /isDjWorkerRequest/);
-  assert.match(route, /getSession/);
-  assert.match(route, /!workerRequest && !session/);
+  assert.doesNotMatch(route, /getSession/);
+  assert.doesNotMatch(route, /isDjWorkerRequest/);
+  assert.doesNotMatch(route, /Unauthorized/);
   assert.match(route, /\/api\/speech\/transcribe/);
+  assert.match(route, /MAX_AUDIO_BASE64_LENGTH/);
+});
+
+test('public room persona chat falls back to the service route without an SPMT token', () => {
+  const route = source('src/app/api/bot/commands/route.ts');
+
+  assert.match(route, /forwardPublicRoomPersona/);
+  assert.match(route, /\/api\/internal\/hearmeout\/persona-command/);
+  assert.match(route, /getStreamWeaverServiceSecret/);
+  assert.match(route, /publicPersonaIsInRoom/);
+  assert.match(route, /persona:\$\{targetTenantId\}/);
+  assert.match(route, /actorRole:\s*'guest'/);
+  assert.match(route, /if \(accessToken\)/);
+  assert.doesNotMatch(route, /Sign in with SPMT to use your StreamWeaver bot/);
 });

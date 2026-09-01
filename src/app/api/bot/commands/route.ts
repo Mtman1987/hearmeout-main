@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getDjWorkerUrl } from '@/lib/dj-worker-config';
 import { getDjWorkerRequestHeaders } from '@/lib/dj-worker-auth';
+import { getStreamWeaverServiceSecret } from '@/lib/bot-action-service-auth';
+import { db, ensureDb } from '@/lib/db';
 import {
   HMO_SPMT_COOKIE,
   HMO_SPMT_REFRESH_COOKIE,
@@ -42,6 +44,47 @@ async function forwardToStreamWeaver(accessToken: string, body: BotCommandBody) 
       targetTenantId: text(body.targetTenantId, 128) || undefined,
       speak: body.speak !== false,
       voice: text(body.voice, 128) || undefined,
+    }),
+    cache: 'no-store',
+    signal: typeof AbortSignal.timeout === 'function' ? AbortSignal.timeout(65000) : undefined,
+  });
+  const raw = await response.text();
+  let payload: any = {};
+  try { payload = raw ? JSON.parse(raw) : {}; } catch { payload = { error: raw || 'Invalid StreamWeaver response' }; }
+  return { response, payload };
+}
+
+async function publicPersonaIsInRoom(roomId: string, targetTenantId: string) {
+  await ensureDb();
+  const presenceId = `persona:${targetTenantId}`;
+  const presence = db.get(`rooms/${roomId}/users`, presenceId) as any;
+  return Boolean(
+    presence
+    && presence.bot === true
+    && text(presence.personaId, 128) === targetTenantId,
+  );
+}
+
+async function forwardPublicRoomPersona(body: BotCommandBody) {
+  const command = text(body.command || body.message || body.transcript, 5000);
+  const roomId = text(body.roomId, 160);
+  const targetTenantId = text(body.targetTenantId, 128);
+  const secret = getStreamWeaverServiceSecret();
+  const response = await fetch(`${STREAMWEAVER_BASE_URL}/api/internal/hearmeout/persona-command`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${secret}`,
+      'Content-Type': 'application/json',
+      Accept: 'application/json',
+    },
+    body: JSON.stringify({
+      command,
+      roomId,
+      targetTenantId,
+      voice: text(body.voice, 128) || undefined,
+      actorUsername: 'HearMeOut visitor',
+      actorDisplayName: 'HearMeOut visitor',
+      actorRole: 'guest',
     }),
     cache: 'no-store',
     signal: typeof AbortSignal.timeout === 'function' ? AbortSignal.timeout(65000) : undefined,
@@ -120,27 +163,61 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'command is required' }, { status: 400 });
   }
 
+  const commandBody = { ...(body || {}), command };
+  const roomId = text(commandBody.roomId, 160);
+  const targetTenantId = text(commandBody.targetTenantId, 128);
   let accessToken = text(request.cookies.get(HMO_SPMT_COOKIE)?.value, 10000);
-  if (!accessToken) {
-    return NextResponse.json({ error: 'Sign in with SPMT to use your StreamWeaver bot' }, { status: 401 });
-  }
-
-  let upstream = await forwardToStreamWeaver(accessToken, { ...body, command });
   let refreshed: Awaited<ReturnType<typeof refreshHmoSpmtSession>> = null;
+  let upstream: Awaited<ReturnType<typeof forwardToStreamWeaver>>;
 
-  if (upstream.response.status === 401) {
-    const refreshToken = text(request.cookies.get(HMO_SPMT_REFRESH_COOKIE)?.value, 10000);
-    refreshed = refreshToken ? await refreshHmoSpmtSession(refreshToken) : null;
-    if (refreshed) {
-      accessToken = refreshed.accessToken;
-      upstream = await forwardToStreamWeaver(accessToken, { ...body, command });
+  const usePublicRoomPersona = async () => {
+    if (!roomId || !targetTenantId) {
+      return NextResponse.json(
+        { error: 'An active room persona is required for public bot conversation' },
+        { status: 400 },
+      );
     }
+    if (!await publicPersonaIsInRoom(roomId, targetTenantId)) {
+      return NextResponse.json(
+        { error: 'That persona is not active in this room' },
+        { status: 403 },
+      );
+    }
+    try {
+      return await forwardPublicRoomPersona(commandBody);
+    } catch (error) {
+      console.warn('[Bot Commands] Public HearMeOut persona service unavailable:', error);
+      return NextResponse.json(
+        { error: 'Public bot service is unavailable' },
+        { status: 502 },
+      );
+    }
+  };
+
+  if (accessToken) {
+    upstream = await forwardToStreamWeaver(accessToken, commandBody);
+    if (upstream.response.status === 401) {
+      const refreshToken = text(request.cookies.get(HMO_SPMT_REFRESH_COOKIE)?.value, 10000);
+      refreshed = refreshToken ? await refreshHmoSpmtSession(refreshToken) : null;
+      if (refreshed) {
+        accessToken = refreshed.accessToken;
+        upstream = await forwardToStreamWeaver(accessToken, commandBody);
+      } else {
+        const publicFallback = await usePublicRoomPersona();
+        if (publicFallback instanceof NextResponse) return publicFallback;
+        upstream = publicFallback;
+      }
+    }
+  } else {
+    const publicFallback = await usePublicRoomPersona();
+    if (publicFallback instanceof NextResponse) return publicFallback;
+    upstream = publicFallback;
   }
 
   let personaSpeech: any = undefined;
   if (upstream.response.ok) {
     try {
-      personaSpeech = await speakThroughPersona(body || {}, upstream.payload);
+      personaSpeech = await speakThroughPersona(commandBody, upstream.payload);
     } catch (error) {
       personaSpeech = {
         attempted: true,
