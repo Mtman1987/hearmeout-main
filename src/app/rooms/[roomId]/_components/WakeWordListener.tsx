@@ -13,6 +13,7 @@ import {
 } from '@/lib/room-persona-client';
 
 const ANALYSE_EVERY_MS = 50;
+const MIC_PUBLICATION_RETRY_MS = 400;
 const MIN_START_RMS = 0.006;
 const MIN_CONTINUE_RMS = 0.0035;
 const NOISE_START_MULTIPLIER = 3;
@@ -119,7 +120,12 @@ export default function WakeWordListener({ roomId, remoteParticipants }: { roomI
       return;
     }
     const sourceTrack = currentMicMediaTrack(localParticipant);
-    if (!sourceTrack) return;
+    if (!sourceTrack) {
+      // LiveKit can report microphone enabled just before its LocalAudioTrack is
+      // available to consumers. Keep retrying instead of silently giving up.
+      const retry = window.setTimeout(() => setMicRevision((value) => value + 1), MIC_PUBLICATION_RETRY_MS);
+      return () => window.clearTimeout(retry);
+    }
 
     const AudioContextCtor = window.AudioContext || (window as any).webkitAudioContext;
     if (!AudioContextCtor) {
