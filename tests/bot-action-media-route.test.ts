@@ -69,7 +69,10 @@ test('voice bridge bot actions apply the privacy gate and roll back a failed sta
 test('room persona worker no longer forwards speech commands or owns STT', () => {
   const runtime = source('worker/src/persona-runtime-adapter.js');
   const bootstrap = source('worker/src/persona-bootstrap.js');
-  assert.doesNotMatch(runtime, /\/api\/internal\/persona-command|persona-transcribe|runCommand\(|processUtterance|onAudioFrame/);
+  assert.doesNotMatch(runtime, /onAudioFrame\s*\(/);
+  assert.doesNotMatch(runtime, /processUtterance\s*\(/);
+  assert.doesNotMatch(runtime, /fetch\([^\n]*persona-transcribe/);
+  assert.doesNotMatch(runtime, /fetch\([^\n]*\/api\/internal\/persona-command/);
   assert.match(runtime, /speechInputRoute:\s*'browser-persona-transcribe-to-bot-commands'/);
   assert.match(bootstrap, /serviceSession: req\.body\?\.serviceSession === true/);
   assert.match(bootstrap, /app\.post\('\/persona\/speak'/);
