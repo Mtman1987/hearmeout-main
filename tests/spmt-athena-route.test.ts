@@ -14,19 +14,21 @@ const personaCard = new URL('../src/app/rooms/[roomId]/_components/PersonaCard.t
 const personaBootstrap = new URL('../worker/src/persona-bootstrap.js', import.meta.url);
 const workerPackage = new URL('../worker/package.json', import.meta.url);
 
-test('HearMeOut human bot conversation never depends on a user SPMT session or bot-share', async () => {
+test('HearMeOut human bot conversation never depends on a user SPMT session, bot-share, or StreamWeaver secret', async () => {
   const source = await readFile(botApiRoute, 'utf8');
   assert.match(source, /publicPersonaIsInRoom/);
   assert.match(source, /\/api\/internal\/hearmeout\/persona-command/);
-  assert.match(source, /Bot Share is bot-to-bot only/);
+  assert.match(source, /StreamWeaver bearer secret/);
   assert.doesNotMatch(source, /HMO_SPMT_COOKIE/);
   assert.doesNotMatch(source, /HMO_SPMT_REFRESH_COOKIE/);
   assert.doesNotMatch(source, /refreshHmoSpmtSession/);
   assert.doesNotMatch(source, /\/api\/spmt\/bot\/commands/);
   assert.doesNotMatch(source, /getBotShareMode|BOT_NOT_SHARED/);
+  assert.doesNotMatch(source, /getStreamWeaverServiceSecret|STREAMWEAVER_SECRET/);
+  assert.doesNotMatch(source, /Authorization:\s*`Bearer/);
 });
 
-test('spoken persona commands use the worker-authenticated public service path only', async () => {
+test('spoken persona commands use the worker-authenticated public service path without a StreamWeaver secret', async () => {
   const source = await readFile(personaCommandRoute, 'utf8');
   assert.match(source, /isDjWorkerRequest/);
   assert.match(source, /\/api\/internal\/hearmeout\/persona-command/);
@@ -34,6 +36,8 @@ test('spoken persona commands use the worker-authenticated public service path o
   assert.doesNotMatch(source, /refreshHmoSpmtSession/);
   assert.doesNotMatch(source, /accessToken|refreshToken/);
   assert.doesNotMatch(source, /\/api\/spmt\/bot\/commands/);
+  assert.doesNotMatch(source, /getStreamWeaverServiceSecret|STREAMWEAVER_SECRET/);
+  assert.doesNotMatch(source, /Authorization:\s*`Bearer/);
 });
 
 test('old Athena API is only a compatibility alias to the generic bot route', async () => {
@@ -110,7 +114,7 @@ test('room bot picker is an all-SPMT public persona gallery', async () => {
   assert.match(pickerSource, /Invite/);
 });
 
-test('bot join API uses room management plus the public persona catalog, never SPMT bot-share auth', async () => {
+test('bot join API uses room management plus the public persona catalog, never SPMT bot-share or StreamWeaver secret auth', async () => {
   const source = await readFile(botSessionRoute, 'utf8');
   assert.match(source, /canManageRoom/);
   assert.match(source, /Only the room owner or room staff can manage bots/);
@@ -119,12 +123,15 @@ test('bot join API uses room management plus the public persona catalog, never S
   assert.match(source, /\/persona/);
   assert.match(source, /serviceSession: action === 'join'/);
   assert.doesNotMatch(source, /HMO_SPMT_COOKIE|refreshHmoSpmtSession|getBotShareMode/);
+  assert.doesNotMatch(source, /getStreamWeaverServiceSecret|STREAMWEAVER_SECRET/);
+  assert.doesNotMatch(source, /Authorization:\s*`Bearer/);
 });
 
-test('available bot list is the trusted all-SPMT public persona catalog', async () => {
+test('available bot list uses the public all-SPMT persona catalog with no StreamWeaver secret', async () => {
   const source = await readFile(botsApiRoute, 'utf8');
-  assert.match(source, /getStreamWeaverServiceSecret/);
   assert.match(source, /\/api\/internal\/hearmeout\/bots/);
+  assert.doesNotMatch(source, /getStreamWeaverServiceSecret|STREAMWEAVER_SECRET/);
+  assert.doesNotMatch(source, /Authorization:\s*`Bearer/);
   assert.doesNotMatch(source, /HMO_SPMT_COOKIE|refreshHmoSpmtSession|\/api\/spmt\/bots/);
 });
 

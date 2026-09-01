@@ -32,16 +32,16 @@ test('public persona transcription does not demand another user session', () => 
   assert.match(route, /MAX_AUDIO_BASE64_LENGTH/);
 });
 
-test('public room persona chat always uses the service route and never a user SPMT token', () => {
+test('public room persona chat uses the public service route with no user token or StreamWeaver secret', () => {
   const route = source('src/app/api/bot/commands/route.ts');
 
   assert.match(route, /forwardPublicRoomPersona/);
   assert.match(route, /\/api\/internal\/hearmeout\/persona-command/);
-  assert.match(route, /getStreamWeaverServiceSecret/);
   assert.match(route, /publicPersonaIsInRoom/);
   assert.match(route, /persona:\$\{targetTenantId\}/);
-  assert.match(route, /actorRole:\s*'guest'/);
-  assert.match(route, /Bot Share is bot-to-bot only/);
+  assert.match(route, /StreamWeaver bearer secret/);
+  assert.doesNotMatch(route, /getStreamWeaverServiceSecret|STREAMWEAVER_SECRET/);
+  assert.doesNotMatch(route, /Authorization:\s*`Bearer/);
   assert.doesNotMatch(route, /accessToken|refreshToken/);
   assert.doesNotMatch(route, /HMO_SPMT_COOKIE|HMO_SPMT_REFRESH_COOKIE/);
   assert.doesNotMatch(route, /refreshHmoSpmtSession/);
