@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getDjWorkerUrl } from '@/lib/dj-worker-config';
 import { getDjWorkerRequestHeaders } from '@/lib/dj-worker-auth';
-import { getStreamWeaverServiceSecret } from '@/lib/bot-action-service-auth';
 import { db, ensureDb } from '@/lib/db';
 
 const STREAMWEAVER_BASE_URL = String(
@@ -37,11 +36,9 @@ async function forwardPublicRoomPersona(body: BotCommandBody) {
   const command = text(body.command || body.message || body.transcript, 5000);
   const roomId = text(body.roomId, 160);
   const targetTenantId = text(body.targetTenantId, 128);
-  const secret = getStreamWeaverServiceSecret();
   const response = await fetch(`${STREAMWEAVER_BASE_URL}/api/internal/hearmeout/persona-command`, {
     method: 'POST',
     headers: {
-      Authorization: `Bearer ${secret}`,
       'Content-Type': 'application/json',
       Accept: 'application/json',
     },
@@ -52,7 +49,6 @@ async function forwardPublicRoomPersona(body: BotCommandBody) {
       voice: text(body.voice, 128) || undefined,
       actorUsername: 'HearMeOut visitor',
       actorDisplayName: 'HearMeOut visitor',
-      actorRole: 'guest',
     }),
     cache: 'no-store',
     signal: typeof AbortSignal.timeout === 'function' ? AbortSignal.timeout(65000) : undefined,
@@ -148,8 +144,8 @@ export async function POST(request: NextRequest) {
   }
 
   // GLOBAL INVARIANT: a persona that is present in the room is a public
-  // chatbot. Never use an SPMT cookie, Bot Share mode, or owner credentials to
-  // decide whether a human may talk to it. Bot Share is bot-to-bot only.
+  // chatbot. Never use an SPMT cookie, Bot Share mode, owner credentials, or a
+  // StreamWeaver bearer secret to decide whether a human may talk to it.
   let upstream: Awaited<ReturnType<typeof forwardPublicRoomPersona>>;
   try {
     upstream = await forwardPublicRoomPersona(commandBody);
