@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { getSession } from '@/lib/auth';
 import { getDjWorkerUrl } from '@/lib/dj-worker-config';
 import { getDjWorkerRequestHeaders } from '@/lib/dj-worker-auth';
 import { db, ensureDb } from '@/lib/db';
@@ -15,6 +16,9 @@ type BotCommandBody = {
   targetTenantId?: unknown;
   speak?: unknown;
   voice?: unknown;
+  actorIdentity?: unknown;
+  actorUsername?: unknown;
+  actorDisplayName?: unknown;
 };
 
 type WorkerPersonaInstance = {
@@ -30,6 +34,58 @@ type WorkerPersonaInstance = {
 
 function text(value: unknown, max: number) {
   return String(value || '').trim().slice(0, max);
+}
+
+async function resolvePublicActor(body: BotCommandBody) {
+  let sessionUser: any = null;
+  try {
+    sessionUser = (await getSession())?.user || null;
+  } catch {
+    // Public persona conversation must still work without a browser session.
+  }
+
+  const identity = text(sessionUser?.uid || body.actorIdentity, 160);
+  let storedUser: any = {};
+  if (identity) {
+    try {
+      await ensureDb();
+      storedUser = db.get('users', identity) || {};
+    } catch {
+      storedUser = {};
+    }
+  }
+
+  const actorUsername = text(
+    storedUser.username
+      || storedUser.twitchUsername
+      || storedUser.displayName
+      || sessionUser?.displayName
+      || body.actorUsername
+      || body.actorDisplayName
+      || 'Guest',
+    100,
+  );
+  const actorDisplayName = text(
+    storedUser.displayName
+      || storedUser.username
+      || storedUser.twitchUsername
+      || sessionUser?.displayName
+      || body.actorDisplayName
+      || body.actorUsername
+      || actorUsername,
+    100,
+  );
+  const actorUserId = text(
+    storedUser.discordId
+      || storedUser.twitchId
+      || storedUser.spmtUserId
+      || sessionUser?.discordId
+      || sessionUser?.twitchId
+      || identity,
+    160,
+  );
+
+  return { actorUserId, actorUsername, actorDisplayName };
 }
 
 async function healthyWorkerPersona(roomId: string, targetTenantId: string): Promise<WorkerPersonaInstance | null> {
@@ -83,6 +139,7 @@ async function forwardPublicRoomPersona(body: BotCommandBody) {
   const command = text(body.command || body.message || body.transcript, 5000);
   const roomId = text(body.roomId, 160);
   const targetTenantId = text(body.targetTenantId, 128);
+  const actor = await resolvePublicActor(body);
   const response = await fetch(`${STREAMWEAVER_BASE_URL}/api/internal/hearmeout/persona-command`, {
     method: 'POST',
     headers: {
@@ -94,8 +151,7 @@ async function forwardPublicRoomPersona(body: BotCommandBody) {
       roomId,
       targetTenantId,
       voice: text(body.voice, 128) || undefined,
-      actorUsername: 'HearMeOut visitor',
-      actorDisplayName: 'HearMeOut visitor',
+      ...actor,
     }),
     cache: 'no-store',
     signal: typeof AbortSignal.timeout === 'function' ? AbortSignal.timeout(65000) : undefined,
@@ -212,8 +268,9 @@ export async function POST(request: NextRequest) {
   }
 
   // GLOBAL INVARIANT: a persona that is present in the room is a public
-  // chatbot. Never use an SPMT cookie, Bot Share mode, owner credentials, or a
-  // StreamWeaver bearer secret to decide whether a human may talk to it.
+  // chatbot. A browser session may enrich the actor's real display name, but
+  // missing SPMT auth, Bot Share mode, owner credentials, or a StreamWeaver bearer secret
+  // never blocks the human from talking to the joined persona.
   let upstream: Awaited<ReturnType<typeof forwardPublicRoomPersona>>;
   try {
     upstream = await forwardPublicRoomPersona(commandBody);

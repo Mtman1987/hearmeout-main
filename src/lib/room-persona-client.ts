@@ -53,6 +53,9 @@ export async function sendRoomPersonaCommand(input: {
   transcript: string;
   targetTenantId: string;
   fallbackDisplayName: string;
+  actorIdentity?: string;
+  actorUsername?: string;
+  actorDisplayName?: string;
 }): Promise<RoomPersonaCommandResult> {
   const response = await fetch('/api/bot/commands', {
     method: 'POST',
@@ -62,6 +65,9 @@ export async function sendRoomPersonaCommand(input: {
       transcript: input.transcript,
       roomId: input.roomId,
       targetTenantId: input.targetTenantId,
+      actorIdentity: input.actorIdentity,
+      actorUsername: input.actorUsername,
+      actorDisplayName: input.actorDisplayName,
       speak: true,
     }),
   });

@@ -11,7 +11,11 @@ function text(value: unknown, max: number) {
 }
 
 async function forwardService(body: any) {
-  const actor = await resolveServiceActor(text(body.actorIdentity, 160));
+  const actor = await resolveServiceActor(
+    text(body.actorIdentity, 160),
+    text(body.actorUsername, 100),
+    text(body.actorDisplayName, 100),
+  );
   const response = await fetch(`${STREAMWEAVER_BASE_URL}/api/internal/hearmeout/persona-command`, {
     method: 'POST',
     headers: {
@@ -34,20 +38,29 @@ async function forwardService(body: any) {
   return { response, payload };
 }
 
-async function resolveServiceActor(identity: string) {
+async function resolveServiceActor(identity: string, providedUsername = '', providedDisplayName = '') {
   if (!identity) {
+    const fallbackName = providedDisplayName || providedUsername || 'Guest';
     return {
       actorUserId: '',
-      actorUsername: 'HearMeOut room',
-      actorDisplayName: 'HearMeOut room',
+      actorUsername: providedUsername || fallbackName,
+      actorDisplayName: providedDisplayName || fallbackName,
     };
   }
   await ensureDb();
   const user = db.get('users', identity) || {};
+  const actorUsername = text(
+    user.username || user.twitchUsername || user.displayName || providedUsername || providedDisplayName || identity,
+    100,
+  );
+  const actorDisplayName = text(
+    user.displayName || user.username || user.twitchUsername || providedDisplayName || providedUsername || identity,
+    100,
+  );
   return {
     actorUserId: text(user.discordId || user.twitchId || user.spmtUserId || identity, 160),
-    actorUsername: text(user.username || user.twitchUsername || user.displayName || identity, 100),
-    actorDisplayName: text(user.displayName || user.username || user.twitchUsername || identity, 100),
+    actorUsername,
+    actorDisplayName,
   };
 }
 
