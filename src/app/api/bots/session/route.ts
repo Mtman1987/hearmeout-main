@@ -124,7 +124,8 @@ export async function POST(request: NextRequest) {
       ownerName: matched.ownerName || '',
       wakeNames: matched.wakeNames || [matched.name, ...(matched.aliases || [])],
       aliases: matched.aliases || [],
-      interests: matched.interests || [],
+      // Explicit wake-name policy: ordinary room conversation never wakes a persona.
+      interests: [],
       voice: matched.voice || '',
       livekitTtsDescriptor: matched.livekitTtsDescriptor || '',
       avatar: matched.avatar || '',
@@ -151,6 +152,9 @@ export async function POST(request: NextRequest) {
         bot: true,
         personaId: matched.ownerTenantId,
         ownerName: matched.ownerName || '',
+        presenceKind: 'persona',
+        persistent: true,
+        transportHealthy: workerPayload?.transportHealthy === true,
         lastSeen: Date.now(),
       }, { merge: true });
     } else {
