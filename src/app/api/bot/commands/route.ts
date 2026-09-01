@@ -32,14 +32,6 @@ function text(value: unknown, max: number) {
   return String(value || '').trim().slice(0, max);
 }
 
-function validPersonaPresence(presence: any, targetTenantId: string) {
-  return Boolean(
-    presence
-    && presence.bot === true
-    && text(presence.personaId, 128) === targetTenantId,
-  );
-}
-
 async function healthyWorkerPersona(roomId: string, targetTenantId: string): Promise<WorkerPersonaInstance | null> {
   const response = await fetch(`${getDjWorkerUrl()}/persona`, {
     method: 'GET',
@@ -60,24 +52,19 @@ async function healthyWorkerPersona(roomId: string, targetTenantId: string): Pro
 async function publicPersonaIsInRoom(roomId: string, targetTenantId: string) {
   await ensureDb();
   const presenceId = `persona:${targetTenantId}`;
-  const presence = db.get(`rooms/${roomId}/users`, presenceId) as any;
-  if (validPersonaPresence(presence, targetTenantId)) {
-    // Upgrade older presence rows in-place so the human-presence pruner will
-    // never treat a joined persona like an expiring browser heartbeat.
-    db.set(`rooms/${roomId}/users`, presenceId, {
-      presenceKind: 'persona',
-      persistent: true,
-      lastSeen: Date.now(),
-    }, { merge: true });
-    return true;
+
+  // The RTC worker is authoritative. A SQLite row can be pruned, stale, or
+  // left behind after a worker restart; none of those should lie about whether
+  // the persona is actually connected and publishable right now.
+  const instance = await healthyWorkerPersona(roomId, targetTenantId);
+  if (!instance) {
+    db.delete(`rooms/${roomId}/users`, presenceId);
+    return false;
   }
 
-  // SQLite presence can be lost or pruned independently of the actual RTC
-  // participant. The worker is the authoritative source for whether a persona
-  // is really still connected and publishable, so self-heal the row when the
-  // transport is healthy instead of forcing a pointless re-invite.
-  const instance = await healthyWorkerPersona(roomId, targetTenantId);
-  if (!instance) return false;
+  // Self-heal/upgrade the convenience presence row from the real live session.
+  // Human presence pruning must never expire this row while the RTC persona is
+  // still alive.
   db.set(`rooms/${roomId}/users`, presenceId, {
     id: presenceId,
     uid: presenceId,
