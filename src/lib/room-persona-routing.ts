@@ -13,6 +13,21 @@ function escapeRegex(value: string) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
+function expandedWakeNames(bot: RoomBotDescriptor) {
+  const names = Array.from(new Set([
+    bot.displayName,
+    ...(bot.wakeNames || []),
+  ].map((value) => String(value || '').trim()).filter(Boolean)));
+  const athenaLike = names.some((name) => {
+    const normalized = name.toLowerCase();
+    return normalized.includes('athena') || normalized === 'annie';
+  });
+  if (athenaLike && !names.some((name) => name.toLowerCase() === 'hey athena')) {
+    names.push('Hey Athena');
+  }
+  return names;
+}
+
 export function wakeNameMatchIndex(value: string, wakeName: string) {
   const normalized = String(wakeName || '').trim().replace(/^@/, '');
   if (!normalized) return -1;
@@ -29,7 +44,7 @@ export function resolveBotInvocation(value: string, bots: RoomBotDescriptor[] = 
   } | null = null;
 
   for (const bot of bots) {
-    for (const wakeName of bot.wakeNames) {
+    for (const wakeName of expandedWakeNames(bot)) {
       const index = wakeNameMatchIndex(value, wakeName);
       if (index < 0) continue;
       const wakeNameLength = String(wakeName || '').trim().length;
