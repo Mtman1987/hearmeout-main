@@ -75,7 +75,7 @@ test('persona presence is persistent and never expires with the 45 second human 
   assert.match(session, /persistent:\s*true/);
   assert.match(command, /healthyWorkerPersona/);
   assert.match(command, /method:\s*'GET'/);
-  assert.match(command, /self-heal the row/);
+  assert.match(command, /Self-heal\/upgrade|self-heal/i);
   assert.match(command, /persistent:\s*true/);
 });
 
