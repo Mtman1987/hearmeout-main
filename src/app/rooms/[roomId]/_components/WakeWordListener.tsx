@@ -79,7 +79,9 @@ export default function WakeWordListener({ roomId, remoteParticipants }: { roomI
       if (!transcript) return;
 
       const invocation = resolveBotInvocation(transcript, targets);
-      if (!invocation?.targetTenantId) return;
+      const targetTenantId = invocation?.targetTenantId;
+      if (!invocation || !targetTenantId) return;
+      const targetDisplayName = invocation.displayName;
 
       const normalized = transcript.toLowerCase();
       const recent = lastTranscriptRef.current;
@@ -98,8 +100,8 @@ export default function WakeWordListener({ roomId, remoteParticipants }: { roomI
             const result = await sendRoomPersonaCommand({
               roomId,
               transcript,
-              targetTenantId: invocation.targetTenantId,
-              fallbackDisplayName: invocation.displayName,
+              targetTenantId,
+              fallbackDisplayName: targetDisplayName,
               actorIdentity,
               actorUsername,
               actorDisplayName: humanName,
@@ -120,7 +122,7 @@ export default function WakeWordListener({ roomId, remoteParticipants }: { roomI
           } catch (error) {
             await postRoomChatMessage(chatMessage(
               'Bots',
-              `${invocation.displayName} could not respond: ${error instanceof Error ? error.message : String(error)}`,
+              `${targetDisplayName} could not respond: ${error instanceof Error ? error.message : String(error)}`,
               'local_wake_error',
             )).catch(() => {});
           } finally {
