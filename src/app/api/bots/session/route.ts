@@ -124,8 +124,9 @@ export async function POST(request: NextRequest) {
       ownerName: matched.ownerName || '',
       wakeNames: matched.wakeNames || [matched.name, ...(matched.aliases || [])],
       aliases: matched.aliases || [],
-      // Explicit wake-name policy: ordinary room conversation never wakes a persona.
-      interests: [],
+      // Interests remain public promo/personality metadata. They are not wake
+      // triggers; typed and spoken invocation both use the shared wake-name resolver.
+      interests: matched.interests || [],
       voice: matched.voice || '',
       livekitTtsDescriptor: matched.livekitTtsDescriptor || '',
       avatar: matched.avatar || '',
@@ -152,6 +153,9 @@ export async function POST(request: NextRequest) {
         bot: true,
         personaId: matched.ownerTenantId,
         ownerName: matched.ownerName || '',
+        wakeNames: matched.wakeNames || [matched.name, ...(matched.aliases || [])],
+        aliases: matched.aliases || [],
+        interests: matched.interests || [],
         presenceKind: 'persona',
         persistent: true,
         transportHealthy: workerPayload?.transportHealthy === true,
