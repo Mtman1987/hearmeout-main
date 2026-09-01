@@ -124,6 +124,8 @@ export async function POST(request: NextRequest) {
       ownerName: matched.ownerName || '',
       wakeNames: matched.wakeNames || [matched.name, ...(matched.aliases || [])],
       aliases: matched.aliases || [],
+      // Interests remain public promo/personality metadata. They are not wake
+      // triggers; typed and spoken invocation both use the shared wake-name resolver.
       interests: matched.interests || [],
       voice: matched.voice || '',
       livekitTtsDescriptor: matched.livekitTtsDescriptor || '',
@@ -151,6 +153,12 @@ export async function POST(request: NextRequest) {
         bot: true,
         personaId: matched.ownerTenantId,
         ownerName: matched.ownerName || '',
+        wakeNames: matched.wakeNames || [matched.name, ...(matched.aliases || [])],
+        aliases: matched.aliases || [],
+        interests: matched.interests || [],
+        presenceKind: 'persona',
+        persistent: true,
+        transportHealthy: workerPayload?.transportHealthy === true,
         lastSeen: Date.now(),
       }, { merge: true });
     } else {

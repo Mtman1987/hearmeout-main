@@ -23,12 +23,9 @@ import { SpeakingIndicator } from "./SpeakingIndicator";
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useAudioDevice } from '@/hooks/use-audio-device';
-import { useVoiceControls } from '@/hooks/use-voice-controls';
 import { useRouter } from 'next/navigation';
 
 interface RoomParticipantData { id: string; uid: string; displayName: string; photoURL: string; twitchChannel?: string; discordGuildId?: string; streamMode?: boolean; serverMuted?: boolean; }
-
-const OPEN_MIC_SILENCE_TIMEOUT_MS = 10 * 60 * 1000;
 
 export default function UserCard({ participant, isLocal, isHost, roomId }: { participant: LivekitClient.Participant; isLocal: boolean; isHost?: boolean; roomId: string; }) {
   const { user } = useSession();
@@ -56,61 +53,19 @@ export default function UserCard({ participant, isLocal, isHost, roomId }: { par
   const userRecordId = participantMeta.uid || identity;
   const [trackAudioLevel, setTrackAudioLevel] = useState(0);
   const [micPauseReason, setMicPauseReason] = useState<string | null>(
-    isLocal ? 'Microphone muted on entry. You are still listening.' : null,
+    isLocal ? 'Microphone muted on entry. Unmute once, then say “Athena …” or another joined persona wake name whenever you want the AI.' : null,
   );
-  const lastSpokeAtRef = React.useRef(Date.now());
-  const voiceModeRef = React.useRef<'open' | 'pushToTalk' | 'noiseGate'>('open');
   const isSpeaking = participant.isSpeaking;
 
   const setMicEnabled = useCallback(async (enabled: boolean) => {
     if (!isLocal || !room) return;
     await room.localParticipant.setMicrophoneEnabled(enabled);
     if (enabled) {
-      lastSpokeAtRef.current = Date.now();
       setMicPauseReason(null);
       return;
     }
-    setMicPauseReason(
-      voiceModeRef.current === 'pushToTalk'
-        ? 'Push-to-talk is ready. Hold your configured key to speak; you are still listening.'
-        : voiceModeRef.current === 'noiseGate'
-          ? 'Noise gate closed your microphone. You are still listening.'
-          : 'Microphone muted. You are still listening.',
-    );
+    setMicPauseReason('Microphone muted. Unmute once to resume room audio and wake-name commands.');
   }, [isLocal, room]);
-
-  const voiceControls = useVoiceControls({ setMicEnabled, audioLevel: trackAudioLevel });
-  const [pttBinding, setPttBinding] = useState(false);
-
-  useEffect(() => {
-    voiceModeRef.current = voiceControls.mode;
-  }, [voiceControls.mode]);
-
-  useEffect(() => {
-    if (!isLocal) return;
-
-    const handleSpeakingChanged = () => {
-      if (participant.isSpeaking) lastSpokeAtRef.current = Date.now();
-    };
-    participant.on(LivekitClient.ParticipantEvent.IsSpeakingChanged, handleSpeakingChanged);
-
-    const interval = window.setInterval(() => {
-      if (
-        voiceModeRef.current === 'open'
-        && participant.isMicrophoneEnabled
-        && Date.now() - lastSpokeAtRef.current >= OPEN_MIC_SILENCE_TIMEOUT_MS
-      ) {
-        void room.localParticipant.setMicrophoneEnabled(false).then(() => {
-          setMicPauseReason('Microphone paused after 10 minutes of silence. You are still listening—select Unmute to talk again.');
-        });
-      }
-    }, 15_000);
-
-    return () => {
-      window.clearInterval(interval);
-      participant.off(LivekitClient.ParticipantEvent.IsSpeakingChanged, handleSpeakingChanged);
-    };
-  }, [isLocal, participant, room]);
 
   useEffect(() => {
     if (!participant) return;
@@ -331,42 +286,13 @@ export default function UserCard({ participant, isLocal, isHost, roomId }: { par
                                 <PopoverContent className="w-80"><div className="grid gap-4"><div className="space-y-2"><h4 className="font-medium leading-none">Audio Settings</h4></div><div className="grid gap-2">
                                     <div className="grid grid-cols-3 items-center gap-4"><Label htmlFor="mic-select">Microphone</Label><Select value={activeAudioInputDeviceId} onValueChange={setAudioInputDevice}><SelectTrigger id="mic-select" className="col-span-2"><SelectValue placeholder="Select an input" /></SelectTrigger><SelectContent>{audioInputDevices.map(d => <SelectItem key={d.deviceId} value={d.deviceId}>{d.label}</SelectItem>)}</SelectContent></Select></div>
                                     <div className="grid grid-cols-3 items-center gap-4"><Label htmlFor="speaker-select">Speakers</Label><Select value={activeAudioOutputDeviceId} onValueChange={setAudioOutputDevice}><SelectTrigger id="speaker-select" className="col-span-2"><SelectValue placeholder="Select an output" /></SelectTrigger><SelectContent>{audioOutputDevices.map(d => <SelectItem key={d.deviceId} value={d.deviceId}>{d.label}</SelectItem>)}</SelectContent></Select></div>
-                                    <div className="border-t pt-2 mt-1">
-                                      <Label className="text-xs text-muted-foreground">Voice Mode</Label>
-                                      <div className="flex gap-1 mt-1">
-                                        <Button variant={voiceControls.mode === 'open' ? 'secondary' : 'outline'} size="sm" className="flex-1 text-xs" onClick={() => voiceControls.setMode('open')}>Open</Button>
-                                        <Button variant={voiceControls.mode === 'pushToTalk' ? 'secondary' : 'outline'} size="sm" className="flex-1 text-xs" onClick={() => voiceControls.setMode('pushToTalk')}>PTT</Button>
-                                        <Button variant={voiceControls.mode === 'noiseGate' ? 'secondary' : 'outline'} size="sm" className="flex-1 text-xs" onClick={() => voiceControls.setMode('noiseGate')}>Gate</Button>
-                                      </div>
+                                    <div className="border-t pt-2 mt-1 space-y-1">
+                                      <Label className="text-xs text-muted-foreground">AI Wake Word</Label>
+                                      <p className="text-xs text-muted-foreground">
+                                        {isMuted ? 'Unmute your microphone once. ' : 'Your microphone is live. '}
+                                        Say a joined persona name such as “Athena, say something.” Normal room speech does not trigger the AI.
+                                      </p>
                                     </div>
-                                    {voiceControls.mode === 'pushToTalk' && (
-                                      <div className="border-t pt-2">
-                                        <Label className="text-xs text-muted-foreground">PTT Key</Label>
-                                        <div className="flex gap-2 mt-1 items-center">
-                                          <Button variant="outline" size="sm" className={cn('flex-1 text-xs', pttBinding && 'ring-2 ring-primary')} onClick={() => setPttBinding(true)} onKeyDown={(e) => { if (pttBinding) { e.preventDefault(); voiceControls.setPttKey(e.key === ' ' ? ' ' : e.code || e.key); setPttBinding(false); } }} onMouseDown={(e) => { if (pttBinding && e.button !== 0) { e.preventDefault(); voiceControls.setPttKey(`Mouse${e.button}`); setPttBinding(false); } }} onBlur={() => setPttBinding(false)}>
-                                            {pttBinding ? 'Press a key...' : voiceControls.pttKey === ' ' ? 'Space' : voiceControls.pttKey}
-                                          </Button>
-                                          {voiceControls.isPttActive && <span className="text-xs text-green-500 font-medium">● Active</span>}
-                                        </div>
-                                      </div>
-                                    )}
-                                    {voiceControls.mode === 'noiseGate' && (
-                                      <div className="border-t pt-2 space-y-2">
-                                        <div>
-                                          <Label className="text-xs text-muted-foreground">Threshold: {Math.round(voiceControls.noiseGateThreshold * 1000)}‰</Label>
-                                          <Slider value={[voiceControls.noiseGateThreshold]} onValueChange={(v) => voiceControls.setNoiseGateThreshold(v[0])} min={0.005} max={0.1} step={0.005} className="mt-1" />
-                                        </div>
-                                        <div>
-                                          <Label className="text-xs text-muted-foreground">Release: {voiceControls.noiseGateRelease}ms</Label>
-                                          <Slider value={[voiceControls.noiseGateRelease]} onValueChange={(v) => voiceControls.setNoiseGateRelease(v[0])} min={50} max={1000} step={50} className="mt-1" />
-                                        </div>
-                                        <div className="flex items-center gap-2">
-                                          <div className={cn('h-2 w-2 rounded-full', voiceControls.isGateOpen ? 'bg-green-500' : 'bg-red-500')} />
-                                          <span className="text-xs text-muted-foreground">{voiceControls.isGateOpen ? 'Gate Open' : 'Gate Closed'}</span>
-                                          <span className="text-xs text-muted-foreground ml-auto">Level: {Math.round(trackAudioLevel * 100)}%</span>
-                                        </div>
-                                      </div>
-                                    )}
                                 </div></div></PopoverContent>
                             </Popover>
                             <DropdownMenu><DropdownMenuTrigger asChild><Button variant="ghost" size="icon" className="h-7 w-7"><MoreVertical className="h-4 w-4" /></Button></DropdownMenuTrigger>

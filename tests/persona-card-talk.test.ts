@@ -7,19 +7,23 @@ function source(relative: string) {
   return fs.readFileSync(path.join(process.cwd(), relative), 'utf8');
 }
 
-test('persona card reuses browser voice-reply capture and the working typed bot path', () => {
+test('persona card keeps the working manual recorder as a fallback but shares the canonical STT and bot client', () => {
   const card = source('src/app/rooms/[roomId]/_components/PersonaCard.tsx');
+  const client = source('src/lib/room-persona-client.ts');
 
   assert.match(card, /navigator\.mediaDevices\.getUserMedia/);
   assert.match(card, /new MediaRecorder/);
   assert.match(card, /audio\/webm;codecs=opus/);
-  assert.match(card, /\/api\/internal\/persona-transcribe/);
-  assert.match(card, /\/api\/bot\/commands/);
-  assert.match(card, /targetTenantId:\s*personaTargetId/);
-  assert.match(card, /speak:\s*true/);
+  assert.match(card, /transcribeRoomPersonaAudio/);
+  assert.match(card, /sendRoomPersonaCommand/);
   assert.match(card, /You said/);
   assert.match(card, /Talk to \$\{displayName\}/);
-  assert.doesNotMatch(card, /\/api\/internal\/persona-command/);
+  assert.match(card, /Fallback button/);
+  assert.doesNotMatch(card, /fetch\('\/api\/internal\/persona-transcribe'/);
+  assert.doesNotMatch(card, /fetch\('\/api\/bot\/commands'/);
+  assert.match(client, /\/api\/internal\/persona-transcribe/);
+  assert.match(client, /\/api\/bot\/commands/);
+  assert.match(client, /speak:\s*true/);
 });
 
 test('public persona transcription does not demand another user session', () => {
@@ -38,6 +42,7 @@ test('public room persona chat uses the public service route with no user token 
   assert.match(route, /forwardPublicRoomPersona/);
   assert.match(route, /\/api\/internal\/hearmeout\/persona-command/);
   assert.match(route, /publicPersonaIsInRoom/);
+  assert.match(route, /healthyWorkerPersona/);
   assert.match(route, /persona:\$\{targetTenantId\}/);
   assert.match(route, /StreamWeaver bearer secret/);
   assert.doesNotMatch(route, /getStreamWeaverServiceSecret|STREAMWEAVER_SECRET/);

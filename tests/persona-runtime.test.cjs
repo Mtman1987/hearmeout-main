@@ -4,56 +4,86 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
-const {
-  PersonaRuntimeAdapter,
-  isHumanRoomIdentity,
-  rmsPcm16,
-  shouldRouteTranscript,
-  wakeNameMatches,
-} = require('../worker/src/persona-runtime-adapter');
+const { PersonaRuntimeAdapter } = require('../worker/src/persona-runtime-adapter');
 
 function source(relative) {
   return fs.readFileSync(path.join(__dirname, '..', relative), 'utf8');
 }
 
-test('a persona only answers explicit wake names or a successful interest roll', () => {
-  assert.equal(shouldRouteTranscript('hey', ['Athena', 'Annie']), false);
-  assert.equal(shouldRouteTranscript('what do you think?', ['Athena']), false);
-  assert.equal(shouldRouteTranscript('I love space exploration', ['Athena'], ['space'], 0.35, () => 0.2), true);
-  assert.equal(shouldRouteTranscript('I love space exploration', ['Athena'], ['space'], 0.35, () => 0.8), false);
-  assert.equal(shouldRouteTranscript('Could not understand audio.', ['Athena']), false);
-});
+function exists(relative) {
+  return fs.existsSync(path.join(__dirname, '..', relative));
+}
 
-test('multiple personas require an explicit wake name', () => {
-  assert.equal(shouldRouteTranscript('hey', ['Athena', 'Annie']), false);
-  assert.equal(shouldRouteTranscript('hey Athena, are you there?', ['Athena', 'Annie']), true);
-  assert.equal(wakeNameMatches('@Annie hello', ['Athena', 'Annie']), true);
-});
-
-test('persona runtime ignores bridge, bot, DJ, music, and listener identities', () => {
-  assert.equal(isHumanRoomIdentity('user_d696355b'), true);
-  for (const identity of ['persona:athena', 'discord-mixed-room', 'discord-bridge-x', 'dj-worker-room', 'dj-user', 'music-bot', 'listener-user']) {
-    assert.equal(isHumanRoomIdentity(identity), false, identity);
-  }
-});
-
-test('voice activity energy helper distinguishes silence from speech PCM', () => {
-  const silence = Buffer.alloc(1920);
-  const speech = Buffer.alloc(1920);
-  for (let i = 0; i < speech.length; i += 2) speech.writeInt16LE(i % 4 ? 1800 : -1800, i);
-  assert.equal(rmsPcm16(silence), 0);
-  assert.ok(rmsPcm16(speech) > 1000);
-});
-
-test('room chat does not default every message to a single persona and asks invoked bots to speak', () => {
+test('typed chat and automatic room voice use the same explicit wake-name resolver', () => {
+  const routing = source('src/lib/room-persona-routing.ts');
   const chat = source('src/app/rooms/[roomId]/_components/ChatBox.tsx');
-  assert.doesNotMatch(chat, /bots\.length === 1[\s\S]{0,160}!value\.trim\(\)\.startsWith\("!"\)/);
-  assert.match(chat, /bot\.interests/);
-  assert.match(chat, /speak:\s*true/);
-  assert.doesNotMatch(chat, /speak:\s*false/);
+  const wake = source('src/app/rooms/[roomId]/_components/WakeWordListener.tsx');
+
+  assert.match(routing, /export function resolveBotInvocation/);
+  assert.match(routing, /wakeNameMatchIndex/);
+  assert.doesNotMatch(routing, /Math\.random|interestChance|interestedBots/);
+  assert.match(chat, /room-persona-routing/);
+  assert.match(chat, /resolveBotInvocation\(submittedText, activeBotParticipants\)/);
+  assert.match(wake, /room-persona-routing/);
+  assert.match(wake, /resolveBotInvocation\(transcript, targets\)/);
 });
 
-test('persona invite uses a service session without borrowed SPMT credentials and worker has a speech endpoint', () => {
+test('automatic wake word records the already-published LiveKit microphone and reuses the proven STT path', () => {
+  const wake = source('src/app/rooms/[roomId]/_components/WakeWordListener.tsx');
+  const client = source('src/lib/room-persona-client.ts');
+  const users = source('src/app/rooms/[roomId]/_components/UserList.tsx');
+
+  assert.match(users, /<WakeWordListener roomId=\{roomId\} remoteParticipants=\{remoteParticipants\}/);
+  assert.match(wake, /getTrackPublication\?\.\(Track\.Source\.Microphone\)|getTrackPublication\(Track\.Source\.Microphone\)/);
+  assert.match(wake, /sourceTrack\.clone\(\)/);
+  assert.match(wake, /new MediaRecorder/);
+  assert.match(wake, /MIC_PUBLICATION_RETRY_MS/);
+  assert.match(wake, /NOISE_START_MULTIPLIER/);
+  assert.match(wake, /SILENCE_TO_SEND_MS/);
+  assert.match(wake, /transcribeRoomPersonaAudio\(blob\)/);
+  assert.match(wake, /sendRoomPersonaCommand/);
+  assert.match(client, /\/api\/internal\/persona-transcribe/);
+  assert.match(client, /\/api\/bot\/commands/);
+});
+
+test('push-to-talk and browser SpeechRecognition are removed from the room voice path', () => {
+  const userCard = source('src/app/rooms/[roomId]/_components/UserCard.tsx');
+  const mobile = source('src/app/rooms/[roomId]/_components/MobileVoiceControl.tsx');
+  assert.equal(exists('src/hooks/use-voice-controls.ts'), false);
+  assert.doesNotMatch(userCard, /pushToTalk|Push-to-talk|\bPTT\b/);
+  assert.doesNotMatch(mobile, /Hold to talk|SpeechRecognition|webkitSpeechRecognition|speechSynthesis/);
+  assert.match(mobile, /Wake-name listening is automatic/);
+});
+
+test('worker owns persona RTC output but never runs a second STT or command listener', () => {
+  const runtime = source('worker/src/persona-runtime-adapter.js');
+  const bootstrap = source('worker/src/persona-bootstrap.js');
+  assert.doesNotMatch(runtime, /onAudioFrame\s*\(/);
+  assert.doesNotMatch(runtime, /processUtterance\s*\(/);
+  assert.doesNotMatch(runtime, /fetch\([^\n]*persona-transcribe/);
+  assert.doesNotMatch(runtime, /fetch\([^\n]*\/api\/internal\/persona-command/);
+  assert.match(runtime, /speechInputRoute:\s*'browser-persona-transcribe-to-bot-commands'/);
+  assert.match(runtime, /listeners:\s*0/);
+  assert.match(bootstrap, /app\.post\('\/persona\/speak'/);
+});
+
+test('persona presence is persistent and never expires with the 45 second human heartbeat', () => {
+  const prune = source('src/app/api/presence/prune/route.ts');
+  const session = source('src/app/api/bots/session/route.ts');
+  const command = source('src/app/api/bot/commands/route.ts');
+
+  assert.match(prune, /isPersistentPersonaPresence/);
+  assert.match(prune, /presenceKind === 'persona'/);
+  assert.match(prune, /continue;/);
+  assert.match(session, /presenceKind:\s*'persona'/);
+  assert.match(session, /persistent:\s*true/);
+  assert.match(command, /healthyWorkerPersona/);
+  assert.match(command, /method:\s*'GET'/);
+  assert.match(command, /Self-heal\/upgrade|self-heal/i);
+  assert.match(command, /persistent:\s*true/);
+});
+
+test('persona invite stays token-free for human conversation and worker keeps the TTS endpoint', () => {
   const sessionRoute = source('src/app/api/bots/session/route.ts');
   const bootstrap = source('worker/src/persona-bootstrap.js');
   const commandRoute = source('src/app/api/bot/commands/route.ts');
@@ -75,39 +105,29 @@ test('persona LiveKit transport rejects stale sessions and re-invite replaces th
   assert.match(bootstrap, /Persona LiveKit transport is stale; re-invite the persona/);
 });
 
-test('mobile wake mode relies on the LiveKit persona track instead of layering browser speech synthesis', () => {
-  const mobile = source('src/app/rooms/[roomId]/_components/MobileVoiceControl.tsx');
-  assert.match(mobile, /payload\?\.personaSpeech/);
-  assert.doesNotMatch(mobile, /SpeechSynthesisUtterance|speechSynthesis/);
+test('manual Talk button is only a fallback and shares the same STT and bot-command client', () => {
+  const card = source('src/app/rooms/[roomId]/_components/PersonaCard.tsx');
+  assert.match(card, /transcribeRoomPersonaAudio/);
+  assert.match(card, /sendRoomPersonaCommand/);
+  assert.match(card, /Fallback button/);
+  assert.doesNotMatch(card, /fetch\('\/api\/internal\/persona-transcribe'/);
+  assert.doesNotMatch(card, /fetch\('\/api\/bot\/commands'/);
 });
 
-test('a service persona can call the command runtime without a borrowed SPMT token', async () => {
-  const originalFetch = global.fetch;
-  let requestBody;
-  global.fetch = async (_url, init) => {
-    requestBody = JSON.parse(init.body);
-    return new Response(JSON.stringify({ response: 'Ready.' }), {
-      status: 200,
-      headers: { 'content-type': 'application/json' },
-    });
-  };
-  try {
-    const runtime = new PersonaRuntimeAdapter({
-      persona: { onAudioFrame: () => () => {}, pushPcm: async () => {} },
-      roomId: 'studio',
-      personaId: 'mamafeisty',
-      displayName: 'Moonbeam',
-      ownerTenantId: 'mamafeisty',
-      appUrl: 'https://hearmeout.example',
-      serviceSession: true,
-    });
-    assert.equal(runtime.status().authenticationMode, 'service');
-    await runtime.runCommand('Moonbeam, who is live?', 'spmt-user-1');
-    assert.equal(requestBody.serviceSession, true);
-    assert.equal(requestBody.targetTenantId, 'mamafeisty');
-    assert.equal(requestBody.accessToken, '');
-    assert.equal(requestBody.actorIdentity, 'spmt-user-1');
-  } finally {
-    global.fetch = originalFetch;
-  }
+test('persona runtime status records the single browser wake-word input architecture', () => {
+  const runtime = new PersonaRuntimeAdapter({
+    roomId: 'studio',
+    personaId: 'athena',
+    displayName: 'Athena',
+    ownerTenantId: 'athena',
+    wakeNames: ['Athena', 'Annie'],
+    serviceSession: true,
+  });
+  runtime.start();
+  const status = runtime.status();
+  assert.equal(status.active, true);
+  assert.equal(status.authenticationMode, 'service');
+  assert.equal(status.listeners, 0);
+  assert.equal(status.wakePolicy, 'browser-vad-stt-explicit-name-only');
+  assert.equal(status.speechInputRoute, 'browser-persona-transcribe-to-bot-commands');
 });

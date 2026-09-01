@@ -23,6 +23,10 @@ jobs:
         run: node --import tsx --test tests/spmt-athena-route.test.ts
       - name: Test visible persona card talk flow
         run: node --import tsx --test tests/persona-card-talk.test.ts
+      - name: Test persistent wake-word and persona lifecycle
+        run: |
+          node --test tests/persona-runtime.test.cjs
+          node --import tsx --test tests/livekit-persona-audio.test.ts
       - name: Test SPMT OAuth callback routing
         run: node --import tsx --test tests/spmt-auth-callback.test.ts
       - name: Test private Athena bootstrap routing

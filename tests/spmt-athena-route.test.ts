@@ -9,14 +9,19 @@ const botSessionRoute = new URL('../src/app/api/bots/session/route.ts', import.m
 const livekitTokenRoute = new URL('../src/app/api/livekit-token/route.ts', import.meta.url);
 const athenaAliasRoute = new URL('../src/app/api/athena/commands/route.ts', import.meta.url);
 const chatBox = new URL('../src/app/rooms/[roomId]/_components/ChatBox.tsx', import.meta.url);
+const wakeWordListener = new URL('../src/app/rooms/[roomId]/_components/WakeWordListener.tsx', import.meta.url);
+const routing = new URL('../src/lib/room-persona-routing.ts', import.meta.url);
+const roomPersonaClient = new URL('../src/lib/room-persona-client.ts', import.meta.url);
 const botPicker = new URL('../src/app/rooms/[roomId]/_components/BotPicker.tsx', import.meta.url);
 const personaCard = new URL('../src/app/rooms/[roomId]/_components/PersonaCard.tsx', import.meta.url);
 const personaBootstrap = new URL('../worker/src/persona-bootstrap.js', import.meta.url);
+const personaRuntime = new URL('../worker/src/persona-runtime-adapter.js', import.meta.url);
 const workerPackage = new URL('../worker/package.json', import.meta.url);
 
 test('HearMeOut human bot conversation never depends on a user SPMT session, bot-share, or StreamWeaver secret', async () => {
   const source = await readFile(botApiRoute, 'utf8');
   assert.match(source, /publicPersonaIsInRoom/);
+  assert.match(source, /healthyWorkerPersona/);
   assert.match(source, /\/api\/internal\/hearmeout\/persona-command/);
   assert.match(source, /StreamWeaver bearer secret/);
   assert.doesNotMatch(source, /HMO_SPMT_COOKIE/);
@@ -28,16 +33,21 @@ test('HearMeOut human bot conversation never depends on a user SPMT session, bot
   assert.doesNotMatch(source, /Authorization:\s*`Bearer/);
 });
 
-test('spoken persona commands use the worker-authenticated public service path without a StreamWeaver secret', async () => {
+test('worker no longer owns spoken STT or a second command path', async () => {
+  const runtime = await readFile(personaRuntime, 'utf8');
+  assert.doesNotMatch(runtime, /onAudioFrame\s*\(/);
+  assert.doesNotMatch(runtime, /processUtterance\s*\(/);
+  assert.doesNotMatch(runtime, /fetch\([^\n]*persona-transcribe/);
+  assert.doesNotMatch(runtime, /fetch\([^\n]*\/api\/internal\/persona-command/);
+  assert.match(runtime, /speechInputRoute:\s*'browser-persona-transcribe-to-bot-commands'/);
+  assert.match(runtime, /listeners:\s*0/);
+});
+
+test('legacy internal persona command remains compatibility-only and is not called by the worker', async () => {
   const source = await readFile(personaCommandRoute, 'utf8');
-  assert.match(source, /isDjWorkerRequest/);
+  const runtime = await readFile(personaRuntime, 'utf8');
   assert.match(source, /\/api\/internal\/hearmeout\/persona-command/);
-  assert.match(source, /forwardService/);
-  assert.doesNotMatch(source, /refreshHmoSpmtSession/);
-  assert.doesNotMatch(source, /accessToken|refreshToken/);
-  assert.doesNotMatch(source, /\/api\/spmt\/bot\/commands/);
-  assert.doesNotMatch(source, /getStreamWeaverServiceSecret|STREAMWEAVER_SECRET/);
-  assert.doesNotMatch(source, /Authorization:\s*`Bearer/);
+  assert.doesNotMatch(runtime, /fetch\([^\n]*\/api\/internal\/persona-command/);
 });
 
 test('old Athena API is only a compatibility alias to the generic bot route', async () => {
@@ -63,35 +73,38 @@ test('room chat discovers actual LiveKit bot participants without requiring Live
   assert.match(source, /if \(!room\)/);
 });
 
-test('room chat uses the generic bot API and asks the joined persona to speak', async () => {
-  const source = await readFile(chatBox, 'utf8');
-  assert.match(source, /fetch\("\/api\/bot\/commands"/);
-  assert.match(source, /payload\?\.bot\?\.name/);
-  assert.match(source, /targetTenantId/);
-  assert.match(source, /speak: true/);
-  assert.match(source, /could not respond/);
-  assert.match(source, /voice playback failed/);
-  assert.doesNotMatch(source, /fetch\("\/api\/athena\/commands"/);
-  assert.doesNotMatch(source, /sendToAthena/);
+test('room chat and wake-word speech both use the canonical persona client and generic bot API', async () => {
+  const chatSource = await readFile(chatBox, 'utf8');
+  const wakeSource = await readFile(wakeWordListener, 'utf8');
+  const clientSource = await readFile(roomPersonaClient, 'utf8');
+  assert.match(chatSource, /sendRoomPersonaCommand/);
+  assert.match(wakeSource, /sendRoomPersonaCommand/);
+  assert.match(clientSource, /fetch\('\/api\/bot\/commands'/);
+  assert.match(clientSource, /targetTenantId/);
+  assert.match(clientSource, /speak:\s*true/);
+  assert.doesNotMatch(chatSource, /fetch\("\/api\/athena\/commands"/);
 });
 
-test('room bot mentions use whole-word matching anywhere in the sentence', async () => {
-  const source = await readFile(chatBox, 'utf8');
-  assert.match(source, /wakeNameMatchIndex/);
-  assert.match(source, /\(\^\|\[\^a-z0-9_\]\)@\?/);
-  assert.doesNotMatch(source, /new RegExp\(`\^\\\\s\*@\?/);
-  assert.match(source, /index < bestMatch\.index/);
-  assert.match(source, /ATHENA_COMPAT_WAKE_NAMES/);
-  assert.match(source, /"Athena"/);
-  assert.match(source, /"Annie"/);
+test('typed and spoken room bot mentions share whole-word wake-name matching', async () => {
+  const routingSource = await readFile(routing, 'utf8');
+  const chatSource = await readFile(chatBox, 'utf8');
+  const wakeSource = await readFile(wakeWordListener, 'utf8');
+  assert.match(routingSource, /wakeNameMatchIndex/);
+  assert.match(routingSource, /\(\^\|\[\^a-z0-9_\]\)@\?/);
+  assert.match(routingSource, /index < bestMatch\.index/);
+  assert.doesNotMatch(routingSource, /Math\.random|interestedBots|interestChance/);
+  assert.match(chatSource, /room-persona-routing/);
+  assert.match(wakeSource, /room-persona-routing/);
 });
 
 test('connected personas can publish aliases, ownership, and historical wake names', async () => {
   const chatSource = await readFile(chatBox, 'utf8');
+  const wakeSource = await readFile(wakeWordListener, 'utf8');
   const personaSource = await readFile(personaCard, 'utf8');
   assert.match(chatSource, /\.\.\.\(metadata\.wakeNames \|\| \[\]\)/);
   assert.match(chatSource, /\.\.\.\(metadata\.aliases \|\| \[\]\)/);
   assert.match(chatSource, /\.\.\.\(metadata\.previousNames \|\| \[\]\)/);
+  assert.match(wakeSource, /\.\.\.\(metadata\.wakeNames \|\| \[\]\)/);
   assert.match(personaSource, /wakeNames\?: string\[\]/);
   assert.match(personaSource, /aliases\?: string\[\]/);
   assert.match(personaSource, /previousNames\?: string\[\]/);
@@ -122,6 +135,8 @@ test('bot join API uses room management plus the public persona catalog, never S
   assert.match(source, /getDjWorkerRequestHeaders/);
   assert.match(source, /\/persona/);
   assert.match(source, /serviceSession: action === 'join'/);
+  assert.match(source, /presenceKind:\s*'persona'/);
+  assert.match(source, /persistent:\s*true/);
   assert.doesNotMatch(source, /HMO_SPMT_COOKIE|refreshHmoSpmtSession|getBotShareMode/);
   assert.doesNotMatch(source, /getStreamWeaverServiceSecret|STREAMWEAVER_SECRET/);
   assert.doesNotMatch(source, /Authorization:\s*`Bearer/);
@@ -149,10 +164,10 @@ test('persona worker joins the plain voice room with worker-authenticated LiveKi
   assert.match(workerPkg.scripts.start, /persona-bootstrap\.js/);
 });
 
-test('Athena wake names remain backward-compatible without owning a separate command path', async () => {
-  const source = await readFile(chatBox, 'utf8');
-  assert.match(source, /ATHENA_COMPAT_WAKE_NAMES/);
-  assert.match(source, /"Athena OS"/);
-  assert.match(source, /"Athena"/);
-  assert.match(source, /"Annie"/);
+test('Athena wake names stay backward compatible through joined persona metadata, not a separate command path', async () => {
+  const chatSource = await readFile(chatBox, 'utf8');
+  const wakeSource = await readFile(wakeWordListener, 'utf8');
+  for (const name of ['Athena OS', 'Athena', 'Annie']) {
+    assert.ok(chatSource.includes(`'${name}'`) || wakeSource.includes(`'${name}'`), `${name} wake name is missing`);
+  }
 });
