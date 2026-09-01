@@ -11,12 +11,16 @@ test('HearMeOut room renders and unlocks remote LiveKit audio', async () => {
   assert.match(source, /Enable room and bot audio/);
 });
 
-test('typed bot messages request TTS and hand it to the persona room track', async () => {
+test('typed and spoken bot messages request TTS through the canonical client and hand it to the persona room track', async () => {
   const chat = await readFile('src/app/rooms/[roomId]/_components/ChatBox.tsx', 'utf8');
+  const wake = await readFile('src/app/rooms/[roomId]/_components/WakeWordListener.tsx', 'utf8');
+  const client = await readFile('src/lib/room-persona-client.ts', 'utf8');
   const route = await readFile('src/app/api/bot/commands/route.ts', 'utf8');
   const worker = await readFile('worker/src/persona-bootstrap.js', 'utf8');
 
-  assert.match(chat, /speak:\s*true/);
+  assert.match(chat, /sendRoomPersonaCommand/);
+  assert.match(wake, /sendRoomPersonaCommand/);
+  assert.match(client, /speak:\s*true/);
   assert.match(route, /\/persona\/speak/);
   assert.match(route, /audioDataUri/);
   assert.match(worker, /audioDataUriToPcm\(audioDataUri\)/);
