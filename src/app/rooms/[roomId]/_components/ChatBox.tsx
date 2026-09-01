@@ -14,6 +14,8 @@ import { runModeration } from "@/app/actions";
 import type { ModerateContentOutput } from "@/ai/flows/sentiment-based-moderation";
 import { useSession } from "@/hooks/use-session";
 import { isPersonaParticipant, parsePersonaMetadata } from "./PersonaCard";
+import { resolveBotInvocation, type RoomBotDescriptor } from '@/lib/room-persona-routing';
+import { sendRoomPersonaCommand } from '@/lib/room-persona-client';
 import BotPicker, {
   changeRoomBotSession,
   fetchAvailableRoomBots,
@@ -27,13 +29,6 @@ interface AdminChatMessage {
   timestamp: string;
 }
 
-export type RoomBotDescriptor = {
-  displayName: string;
-  wakeNames: string[];
-  interests?: string[];
-  targetTenantId?: string;
-};
-
 interface ChatBoxProps {
   roomId?: string;
   compact?: boolean;
@@ -41,91 +36,6 @@ interface ChatBoxProps {
   onOpenTwitchChat?: () => void;
   onOpenDiscordChat?: () => void;
   botParticipants?: RoomBotDescriptor[];
-}
-
-type BotInvocation = {
-  displayName: string;
-  targetTenantId?: string;
-};
-
-const ATHENA_COMPAT_WAKE_NAMES = ["Athena OS", "Athena", "Annie"];
-
-function escapeRegex(value: string) {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-function wakeNameMatchIndex(value: string, wakeName: string) {
-  const normalized = String(wakeName || "").trim().replace(/^@/, "");
-  if (!normalized) return -1;
-  const match = new RegExp(`(^|[^a-z0-9_])@?${escapeRegex(normalized)}([^a-z0-9_]|$)`, "i").exec(value);
-  return match?.index ?? -1;
-}
-
-function matchesWakeName(value: string, wakeName: string) {
-  return wakeNameMatchIndex(value, wakeName) >= 0;
-}
-
-export function resolveBotInvocation(
-  value: string,
-  bots: RoomBotDescriptor[] = [],
-  random: () => number = Math.random,
-): BotInvocation | null {
-  let bestMatch: {
-    displayName: string;
-    targetTenantId?: string;
-    index: number;
-    wakeNameLength: number;
-  } | null = null;
-
-  for (const bot of bots) {
-    for (const wakeName of bot.wakeNames) {
-      const index = wakeNameMatchIndex(value, wakeName);
-      if (index < 0) continue;
-      const wakeNameLength = String(wakeName || "").trim().length;
-      if (
-        !bestMatch
-        || index < bestMatch.index
-        || (index === bestMatch.index && wakeNameLength > bestMatch.wakeNameLength)
-      ) {
-        bestMatch = {
-          displayName: bot.displayName,
-          targetTenantId: bot.targetTenantId,
-          index,
-          wakeNameLength,
-        };
-      }
-    }
-  }
-
-  if (bestMatch) {
-    return {
-      displayName: bestMatch.displayName,
-      targetTenantId: bestMatch.targetTenantId,
-    };
-  }
-
-  if (ATHENA_COMPAT_WAKE_NAMES.some((wakeName) => matchesWakeName(value, wakeName))) {
-    return { displayName: "Athena" };
-  }
-
-  const trimmed = value.trim();
-  if (!trimmed || trimmed.startsWith("!")) return null;
-
-  const interestedBots = bots.filter((bot) => (
-    (bot.interests || []).some((interest) => matchesWakeName(value, interest))
-  ));
-  if (interestedBots.length && random() < 0.35) {
-    const selected = interestedBots[Math.min(
-      interestedBots.length - 1,
-      Math.floor(random() * interestedBots.length),
-    )];
-    return {
-      displayName: selected.displayName,
-      targetTenantId: selected.targetTenantId,
-    };
-  }
-
-  return null;
 }
 
 function participantDescriptors(participants: RemoteParticipant[]): RoomBotDescriptor[] {
@@ -146,11 +56,11 @@ function participantDescriptors(participants: RemoteParticipant[]): RoomBotDescr
         ...(metadata.wakeNames || []),
         ...(metadata.aliases || []),
         ...(metadata.previousNames || []),
+        ...(String(displayName).toLowerCase().includes('athena') ? ['Athena', 'Athena OS', 'Annie'] : []),
       ].map((entry) => String(entry || "").trim()).filter(Boolean)));
       return {
         displayName,
         wakeNames,
-        interests: metadata.interests || [],
         targetTenantId: metadata.ownerTenantId || metadata.personaId || identityName || undefined,
       };
     });
@@ -246,40 +156,6 @@ export default function ChatBox({ roomId, compact = false, onOpenSpaceChat, onOp
     });
   };
 
-  const sendToBot = async (
-    command: string,
-    fallbackDisplayName: string,
-    targetTenantId?: string,
-  ) => {
-    const response = await fetch("/api/bot/commands", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        command,
-        roomId: activeRoomId,
-        targetTenantId: targetTenantId || undefined,
-        speak: true,
-      }),
-    });
-    const payload = await response.json().catch(() => ({}));
-    if (!response.ok) {
-      throw new Error(String(payload?.error?.message || payload?.error || `Bot runtime returned ${response.status}`));
-    }
-    const speech = payload?.personaSpeech;
-    return {
-      reply: String(payload?.response || payload?.data?.response || "").trim(),
-      botName: String(
-        payload?.bot?.name
-        || payload?.data?.bot?.name
-        || fallbackDisplayName
-        || "StreamWeaver Bot",
-      ).trim(),
-      speechError: speech?.attempted && speech?.ok === false
-        ? String(speech?.error || `voice handoff returned ${speech?.status || 'an error'}`)
-        : "",
-    };
-  };
-
   useEffect(() => {
     fetchAdminChat();
     const interval = setInterval(fetchAdminChat, 5000);
@@ -338,11 +214,13 @@ export default function ChatBox({ roomId, compact = false, onOpenSpaceChat, onOp
       const botInvocation = resolveBotInvocation(submittedText, activeBotParticipants);
       if (botInvocation) {
         try {
-          const { reply, botName, speechError } = await sendToBot(
-            submittedText,
-            botInvocation.displayName,
-            botInvocation.targetTenantId,
-          );
+          if (!activeRoomId || !botInvocation.targetTenantId) throw new Error('That persona is not active in this room');
+          const { reply, botName, speechError } = await sendRoomPersonaCommand({
+            roomId: activeRoomId,
+            transcript: submittedText,
+            targetTenantId: botInvocation.targetTenantId,
+            fallbackDisplayName: botInvocation.displayName,
+          });
           if (reply) {
             await sendToAdminChat({
               id: `bot_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
