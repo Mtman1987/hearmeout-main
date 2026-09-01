@@ -4,7 +4,6 @@ import { db, ensureDb } from '@/lib/db';
 import { canManageRoom } from '@/lib/room-access';
 import { getDjWorkerUrl } from '@/lib/dj-worker-config';
 import { getDjWorkerRequestHeaders } from '@/lib/dj-worker-auth';
-import { getStreamWeaverServiceSecret } from '@/lib/bot-action-service-auth';
 
 const STREAMWEAVER_BASE_URL = String(
   process.env.STREAMWEAVER_BASE_URL || 'https://streamweaver-new.fly.dev',
@@ -29,9 +28,8 @@ type PublicBot = {
 };
 
 async function fetchCatalog() {
-  const secret = getStreamWeaverServiceSecret();
   const response = await fetch(`${STREAMWEAVER_BASE_URL}/api/internal/hearmeout/bots`, {
-    headers: { Authorization: `Bearer ${secret}`, Accept: 'application/json' },
+    headers: { Accept: 'application/json' },
     cache: 'no-store',
     signal: typeof AbortSignal.timeout === 'function' ? AbortSignal.timeout(12000) : undefined,
   });
