@@ -98,9 +98,9 @@ class PersonaRuntimeAdapter {
   start() {
     // IMPORTANT: do not subscribe to room microphone audio here. HearMeOut has
     // exactly one human-speech path now: the browser records the already-live
-    // LiveKit mic, uses the proven persona-transcribe endpoint, applies the
-    // shared wake-name resolver, then calls /api/bot/commands. The worker only
-    // owns persona RTC presence and outgoing TTS PCM.
+    // LiveKit mic, uses the proven browser transcription service, applies the
+    // shared wake-name resolver, then calls the canonical bot command endpoint.
+    // The worker only owns persona RTC presence and outgoing TTS PCM.
     this.stopped = false;
   }
 
