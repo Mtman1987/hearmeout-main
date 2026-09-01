@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { getSession } from '@/lib/auth';
 import { isDjWorkerRequest } from '@/lib/dj-worker-auth';
 
 const STREAMWEAVER_BASE_URL = String(
@@ -6,7 +7,9 @@ const STREAMWEAVER_BASE_URL = String(
 ).replace(/\/$/, '');
 
 export async function POST(request: NextRequest) {
-  if (!isDjWorkerRequest(request)) {
+  const workerRequest = isDjWorkerRequest(request);
+  const session = workerRequest ? null : await getSession();
+  if (!workerRequest && !session) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 

@@ -2,7 +2,7 @@
 
 import React from 'react';
 import type { Participant, RemoteParticipant } from 'livekit-client';
-import { Bot, MicOff, Radio, ShieldOff, UserX, Volume2, VolumeX } from 'lucide-react';
+import { Bot, LoaderCircle, Mic, MicOff, Radio, ShieldOff, Square, UserX, Volume2, VolumeX } from 'lucide-react';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent } from '@/components/ui/card';
@@ -31,6 +31,22 @@ export type PersonaMetadata = {
   talkingAvatar?: string;
 };
 
+type TalkStatus = 'idle' | 'recording' | 'transcribing' | 'sending' | 'done' | 'error';
+
+function blobToDataUrl(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onloadend = () => resolve(String(reader.result || ''));
+    reader.onerror = () => reject(reader.error || new Error('Failed to read microphone audio.'));
+    reader.readAsDataURL(blob);
+  });
+}
+
+function responseError(payload: any, fallback: string) {
+  const value = payload?.data?.error || payload?.error?.message || payload?.error;
+  return typeof value === 'string' && value.trim() ? value.trim() : fallback;
+}
+
 export function parsePersonaMetadata(metadata?: string): PersonaMetadata | null {
   if (!metadata) return null;
   try {
@@ -53,13 +69,123 @@ export default function PersonaCard({ participant, roomId, isHost = false }: { p
   const avatar = (isSpeaking ? metadata.talkingAvatar : metadata.idleAvatar) || metadata.avatar || '';
   const [volume, setVolume] = React.useState(1);
   const [pendingAction, setPendingAction] = React.useState('');
+  const [talkStatus, setTalkStatus] = React.useState<TalkStatus>('idle');
+  const [talkTranscript, setTalkTranscript] = React.useState('');
+  const [talkReply, setTalkReply] = React.useState('');
+  const [talkError, setTalkError] = React.useState('');
   const lastVolume = React.useRef(1);
+  const recorderRef = React.useRef<MediaRecorder | null>(null);
+  const recorderStreamRef = React.useRef<MediaStream | null>(null);
+  const recorderTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
 
   React.useEffect(() => {
     const remote = participant as RemoteParticipant;
     if (volume > 0) lastVolume.current = volume;
     if (typeof remote.setVolume === 'function') remote.setVolume(volume);
   }, [participant, volume]);
+
+  React.useEffect(() => () => {
+    if (recorderTimerRef.current) clearTimeout(recorderTimerRef.current);
+    try {
+      if (recorderRef.current?.state === 'recording') recorderRef.current.stop();
+    } catch {}
+    recorderStreamRef.current?.getTracks().forEach((track) => track.stop());
+  }, []);
+
+  const personaTargetId = metadata.ownerTenantId || metadata.personaId || participant.identity.replace(/^persona:/, '');
+
+  const sendTranscript = React.useCallback(async (transcript: string) => {
+    setTalkStatus('sending');
+    const response = await fetch('/api/bot/commands', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        command: transcript,
+        roomId,
+        targetTenantId: personaTargetId,
+        speak: true,
+      }),
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(responseError(payload, `Could not send speech to ${displayName}.`));
+    const data = payload?.data && typeof payload.data === 'object' ? payload.data : payload;
+    setTalkReply(String(data?.response || payload?.response || '').trim());
+    setTalkStatus('done');
+  }, [displayName, personaTargetId, roomId]);
+
+  const finishRecording = React.useCallback(async (chunks: Blob[], stream: MediaStream, mimeType: string) => {
+    if (recorderTimerRef.current) {
+      clearTimeout(recorderTimerRef.current);
+      recorderTimerRef.current = null;
+    }
+    stream.getTracks().forEach((track) => track.stop());
+    recorderStreamRef.current = null;
+    recorderRef.current = null;
+
+    try {
+      setTalkStatus('transcribing');
+      const audioBlob = new Blob(chunks, { type: mimeType || 'audio/webm' });
+      const dataUrl = await blobToDataUrl(audioBlob);
+      const base64Audio = dataUrl.split(',')[1] || '';
+      if (!base64Audio) throw new Error('No microphone audio was captured.');
+
+      const response = await fetch('/api/internal/persona-transcribe', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ base64Audio }),
+      });
+      const payload = await response.json().catch(() => ({}));
+      const transcription = String(payload?.data?.transcription || payload?.transcription || '').trim();
+      const transcriptionError = responseError(payload, 'Transcription failed.');
+      if (!response.ok || (!transcription && (payload?.data?.error || payload?.error))) {
+        throw new Error(transcriptionError);
+      }
+      if (!transcription) throw new Error('I did not hear any words. Try again and speak after the button turns red.');
+
+      setTalkTranscript(transcription);
+      await sendTranscript(transcription);
+    } catch (error) {
+      setTalkStatus('error');
+      setTalkError(error instanceof Error ? error.message : String(error));
+    }
+  }, [sendTranscript]);
+
+  const startTalkRecording = React.useCallback(async () => {
+    if (talkStatus === 'recording') {
+      try { recorderRef.current?.stop(); } catch {}
+      return;
+    }
+    if (talkStatus === 'transcribing' || talkStatus === 'sending') return;
+
+    setTalkTranscript('');
+    setTalkReply('');
+    setTalkError('');
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+      });
+      const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+        ? 'audio/webm;codecs=opus'
+        : 'audio/webm';
+      const recorder = new MediaRecorder(stream, { mimeType });
+      const chunks: Blob[] = [];
+      recorderRef.current = recorder;
+      recorderStreamRef.current = stream;
+      recorder.ondataavailable = (event) => {
+        if (event.data.size > 0) chunks.push(event.data);
+      };
+      recorder.onstop = () => void finishRecording(chunks, stream, mimeType);
+      recorder.start();
+      setTalkStatus('recording');
+      recorderTimerRef.current = setTimeout(() => {
+        if (recorder.state === 'recording') recorder.stop();
+      }, 8000);
+    } catch (error) {
+      setTalkStatus('error');
+      setTalkError(error instanceof Error ? error.message : String(error));
+    }
+  }, [finishRecording, talkStatus]);
 
   const isServerMuted = !participant.isMicrophoneEnabled;
   const adminAction = async (action: 'mute' | 'unmute' | 'kick' | 'ban') => {
@@ -96,6 +222,8 @@ export default function PersonaCard({ participant, roomId, isHost = false }: { p
     }
   };
 
+  const talkBusy = talkStatus === 'transcribing' || talkStatus === 'sending';
+
   return (
     <Card className="flex h-full flex-col">
       <CardContent className="flex flex-grow flex-col gap-4 p-4">
@@ -130,6 +258,44 @@ export default function PersonaCard({ participant, roomId, isHost = false }: { p
             )}
           </div>
         </div>
+
+        <div className="rounded-lg border bg-muted/20 p-3">
+          <Button
+            type="button"
+            className="w-full"
+            variant={talkStatus === 'recording' ? 'destructive' : 'secondary'}
+            disabled={talkBusy}
+            onClick={() => void startTalkRecording()}
+          >
+            {talkStatus === 'recording' ? <Square className="mr-2 h-4 w-4" /> : talkBusy ? <LoaderCircle className="mr-2 h-4 w-4 animate-spin" /> : <Mic className="mr-2 h-4 w-4" />}
+            {talkStatus === 'recording'
+              ? 'Stop & send'
+              : talkStatus === 'transcribing'
+                ? 'Turning speech into text…'
+                : talkStatus === 'sending'
+                  ? `Sending to ${displayName}…`
+                  : `Talk to ${displayName}`}
+          </Button>
+          <p className="mt-2 text-center text-xs text-muted-foreground">
+            {talkStatus === 'recording'
+              ? 'Listening now. Speak normally; click again to send now, or it sends automatically after 8 seconds.'
+              : 'Click once, speak, see exactly what was heard, then the text is sent to this bot.'}
+          </p>
+          {talkTranscript ? (
+            <div className="mt-3 rounded-md border bg-background/70 p-2 text-sm">
+              <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">You said</div>
+              <div>{talkTranscript}</div>
+            </div>
+          ) : null}
+          {talkReply ? (
+            <div className="mt-2 rounded-md border bg-background/70 p-2 text-sm">
+              <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">{displayName} replied</div>
+              <div>{talkReply}</div>
+            </div>
+          ) : null}
+          {talkError ? <div className="mt-2 text-sm text-destructive">{talkError}</div> : null}
+        </div>
+
         <div className="mt-auto flex items-center gap-2">
           <Tooltip><TooltipTrigger asChild><Button variant="outline" size="icon" className="h-8 w-8" onClick={() => setVolume((current) => current > 0 ? 0 : lastVolume.current)}>{volume > 0 ? <Volume2 className="h-4 w-4" /> : <VolumeX className="h-4 w-4" />}</Button></TooltipTrigger><TooltipContent>{volume > 0 ? 'Mute for me' : 'Unmute for me'}</TooltipContent></Tooltip>
           <Slider aria-label={`${displayName} volume`} value={[volume]} onValueChange={(value) => setVolume(value[0])} max={1} step={0.05} />
