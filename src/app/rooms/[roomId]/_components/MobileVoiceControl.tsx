@@ -42,7 +42,7 @@ function parseVoiceTargets(participants: RemoteParticipant[]): BotVoiceTarget[] 
       identityName,
       ...(Array.isArray(metadata.wakeNames) ? metadata.wakeNames : []),
       ...(Array.isArray(metadata.aliases) ? metadata.aliases : []),
-      ...(name.toLowerCase().includes('athena') ? ['Athena', 'Athena OS', 'Annie'] : []),
+      ...(name.toLowerCase().includes('athena') ? ['Hey Athena', 'Athena', 'Athena OS', 'Annie'] : []),
     ].map((value) => String(value || '').trim()).filter(Boolean)));
     targets.push({ name, wakeNames });
   }
@@ -97,7 +97,7 @@ export default function MobileVoiceControl({ roomId, remoteParticipants }: Mobil
 
   if (!localParticipant) return null;
 
-  const primaryWakeNames = targets.map((target) => target.wakeNames[0] || target.name).filter(Boolean);
+  const primaryWakeNames = targets.map((target) => target.wakeNames.find((name) => /^hey\s+/i.test(name)) || target.wakeNames[0] || target.name).filter(Boolean);
 
   return (
     <section className="sm:hidden col-span-1 rounded-xl border border-border/80 bg-card/90 p-3 shadow-sm" aria-label="Mobile voice controls" data-room-id={roomId}>
@@ -107,7 +107,7 @@ export default function MobileVoiceControl({ roomId, remoteParticipants }: Mobil
         </div>
         <div className="min-w-0 flex-1">
           <p className="text-sm font-semibold">{speaking && micEnabled ? 'You are speaking' : micEnabled ? 'Microphone is live' : 'Microphone is off'}</p>
-          <p className="text-xs text-muted-foreground">{micEnabled ? 'Your LiveKit microphone is feeding the room and joined persona wake-word listener.' : 'Enable the microphone once to use room voice and AI wake names.'}</p>
+          <p className="text-xs text-muted-foreground">{micEnabled ? 'Your LiveKit microphone feeds the room only. HearMeOut does not continuously send room speech to cloud STT.' : 'Enable the microphone for normal room voice.'}</p>
         </div>
         <span className={`h-2.5 w-2.5 shrink-0 rounded-full ${speaking && micEnabled ? 'bg-emerald-400 animate-pulse' : micEnabled ? 'bg-primary' : 'bg-muted-foreground/40'}`} aria-hidden />
       </div>
@@ -121,11 +121,11 @@ export default function MobileVoiceControl({ roomId, remoteParticipants }: Mobil
 
       {targets.length > 0 ? (
         <div className="mt-3 rounded-md border border-primary/20 bg-primary/5 p-2 text-xs text-muted-foreground">
-          <p className="flex items-center gap-1.5 font-medium text-foreground"><Bot className="h-4 w-4" /> Wake-name listening is automatic</p>
-          <p className="mt-1">Say {primaryWakeNames.map((name) => `“${name}, …”`).join(' or ')} while your mic is live. Normal room speech is ignored by the AI.</p>
+          <p className="flex items-center gap-1.5 font-medium text-foreground"><Bot className="h-4 w-4" /> Hands-free wake is local</p>
+          <p className="mt-1">SpaceMountain Companion / the Companion APK listens on your device for {primaryWakeNames.map((name) => `“${name}”`).join(' or ')}. Ordinary room speech is not uploaded for wake detection. Without a local Companion, use the Talk button on the bot card.</p>
         </div>
       ) : (
-        <p className="mt-2 text-xs text-muted-foreground">Join Athena or another shared persona first. Once joined, its wake name works automatically while your mic is live.</p>
+        <p className="mt-2 text-xs text-muted-foreground">Join Athena or another persona first. Local Companion wake events target joined personas; the bot-card Talk button remains available as the deliberate speech fallback.</p>
       )}
 
       {error ? (

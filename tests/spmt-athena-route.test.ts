@@ -39,7 +39,8 @@ test('worker no longer owns spoken STT or a second command path', async () => {
   assert.doesNotMatch(runtime, /processUtterance\s*\(/);
   assert.doesNotMatch(runtime, /fetch\([^\n]*persona-transcribe/);
   assert.doesNotMatch(runtime, /fetch\([^\n]*\/api\/internal\/persona-command/);
-  assert.match(runtime, /speechInputRoute:\s*'browser-persona-transcribe-to-bot-commands'/);
+  assert.match(runtime, /speechInputRoute:\s*'local-companion-event-to-bot-commands'/);
+  assert.match(runtime, /wakePolicy:\s*'local-companion-explicit-name-only'/);
   assert.match(runtime, /listeners:\s*0/);
 });
 
@@ -73,19 +74,21 @@ test('room chat discovers actual LiveKit bot participants without requiring Live
   assert.match(source, /if \(!room\)/);
 });
 
-test('room chat and wake-word speech both use the canonical persona client and generic bot API', async () => {
+test('room chat and local wake speech both use the canonical persona client and generic bot API', async () => {
   const chatSource = await readFile(chatBox, 'utf8');
   const wakeSource = await readFile(wakeWordListener, 'utf8');
   const clientSource = await readFile(roomPersonaClient, 'utf8');
   assert.match(chatSource, /sendRoomPersonaCommand/);
   assert.match(wakeSource, /sendRoomPersonaCommand/);
+  assert.match(wakeSource, /spmt-companion-athena-command/);
+  assert.doesNotMatch(wakeSource, /transcribeRoomPersonaAudio|MediaRecorder|AudioContext/);
   assert.match(clientSource, /fetch\('\/api\/bot\/commands'/);
   assert.match(clientSource, /targetTenantId/);
   assert.match(clientSource, /speak:\s*true/);
   assert.doesNotMatch(chatSource, /fetch\("\/api\/athena\/commands"/);
 });
 
-test('typed and spoken room bot mentions share whole-word wake-name matching', async () => {
+test('typed and local wake room bot mentions share whole-word wake-name matching', async () => {
   const routingSource = await readFile(routing, 'utf8');
   const chatSource = await readFile(chatBox, 'utf8');
   const wakeSource = await readFile(wakeWordListener, 'utf8');
@@ -167,7 +170,7 @@ test('persona worker joins the plain voice room with worker-authenticated LiveKi
 test('Athena wake names stay backward compatible through joined persona metadata, not a separate command path', async () => {
   const chatSource = await readFile(chatBox, 'utf8');
   const wakeSource = await readFile(wakeWordListener, 'utf8');
-  for (const name of ['Athena OS', 'Athena', 'Annie']) {
+  for (const name of ['Hey Athena', 'Athena OS', 'Athena', 'Annie']) {
     assert.ok(chatSource.includes(`'${name}'`) || wakeSource.includes(`'${name}'`), `${name} wake name is missing`);
   }
 });

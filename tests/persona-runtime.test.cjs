@@ -14,7 +14,7 @@ function exists(relative) {
   return fs.existsSync(path.join(__dirname, '..', relative));
 }
 
-test('typed chat and automatic room voice use the same explicit wake-name resolver', () => {
+test('typed chat and local Companion wake use the same explicit wake-name resolver', () => {
   const routing = source('src/lib/room-persona-routing.ts');
   const chat = source('src/app/rooms/[roomId]/_components/ChatBox.tsx');
   const wake = source('src/app/rooms/[roomId]/_components/WakeWordListener.tsx');
@@ -28,29 +28,32 @@ test('typed chat and automatic room voice use the same explicit wake-name resolv
   assert.match(wake, /resolveBotInvocation\(transcript, targets\)/);
 });
 
-test('Athena explicitly accepts Hey Athena through the shared typed-and-voice resolver', () => {
+test('Athena explicitly accepts Hey Athena through the shared typed-and-local-wake resolver', () => {
   const routing = source('src/lib/room-persona-routing.ts');
   assert.match(routing, /expandedWakeNames/);
   assert.match(routing, /names\.push\('Hey Athena'\)/);
   assert.match(routing, /expandedWakeNames\(bot\)/);
 });
 
-test('automatic wake word records the already-published LiveKit microphone and reuses the proven STT path', () => {
+test('ambient browser speech never reaches cloud STT; local Companion supplies wake transcripts', () => {
   const wake = source('src/app/rooms/[roomId]/_components/WakeWordListener.tsx');
   const client = source('src/lib/room-persona-client.ts');
   const users = source('src/app/rooms/[roomId]/_components/UserList.tsx');
+  const mobile = source('src/app/rooms/[roomId]/_components/MobileVoiceControl.tsx');
 
   assert.match(users, /<WakeWordListener roomId=\{roomId\} remoteParticipants=\{remoteParticipants\}/);
-  assert.match(wake, /getTrackPublication\?\.\(Track\.Source\.Microphone\)|getTrackPublication\(Track\.Source\.Microphone\)/);
-  assert.match(wake, /sourceTrack\.clone\(\)/);
-  assert.match(wake, /new MediaRecorder/);
-  assert.match(wake, /MIC_PUBLICATION_RETRY_MS/);
-  assert.match(wake, /NOISE_START_MULTIPLIER/);
-  assert.match(wake, /SILENCE_TO_SEND_MS/);
-  assert.match(wake, /transcribeRoomPersonaAudio\(blob\)/);
+  assert.match(wake, /LOCAL_COMPANION_WAKE_EVENT\s*=\s*'spmt-companion-athena-command'/);
+  assert.match(wake, /window\.addEventListener\(LOCAL_COMPANION_WAKE_EVENT/);
   assert.match(wake, /sendRoomPersonaCommand/);
+  assert.doesNotMatch(wake, /MediaRecorder/);
+  assert.doesNotMatch(wake, /AudioContext|webkitAudioContext/);
+  assert.doesNotMatch(wake, /Track\.Source\.Microphone|getTrackPublication/);
+  assert.doesNotMatch(wake, /transcribeRoomPersonaAudio/);
+  assert.doesNotMatch(wake, /persona-transcribe/);
   assert.match(client, /\/api\/internal\/persona-transcribe/);
   assert.match(client, /\/api\/bot\/commands/);
+  assert.match(mobile, /HearMeOut does not continuously send room speech to cloud STT/);
+  assert.match(mobile, /Hands-free wake is local/);
 });
 
 test('persona commands use the real participant identity and never generic room actor labels', () => {
@@ -67,13 +70,13 @@ test('persona commands use the real participant identity and never generic room 
   assert.doesNotMatch(compatibility, /HearMeOut room/);
 });
 
-test('push-to-talk and browser SpeechRecognition are removed from the room voice path', () => {
+test('push-to-talk and browser SpeechRecognition remain removed from the room voice path', () => {
   const userCard = source('src/app/rooms/[roomId]/_components/UserCard.tsx');
   const mobile = source('src/app/rooms/[roomId]/_components/MobileVoiceControl.tsx');
   assert.equal(exists('src/hooks/use-voice-controls.ts'), false);
   assert.doesNotMatch(userCard, /pushToTalk|Push-to-talk|\bPTT\b/);
   assert.doesNotMatch(mobile, /Hold to talk|SpeechRecognition|webkitSpeechRecognition|speechSynthesis/);
-  assert.match(mobile, /Wake-name listening is automatic/);
+  assert.match(mobile, /Hands-free wake is local/);
 });
 
 test('worker owns persona RTC output but never runs a second STT or command listener', () => {
@@ -83,7 +86,7 @@ test('worker owns persona RTC output but never runs a second STT or command list
   assert.doesNotMatch(runtime, /processUtterance\s*\(/);
   assert.doesNotMatch(runtime, /fetch\([^\n]*persona-transcribe/);
   assert.doesNotMatch(runtime, /fetch\([^\n]*\/api\/internal\/persona-command/);
-  assert.match(runtime, /speechInputRoute:\s*'browser-persona-transcribe-to-bot-commands'/);
+  assert.match(runtime, /speechInputRoute:\s*'local-companion-event-to-bot-commands'/);
   assert.match(runtime, /listeners:\s*0/);
   assert.match(bootstrap, /app\.post\('\/persona\/speak'/);
 });
@@ -126,7 +129,7 @@ test('persona LiveKit transport rejects stale sessions and re-invite replaces th
   assert.match(bootstrap, /Persona LiveKit transport is stale; re-invite the persona/);
 });
 
-test('manual Talk button is only a fallback and shares the same STT and bot-command client', () => {
+test('manual Talk button is the deliberate cloud-STT fallback and shares the bot-command client', () => {
   const card = source('src/app/rooms/[roomId]/_components/PersonaCard.tsx');
   assert.match(card, /transcribeRoomPersonaAudio/);
   assert.match(card, /sendRoomPersonaCommand/);
@@ -135,7 +138,7 @@ test('manual Talk button is only a fallback and shares the same STT and bot-comm
   assert.doesNotMatch(card, /fetch\('\/api\/bot\/commands'/);
 });
 
-test('persona runtime status records the single browser wake-word input architecture', () => {
+test('persona runtime status records the local Companion wake-word architecture', () => {
   const runtime = new PersonaRuntimeAdapter({
     roomId: 'studio',
     personaId: 'athena',
@@ -149,6 +152,6 @@ test('persona runtime status records the single browser wake-word input architec
   assert.equal(status.active, true);
   assert.equal(status.authenticationMode, 'service');
   assert.equal(status.listeners, 0);
-  assert.equal(status.wakePolicy, 'browser-vad-stt-explicit-name-only');
-  assert.equal(status.speechInputRoute, 'browser-persona-transcribe-to-bot-commands');
+  assert.equal(status.wakePolicy, 'local-companion-explicit-name-only');
+  assert.equal(status.speechInputRoute, 'local-companion-event-to-bot-commands');
 });

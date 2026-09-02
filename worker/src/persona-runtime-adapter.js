@@ -96,10 +96,11 @@ class PersonaRuntimeAdapter {
   }
 
   start() {
-    // IMPORTANT: do not subscribe to room microphone audio here. HearMeOut has
-    // exactly one human-speech path now: the browser records the already-live
-    // LiveKit mic, uses the proven browser transcription service, applies the
-    // shared wake-name resolver, then calls the canonical bot command endpoint.
+    // IMPORTANT: do not subscribe to room microphone audio here. The always-on
+    // wake detector lives on the user's local Companion device and emits a
+    // command only after an on-device "Hey Athena" match. HearMeOut accepts
+    // that local event through its canonical bot-command client. The deliberate
+    // Talk button is the only browser path that records audio for cloud STT.
     // The worker only owns persona RTC presence and outgoing TTS PCM.
     this.stopped = false;
   }
@@ -116,8 +117,8 @@ class PersonaRuntimeAdapter {
       displayName: this.displayName,
       voice: this.voice || undefined,
       wakeNames: this.wakeNames,
-      wakePolicy: 'browser-vad-stt-explicit-name-only',
-      speechInputRoute: 'browser-persona-transcribe-to-bot-commands',
+      wakePolicy: 'local-companion-explicit-name-only',
+      speechInputRoute: 'local-companion-event-to-bot-commands',
       interests: this.interests,
       listeners: 0,
       authenticated: !!this.accessToken || this.serviceSession,
