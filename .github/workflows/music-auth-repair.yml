@@ -1,0 +1,32 @@
+name: Inspect approved music credential repair
+on:
+  push:
+    branches: [codex/music-auth-repair]
+    paths: [.github/workflows/music-auth-repair.yml]
+permissions:
+  contents: read
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN_MAIN || secrets.FLY_API_TOKEN }}
+    steps:
+      - uses: superfly/flyctl-actions/setup-flyctl@v1
+      - name: Compare credential metadata without revealing values
+        shell: python
+        run: |
+          import subprocess,json
+          values={}
+          for app in ["hearmeout-main","streamweaver-new"]:
+           r=subprocess.run(["flyctl","secrets","list","--app",app,"--json"],capture_output=True,text=True)
+           if r.returncode: print(json.dumps({"app":app,"inventoryAvailable":False})); continue
+           data=json.loads(r.stdout);rows=data if isinstance(data,list) else data.get("secrets",[])
+           picked={}
+           for row in rows:
+            name=row.get("Name",row.get("name"))
+            if name in ["BOT_SECRET_KEY","HEARMEOUT_SERVICE_SECRET"]:picked[name]=row.get("Digest",row.get("digest"))
+           values[app]=picked;print(json.dumps({"app":app,"configuredCredentialNames":list(picked)}))
+          if len(values)==2:
+           a=values["streamweaver-new"];b=values["hearmeout-main"]
+           print(json.dumps({"matchingCredentials":[{"sender":ka,"receiver":kb} for ka,va in a.items() for kb,vb in b.items() if va and va==vb]}))
