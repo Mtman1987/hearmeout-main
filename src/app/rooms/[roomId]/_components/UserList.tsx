@@ -1,20 +1,21 @@
 'use client';
 
 import UserCard from "./UserCard";
-import PersonaCard, { isPersonaParticipant } from './PersonaCard';
+import PersonaCard, { isPersonaParticipant, parsePersonaMetadata } from './PersonaCard';
 import DJCard from "./DJCard";
+import { VoiceBridgeCard } from './VoiceBridgeCard';
 import MobileVoiceControl from './MobileVoiceControl';
 import WakeWordListener from './WakeWordListener';
 import React from "react";
 import { useSession } from '@/hooks/use-session';
 import { useCollection, useDoc } from '@/hooks/use-db';
-import { useLocalParticipant, useRemoteParticipants, useTracks, AudioTrack } from '@livekit/components-react';
-import { Track } from 'livekit-client';
+import { useLocalParticipant, useRemoteParticipants } from '@livekit/components-react';
+import type { Participant, RemoteParticipant } from 'livekit-client';
 import '@livekit/components-styles';
 import { canManageRoom } from '@/lib/room-access';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Card, CardContent } from '@/components/ui/card';
-import { Radio } from 'lucide-react';
+import { Bot, Music, Radio } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { isActivityRoomId } from '@/lib/watch-session';
 
@@ -87,33 +88,172 @@ function PeerPresenceParticipants({ roomId, localUserId, connectedPeerIds }: { r
 const isHiddenBridgeParticipant = (identity?: string) =>
   !!identity && identity.startsWith('discord-bridge-listener');
 
-function LiveKitParticipants({ isHost, roomId }: { isHost: boolean; roomId: string }) {
+const isDiscordMixParticipant = (identity?: string) =>
+  !!identity && identity.startsWith('discord-mixed-');
+
+function BotDeck({
+  personas,
+  showDJ,
+  isHost,
+  roomId,
+  localVolume,
+  onVolumeChange,
+  canControl,
+  onOpenQueue,
+  onOpenAddSong,
+  onOpenWatch,
+}: {
+  personas: Participant[];
+  showDJ: boolean;
+  isHost: boolean;
+  roomId: string;
+  localVolume: number;
+  onVolumeChange: (volume: number) => void;
+  canControl: boolean;
+  onOpenQueue: () => void;
+  onOpenAddSong: () => void;
+  onOpenWatch?: () => void;
+}) {
+  const [active, setActive] = React.useState<string | null>(showDJ ? 'dj' : personas[0]?.identity || null);
+
+  React.useEffect(() => {
+    if (active === 'dj' && !showDJ) {
+      setActive(personas[0]?.identity || null);
+      return;
+    }
+    if (active && active !== 'dj' && !personas.some((persona) => persona.identity === active)) {
+      setActive(showDJ ? 'dj' : personas[0]?.identity || null);
+      return;
+    }
+    if (!active) setActive(showDJ ? 'dj' : personas[0]?.identity || null);
+  }, [active, personas, showDJ]);
+
+  if (!showDJ && personas.length === 0) return null;
+
+  const activePersona = active && active !== 'dj'
+    ? personas.find((persona) => persona.identity === active)
+    : null;
+
+  return (
+    <div className="relative flex h-full flex-col">
+      <div className="mb-2 flex min-h-10 items-center gap-2 rounded-lg border bg-card/80 p-1.5 shadow-sm backdrop-blur">
+        {showDJ ? (
+          <Button
+            type="button"
+            variant={active === 'dj' ? 'secondary' : 'ghost'}
+            size="icon"
+            className="h-8 w-8 rounded-full"
+            onClick={() => setActive(active === 'dj' ? (personas[0]?.identity || null) : 'dj')}
+            aria-label="HearMeOut DJ"
+            title="HearMeOut DJ"
+          >
+            <Music className="h-4 w-4" />
+          </Button>
+        ) : null}
+        {personas.map((persona) => {
+          const metadata = parsePersonaMetadata(persona.metadata) || {};
+          const label = metadata.displayName || persona.name || persona.identity.replace(/^persona:/, '') || 'Bot';
+          const avatar = (persona.isSpeaking ? metadata.talkingAvatar : metadata.idleAvatar) || metadata.avatar || '';
+          return (
+            <Button
+              key={persona.sid}
+              type="button"
+              variant={active === persona.identity ? 'secondary' : 'ghost'}
+              size="icon"
+              className={`h-8 w-8 rounded-full p-0 ${persona.isSpeaking ? 'ring-2 ring-green-400' : ''}`}
+              onClick={() => setActive(active === persona.identity ? (showDJ ? 'dj' : null) : persona.identity)}
+              aria-label={label}
+              title={label}
+            >
+              <Avatar className="h-7 w-7">
+                {avatar ? <AvatarImage src={avatar} alt={label} /> : null}
+                <AvatarFallback><Bot className="h-3.5 w-3.5" /></AvatarFallback>
+              </Avatar>
+            </Button>
+          );
+        })}
+        <span className="ml-auto pr-2 text-[11px] text-muted-foreground">Bots</span>
+      </div>
+
+      {active === 'dj' && showDJ ? (
+        <DJCard
+          roomId={roomId}
+          localVolume={localVolume}
+          onVolumeChange={onVolumeChange}
+          canControl={canControl}
+          onOpenQueue={onOpenQueue}
+          onOpenAddSong={onOpenAddSong}
+          onOpenWatch={onOpenWatch}
+        />
+      ) : activePersona ? (
+        <PersonaCard participant={activePersona} roomId={roomId} isHost={isHost} />
+      ) : (
+        <Card className="flex h-full items-center justify-center p-6 text-sm text-muted-foreground">
+          Choose a bot icon above.
+        </Card>
+      )}
+    </div>
+  );
+}
+
+function LiveKitParticipants({
+  isHost,
+  canManageBridge,
+  roomId,
+  showDJ,
+  localVolume,
+  onVolumeChange,
+  onOpenQueue,
+  onOpenAddSong,
+  onOpenWatch,
+}: {
+  isHost: boolean;
+  canManageBridge: boolean;
+  roomId: string;
+  showDJ: boolean;
+  localVolume: number;
+  onVolumeChange: (volume: number) => void;
+  onOpenQueue: () => void;
+  onOpenAddSong: () => void;
+  onOpenWatch?: () => void;
+}) {
   const { localParticipant } = useLocalParticipant();
   const remoteParticipants = useRemoteParticipants();
-  const allParticipants = [localParticipant, ...remoteParticipants].filter(
-    (participant) => !isHiddenBridgeParticipant(participant?.identity),
+  const bridgeParticipant = remoteParticipants.find((participant) => isDiscordMixParticipant(participant.identity)) as RemoteParticipant | undefined;
+  const personas = remoteParticipants.filter((participant) => isPersonaParticipant(participant));
+  const people = [localParticipant, ...remoteParticipants].filter((participant) =>
+    !isHiddenBridgeParticipant(participant?.identity)
+      && !isDiscordMixParticipant(participant?.identity)
+      && !isPersonaParticipant(participant),
   );
-
-  const allAudioTracks = useTracks(
-    [Track.Source.Microphone, Track.Source.Unknown],
-    { onlySubscribed: true }
-  ).filter(track => track.publication && !track.participant.isLocal && !isHiddenBridgeParticipant(track.participant.identity));
 
   return (
     <>
-      {/* One authoritative human-speech path for the entire room. It records
-          the already-published LiveKit mic, transcribes through the same STT as
-          the persona Talk button, applies the same wake-name resolver as typed
-          chat, and sends through /api/bot/commands. */}
+      {/* RoomAudioRenderer is the single playback renderer. Do not mount a
+          second AudioTrack per participant here; duplicate renderers make local
+          volume controls ineffective and can create comb/echo artifacts. */}
       <WakeWordListener roomId={roomId} remoteParticipants={remoteParticipants} />
       <MobileVoiceControl roomId={roomId} remoteParticipants={remoteParticipants} />
-      {allAudioTracks.map((trackRef) => (
-        <AudioTrack key={trackRef.publication.trackSid} trackRef={trackRef} volume={1.0} muted={false} />
-      ))}
-      {allParticipants.map((participant) => (
-        isPersonaParticipant(participant)
-          ? <PersonaCard key={participant.sid} participant={participant} roomId={roomId} isHost={isHost} />
-          : <UserCard key={participant.sid} participant={participant} isLocal={participant.isLocal} isHost={isHost} roomId={roomId} />
+
+      {(canManageBridge || bridgeParticipant) ? (
+        <VoiceBridgeCard roomId={roomId} participant={bridgeParticipant} canManage={canManageBridge} />
+      ) : null}
+
+      <BotDeck
+        personas={personas}
+        showDJ={showDJ}
+        isHost={isHost}
+        roomId={roomId}
+        localVolume={localVolume}
+        onVolumeChange={onVolumeChange}
+        canControl={canManageBridge}
+        onOpenQueue={onOpenQueue}
+        onOpenAddSong={onOpenAddSong}
+        onOpenWatch={onOpenWatch}
+      />
+
+      {people.map((participant) => (
+        <UserCard key={participant.sid} participant={participant} isLocal={participant.isLocal} isHost={isHost} roomId={roomId} />
       ))}
     </>
   );
@@ -136,18 +276,19 @@ export default function UserList({ roomId, localVolume, onVolumeChange, showDJ, 
           </div>
         )}
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
-          {showDJ && (
-            <DJCard
+          {voiceEnabled && (
+            <LiveKitParticipants
+              isHost={isHost}
+              canManageBridge={canControl}
               roomId={roomId}
+              showDJ={showDJ}
               localVolume={localVolume}
               onVolumeChange={onVolumeChange}
-              canControl={canControl}
               onOpenQueue={onOpenQueue}
               onOpenAddSong={onOpenAddSong}
               onOpenWatch={onOpenWatch}
             />
           )}
-          {voiceEnabled && <LiveKitParticipants isHost={isHost} roomId={roomId} />}
           {voicePeerFallback && <PeerPresenceParticipants roomId={roomId} localUserId={user?.uid} connectedPeerIds={peerConnectedPeerIds} />}
         </div>
       </div>
