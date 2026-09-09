@@ -76,6 +76,7 @@ class DiscordPcmJitterSource {
     this.needsAttack = false;
     this.firstPacketAt = 0;
     this.lastPushAt = 0;
+    this.lastPushFrames = 0;
     this.arrivalJitterMs = 0;
     this.stableFrames = 0;
     this.stats = {
@@ -141,14 +142,26 @@ class DiscordPcmJitterSource {
   push(pcm, now = Date.now()) {
     if (!pcm || pcm.length === 0) return;
     const bytes = Buffer.isBuffer(pcm) ? pcm : Buffer.from(pcm);
+    const frames = Math.max(1, Math.floor(bytes.length / this.frameBytes));
 
+    // This is decoder/PCM delivery jitter, not Discord RTP/network jitter. The
+    // decoder emits chunks that can contain several 20 ms frames, so compare
+    // this callback against the duration of the PREVIOUS chunk. Also exclude
+    // normal talk-spurt gaps: silence between words/speakers must not show up as
+    // 100-300 ms of scary "jitter" in the UI.
     if (this.lastPushAt) {
-      const frames = Math.max(1, Math.floor(bytes.length / this.frameBytes));
-      const expectedGap = frames * this.frameDurationMs;
-      const observedJitter = Math.abs((now - this.lastPushAt) - expectedGap);
-      this.arrivalJitterMs = this.arrivalJitterMs
-        ? this.arrivalJitterMs * 0.9 + observedJitter * 0.1
-        : observedJitter;
+      const gapMs = Math.max(0, now - this.lastPushAt);
+      const expectedGapMs = Math.max(1, this.lastPushFrames || frames) * this.frameDurationMs;
+      const excessGapMs = Math.max(0, gapMs - expectedGapMs);
+      const newSpeechBurst = excessGapMs > this.shortGapRebufferMs;
+      if (newSpeechBurst) {
+        this.arrivalJitterMs = 0;
+      } else {
+        const observedJitter = Math.abs(gapMs - expectedGapMs);
+        this.arrivalJitterMs = this.arrivalJitterMs
+          ? this.arrivalJitterMs * 0.9 + observedJitter * 0.1
+          : observedJitter;
+      }
     }
 
     // Do not declare an underrun merely because Discord stopped sending PCM.
@@ -175,6 +188,7 @@ class DiscordPcmJitterSource {
 
     if (!this.firstPacketAt) this.firstPacketAt = now;
     this.lastPushAt = now;
+    this.lastPushFrames = frames;
     this.buf = this.buf.length ? Buffer.concat([this.buf, bytes]) : Buffer.from(bytes);
 
     const maxBytes = this.maxFrames * this.frameBytes;
