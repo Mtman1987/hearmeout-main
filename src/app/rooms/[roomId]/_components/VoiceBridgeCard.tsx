@@ -1,14 +1,10 @@
 "use client";
 
 import * as React from 'react';
-import type { RemoteParticipant } from 'livekit-client';
-import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
-import { Badge } from '@/components/ui/badge';
-import { Button } from '@/components/ui/button';
-import { Card, CardContent } from '@/components/ui/card';
-import { Label } from '@/components/ui/label';
-import { Slider } from '@/components/ui/slider';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Switch } from '@/components/ui/switch';
+import { Label } from '@/components/ui/label';
+import { Badge } from '@/components/ui/badge';
 import {
   Select,
   SelectContent,
@@ -17,33 +13,24 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { useToast } from '@/hooks/use-toast';
-import { LoaderCircle, Radio, Settings2, Volume2, VolumeX } from 'lucide-react';
+import { LoaderCircle, Radio } from 'lucide-react';
 
 const VOICE_CHANNEL_TYPES = new Set([2, 13]);
 
 type Guild = { id: string; name: string };
 type Channel = { id: string; name: string; type: number };
-type DiscordMember = {
-  id: string;
-  displayName: string;
-  photoURL?: string;
-  speaking?: boolean;
-};
 
 type BridgeState = {
-  config?: {
-    enabled?: boolean;
-    guildId?: string;
-    voiceChannelId?: string;
+  config: {
+    enabled: boolean;
+    guildId: string;
+    voiceChannelId: string;
     roomVoiceOutboundEnabled?: boolean;
     audioProfile?: 'low-latency' | 'balanced' | 'resilient';
   };
   worker?: {
     running?: boolean;
     discordSpeakers?: number;
-    discordHumanCount?: number;
-    discordMembers?: DiscordMember[];
-    activeDiscordSpeakers?: string[];
     appSources?: number;
     roomVoiceOutboundEnabled?: boolean;
     mode?: 'two-way' | 'listen-only';
@@ -59,25 +46,11 @@ type BridgeState = {
       droppedFrames?: number;
       captureErrors?: number;
     };
-    voiceEncoding?: {
-      sampleRate?: number;
-      channels?: number;
-      lane?: string;
-      ttsIncluded?: boolean;
-      musicIncluded?: boolean;
-    };
+    noiseCancellation?: { krispEnabled?: boolean; captureProcessing?: string; reason?: string };
   };
 };
 
-export function VoiceBridgeCard({
-  roomId,
-  participant,
-  canManage = false,
-}: {
-  roomId: string;
-  participant?: RemoteParticipant;
-  canManage?: boolean;
-}) {
+export function VoiceBridgeCard({ roomId }: { roomId: string }) {
   const { toast } = useToast();
   const [guilds, setGuilds] = React.useState<Guild[]>([]);
   const [channels, setChannels] = React.useState<Channel[]>([]);
@@ -89,25 +62,6 @@ export function VoiceBridgeCard({
   const [status, setStatus] = React.useState<BridgeState['worker']>();
   const [loadingChannels, setLoadingChannels] = React.useState(false);
   const [busy, setBusy] = React.useState(false);
-  const [showSettings, setShowSettings] = React.useState(false);
-  const [localVolume, setLocalVolume] = React.useState(1);
-  const lastNonZeroVolume = React.useRef(1);
-
-  React.useEffect(() => {
-    try {
-      const saved = Number(window.localStorage.getItem(`hmo-discord-bridge-volume:${roomId}`));
-      if (Number.isFinite(saved) && saved >= 0 && saved <= 1) setLocalVolume(saved);
-    } catch {}
-  }, [roomId]);
-
-  React.useEffect(() => {
-    if (!participant) return;
-    if (localVolume > 0) lastNonZeroVolume.current = localVolume;
-    if (typeof participant.setVolume === 'function') participant.setVolume(localVolume);
-    try {
-      window.localStorage.setItem(`hmo-discord-bridge-volume:${roomId}`, String(localVolume));
-    } catch {}
-  }, [participant, localVolume, roomId]);
 
   const applyWorkerState = React.useCallback((worker?: BridgeState['worker']) => {
     setStatus(worker);
@@ -123,7 +77,7 @@ export function VoiceBridgeCard({
     setLoadingChannels(true);
     try {
       const res = await fetch(`/api/discord/channels?guildId=${encodeURIComponent(gid)}`);
-      const data = await res.json().catch(() => []);
+      const data = await res.json();
       const list: Channel[] = Array.isArray(data) ? data : [];
       setChannels(list.filter((c) => VOICE_CHANNEL_TYPES.has(c.type)));
     } catch {
@@ -133,48 +87,33 @@ export function VoiceBridgeCard({
     }
   }, []);
 
-  const refreshState = React.useCallback(async () => {
-    const stateRes = await fetch(`/api/discord/voice-bridge?roomId=${encodeURIComponent(roomId)}`, { cache: 'no-store' }).catch(() => null);
-    if (!stateRes?.ok) return;
-    const state: BridgeState = await stateRes.json().catch(() => ({} as BridgeState));
-    const cfg = state.config;
-    if (cfg) {
-      const nextGuildId = cfg.guildId || '';
-      setGuildId(nextGuildId);
-      setVoiceChannelId(cfg.voiceChannelId || '');
-      setRunning(Boolean(state.worker?.running || cfg.enabled));
-      setRoomVoiceOutboundEnabled(state.worker?.roomVoiceOutboundEnabled ?? cfg.roomVoiceOutboundEnabled ?? true);
-      setAudioProfile(state.worker?.audioProfile || cfg.audioProfile || 'balanced');
-      if (nextGuildId) void loadChannels(nextGuildId);
-    }
-    applyWorkerState(state.worker);
-  }, [roomId, loadChannels, applyWorkerState]);
-
   React.useEffect(() => {
     let alive = true;
     (async () => {
-      const [stateResult, guildsResult] = await Promise.allSettled([
-        fetch(`/api/discord/voice-bridge?roomId=${encodeURIComponent(roomId)}`, { cache: 'no-store' }),
-        fetch('/api/discord/guilds'),
-      ]);
-      if (!alive) return;
-      if (guildsResult.status === 'fulfilled') {
-        const list = await guildsResult.value.json().catch(() => []);
-        if (alive) setGuilds(Array.isArray(list) ? list : []);
-      }
-      if (stateResult.status === 'fulfilled' && stateResult.value.ok) {
-        const state: BridgeState = await stateResult.value.json().catch(() => ({} as BridgeState));
+      try {
+        const [stateRes, guildsRes] = await Promise.all([
+          fetch(`/api/discord/voice-bridge?roomId=${encodeURIComponent(roomId)}`),
+          fetch('/api/discord/guilds'),
+        ]);
+        const state: BridgeState = await stateRes.json().catch(() => ({} as BridgeState));
+        const guildList = await guildsRes.json().catch(() => []);
         if (!alive) return;
-        const cfg = state.config;
+
+        setGuilds(Array.isArray(guildList) ? guildList : []);
+        const cfg = state?.config;
         if (cfg) {
           setGuildId(cfg.guildId || '');
           setVoiceChannelId(cfg.voiceChannelId || '');
-          setRunning(Boolean(state.worker?.running || cfg.enabled));
-          setRoomVoiceOutboundEnabled(state.worker?.roomVoiceOutboundEnabled ?? cfg.roomVoiceOutboundEnabled ?? true);
-          setAudioProfile(state.worker?.audioProfile || cfg.audioProfile || 'balanced');
-          if (cfg.guildId) void loadChannels(cfg.guildId);
+          setRunning(Boolean(state?.worker?.running || cfg.enabled));
+          setRoomVoiceOutboundEnabled(
+            state?.worker?.roomVoiceOutboundEnabled ?? cfg.roomVoiceOutboundEnabled ?? true,
+          );
+          setAudioProfile(state?.worker?.audioProfile || cfg.audioProfile || 'balanced');
+          if (cfg.guildId) loadChannels(cfg.guildId);
         }
-        applyWorkerState(state.worker);
+        applyWorkerState(state?.worker);
+      } catch {
+        /* non-fatal */
       }
     })();
     return () => { alive = false; };
@@ -182,21 +121,24 @@ export function VoiceBridgeCard({
 
   React.useEffect(() => {
     if (!running) return;
-    const interval = window.setInterval(() => void refreshState(), 1500);
+    const interval = window.setInterval(async () => {
+      const response = await fetch(`/api/discord/voice-bridge?roomId=${encodeURIComponent(roomId)}`, { cache: 'no-store' }).catch(() => null);
+      if (!response?.ok) return;
+      const next: BridgeState = await response.json().catch(() => ({} as BridgeState));
+      applyWorkerState(next.worker);
+    }, 3000);
     return () => window.clearInterval(interval);
-  }, [running, refreshState]);
+  }, [roomId, running, applyWorkerState]);
 
   const onGuildChange = (value: string) => {
     setGuildId(value);
     setVoiceChannelId('');
-    void loadChannels(value);
+    loadChannels(value);
   };
 
   const setBridge = async (enable: boolean) => {
-    if (!canManage) return;
     if (enable && (!guildId || !voiceChannelId)) {
       toast({ title: 'Pick a server and voice channel first', variant: 'destructive' });
-      setShowSettings(true);
       return;
     }
     setBusy(true);
@@ -210,18 +152,17 @@ export function VoiceBridgeCard({
       if (!res.ok || data.success === false) throw new Error(data.message || data.error || 'Request failed');
       setRunning(enable);
       applyWorkerState(data.status);
+      toast({ title: enable ? 'Discord voice bridge started' : 'Discord voice bridge stopped' });
     } catch (err: any) {
       toast({ title: 'Voice bridge error', description: err?.message, variant: 'destructive' });
-      await refreshState();
+      setRunning(!enable);
     } finally {
       setBusy(false);
     }
   };
 
   const setRoomOutbound = async (enable: boolean) => {
-    if (!canManage) return;
     const previous = roomVoiceOutboundEnabled;
-    setRoomVoiceOutboundEnabled(enable);
     setBusy(true);
     try {
       const res = await fetch('/api/discord/voice-bridge', {
@@ -230,18 +171,24 @@ export function VoiceBridgeCard({
         body: JSON.stringify({ roomId, action: 'set-room-outbound', roomVoiceOutboundEnabled: enable }),
       });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok || data.success === false) throw new Error(data.message || data.error || 'Could not change Discord return audio');
+      if (!res.ok || data.success === false) throw new Error(data.message || data.error || 'Privacy gate change was not confirmed');
+      setRoomVoiceOutboundEnabled(enable);
       applyWorkerState(data.status || status);
+      toast({
+        title: enable ? 'Room voice return is on' : 'Listen-only privacy is on',
+        description: enable
+          ? 'People in Discord can hear HearMeOut room voices.'
+          : 'You still hear Discord here, but HearMeOut room voices are not sent back.',
+      });
     } catch (err: any) {
       setRoomVoiceOutboundEnabled(previous);
-      toast({ title: 'Discord return audio error', description: err?.message, variant: 'destructive' });
+      toast({ title: 'Privacy gate error', description: err?.message, variant: 'destructive' });
     } finally {
       setBusy(false);
     }
   };
 
   const changeAudioProfile = async (profile: 'low-latency' | 'balanced' | 'resilient') => {
-    if (!canManage) return;
     const previous = audioProfile;
     setAudioProfile(profile);
     try {
@@ -253,146 +200,87 @@ export function VoiceBridgeCard({
       const data = await res.json().catch(() => ({}));
       if (!res.ok || data.success === false) throw new Error(data.error || data.message || 'Audio profile change failed');
       applyWorkerState(data.status || status);
+      toast({ title: `Discord audio: ${profile}` });
     } catch (err: any) {
       setAudioProfile(previous);
       toast({ title: 'Audio profile error', description: err?.message, variant: 'destructive' });
     }
   };
 
-  const members = status?.discordMembers || [];
-  const activeIds = new Set(status?.activeDiscordSpeakers || []);
-  const activeMember = members.find((member) => member.speaking || activeIds.has(member.id));
-  const displayMember = activeMember || members[0];
-  const humanCount = status?.discordHumanCount ?? status?.discordSpeakers ?? members.length;
-  const returnBlocked = Boolean(status?.discordSelfMute || status?.discordServerMute || status?.discordSuppressed);
-  const locallyMuted = localVolume <= 0;
+  const discordMuted = Boolean(status?.discordSelfMute || status?.discordServerMute || status?.discordSuppressed);
 
   return (
-    <Card className="flex h-full flex-col">
-      <CardContent className="flex flex-grow flex-col gap-4 p-4">
-        <div className="flex items-start gap-4">
-          <div className="relative">
-            <Avatar className={`h-16 w-16 transition-all ${activeMember ? 'ring-4 ring-green-400 ring-offset-2 ring-offset-background shadow-lg' : 'ring-2 ring-indigo-400/40'}`}>
-              {displayMember?.photoURL ? <AvatarImage src={displayMember.photoURL} alt={displayMember.displayName} /> : null}
-              <AvatarFallback className="bg-indigo-600 text-white">D</AvatarFallback>
-            </Avatar>
-            <span className={`absolute -bottom-1 -right-1 h-4 w-4 rounded-full border-2 border-background ${running ? (activeMember ? 'bg-green-500' : 'bg-indigo-500') : 'bg-slate-500'}`} />
-          </div>
+    <Card>
+      <CardHeader className="pb-3">
+        <CardTitle className="flex items-center gap-2 text-base">
+          <Radio className="h-4 w-4" />
+          Discord Voice Bridge
+          {running && <Badge variant="secondary" className="ml-1">Live</Badge>}
+          {running && discordMuted && <Badge variant="destructive" className="ml-1">Discord muted</Badge>}
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <p className="text-sm text-muted-foreground">
+          The bridge bot stays in Discord and carries that voice channel into this room. You do not
+          need to join the Discord voice channel yourself. Use the privacy gate below when you want
+          to hear Discord without sending this room&apos;s conversation back.
+        </p>
 
-          <div className="min-w-0 flex-1">
-            <div className="flex flex-wrap items-center gap-2">
-              <p className="truncate text-lg font-bold">Discord Voice</p>
-              <Badge variant={running ? 'secondary' : 'outline'}>{running ? 'LIVE' : 'OFF'}</Badge>
-              {returnBlocked && running ? <Badge variant="destructive">Return blocked</Badge> : null}
-            </div>
-            <p className="mt-1 truncate text-sm text-muted-foreground">
-              {activeMember ? `${activeMember.displayName} speaking` : running ? `${humanCount} ${humanCount === 1 ? 'person' : 'people'} in Discord` : 'Bridge ready'}
-            </p>
-            <p className="mt-1 text-xs text-muted-foreground">48 kHz mono voice · bot TTS included · music stays in Discord Activity</p>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <div className="space-y-1.5">
+            <Label>Server</Label>
+            <Select value={guildId} onValueChange={onGuildChange} disabled={running || busy}>
+              <SelectTrigger><SelectValue placeholder="Select a server" /></SelectTrigger>
+              <SelectContent>{guilds.map((g) => <SelectItem key={g.id} value={g.id}>{g.name}</SelectItem>)}</SelectContent>
+            </Select>
           </div>
+          <div className="space-y-1.5">
+            <Label>Voice channel</Label>
+            <Select value={voiceChannelId} onValueChange={setVoiceChannelId} disabled={running || busy || !guildId || loadingChannels}>
+              <SelectTrigger><SelectValue placeholder={loadingChannels ? 'Loading…' : 'Select a voice channel'} /></SelectTrigger>
+              <SelectContent>{channels.map((c) => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}</SelectContent>
+            </Select>
+          </div>
+        </div>
 
-          <div className="flex items-center gap-1">
+        <div className="flex items-center justify-between rounded-md border p-3">
+          <div className="flex items-center gap-3">
             {busy ? <LoaderCircle className="h-4 w-4 animate-spin" /> : null}
-            {canManage ? (
-              <Button variant={showSettings ? 'secondary' : 'ghost'} size="icon" className="h-8 w-8" onClick={() => setShowSettings((value) => !value)} aria-label="Discord bridge settings">
-                <Settings2 className="h-4 w-4" />
-              </Button>
-            ) : null}
+            <div>
+              <Label className="cursor-pointer">Enable voice bridge</Label>
+              {running && status ? <p className="text-xs text-muted-foreground">{status.discordSpeakers ?? 0} Discord speaker(s) · {status.appSources ?? 0} app voice(s)</p> : null}
+            </div>
           </div>
+          <Switch checked={running} disabled={busy} onCheckedChange={(checked) => setBridge(checked)} />
         </div>
 
-        {members.length > 0 ? (
-          <div className="flex flex-wrap gap-2">
-            {members.map((member) => {
-              const speaking = member.speaking || activeIds.has(member.id);
-              return (
-                <div key={member.id} className={`flex items-center gap-1.5 rounded-full border px-2 py-1 text-xs ${speaking ? 'border-green-500/60 bg-green-500/10 text-green-300' : 'text-muted-foreground'}`}>
-                  <Avatar className="h-5 w-5">
-                    {member.photoURL ? <AvatarImage src={member.photoURL} alt={member.displayName} /> : null}
-                    <AvatarFallback>{member.displayName?.charAt(0)?.toUpperCase() || 'D'}</AvatarFallback>
-                  </Avatar>
-                  <span className="max-w-28 truncate">{member.displayName}</span>
-                </div>
-              );
-            })}
+        <div className="flex items-center justify-between gap-4 rounded-md border p-3">
+          <div className="min-w-0">
+            <Label className="cursor-pointer">Let Discord hear this room</Label>
+            <p className="mt-1 text-xs text-muted-foreground">
+              {roomVoiceOutboundEnabled ? 'Two-way: HearMeOut room voices are sent to Discord.' : 'Listen-only: Discord stays audible here, but this room stays private.'}
+            </p>
+            <p className="mt-1 text-xs text-muted-foreground">Music uses its own bridge lane and is not muted by this room-voice gate.</p>
           </div>
-        ) : null}
-
-        <div className="mt-auto flex items-center gap-2">
-          <Button
-            variant="outline"
-            size="icon"
-            className="h-8 w-8"
-            disabled={!participant}
-            onClick={() => setLocalVolume((value) => value > 0 ? 0 : lastNonZeroVolume.current || 1)}
-            aria-label={locallyMuted ? 'Unmute Discord for me' : 'Mute Discord for me'}
-          >
-            {locallyMuted ? <VolumeX className="h-4 w-4" /> : <Volume2 className="h-4 w-4" />}
-          </Button>
-          <Slider
-            aria-label="Discord local volume"
-            value={[Math.round(localVolume * 100)]}
-            onValueChange={(value) => setLocalVolume(Math.max(0, Math.min(1, value[0] / 100)))}
-            max={100}
-            step={1}
-            disabled={!participant}
-          />
-          <span className="w-10 text-right text-xs tabular-nums text-muted-foreground">{Math.round(localVolume * 100)}%</span>
+          <Switch checked={roomVoiceOutboundEnabled} disabled={busy} aria-label="Let Discord hear this HearMeOut room" onCheckedChange={(checked) => setRoomOutbound(checked)} />
         </div>
 
-        {showSettings && canManage ? (
-          <div className="space-y-3 rounded-lg border bg-muted/20 p-3">
-            <div className="grid gap-3 sm:grid-cols-2">
-              <div className="space-y-1.5">
-                <Label>Server</Label>
-                <Select value={guildId} onValueChange={onGuildChange} disabled={running || busy}>
-                  <SelectTrigger><SelectValue placeholder="Select server" /></SelectTrigger>
-                  <SelectContent>{guilds.map((guild) => <SelectItem key={guild.id} value={guild.id}>{guild.name}</SelectItem>)}</SelectContent>
-                </Select>
-              </div>
-              <div className="space-y-1.5">
-                <Label>Voice channel</Label>
-                <Select value={voiceChannelId} onValueChange={setVoiceChannelId} disabled={running || busy || !guildId || loadingChannels}>
-                  <SelectTrigger><SelectValue placeholder={loadingChannels ? 'Loading…' : 'Select voice channel'} /></SelectTrigger>
-                  <SelectContent>{channels.map((channel) => <SelectItem key={channel.id} value={channel.id}>{channel.name}</SelectItem>)}</SelectContent>
-                </Select>
-              </div>
-            </div>
-
-            <div className="flex items-center justify-between gap-3 rounded-md border p-2.5">
-              <div>
-                <Label>Voice bridge</Label>
-                <p className="text-xs text-muted-foreground">The bridge bot itself is never counted as a person.</p>
-              </div>
-              <Switch checked={running} disabled={busy} onCheckedChange={(checked) => void setBridge(checked)} />
-            </div>
-
-            <div className="flex items-center justify-between gap-3 rounded-md border p-2.5">
-              <div>
-                <Label>Let Discord hear this room</Label>
-                <p className="text-xs text-muted-foreground">Human microphones and persona TTS return to Discord. Music does not use this lane.</p>
-              </div>
-              <Switch checked={roomVoiceOutboundEnabled} disabled={busy} onCheckedChange={(checked) => void setRoomOutbound(checked)} />
-            </div>
-
-            <div className="space-y-1.5">
-              <Label>Reliability</Label>
-              <Select value={audioProfile} onValueChange={(value) => void changeAudioProfile(value as typeof audioProfile)} disabled={busy}>
-                <SelectTrigger><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="low-latency">Low latency</SelectItem>
-                  <SelectItem value="balanced">Balanced</SelectItem>
-                  <SelectItem value="resilient">Resilient</SelectItem>
-                </SelectContent>
-              </Select>
-              {running && status?.discordJitter ? (
-                <p className="text-xs text-muted-foreground">
-                  Buffer {status.discordJitter.bufferedMs ?? 0}/{status.discordJitter.targetMs ?? 0} ms · jitter {status.discordJitter.arrivalJitterMs ?? 0} ms · underruns {status.discordJitter.underruns ?? 0} · dropped {status.discordJitter.droppedFrames ?? 0}
-                </p>
-              ) : null}
-            </div>
+        <div className="space-y-2 rounded-md border p-3">
+          <div>
+            <Label>Discord → LiveKit reliability</Label>
+            <p className="mt-1 text-xs text-muted-foreground">Balanced adapts to normal jitter. Use Resilient when the connection is dropping packets; Low latency is best only on a clean route.</p>
           </div>
-        ) : null}
+          <Select value={audioProfile} onValueChange={(value) => changeAudioProfile(value as typeof audioProfile)} disabled={busy}>
+            <SelectTrigger aria-label="Discord audio reliability profile"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="low-latency">Low latency</SelectItem>
+              <SelectItem value="balanced">Balanced</SelectItem>
+              <SelectItem value="resilient">Resilient / slow internet</SelectItem>
+            </SelectContent>
+          </Select>
+          {running && status?.discordJitter ? <p className="text-xs text-muted-foreground">Buffer {status.discordJitter.bufferedMs ?? 0} ms / {status.discordJitter.targetMs ?? 0} ms · network jitter {status.discordJitter.arrivalJitterMs ?? 0} ms · underruns {status.discordJitter.underruns ?? 0} · dropped {status.discordJitter.droppedFrames ?? 0}</p> : null}
+          <p className="text-xs text-muted-foreground">Krisp: not applied to this server-published Discord PCM track. Browser WebRTC echo/noise cancellation still applies to human microphones; the bridge fixes transport jitter before LiveKit ingest.</p>
+        </div>
       </CardContent>
     </Card>
   );

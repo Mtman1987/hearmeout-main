@@ -14,7 +14,6 @@ const api = read('src/app/api/discord/voice-bridge/route.ts');
 const ui = read('src/app/rooms/[roomId]/_components/VoiceBridgeCard.tsx');
 const dockerfile = read('worker/Dockerfile');
 const audioStatePatch = read('worker/scripts/patch-voice-bridge-audio-state.cjs');
-const voiceOnlyPatch = read('worker/scripts/patch-voice-bridge-voice-only.cjs');
 
 test('worker starts privacy-safe and gates only the HearMeOut voice lane', () => {
   assert.match(bridge, /roomVoiceOutboundEnabled = false/);
@@ -23,6 +22,7 @@ test('worker starts privacy-safe and gates only the HearMeOut voice lane', () =>
   assert.match(bridge, /src\.buf = Buffer\.alloc\(0\)/);
   assert.match(bridge, /discordMixTick\(\)/);
   assert.match(bridge, /\['voice'\]|'voice'/);
+  assert.match(bridge, /'music'/);
 });
 
 test('worker exposes an authenticated privacy gate without coupling bridge start to personas', () => {
@@ -51,28 +51,20 @@ test('main app preserves explicit privacy choices but migrates legacy rooms to t
   assert.match(api, /Bridge privacy gate could not be confirmed/);
 });
 
-test('room UI follows live worker outbound state and keeps bridge controls in the Discord voice card', () => {
+test('room UI follows live worker outbound state instead of a stale browser toggle', () => {
   assert.match(ui, /applyWorkerState/);
   assert.match(ui, /worker\?\.roomVoiceOutboundEnabled/);
   assert.match(ui, /setRoomVoiceOutboundEnabled\(worker\.roomVoiceOutboundEnabled\)/);
   assert.match(ui, /Let Discord hear this room/);
-  assert.match(ui, /Human microphones and persona TTS return to Discord\. Music does not use this lane\./);
-  assert.match(ui, /discordMembers/);
-  assert.match(ui, /activeDiscordSpeakers/);
-  assert.match(ui, /Discord local volume/);
+  assert.match(ui, /Listen-only: Discord stays audible here, but this room stays private/);
 });
 
-test('worker build reports real Discord state and applies the mono voice-only runtime patch', () => {
+test('worker build reports real Discord mute state and handles Stage suppression', () => {
   assert.match(dockerfile, /patch-voice-bridge-audio-state\.cjs/);
-  assert.match(dockerfile, /patch-voice-bridge-voice-only\.cjs/);
   assert.match(audioStatePatch, /discordSelfMute/);
   assert.match(audioStatePatch, /discordServerMute/);
   assert.match(audioStatePatch, /discordSuppressed/);
   assert.match(audioStatePatch, /setSuppressed\(false\)/);
-  assert.match(voiceOnlyPatch, /const VOICE_CHANNELS = 1/);
-  assert.match(voiceOnlyPatch, /discordHumanCount/);
-  assert.match(voiceOnlyPatch, /activeDiscordSpeakers/);
-  assert.match(voiceOnlyPatch, /Music\/video stays in Discord Activities/);
 });
 
 test('the voice-bridge API does not invite or join Athena/persona bots', () => {

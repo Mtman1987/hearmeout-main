@@ -6,11 +6,12 @@ import { LiveKitRoom, RoomAudioRenderer, RoomContext, useConnectionState, useRoo
 import { ConnectionState, DisconnectReason, Room as LKRoom, RoomEvent } from 'livekit-client';
 import { SidebarProvider, SidebarInset, SidebarTrigger, useSidebar } from '@/components/ui/sidebar';
 import { Button } from "@/components/ui/button";
-import { Copy, X, LoaderCircle, FrameIcon, Music, Monitor, Film, ExternalLink } from 'lucide-react';
+import { Copy, X, LoaderCircle, FrameIcon, Music, Monitor, Film, ExternalLink, Radio } from 'lucide-react';
 import LeftSidebar from '@/app/components/LeftSidebar';
 import UserList from './_components/UserList';
 import ChatBox from './_components/ChatBox';
 import VoiceQueue from './_components/VoiceQueue';
+import { VoiceBridgeCard } from './_components/VoiceBridgeCard';
 import { cn } from "@/lib/utils";
 import { useToast } from '@/hooks/use-toast';
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -57,9 +58,18 @@ type WatchCardState = {
   playback?: { status?: string };
 };
 
-function RoomAudioPlayback() {
+
+function RoomAudioPlayback({ volume }: { volume: number }) {
     const room = useRoomContext();
+    const audioRootRef = useRef<HTMLDivElement>(null);
     const [audioBlocked, setAudioBlocked] = useState(false);
+
+    const applyVolume = useCallback(() => {
+        const normalizedVolume = Math.max(0, Math.min(1, Number(volume) || 0));
+        audioRootRef.current?.querySelectorAll<HTMLAudioElement>('audio').forEach((audio) => {
+            audio.volume = normalizedVolume;
+        });
+    }, [volume]);
 
     useEffect(() => {
         const updatePlaybackStatus = (canPlayback: boolean) => setAudioBlocked(!canPlayback);
@@ -70,9 +80,19 @@ function RoomAudioPlayback() {
         };
     }, [room]);
 
+    useEffect(() => {
+        applyVolume();
+        const root = audioRootRef.current;
+        if (!root) return;
+        const observer = new MutationObserver(applyVolume);
+        observer.observe(root, { childList: true, subtree: true });
+        return () => observer.disconnect();
+    }, [applyVolume]);
+
     const enableAudio = async () => {
         try {
             await room.startAudio();
+            applyVolume();
             setAudioBlocked(false);
         } catch (error) {
             setAudioBlocked(true);
@@ -82,7 +102,7 @@ function RoomAudioPlayback() {
 
     return (
         <>
-            <div aria-hidden="true" data-room-audio-renderer>
+            <div ref={audioRootRef} aria-hidden="true" data-room-audio-renderer>
                 <RoomAudioRenderer />
             </div>
             {audioBlocked && (
@@ -430,8 +450,8 @@ function SharedScreenShareCard({ roomId }: { roomId: string }) {
     );
 }
 
-function RoomHeader({ roomName, onToggleChat, showDJ, onToggleDJ, peerFallback, livekitReady, onScreenShare }: {
-    roomName: string; onToggleChat: () => void; showDJ: boolean; onToggleDJ: () => void; peerFallback?: boolean; livekitReady?: boolean; onScreenShare?: () => void;
+function RoomHeader({ roomName, onToggleChat, showDJ, onToggleDJ, canBridge, showVoiceBridge, onToggleVoiceBridge, peerFallback, livekitReady, onScreenShare }: {
+    roomName: string; onToggleChat: () => void; showDJ: boolean; onToggleDJ: () => void; canBridge?: boolean; showVoiceBridge?: boolean; onToggleVoiceBridge?: () => void; peerFallback?: boolean; livekitReady?: boolean; onScreenShare?: () => void;
 }) {
     const { isMobile } = useSidebar();
     const params = useParams();
@@ -459,11 +479,23 @@ function RoomHeader({ roomName, onToggleChat, showDJ, onToggleDJ, peerFallback, 
                         variant={showDJ ? "secondary" : "outline"}
                         size="icon"
                         onClick={onToggleDJ}
-                        aria-label={showDJ ? 'Hide HearMeOut DJ controls and Discord Activity' : 'Show HearMeOut DJ controls and Discord Activity'}
+                        aria-label={showDJ ? 'Hide HearMeOut DJ controls' : 'Show HearMeOut DJ controls'}
                     >
                         <Music className="h-4 w-4" />
                     </Button>
-                </TooltipTrigger><TooltipContent><p>{showDJ ? 'Hide DJ and Discord Activity' : 'Show DJ and Discord Activity'}</p></TooltipContent></Tooltip>
+                </TooltipTrigger><TooltipContent><p>{showDJ ? 'Hide HearMeOut DJ controls' : 'Show HearMeOut DJ controls'}</p></TooltipContent></Tooltip>
+                {canBridge && onToggleVoiceBridge && (
+                    <Tooltip><TooltipTrigger asChild>
+                        <Button
+                            variant={showVoiceBridge ? "secondary" : "outline"}
+                            size="icon"
+                            onClick={onToggleVoiceBridge}
+                            aria-label={showVoiceBridge ? 'Hide Discord voice bridge' : 'Show Discord voice bridge'}
+                        >
+                            <Radio className="h-4 w-4" />
+                        </Button>
+                    </TooltipTrigger><TooltipContent><p>{showVoiceBridge ? 'Hide Discord voice bridge' : 'Show Discord voice bridge'}</p></TooltipContent></Tooltip>
+                )}
                 {onScreenShare && (
                     <Tooltip><TooltipTrigger asChild>
                         <Button variant="outline" size="icon" onClick={onScreenShare}><Monitor className="h-4 w-4" /></Button>
@@ -589,6 +621,7 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
     const [peerAudioBlocked, setPeerAudioBlocked] = useState(false);
     const [localVolume, setLocalVolume] = useState(0.5);
     const [showDJ, setShowDJ] = useState(false);
+    const [showVoiceBridge, setShowVoiceBridge] = useState(false);
     const isActivityRoom = isActivityRoomId(roomId);
 
     const { data: userSettings } = useDoc<{ streamMode?: boolean; twitchChannel?: string }>(
@@ -733,6 +766,9 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
             : { title: 'P2P Audio Enabled', description: 'Incoming room voice is now playing.' });
     }, [toast]);
 
+    // Voice transport must be room-wide. If one browser cannot reach LiveKit
+    // and registers on the PeerJS mesh, move the remaining browsers to that
+    // same mesh so the room is not split across two isolated voice networks.
     useEffect(() => {
         if (!userId || !roomId || !voiceToken || voiceFallbackActive) return;
         let cancelled = false;
@@ -747,7 +783,9 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
                 if (Array.isArray(payload.peers) && payload.peers.length > 0) {
                     await startPeerVoiceFallback(new Error('Another participant switched this room to P2P voice'));
                 }
-            } catch {}
+            } catch {
+                // LiveKit remains active when fallback discovery is unavailable.
+            }
         };
 
         void followRoomFallback();
@@ -758,12 +796,14 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
         };
     }, [roomId, startPeerVoiceFallback, userId, voiceFallbackActive, voiceToken]);
 
+    // Check if user is banned
     const [isBanned, setIsBanned] = React.useState(false);
     useEffect(() => {
       if (!userId || !roomId) return;
       dbGet(`rooms/${roomId}/banned`, userId).then(data => { if (data) setIsBanned(true); });
     }, [userId, roomId]);
 
+    // Poll for move instructions
     useEffect(() => {
       if (!userId || !roomId) return;
       const checkMove = async () => {
@@ -790,6 +830,7 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
                 lastSeen: Date.now(),
             };
             dbSet(`rooms/${roomId}/users`, userId, userPresence, true);
+            // Update occupant count
             fetch(`/api/db?collection=rooms/${roomId}/users`).then(r => r.json()).then(users => {
                 if (Array.isArray(users)) dbUpdate('rooms', roomId, { occupantCount: users.length });
             }).catch(() => {});
@@ -804,6 +845,7 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
         setup();
         const heartbeat = setInterval(() => {
             dbSet(`rooms/${roomId}/users`, userId, { lastSeen: Date.now() }, true);
+            // Re-register peer presence for discovery
             if (peerVoiceRef.current?.active) {
                 fetch('/api/peer-voice/register', {
                     method: 'POST',
@@ -820,6 +862,7 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ collection: `rooms/${roomId}/users`, id: userId }),
             }).then(() => {
+                // Update occupant count on leave
                 fetch(`/api/db?collection=rooms/${roomId}/users`).then(r => r.json()).then(users => {
                     if (Array.isArray(users)) {
                         fetch('/api/db', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ collection: 'rooms', id: roomId, data: { occupantCount: users.length } }) }).catch(() => {});
@@ -838,6 +881,7 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
             clearInterval(heartbeat);
             window.removeEventListener('pagehide', onPageHide);
             clearPresence();
+            // Clean up audio elements
             for (const [, audioEl] of peerVoiceAudioRefs.current) {
               audioEl.srcObject = null;
               audioEl.remove();
@@ -858,6 +902,7 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
       );
     }
 
+    // Room expiry check
     const expiresAt = effectiveRoomExpiry(room.expiresAt, room.createdAt);
     const isExpired = expiresAt ? Date.now() > expiresAt : false;
     if (isExpired) {
@@ -891,7 +936,7 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
             }).catch(() => {});
             void startPeerVoiceFallback(err);
           }}>
-        <RoomAudioPlayback />
+        <RoomAudioPlayback volume={localVolume} />
         {renderRoomUI()}
       </LiveKitRoom>
       ) : fallbackRoom ? (
@@ -938,6 +983,9 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
                       onToggleChat={() => setChatOpen(!chatOpen)}
                       showDJ={showDJ}
                       onToggleDJ={() => setShowDJ(v => !v)}
+                      canBridge={isOwner || isActivityRoom}
+                      showVoiceBridge={showVoiceBridge}
+                      onToggleVoiceBridge={() => setShowVoiceBridge(v => !v)}
                       peerFallback={voiceFallbackActive}
                       livekitReady={voiceReady}
                       onScreenShare={() => openPopout('screenShare', { width: 720, height: 520 }, { source: 'screenShare' })}
@@ -977,7 +1025,7 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
                           onEnablePeerAudio={unlockPeerAudio}
                         />
                         {isActivityRoomId(roomId) ? (
-                          showDJ ? <DiscordActivityEmbedCard canPause={isOwner} /> : null
+                          <DiscordActivityEmbedCard canPause={isOwner} />
                         ) : (
                           <SharedWatchCard
                             roomId={roomId}
@@ -987,6 +1035,7 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
                           />
                         )}
                         <SharedScreenShareCard roomId={roomId} />
+                        {(isOwner || isActivityRoomId(roomId)) && showVoiceBridge && <VoiceBridgeCard roomId={roomId} />}
                         {isOwner && <VoiceQueue roomId={roomId} />}
                     </main>
                 </div>
@@ -1061,6 +1110,7 @@ function RoomPageContent() {
         );
     }
 
+    // Password gate for private rooms
     const isOwner = canManageRoom(user as any, effectiveRoom.ownerId);
     if (effectiveRoom.isPrivate && effectiveRoom.password && !passwordUnlocked && !isOwner) {
         return (
