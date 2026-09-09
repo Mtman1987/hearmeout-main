@@ -123,6 +123,7 @@ async function startRoomTts(roomId) {
       idleTimer: null,
       clipsPlayed: 0,
       lastSpokeAt: 0,
+      queueErrors: 0,
     };
     roomTtsSessions.set(roomId, record);
     scheduleIdle(roomId, record);
@@ -159,14 +160,21 @@ async function handleRoomTtsSpeak(req, res) {
       record.lastSpokeAt = Date.now();
       scheduleIdle(roomId, record);
     });
-    record.queue = queued.catch(() => {});
-    await queued;
+    record.queue = queued.catch((error) => {
+      record.queueErrors += 1;
+      console.error(`[RoomTTS:${roomId}] queued clip failed:`, error?.message || error);
+      scheduleIdle(roomId, record);
+    });
 
+    // The caller only needs confirmation that a decoded clip reached a healthy
+    // room publisher and entered its serialized playback queue. Do not keep the
+    // HTTP request open for the full spoken duration.
     return res.json({
       success: true,
+      queued: true,
       roomId,
       bytes: pcm.length,
-      clipsPlayed: record.clipsPlayed,
+      clipsAhead: 1,
       idleDisconnectMs: ROOM_TTS_IDLE_MS,
       transportHealthy: record.session.isHealthy(),
     });
@@ -199,6 +207,7 @@ function installRoutes(app, express) {
         roomId: record.roomId,
         transportHealthy: record.session.isHealthy(),
         clipsPlayed: record.clipsPlayed,
+        queueErrors: record.queueErrors,
         lastSpokeAt: record.lastSpokeAt || null,
       })),
     });
