@@ -11,6 +11,11 @@ const CORS_HEADERS = {
   'access-control-allow-headers': 'content-type, range',
 };
 
+type ExtractedYoutubeAudio = {
+  url: string;
+  mimeType?: string;
+};
+
 function getRequestBaseUrl(request: Request) {
   const url = new URL(request.url);
   const forwardedProto = request.headers.get('x-forwarded-proto');
@@ -37,7 +42,7 @@ function copyMediaHeaders(source: Headers) {
   return headers;
 }
 
-async function extractYoutubeAudio(videoId: string, refresh = false) {
+async function extractYoutubeAudio(videoId: string, refresh = false): Promise<ExtractedYoutubeAudio | null> {
   const workerUrl = getDjWorkerUrl();
   if (!workerUrl || !isValidVideoId(videoId)) return null;
 
@@ -54,7 +59,7 @@ async function extractYoutubeAudio(videoId: string, refresh = false) {
 
   const payload = await response.json().catch(() => null) as { url?: string; mimeType?: string } | null;
   if (!payload?.url || !/^https:\/\//i.test(payload.url)) return null;
-  return payload;
+  return { url: payload.url, mimeType: payload.mimeType };
 }
 
 async function proxyDiscordYoutubeAudio(request: Request, videoId: string) {
@@ -76,7 +81,7 @@ async function proxyDiscordYoutubeAudio(request: Request, videoId: string) {
   let mediaResponse = await fetchMedia(extracted.url);
   if (mediaResponse && (mediaResponse.status === 401 || mediaResponse.status === 403)) {
     const refreshed = await extractYoutubeAudio(videoId, true);
-    if (!refreshed?.url) return null;
+    if (!refreshed) return null;
     extracted = refreshed;
     mediaResponse = await fetchMedia(refreshed.url);
   }
