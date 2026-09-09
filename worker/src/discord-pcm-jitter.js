@@ -4,6 +4,12 @@
 // exact 20 ms clock. Keep a bounded adaptive playout buffer, but never invent
 // extra speech frames: replaying or stretching the final PCM sample is what
 // created the audible "machine-gun" edges during an underrun.
+//
+// Discord voice arrives already aggressively normalized. Feeding that PCM into
+// a second voice encoder at full-scale leaves effectively no headroom and makes
+// even small peaks (or two people talking at once) hit the bridge's hard clip.
+// Keep roughly 10 dB of headroom before the PCM reaches the LiveKit publisher.
+const DEFAULT_DISCORD_INGRESS_GAIN = 0.32;
 
 const AUDIO_PROFILES = Object.freeze({
   'low-latency': Object.freeze({
@@ -45,6 +51,7 @@ class DiscordPcmJitterSource {
     adaptiveMaxFrames,
     maxStartupWaitMs,
     fadeSamples,
+    outputGain = DEFAULT_DISCORD_INGRESS_GAIN,
   } = {}) {
     if (!Number.isInteger(frameBytes) || frameBytes <= 0 || frameBytes % 2 !== 0) {
       throw new Error('frameBytes must be a positive even integer');
@@ -52,6 +59,7 @@ class DiscordPcmJitterSource {
     this.frameBytes = frameBytes;
     this.channels = Math.max(1, Number(channels) || 2);
     this.frameDurationMs = Math.max(1, Number(frameDurationMs) || 20);
+    this.outputGain = clampNumber(outputGain, DEFAULT_DISCORD_INGRESS_GAIN, 0.05, 1);
     this.buf = Buffer.alloc(0);
     this.started = false;
     this.starved = false;
@@ -68,6 +76,8 @@ class DiscordPcmJitterSource {
       lateFrames: 0,
       droppedFrames: 0,
       concealedFrames: 0,
+      peakInput: 0,
+      peakOutput: 0,
     };
     this.configure({
       profile,
@@ -211,7 +221,11 @@ class DiscordPcmJitterSource {
         this.stableFrames = 0;
       }
     }
-    return frame;
+
+    const gained = applyPcm16Gain(frame, this.outputGain);
+    this.stats.peakInput = Math.max(this.stats.peakInput, gained.peakInput);
+    this.stats.peakOutput = Math.max(this.stats.peakOutput, gained.peakOutput);
+    return gained.frame;
   }
 
   snapshot() {
@@ -226,9 +240,26 @@ class DiscordPcmJitterSource {
       maxFrames: this.maxFrames,
       maxStartupWaitMs: this.maxStartupWaitMs,
       arrivalJitterMs: Math.round(this.arrivalJitterMs * 10) / 10,
+      outputGain: this.outputGain,
+      outputGainDb: Math.round((20 * Math.log10(this.outputGain)) * 10) / 10,
       ...this.stats,
     };
   }
+}
+
+function applyPcm16Gain(frame, gain = DEFAULT_DISCORD_INGRESS_GAIN) {
+  const resolvedGain = clampNumber(gain, DEFAULT_DISCORD_INGRESS_GAIN, 0.05, 1);
+  const out = Buffer.from(frame);
+  let peakInput = 0;
+  let peakOutput = 0;
+  for (let i = 0; i + 1 < out.length; i += 2) {
+    const input = out.readInt16LE(i);
+    const output = Math.max(-32768, Math.min(32767, Math.round(input * resolvedGain)));
+    peakInput = Math.max(peakInput, Math.abs(input));
+    peakOutput = Math.max(peakOutput, Math.abs(output));
+    out.writeInt16LE(output, i);
+  }
+  return { frame: out, peakInput, peakOutput };
 }
 
 function fadePcm16Edge(frame, direction, fadeSamples = 144, channels = 2) {
@@ -268,10 +299,18 @@ function clampInteger(value, fallback, min, max) {
   return Math.max(min, Math.min(max, resolved));
 }
 
+function clampNumber(value, fallback, min, max) {
+  const parsed = Number(value);
+  const resolved = Number.isFinite(parsed) ? parsed : fallback;
+  return Math.max(min, Math.min(max, resolved));
+}
+
 module.exports = {
   AUDIO_PROFILES,
+  DEFAULT_DISCORD_INGRESS_GAIN,
   DiscordPcmJitterSource,
   normalizeAudioProfile,
+  applyPcm16Gain,
   fadePcm16Edge,
   attackPcm16,
   releasePcm16,
