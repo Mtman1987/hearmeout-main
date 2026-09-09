@@ -90,8 +90,9 @@ replaceOnce(
   'mono LiveKit source',
 );
 
+const musicLaneMarker = "    for (const [livekitRoomId, label] of [[this.roomId, 'voice'], [`${this.roomId}-music`, 'music']]) {";
 replaceOnce(
-  `    for (const [livekitRoomId, label] of [[this.roomId, 'voice'], [\`${this.roomId}-music\`, 'music']]) {`,
+  musicLaneMarker,
   `    // Voice bridge is speech-only. Music/video stays in Discord Activities.\n    for (const [livekitRoomId, label] of [[this.roomId, 'voice']]) {`,
   'remove music bridge lane',
 );
