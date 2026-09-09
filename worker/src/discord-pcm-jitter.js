@@ -11,13 +11,6 @@
 // Keep roughly 10 dB of headroom before the PCM reaches the LiveKit publisher.
 const DEFAULT_DISCORD_INGRESS_GAIN = 0.32;
 
-// A drained receive buffer is normal at the end of a Discord speech burst. It
-// is only a transport underrun when PCM comes back almost immediately, meaning
-// the playout clock caught the producer mid-utterance. Longer gaps are treated
-// as a new utterance and re-prime at the normal profile target instead of
-// ratcheting the adaptive buffer upward forever during ordinary conversation.
-const SHORT_GAP_REBUFFER_MS = 80;
-
 const AUDIO_PROFILES = Object.freeze({
   'low-latency': Object.freeze({
     targetFrames: 4,
@@ -59,7 +52,6 @@ class DiscordPcmJitterSource {
     maxStartupWaitMs,
     fadeSamples,
     outputGain = DEFAULT_DISCORD_INGRESS_GAIN,
-    shortGapRebufferMs = SHORT_GAP_REBUFFER_MS,
   } = {}) {
     if (!Number.isInteger(frameBytes) || frameBytes <= 0 || frameBytes % 2 !== 0) {
       throw new Error('frameBytes must be a positive even integer');
@@ -68,21 +60,17 @@ class DiscordPcmJitterSource {
     this.channels = Math.max(1, Number(channels) || 2);
     this.frameDurationMs = Math.max(1, Number(frameDurationMs) || 20);
     this.outputGain = clampNumber(outputGain, DEFAULT_DISCORD_INGRESS_GAIN, 0.05, 1);
-    this.shortGapRebufferMs = clampInteger(shortGapRebufferMs, SHORT_GAP_REBUFFER_MS, 20, 250);
     this.buf = Buffer.alloc(0);
     this.started = false;
     this.starved = false;
-    this.starvedAt = 0;
     this.needsAttack = false;
     this.firstPacketAt = 0;
     this.lastPushAt = 0;
-    this.lastPushFrames = 0;
     this.arrivalJitterMs = 0;
     this.stableFrames = 0;
     this.stats = {
       starts: 0,
       speechEnds: 0,
-      speechRestarts: 0,
       underruns: 0,
       rebuffers: 0,
       lateFrames: 0,
@@ -142,53 +130,21 @@ class DiscordPcmJitterSource {
   push(pcm, now = Date.now()) {
     if (!pcm || pcm.length === 0) return;
     const bytes = Buffer.isBuffer(pcm) ? pcm : Buffer.from(pcm);
-    const frames = Math.max(1, Math.floor(bytes.length / this.frameBytes));
-
-    // This is decoder/PCM delivery jitter, not Discord RTP/network jitter. The
-    // decoder emits chunks that can contain several 20 ms frames, so compare
-    // this callback against the duration of the PREVIOUS chunk. Also exclude
-    // normal talk-spurt gaps: silence between words/speakers must not show up as
-    // 100-300 ms of scary "jitter" in the UI.
-    if (this.lastPushAt) {
-      const gapMs = Math.max(0, now - this.lastPushAt);
-      const expectedGapMs = Math.max(1, this.lastPushFrames || frames) * this.frameDurationMs;
-      const excessGapMs = Math.max(0, gapMs - expectedGapMs);
-      const newSpeechBurst = excessGapMs > this.shortGapRebufferMs;
-      if (newSpeechBurst) {
-        this.arrivalJitterMs = 0;
-      } else {
-        const observedJitter = Math.abs(gapMs - expectedGapMs);
-        this.arrivalJitterMs = this.arrivalJitterMs
-          ? this.arrivalJitterMs * 0.9 + observedJitter * 0.1
-          : observedJitter;
-      }
-    }
-
-    // Do not declare an underrun merely because Discord stopped sending PCM.
-    // Discord naturally stops at speech boundaries. If PCM resumes within a
-    // very short gap after the playout buffer drained, that is a real mid-
-    // utterance starvation and should increase the adaptive target. Otherwise
-    // this is simply a new utterance and should re-prime at the normal target.
-    if (this.starved && this.started) {
-      const starvationGapMs = this.starvedAt ? Math.max(0, now - this.starvedAt) : Number.POSITIVE_INFINITY;
-      if (starvationGapMs <= this.shortGapRebufferMs) {
-        this.stats.lateFrames += 1;
-        this.recordUnderrun(now);
-      } else {
-        this.started = false;
-        this.starved = false;
-        this.starvedAt = 0;
-        this.needsAttack = false;
-        this.firstPacketAt = now;
-        this.stableFrames = 0;
-        this.stats.speechRestarts += 1;
-        if (this.targetFrames > this.baseTargetFrames) this.targetFrames -= 1;
-      }
-    }
-
     if (!this.firstPacketAt) this.firstPacketAt = now;
+    if (this.lastPushAt) {
+      const frames = Math.max(1, Math.floor(bytes.length / this.frameBytes));
+      const expectedGap = frames * this.frameDurationMs;
+      const observedJitter = Math.abs((now - this.lastPushAt) - expectedGap);
+      this.arrivalJitterMs = this.arrivalJitterMs
+        ? this.arrivalJitterMs * 0.9 + observedJitter * 0.1
+        : observedJitter;
+    }
     this.lastPushAt = now;
-    this.lastPushFrames = frames;
+    if (this.starved && this.started) {
+      this.needsAttack = true;
+      this.starved = false;
+      this.stats.lateFrames += 1;
+    }
     this.buf = this.buf.length ? Buffer.concat([this.buf, bytes]) : Buffer.from(bytes);
 
     const maxBytes = this.maxFrames * this.frameBytes;
@@ -215,7 +171,6 @@ class DiscordPcmJitterSource {
   beginPlayout() {
     this.started = true;
     this.starved = false;
-    this.starvedAt = 0;
     this.needsAttack = true;
     this.stats.starts += 1;
   }
@@ -223,12 +178,13 @@ class DiscordPcmJitterSource {
   recordUnderrun(now) {
     this.started = false;
     this.starved = false;
-    this.starvedAt = 0;
     this.needsAttack = false;
     this.firstPacketAt = this.buf.length ? now : 0;
     this.stableFrames = 0;
     this.stats.underruns += 1;
     this.stats.rebuffers += 1;
+    // Adapt quickly to a poor route, but remain far below the old fixed 600ms
+    // delay. Stable playback gradually returns to the selected profile.
     this.targetFrames = Math.min(this.adaptiveMaxFrames, this.targetFrames + 2);
   }
 
@@ -239,10 +195,8 @@ class DiscordPcmJitterSource {
     }
 
     if (this.buf.length < this.frameBytes) {
-      if (!this.starved) {
-        this.starved = true;
-        this.starvedAt = now;
-      }
+      if (this.starved) this.recordUnderrun(now);
+      else this.starved = true;
       return null;
     }
 
@@ -255,15 +209,12 @@ class DiscordPcmJitterSource {
 
     if (this.buf.length < this.frameBytes) {
       // Fade only the tail of the real final frame. Do not synthesize/replay
-      // another 20ms frame from its last samples. Mark the source drained, but
-      // wait to see whether PCM resumes quickly before calling it an underrun.
+      // another 20ms frame from its last samples.
       frame = fadePcm16Edge(frame, 'out', this.fadeSamples, this.channels);
       this.starved = true;
-      this.starvedAt = now;
       this.stats.speechEnds += 1;
     } else {
       this.starved = false;
-      this.starvedAt = 0;
       this.stableFrames += 1;
       if (this.stableFrames >= 1500 && this.targetFrames > this.baseTargetFrames) {
         this.targetFrames -= 1;
@@ -288,7 +239,6 @@ class DiscordPcmJitterSource {
       targetMs: this.targetFrames * this.frameDurationMs,
       maxFrames: this.maxFrames,
       maxStartupWaitMs: this.maxStartupWaitMs,
-      shortGapRebufferMs: this.shortGapRebufferMs,
       arrivalJitterMs: Math.round(this.arrivalJitterMs * 10) / 10,
       outputGain: this.outputGain,
       outputGainDb: Math.round((20 * Math.log10(this.outputGain)) * 10) / 10,
@@ -358,7 +308,6 @@ function clampNumber(value, fallback, min, max) {
 module.exports = {
   AUDIO_PROFILES,
   DEFAULT_DISCORD_INGRESS_GAIN,
-  SHORT_GAP_REBUFFER_MS,
   DiscordPcmJitterSource,
   normalizeAudioProfile,
   applyPcm16Gain,

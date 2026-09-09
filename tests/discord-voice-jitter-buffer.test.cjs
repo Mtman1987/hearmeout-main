@@ -59,92 +59,28 @@ test('speech release fades the tail inside the real final frame', () => {
   assert.equal(released.readInt16LE(6), 0);
 });
 
-test('drained speech is a normal pause and does not inflate underrun or target counters', () => {
+test('drained speech never emits synthesized or repeated PCM frames', () => {
   const source = new DiscordPcmJitterSource({ frameBytes: 8, profile: 'low-latency', fadeSamples: 1 });
-  source.push(repeatedFrames(4, 12000), 1000);
-  assert.ok(source.nextFrame(1000));
-  assert.ok(source.nextFrame(1020));
-  assert.ok(source.nextFrame(1040));
-  assert.ok(source.nextFrame(1060));
-  assert.equal(source.nextFrame(1080), null);
-  assert.equal(source.nextFrame(1100), null);
-
-  const idle = source.snapshot();
-  assert.equal(idle.concealedFrames, 0);
-  assert.equal(idle.underruns, 0);
-  assert.equal(idle.targetFrames, AUDIO_PROFILES['low-latency'].targetFrames);
-
-  // A later utterance should re-prime as speech, not be treated as a network
-  // underrun simply because Discord emitted no PCM while the user was quiet.
-  source.push(repeatedFrames(4, 9000), 1300);
-  assert.ok(source.nextFrame(1300));
-  assert.equal(source.snapshot().underruns, 0);
-  assert.equal(source.snapshot().speechRestarts, 1);
-});
-
-test('a short producer gap after the playout buffer drains is a real adaptive underrun', () => {
-  const source = new DiscordPcmJitterSource({ frameBytes: 8, profile: 'low-latency', fadeSamples: 1 });
-  source.push(repeatedFrames(4, 12000), 1000);
-  assert.ok(source.nextFrame(1000));
-  assert.ok(source.nextFrame(1020));
-  assert.ok(source.nextFrame(1040));
-  assert.ok(source.nextFrame(1060));
-
-  // Final frame drained at 1060; PCM resuming 40 ms later means the transport
-  // starved mid-utterance, not that a human naturally paused for a new phrase.
-  source.push(repeatedFrames(6, 12000), 1100);
-  assert.equal(source.snapshot().underruns, 1);
-  assert.equal(source.snapshot().rebuffers, 1);
-  assert.equal(source.snapshot().lateFrames, 1);
-  assert.equal(source.snapshot().targetFrames, 6);
+  source.push(repeatedFrames(2, 12000), 1000);
   assert.ok(source.nextFrame(1100));
+  assert.ok(source.nextFrame(1120));
+  assert.equal(source.nextFrame(1140), null);
+  assert.equal(source.nextFrame(1160), null);
+  assert.equal(source.snapshot().concealedFrames, 0);
+  assert.equal(source.snapshot().underruns, 1);
 });
 
-test('repeated short transport gaps raise the adaptive target only within the selected profile limit', () => {
+test('repeated underruns raise the adaptive target only within the selected profile limit', () => {
   const source = new DiscordPcmJitterSource({ frameBytes: 8, profile: 'low-latency', fadeSamples: 1 });
-  let now = 1000;
-
   for (let cycle = 0; cycle < 8; cycle += 1) {
-    const target = source.snapshot().targetFrames;
-    const missing = Math.max(0, target - source.bufferedFrames());
-    if (missing) source.push(repeatedFrames(missing), now);
-
-    for (let frame = 0; frame < target; frame += 1) {
-      assert.ok(source.nextFrame(now + frame * 20));
-    }
-
-    const finalFrameAt = now + (target - 1) * 20;
-    const resumeAt = finalFrameAt + 40;
-    source.push(pcmFrame([1000, 1000, 1000, 1000]), resumeAt);
-    now = resumeAt;
+    const at = 1000 + cycle * 200;
+    const frames = source.snapshot().targetFrames;
+    source.push(repeatedFrames(frames), at);
+    for (let frame = 0; frame < frames; frame += 1) assert.ok(source.nextFrame(at + frame * 20));
+    source.nextFrame(at + frames * 20);
+    source.nextFrame(at + frames * 20 + 20);
   }
-
   assert.equal(source.snapshot().targetFrames, AUDIO_PROFILES['low-latency'].adaptiveMaxFrames);
-  assert.ok(source.snapshot().underruns > 0);
-});
-
-test('PCM arrival jitter uses the previous decoded chunk duration', () => {
-  const source = new DiscordPcmJitterSource({ frameBytes: 8, profile: 'balanced' });
-
-  // Four 20 ms frames should make the next decoder callback naturally arrive
-  // about 80 ms later, regardless of how many frames the next callback holds.
-  source.push(repeatedFrames(4), 1000);
-  source.push(pcmFrame([1000, 1000, 1000, 1000]), 1080);
-  assert.equal(source.snapshot().arrivalJitterMs, 0);
-});
-
-test('normal silence between speech bursts does not count as PCM arrival jitter', () => {
-  const source = new DiscordPcmJitterSource({ frameBytes: 8, profile: 'balanced' });
-
-  source.push(repeatedFrames(4), 1000);
-  source.push(repeatedFrames(4), 1080);
-  assert.equal(source.snapshot().arrivalJitterMs, 0);
-
-  // The previous chunk represents 80 ms of PCM. Returning 420 ms later leaves
-  // a 340 ms human-silence gap, which starts a new talk spurt instead of
-  // polluting the jitter metric.
-  source.push(repeatedFrames(4), 1500);
-  assert.equal(source.snapshot().arrivalJitterMs, 0);
 });
 
 test('caps excessive backlog on whole PCM frames', () => {
