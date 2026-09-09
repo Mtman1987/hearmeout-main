@@ -6,13 +6,15 @@ import {
   getWatchSession,
   requestWatchMusicItem,
 } from '@/lib/watch-request-service';
-import { getMusicWatchSessionId, getRoomWatchSessionId } from '@/lib/watch-session';
+import { ACTIVITY_ROOM_ID, getMusicWatchSessionId, getRoomWatchSessionId } from '@/lib/watch-session';
 import {
   changeRoomPersonaForBotAction,
   controlVoiceBridgeForBotAction,
   listRoomsForBotAction,
   readVoiceBridgeForBotAction,
 } from '@/lib/bot-room-action-service';
+import { getDjWorkerUrl } from '@/lib/dj-worker-config';
+import { getDjWorkerRequestHeaders } from '@/lib/dj-worker-auth';
 
 export const dynamic = 'force-dynamic';
 
@@ -23,7 +25,8 @@ type HearMeOutAction =
   | 'hmo.rooms.read'
   | 'hmo.bot.control'
   | 'hmo.voice.bridge.state'
-  | 'hmo.voice.bridge.control';
+  | 'hmo.voice.bridge.control'
+  | 'hmo.tts.speak';
 const ACTIONS = new Set<HearMeOutAction>([
   'hmo.media.state.read',
   'hmo.media.request',
@@ -32,6 +35,7 @@ const ACTIONS = new Set<HearMeOutAction>([
   'hmo.bot.control',
   'hmo.voice.bridge.state',
   'hmo.voice.bridge.control',
+  'hmo.tts.speak',
 ]);
 const CONTROLS = new Set(['play', 'pause', 'next', 'clear', 'mute', 'unmute', 'volume']);
 
@@ -64,6 +68,29 @@ export async function POST(request: NextRequest) {
       tenantId: text(body?.tenantId, 160),
       actorRole: text(body?.actorRole, 40),
     };
+
+    if (action === 'hmo.tts.speak') {
+      const targetRoomId = room || ACTIVITY_ROOM_ID;
+      const audioDataUri = String(body?.audioDataUri || '').trim();
+      if (!audioDataUri.startsWith('data:audio')) {
+        return NextResponse.json({ error: 'A TTS audio data URI is required' }, { status: 400 });
+      }
+      if (audioDataUri.length > 30_000_000) {
+        return NextResponse.json({ error: 'TTS audio payload is too large' }, { status: 413 });
+      }
+      const workerResponse = await fetch(`${getDjWorkerUrl()}/room-tts/speak`, {
+        method: 'POST',
+        headers: getDjWorkerRequestHeaders({ 'Content-Type': 'application/json', Accept: 'application/json' }),
+        body: JSON.stringify({ roomId: targetRoomId, audioDataUri }),
+        cache: 'no-store',
+        signal: typeof AbortSignal.timeout === 'function' ? AbortSignal.timeout(45_000) : undefined,
+      });
+      const workerPayload = await workerResponse.json().catch(() => ({})) as any;
+      if (!workerResponse.ok || workerPayload?.success === false) {
+        throw new Error(String(workerPayload?.error || `Room TTS worker returned ${workerResponse.status}`));
+      }
+      return NextResponse.json({ success: true, action, roomId: targetRoomId, ...workerPayload });
+    }
 
     if (action === 'hmo.rooms.read') {
       const rooms = await listRoomsForBotAction(actor);
@@ -150,9 +177,9 @@ export async function POST(request: NextRequest) {
         ? 404
         : /more than one/i.test(message)
           ? 409
-          : /required|must be|unsupported|profile/i.test(message)
+          : /required|must be|unsupported|profile|payload/i.test(message)
             ? 400
-            : /unavailable|unreachable|worker|discord/i.test(message)
+            : /unavailable|unreachable|worker|discord|tts/i.test(message)
               ? 502
               : 500;
     return NextResponse.json({ error: message, action }, { status });
