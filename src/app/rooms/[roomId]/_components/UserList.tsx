@@ -103,7 +103,14 @@ function LiveKitParticipants({ isHost, roomId }: { isHost: boolean; roomId: stri
   const allAudioTracks = useTracks(
     [Track.Source.Microphone, Track.Source.Unknown],
     { onlySubscribed: true }
-  ).filter(track => track.publication && !track.participant.isLocal && !isHiddenBridgeParticipant(track.participant.identity));
+  ).filter(track =>
+    track.publication
+    && !track.participant.isLocal
+    && !isHiddenBridgeParticipant(track.participant.identity)
+    // RoomAudioPlayback already renders this system TTS track. Excluding it
+    // here prevents the same synthesized voice from being played twice.
+    && !isRoomTtsParticipant(track.participant.identity)
+  );
 
   return (
     <>
