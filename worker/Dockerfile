@@ -28,7 +28,8 @@ COPY worker/src ./src
 COPY worker/scripts ./scripts
 RUN node ./scripts/patch-voice-bridge-audio-state.cjs \
     && node ./scripts/patch-voice-bridge-voice-only.cjs \
-    && node ./scripts/patch-voice-bridge-silence-tail.cjs
+    && node ./scripts/patch-voice-bridge-silence-tail.cjs \
+    && node ./scripts/patch-voice-bridge-jitter-status.cjs
 
 RUN mkdir -p /tmp/music
 
