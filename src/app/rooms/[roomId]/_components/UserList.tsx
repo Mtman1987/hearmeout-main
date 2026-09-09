@@ -87,11 +87,17 @@ function PeerPresenceParticipants({ roomId, localUserId, connectedPeerIds }: { r
 const isHiddenBridgeParticipant = (identity?: string) =>
   !!identity && identity.startsWith('discord-bridge-listener');
 
+const isRoomTtsParticipant = (identity?: string) =>
+  !!identity && identity.startsWith('room-tts:');
+
 function LiveKitParticipants({ isHost, roomId }: { isHost: boolean; roomId: string }) {
   const { localParticipant } = useLocalParticipant();
   const remoteParticipants = useRemoteParticipants();
+  const voiceInputParticipants = remoteParticipants.filter(
+    (participant) => !isRoomTtsParticipant(participant?.identity) && !isHiddenBridgeParticipant(participant?.identity),
+  );
   const allParticipants = [localParticipant, ...remoteParticipants].filter(
-    (participant) => !isHiddenBridgeParticipant(participant?.identity),
+    (participant) => !isHiddenBridgeParticipant(participant?.identity) && !isRoomTtsParticipant(participant?.identity),
   );
 
   const allAudioTracks = useTracks(
@@ -104,9 +110,11 @@ function LiveKitParticipants({ isHost, roomId }: { isHost: boolean; roomId: stri
       {/* One authoritative human-speech path for the entire room. It records
           the already-published LiveKit mic, transcribes through the same STT as
           the persona Talk button, applies the same wake-name resolver as typed
-          chat, and sends through /api/bot/commands. */}
-      <WakeWordListener roomId={roomId} remoteParticipants={remoteParticipants} />
-      <MobileVoiceControl roomId={roomId} remoteParticipants={remoteParticipants} />
+          chat, and sends through /api/bot/commands. System room TTS is audible
+          but deliberately excluded from STT so a spoken bot reply cannot wake
+          another bot and feed back into itself. */}
+      <WakeWordListener roomId={roomId} remoteParticipants={voiceInputParticipants} />
+      <MobileVoiceControl roomId={roomId} remoteParticipants={voiceInputParticipants} />
       {allAudioTracks.map((trackRef) => (
         <AudioTrack key={trackRef.publication.trackSid} trackRef={trackRef} volume={1.0} muted={false} />
       ))}
