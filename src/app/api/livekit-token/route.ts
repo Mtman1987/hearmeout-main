@@ -7,8 +7,8 @@ import { isDjWorkerRequest } from '@/lib/dj-worker-auth';
 
 // Mints LiveKit access tokens. Browser users are bound to their verified
 // HearMeOut session. Internal worker identities are separately authenticated
-// with HMO_WORKER_SHARED_SECRET and may mint DJ, Discord bridge, or persona
-// participants for the requested room.
+// with HMO_WORKER_SHARED_SECRET and may mint DJ, Discord bridge, room TTS, or
+// persona participants for the requested room.
 
 async function isRoomDJ(uid: string, roomId: string): Promise<{
   ok: boolean;
@@ -40,6 +40,9 @@ export async function POST(request: NextRequest) {
       voiceBridge,
       bridgeIdentity,
       bridgeMetadata,
+      roomTts,
+      ttsIdentity,
+      ttsMetadata,
       persona,
       personaId,
       personaMetadata,
@@ -49,6 +52,7 @@ export async function POST(request: NextRequest) {
       !session
       && !(musicRoom && isDJ && fromDjWorker)
       && !(voiceBridge && fromDjWorker)
+      && !(roomTts && fromDjWorker)
       && !(persona && fromDjWorker)
     ) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
@@ -63,6 +67,34 @@ export async function POST(request: NextRequest) {
 
     if (!apiKey || !apiSecret) {
       return NextResponse.json({ error: 'LiveKit credentials not configured' }, { status: 500 });
+    }
+
+    // Shared public-room TTS is an output-only system participant. It is kept
+    // separate from personas and the Discord voice bridge so TTS can be changed
+    // without touching either conversation runtime or voice transport. The
+    // worker disconnects this publisher after a short idle window.
+    if (roomTts && fromDjWorker) {
+      const cleanIdentity = String(ttsIdentity || `room-tts:${roomId}`)
+        .trim()
+        .replace(/[^A-Za-z0-9_.:-]/g, '')
+        .slice(0, 96) || `room-tts:${String(roomId).slice(0, 70)}`;
+      const metadata = typeof ttsMetadata === 'string'
+        ? ttsMetadata.slice(0, 2048)
+        : JSON.stringify(ttsMetadata || {
+            type: 'system-audio',
+            hidden: true,
+            source: 'room-tts',
+          }).slice(0, 2048);
+      const at = new AccessToken(apiKey, apiSecret, {
+        identity: cleanIdentity,
+        name: typeof userName === 'string' && userName.trim()
+          ? userName.trim().slice(0, 64)
+          : 'Room TTS',
+        metadata,
+        ttl: '15m',
+      });
+      at.addGrant({ roomJoin: true, room: roomId, canPublish: true, canSubscribe: false });
+      return NextResponse.json({ token: await at.toJwt() });
     }
 
     if (persona && fromDjWorker) {
@@ -122,7 +154,7 @@ export async function POST(request: NextRequest) {
         const dj = !session || fromDjWorker ? { ok: true } : await isRoomDJ(uid, roomId);
         if (!dj.ok) {
           return NextResponse.json(
-            { error: `forbidden: ${dj.reason ?? 'not allowed to DJ'}` },
+            { error: `forbidden: ${dj.reason ?? 'not allowed to DJ this room'}` },
             { status: 403 },
           );
         }
