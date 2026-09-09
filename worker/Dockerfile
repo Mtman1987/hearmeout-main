@@ -26,7 +26,8 @@ RUN npm ci --omit=dev
 
 COPY worker/src ./src
 COPY worker/scripts ./scripts
-RUN node ./scripts/patch-voice-bridge-audio-state.cjs
+RUN node ./scripts/patch-voice-bridge-audio-state.cjs \
+    && node ./scripts/patch-voice-bridge-voice-only.cjs
 
 RUN mkdir -p /tmp/music
 
