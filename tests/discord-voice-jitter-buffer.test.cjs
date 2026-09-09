@@ -123,6 +123,30 @@ test('repeated short transport gaps raise the adaptive target only within the se
   assert.ok(source.snapshot().underruns > 0);
 });
 
+test('PCM arrival jitter uses the previous decoded chunk duration', () => {
+  const source = new DiscordPcmJitterSource({ frameBytes: 8, profile: 'balanced' });
+
+  // Four 20 ms frames should make the next decoder callback naturally arrive
+  // about 80 ms later, regardless of how many frames the next callback holds.
+  source.push(repeatedFrames(4), 1000);
+  source.push(pcmFrame([1000, 1000, 1000, 1000]), 1080);
+  assert.equal(source.snapshot().arrivalJitterMs, 0);
+});
+
+test('normal silence between speech bursts does not count as PCM arrival jitter', () => {
+  const source = new DiscordPcmJitterSource({ frameBytes: 8, profile: 'balanced' });
+
+  source.push(repeatedFrames(4), 1000);
+  source.push(repeatedFrames(4), 1080);
+  assert.equal(source.snapshot().arrivalJitterMs, 0);
+
+  // The previous chunk represents 80 ms of PCM. Returning 420 ms later leaves
+  // a 340 ms human-silence gap, which starts a new talk spurt instead of
+  // polluting the jitter metric.
+  source.push(repeatedFrames(4), 1500);
+  assert.equal(source.snapshot().arrivalJitterMs, 0);
+});
+
 test('caps excessive backlog on whole PCM frames', () => {
   const source = new DiscordPcmJitterSource({ frameBytes: 8, profile: 'balanced' });
   source.push(Buffer.concat(Array.from({ length: 100 }, (_, i) => pcmFrame([i, i, i, i]))), 1000);
