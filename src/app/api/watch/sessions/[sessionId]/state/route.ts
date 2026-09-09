@@ -73,10 +73,12 @@ async function proxyDiscordYoutubeAudio(request: Request, videoId: string) {
     return fetch(url, { headers, redirect: 'follow', cache: 'no-store' }).catch(() => null);
   };
 
-  let mediaResponse = await fetchMedia(extracted.url!);
+  let mediaResponse = await fetchMedia(extracted.url);
   if (mediaResponse && (mediaResponse.status === 401 || mediaResponse.status === 403)) {
-    extracted = await extractYoutubeAudio(videoId, true);
-    if (extracted?.url) mediaResponse = await fetchMedia(extracted.url);
+    const refreshed = await extractYoutubeAudio(videoId, true);
+    if (!refreshed?.url) return null;
+    extracted = refreshed;
+    mediaResponse = await fetchMedia(refreshed.url);
   }
   if (!mediaResponse?.ok && mediaResponse?.status !== 206) return null;
 
