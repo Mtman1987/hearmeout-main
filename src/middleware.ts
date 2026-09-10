@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { HMO_SPMT_REFRESH_COOKIE, refreshHmoSpmtSession, type RefreshedHmoSpmtSession } from '@/lib/spmt-session';
+import { isActivityEntry, isPublicActivityRequest } from '@/lib/activity-access';
 
 const SPMT_BASE_URL = String(process.env.SPMT_BASE_URL || 'https://spmt.live').replace(/\/$/, '');
 const SPMT_COOKIE = 'hmo_spmt_session';
@@ -82,7 +83,19 @@ function withRefresh(response: NextResponse, refreshed: RefreshedHmoSpmtSession 
 
 export async function middleware(request: NextRequest) {
   const pathname = request.nextUrl.pathname;
-  if (PUBLIC_PREFIXES.some((prefix) => pathname === prefix || pathname.startsWith(prefix)) || isStatic(pathname)) {
+  if (isPublicActivityRequest(request.nextUrl, request.method)) {
+    // Root URL mappings must reach the standalone player before the React
+    // account shell mounts. Keep Discord's origin and all launch parameters.
+    if (pathname === '/' && isActivityEntry(request.nextUrl)) {
+      const activity = request.nextUrl.clone();
+      activity.pathname = '/activity';
+      return NextResponse.rewrite(activity);
+    }
+    return NextResponse.next();
+  }
+  // The .js entry can contain a private session id; do not let the generic
+  // static-file exception turn that into a public entry point.
+  if (PUBLIC_PREFIXES.some((prefix) => pathname === prefix || pathname.startsWith(prefix)) || (isStatic(pathname) && !isActivityEntry(request.nextUrl))) {
     return NextResponse.next();
   }
 

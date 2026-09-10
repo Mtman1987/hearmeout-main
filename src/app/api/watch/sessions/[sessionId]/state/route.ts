@@ -81,7 +81,7 @@ async function proxyDiscordYoutubeAudio(request: Request, videoId: string) {
   if (!mediaResponse?.ok && mediaResponse?.status !== 206) return null;
 
   const headers = copyMediaHeaders(mediaResponse.headers);
-  if (!headers.get('content-type') && extracted.mimeType) headers.set('content-type', extracted.mimeType);
+  if (!headers.get('content-type') && extracted?.mimeType) headers.set('content-type', extracted.mimeType);
   headers.set('cache-control', 'no-store');
   return new NextResponse(mediaResponse.body, {
     status: mediaResponse.status,

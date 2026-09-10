@@ -289,7 +289,9 @@ function youtubeVideoIdForItem(item) {
 }
 
 function shouldResolveYoutubeInBrowser(item) {
-  return Boolean(youtubeVideoIdForItem(item) && item?.metadata?.playbackStrategy === 'proxy');
+  // Discord cannot download external YouTube URLs or upload a browser cache.
+  // Consume the worker's shared media through the same-origin state route.
+  return !IS_DISCORD_ACTIVITY && Boolean(youtubeVideoIdForItem(item) && item?.metadata?.playbackStrategy === 'proxy');
 }
 
 function scheduleControlsHide() {
@@ -506,6 +508,7 @@ function appUrl(path) {
 
 function apiUrls(path) {
   const urls = [appUrl(path)];
+  if (IS_DISCORD_ACTIVITY) return urls;
   if (path && !/^https?:\\/\\//i.test(path) && APP_BASE_URL) {
     try {
       const base = new URL(APP_BASE_URL, window.location.href);
@@ -634,6 +637,7 @@ async function api(path, options) {
       ...requestOptions,
       cache: 'no-store',
       headers,
+      signal: requestOptions.signal || AbortSignal.timeout(15000),
     });
     if (response.ok) return response.json();
     const payload = await response.json().catch(() => null);
@@ -1046,15 +1050,23 @@ function setDrawer(panelName) {
   wakeControls();
 }
 
+let refreshing = false;
 async function refresh() {
+  if (refreshing) return;
+  refreshing = true;
+  const requestedSessionId = sessionId;
   try {
-    render(await api('/api/watch/sessions/' + sessionId + '/state'));
+    const nextState = await api('/api/watch/sessions/' + requestedSessionId + '/state');
+    if (requestedSessionId !== sessionId) return;
+    render(nextState);
     if (statusEl.textContent !== 'Discord connected') statusEl.textContent = 'Live';
     errorEl.textContent = '';
   } catch (err) {
     statusEl.textContent = 'Disconnected';
     errorEl.textContent = err && err.message ? err.message : String(err);
     console.error(err);
+  } finally {
+    refreshing = false;
   }
 }
 

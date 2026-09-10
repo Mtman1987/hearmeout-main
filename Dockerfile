@@ -11,6 +11,9 @@ RUN npm ci --legacy-peer-deps
 
 COPY . .
 
+# Exercise the real middleware and generated Activity player before shipping.
+RUN node --import tsx --test tests/discord-activity-startup.test.ts
+
 # Copy sql.js WASM file to the build output location
 RUN mkdir -p /app/public && \
     cp node_modules/sql.js/dist/sql-wasm.wasm /app/public/ || true
