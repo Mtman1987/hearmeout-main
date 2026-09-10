@@ -41,7 +41,9 @@ test('ambient browser speech never reaches cloud STT; local Companion supplies w
   const users = source('src/app/rooms/[roomId]/_components/UserList.tsx');
   const mobile = source('src/app/rooms/[roomId]/_components/MobileVoiceControl.tsx');
 
-  assert.match(users, /<WakeWordListener roomId=\{roomId\} remoteParticipants=\{remoteParticipants\}/);
+  assert.match(users, /<WakeWordListener roomId=\{roomId\} remoteParticipants=\{voiceInputParticipants\}/);
+  assert.match(users, /const voiceInputParticipants = remoteParticipants\.filter\(/);
+  assert.match(users, /!isRoomTtsParticipant\(participant\?\.identity\) && !isHiddenBridgeParticipant\(participant\?\.identity\)/);
   assert.match(wake, /LOCAL_COMPANION_WAKE_EVENT\s*=\s*'spmt-companion-athena-command'/);
   assert.match(wake, /window\.addEventListener\(LOCAL_COMPANION_WAKE_EVENT/);
   assert.match(wake, /sendRoomPersonaCommand/);
