@@ -5,6 +5,7 @@ import { useEffect, useState } from 'react';
 import { useDoc, useCollection } from '@/hooks/use-db';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Room } from 'livekit-client';
+import { getMusicWatchSessionId } from '@/lib/watch-session';
 
 export default function OBSOverlay() {
   const params = useParams();
@@ -53,7 +54,22 @@ export default function OBSOverlay() {
     return () => { livekitRoom?.disconnect(); };
   }, [roomId]);
 
-  const currentTrack = room?.playlist?.find((t: any) => t.id === room?.currentTrackId);
+  const [currentTrack, setCurrentTrack] = useState<{ title: string; artist?: string } | null>(null);
+  useEffect(() => {
+    let disposed = false;
+    const refresh = async () => {
+      try {
+        const response = await fetch(`/api/watch/sessions/${getMusicWatchSessionId()}/state`, { cache: 'no-store' });
+        if (response.ok) {
+          const state = await response.json();
+          if (!disposed) setCurrentTrack(state.current?.item || null);
+        }
+      } catch {}
+    };
+    void refresh();
+    const timer = setInterval(refresh, 2000);
+    return () => { disposed = true; clearInterval(timer); };
+  }, []);
 
   return (
     <div className="w-screen h-screen bg-transparent p-4">

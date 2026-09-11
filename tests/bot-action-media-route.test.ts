@@ -17,7 +17,7 @@ test('the bot adapter reuses the canonical HearMeOut media services', () => {
   const route = source('src/app/api/internal/bot/actions/route.ts');
   assert.match(route, /getPublicWatchSession\(/);
   assert.match(route, /requestWatchMusicItem\(/);
-  assert.match(route, /controlWatchSession\(/);
+  assert.match(route, /PLAYBACK_CONTROLS_DISABLED/);
   assert.match(route, /getRoomWatchSessionId\(roomId, 'music'\)/);
 });
 
@@ -28,10 +28,10 @@ test('the service-authenticated route bypasses only user middleware and authenti
   assert.match(route, /return NextResponse\.json\(\{ error: 'Unauthorized' \}, \{ status: 401 \}\)/);
 });
 
-test('media controls are restricted to the explicit safe control set', () => {
+test('service-authenticated bot actions cannot change playback or listener volume', () => {
   const route = source('src/app/api/internal/bot/actions/route.ts');
-  assert.match(route, /new Set\(\['play', 'pause', 'next', 'clear', 'mute', 'unmute', 'volume'\]\)/);
-  assert.match(route, /Unsupported media control/);
+  assert.match(route, /error: PLAYBACK_CONTROLS_DISABLED, action.*status: 410/);
+  assert.doesNotMatch(route, /await controlWatchSession/);
 });
 
 test('the internal adapter exposes room, tenant persona, and voice bridge actions', () => {
@@ -73,7 +73,7 @@ test('room persona worker no longer forwards speech commands or owns STT', () =>
   assert.doesNotMatch(runtime, /processUtterance\s*\(/);
   assert.doesNotMatch(runtime, /fetch\([^\n]*persona-transcribe/);
   assert.doesNotMatch(runtime, /fetch\([^\n]*\/api\/internal\/persona-command/);
-  assert.match(runtime, /speechInputRoute:\s*'browser-persona-transcribe-to-bot-commands'/);
+  assert.match(runtime, /speechInputRoute:\s*'local-companion-event-to-bot-commands'/);
   assert.match(bootstrap, /serviceSession: req\.body\?\.serviceSession === true/);
   assert.match(bootstrap, /app\.post\('\/persona\/speak'/);
 });

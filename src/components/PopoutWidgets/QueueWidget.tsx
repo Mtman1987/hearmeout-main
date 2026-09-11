@@ -1,15 +1,7 @@
 'use client';
-
 import React from 'react';
 import { DraggableContainer } from './DraggableContainer';
-import PlaylistPanel from '@/app/rooms/[roomId]/_components/PlaylistPanel';
-import { Button } from '@/components/ui/button';
-import { Plus } from 'lucide-react';
-import { useDoc } from '@/hooks/use-db';
-import { useSession } from '@/hooks/use-session';
-import { dbUpdate } from '@/lib/db-helpers';
-import type { PlaylistItem } from '@/types/playlist';
-
+import { getMusicWatchSessionId } from '@/lib/watch-session';
 interface QueueWidgetProps {
   id: string;
   position: { x: number; y: number };
@@ -24,74 +16,27 @@ interface QueueWidgetProps {
   onOpenAddSong?: () => void;
 }
 
-interface RoomData {
-  ownerId: string;
-  playlist: PlaylistItem[];
-  currentTrackId?: string;
-  isPlaying?: boolean;
-}
-
-export function QueueWidget({
-  id,
-  position,
-  size,
-  opacity,
-  onPositionChange,
-  onSizeChange,
-  onOpacityChange,
-  onSaveLayout,
-  onClose,
-  roomId,
-  onOpenAddSong,
-}: QueueWidgetProps) {
-  const { user } = useSession();
-  const { data: room } = useDoc<RoomData>('rooms', roomId, 2000);
-  const playlist = room?.playlist || [];
-  const canControl = !!user;
-
-  const handlePlaySong = React.useCallback((songId: string) => {
-    if (canControl) dbUpdate('rooms', roomId, { currentTrackId: songId, isPlaying: true });
-  }, [canControl, roomId]);
-
-  const handleRemoveSong = React.useCallback((songId: string) => {
-    dbUpdate('rooms', roomId, { playlist: playlist.filter((song) => song.id !== songId) });
-  }, [playlist, roomId]);
-
-  const handleClearPlaylist = React.useCallback(() => {
-    dbUpdate('rooms', roomId, { playlist: [], currentTrackId: '', isPlaying: false });
-  }, [roomId]);
-
-  return (
-    <DraggableContainer
-      id={id}
-      position={position}
-      size={size}
-      opacity={opacity}
-      onPositionChange={onPositionChange}
-      onSizeChange={onSizeChange}
-      onOpacityChange={onOpacityChange}
-      onSaveLayout={onSaveLayout}
-      onClose={onClose}
-      title="Queue"
-      minimalChrome
-    >
-      <div className="flex-1 overflow-y-auto p-3 space-y-3">
-        {canControl && onOpenAddSong && (
-          <div className="flex justify-end">
-            <Button size="sm" variant="outline" onClick={onOpenAddSong}>
-              <Plus className="h-4 w-4 mr-1" /> Add Song
-            </Button>
-          </div>
-        )}
-        <PlaylistPanel
-          playlist={playlist}
-          currentTrackId={room?.currentTrackId || ''}
-          isPlayerControlAllowed={canControl}
-          onPlaySong={handlePlaySong}
-          onRemoveSong={handleRemoveSong}
-          onClearPlaylist={handleClearPlaylist}
-        />
-      </div>
-    </DraggableContainer>
-  );
+export function QueueWidget({ id, position, size, opacity, onPositionChange, onSizeChange, onOpacityChange, onSaveLayout, onClose, onOpenAddSong }: QueueWidgetProps) {
+  const [queue, setQueue] = React.useState<Array<{requestId: string; item: {title: string}}>>([]);
+  const [title, setTitle] = React.useState('Waiting for a request');
+  React.useEffect(() => {
+    let cancelled = false;
+    const refresh = async () => {
+      const response = await fetch(`/api/watch/sessions/${getMusicWatchSessionId()}/state`, { cache: 'no-store' }).catch(() => null);
+      if (!response?.ok) return;
+      const state = await response.json();
+      if (!cancelled) { setQueue(state.queue || []); setTitle(state.current?.item.title || 'Waiting for a request'); }
+    };
+    void refresh(); const timer = setInterval(refresh, 2000);
+    return () => { cancelled = true; clearInterval(timer); };
+  }, []);
+  return <DraggableContainer id={id} position={position} size={size} opacity={opacity}
+    onPositionChange={onPositionChange} onSizeChange={onSizeChange} onOpacityChange={onOpacityChange}
+    onSaveLayout={onSaveLayout} onClose={onClose} title="Music queue" minimalChrome>
+    <div className="space-y-3 overflow-auto p-4"><p className="font-semibold">{title}</p>
+      <ol className="list-inside list-decimal">{queue.map(request => <li key={request.requestId}>{request.item.title}</li>)}</ol>
+      {!queue.length && <p>Queue is empty.</p>}
+      {onOpenAddSong && <button onClick={onOpenAddSong}>Request a song</button>}
+    </div>
+  </DraggableContainer>;
 }

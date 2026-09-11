@@ -15,6 +15,8 @@ import {
   writeFileSync,
 } from 'fs';
 import { dirname } from 'path';
+import { ACTIVITY_ROOM_ID } from './watch-session';
+import { normalizeActivityRoomLifecycle } from './activity-room-lifecycle';
 
 const DB_FILE = process.env.DB_FILE || './data/app.db';
 const DB_BACKUP_FILE = `${DB_FILE}.bak`;
@@ -71,6 +73,15 @@ async function ensureDb(): Promise<SqlJsDatabase> {
       );
     `);
     _db.run(`CREATE INDEX IF NOT EXISTS idx_collection ON docs(collection_path);`);
+
+    // Migrate only an existing legacy room; startup must not create one.
+    const activityRoom = db.get('rooms', ACTIVITY_ROOM_ID);
+    if (activityRoom) {
+      const normalized = normalizeActivityRoomLifecycle(activityRoom);
+      if (JSON.stringify(activityRoom) !== JSON.stringify(normalized)) {
+        db.set('rooms', ACTIVITY_ROOM_ID, normalized);
+      }
+    }
 
     return _db;
   })();

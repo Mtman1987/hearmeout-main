@@ -1,4 +1,6 @@
 import { db, ensureDb } from '@/lib/db';
+import { normalizeActivityRoomLifecycle } from './activity-room-lifecycle';
+import { effectiveRoomExpiry } from './room-lifecycle';
 import {
   ACTIVITY_ROOM_ID,
   ACTIVITY_ROOM_NAME,
@@ -14,8 +16,17 @@ export function isDiscordActivityWatchSession(sessionId: unknown) {
 
 export async function ensureDiscordActivityRoom() {
   await ensureDb();
-  const existing = db.get('rooms', ACTIVITY_ROOM_ID) || {};
-  const room = {
+  const stored = db.get('rooms', ACTIVITY_ROOM_ID);
+  // Only an explicit Activity launch starts a new lifetime.
+  // State polling and dashboard/room visits never call this creation path.
+  if (stored) {
+    const existing = normalizeActivityRoomLifecycle(stored);
+    if ((effectiveRoomExpiry(existing.expiresAt, existing.createdAt) ?? 0) > Date.now()) {
+      return existing;
+    }
+  }
+  const existing = stored || {};
+  const room = normalizeActivityRoomLifecycle({
     ...existing,
     id: ACTIVITY_ROOM_ID,
     name: ACTIVITY_ROOM_NAME,
@@ -29,10 +40,10 @@ export async function ensureDiscordActivityRoom() {
     playHistory: Array.isArray(existing.playHistory) ? existing.playHistory : [],
     isPrivate: false,
     password: undefined,
+    createdAt: new Date().toISOString(),
     expiresAt: undefined,
-    systemRoom: true,
     updatedAt: new Date().toISOString(),
-  };
+  });
 
   db.set('rooms', ACTIVITY_ROOM_ID, room);
   return room;

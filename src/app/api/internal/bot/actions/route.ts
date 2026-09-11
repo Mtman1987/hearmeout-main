@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { isBotActionServiceRequest } from '@/lib/bot-action-service-auth';
 import {
-  controlWatchSession,
+  PLAYBACK_CONTROLS_DISABLED,
   getPublicWatchSession,
   getWatchSession,
   requestWatchMusicItem,
@@ -37,7 +37,6 @@ const ACTIONS = new Set<HearMeOutAction>([
   'hmo.voice.bridge.control',
   'hmo.tts.speak',
 ]);
-const CONTROLS = new Set(['play', 'pause', 'next', 'clear', 'mute', 'unmute', 'volume']);
 
 function text(value: unknown, max = 500) {
   return String(value || '').trim().slice(0, max);
@@ -153,21 +152,7 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    const control = text(body?.control, 40).toLowerCase();
-    if (!CONTROLS.has(control)) return NextResponse.json({ error: 'Unsupported media control' }, { status: 400 });
-    const rawValue = body?.value;
-    const value = rawValue === undefined || rawValue === null || rawValue === '' ? undefined : Number(rawValue);
-    const session = await controlWatchSession(sessionId, control, Number.isFinite(value) ? value : undefined, undefined, {
-      actorUserId: text(body?.actorUserId, 160),
-      isAdmin: true,
-      platform: 'admin',
-    });
-    return NextResponse.json({
-      success: true,
-      action,
-      control,
-      session: getPublicWatchSession(session, publicBaseUrl(request)),
-    });
+    return NextResponse.json({ error: PLAYBACK_CONTROLS_DISABLED, action }, { status: 410 });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     console.error(`[HearMeOutBotAction] ${action} failed:`, error);

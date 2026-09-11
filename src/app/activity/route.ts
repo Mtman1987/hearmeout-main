@@ -1,223 +1,34 @@
 import { NextResponse } from 'next/server';
 import { DISCORD_CLIENT_ID } from '@/lib/public-config';
-import { GLOBAL_WATCH_SESSION_ID, MUSIC_WATCH_SESSION_ID } from '@/lib/watch-session';
-import { getDefaultActivitySessionId, getPublicWatchSession, getResolvedWatchSession } from '@/lib/watch/watch-request-service';
+import { getDefaultActivitySessionId } from '@/lib/watch-request-service';
 import { ensureDiscordActivityRoom } from '@/lib/activity-room';
-import { js as activityJs } from '../activity-lite.js/route';
+import { js } from '../activity-lite.js/route';
 
-function escapeHtml(value: unknown) {
-  return String(value || '').replace(/[&<>"']/g, (char) => ({
-    '&': '&amp;',
-    '<': '&lt;',
-    '>': '&gt;',
-    '"': '&quot;',
-    "'": '&#39;',
-  }[char] || char));
+function escapeHtml(value: string) {
+  return value.replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]!));
 }
-
-function isHlsPlaybackUrl(value: string) {
-  if (value.endsWith('.m3u8')) return true;
-  try {
-    const url = new URL(value, 'https://hearmeout.local');
-    const proxied = url.searchParams.get('url');
-    return Boolean(proxied?.endsWith('.m3u8'));
-  } catch {
-    return false;
-  }
-}
-
-function clientUrl(value: string, discordProxy = false) {
-  if (!value || /^https?:\/\//i.test(value)) return value;
-  const path = value.startsWith('/') ? value : `/${value}`;
-  return discordProxy && !path.startsWith('/.proxy/') ? `/.proxy${path}` : path;
-}
-
-function activityAppBaseUrl(requestUrl: URL) {
-  const configuredBaseUrl = process.env.NEXT_PUBLIC_BASE_URL || process.env.NEXT_PUBLIC_APP_URL;
-  if (configuredBaseUrl) return configuredBaseUrl.replace(/\/$/, '');
-  if (requestUrl.hostname === 'localhost' || requestUrl.hostname === '127.0.0.1') return requestUrl.origin;
-  return 'https://hearmeout-main.fly.dev';
-}
-
-async function html(request: Request) {
-  await ensureDiscordActivityRoom();
-  const configuredBaseUrl = process.env.NEXT_PUBLIC_BASE_URL || process.env.NEXT_PUBLIC_APP_URL;
-  const requestUrl = new URL(request.url);
-  const discordProxy = Boolean(requestUrl.searchParams.get('frame_id')) || requestUrl.hostname.endsWith('.discordsays.com');
-  const baseUrl = (configuredBaseUrl || requestUrl.origin).replace(/\/$/, '');
-  const appBaseUrl = activityAppBaseUrl(requestUrl);
-  const rawSessionId = requestUrl.searchParams.get('sessionId') || requestUrl.searchParams.get('session_id');
-  const requestedSessionId = getDefaultActivitySessionId(rawSessionId);
-  const session = getPublicWatchSession(getResolvedWatchSession(requestedSessionId), baseUrl);
-  const current = session.current;
-  const title = current ? `${current.item.title} (${current.item.year})` : 'Waiting for a request';
-  const media = current ? `${current.item.source} - requested by ${current.requestedBy.username}` : 'Media: idle';
-  const src = current?.item.type === 'music' && current.item.metadata?.videoPlaybackUrl
-    ? current.item.metadata.videoPlaybackUrl
-    : current?.item.type === 'music' && current.item.metadata?.audioPlaybackUrl
-    ? current.item.metadata.audioPlaybackUrl
-    : current?.item.playbackUrl || '';
-  const isEmbeddedVideo = src.includes('youtube.com/embed/') || src.includes('youtube-nocookie.com/embed/');
-  const isAudioOnly = current?.item.type === 'tts' || current?.item.metadata?.provider === 'tts' || (current?.item.type === 'music' && src.includes('/api/youtube-audio/'));
-  const nativeSrc = src && !isAudioOnly && !isEmbeddedVideo && !isHlsPlaybackUrl(src) ? clientUrl(src, discordProxy) : '';
-  const audioSrc = src && isAudioOnly ? clientUrl(src, discordProxy) : '';
-  const iframeSrc = src && isEmbeddedVideo ? src : '';
-
-  return `<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>HearMeOut Discord Activity</title>
-  <style>
-    * { box-sizing: border-box; }
-    html, body { width: 100%; height: 100%; margin: 0; background: #000; color: #e5edf5; font-family: Arial, system-ui, sans-serif; }
-    body { overflow: hidden; }
-    main { width: 100vw; height: 100vh; background: #000; }
-    .player { position: relative; width: 100%; height: 100%; background: #000; display: grid; grid-template-rows: minmax(0, 1fr) auto; overflow: hidden; }
-    header { display: none; }
-    h1, h2, p { margin: 0; }
-    h1 { font-size: 18px; font-weight: 700; }
-    h2 { font-size: 16px; margin-bottom: 10px; }
-    .muted { color: #94a3b8; font-size: 13px; }
-    .status { color: #86efac; border: 1px solid rgba(52,211,153,.5); border-radius: 999px; padding: 5px 10px; font-size: 13px; white-space: nowrap; background: rgba(0,0,0,.45); }
-    .video-wrap { position: relative; min-height: 0; background: #000; }
-    video, iframe.youtube-player { width: 100%; height: 100%; background: #000; display: block; object-fit: contain; border: 0; pointer-events: none; user-select: none; }
-    video.hidden, audio.hidden, iframe.hidden { display: none !important; }
-    audio.audio-player { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
-    .empty { position: absolute; inset: 0; display: grid; place-content: center; gap: 8px; text-align: center; color: #cbd5e1; background: rgba(0,0,0,.55); }
-    .empty.hidden { display: none !important; }
-    .activity-chrome { opacity: 1; transition: opacity .22s ease, transform .22s ease; }
-    body.controls-hidden .activity-chrome { opacity: 0; pointer-events: none; }
-    body.controls-hidden .room-tabs { transform: translateY(-8px); }
-    body.controls-hidden .toolbar, body.controls-hidden .meta { transform: translateY(8px); }
-    body.controls-hidden .video-wrap { cursor: none; }
-    .room-tabs { position: fixed; left: 10px; top: 10px; z-index: 11; display: flex; flex-wrap: wrap; gap: 6px; max-width: calc(100vw - 20px); padding: 6px; border: 1px solid rgba(148,163,184,.35); border-radius: 8px; background: rgba(2,6,23,.76); backdrop-filter: blur(8px); }
-    .room-tab { min-height: 34px; border-color: transparent; background: transparent; padding: 6px 10px; }
-    .room-tab.active { border-color: rgba(52,211,153,.85); background: rgba(16,185,129,.18); color: #bbf7d0; }
-    .toolbar { position: fixed; left: 50%; bottom: 10px; z-index: 11; display: flex; width: min(980px, calc(100vw - 20px)); align-items: center; gap: 6px; overflow-x: auto; padding: 8px; border: 1px solid rgba(148,163,184,.35); border-radius: 8px; background: rgba(2,6,23,.82); backdrop-filter: blur(8px); transform: translateX(-50%); }
-    body.controls-hidden .toolbar { transform: translate(-50%, 8px); }
-    button, input, select { min-height: 38px; border-radius: 6px; border: 1px solid #475569; background: #172033; color: #e5edf5; padding: 8px 10px; font: inherit; }
-    button { cursor: pointer; }
-    button:disabled { opacity: .45; cursor: not-allowed; }
-    button:hover:not(:disabled), .download:hover { border-color: #34d399; }
-    .icon-btn { min-width: 40px; width: 40px; padding: 0; display: inline-grid; place-items: center; }
-    .panel-btn.active { border-color: #34d399; color: #bbf7d0; }
-    .volume { min-width: 150px; flex: 1; display: flex; align-items: center; gap: 8px; border: 1px solid #475569; border-radius: 6px; background: #0f172a; padding: 7px 9px; }
-    .volume input { min-height: 0; padding: 0; accent-color: #34d399; }
-    .seekbar { min-width: 220px; flex: 3; display: flex; align-items: center; gap: 8px; border: 1px solid #475569; border-radius: 6px; background: #0f172a; padding: 7px 9px; }
-    .seekbar input { min-height: 0; padding: 0; accent-color: #34d399; }
-    .seekbar span { min-width: 84px; color: #cbd5e1; font-size: 12px; font-variant-numeric: tabular-nums; }
-    .meta { position: fixed; left: 10px; right: 10px; bottom: 64px; z-index: 9; display: grid; justify-items: center; gap: 4px; text-align: center; pointer-events: none; text-shadow: 0 1px 4px #000; }
-    aside { display: none; }
-    aside.open { position: fixed; right: 10px; top: 58px; bottom: 76px; z-index: 12; display: block; width: min(360px, calc(100vw - 20px)); overflow: auto; padding: 0; color: #e5edf5; background: rgba(2,6,23,.92); border: 1px solid rgba(148,163,184,.35); border-radius: 8px; }
-    aside section { margin-bottom: 12px; padding: 12px; background: #151b25; border: 1px solid #283447; border-radius: 8px; }
-    form { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; }
-    input { width: 100%; background: #020617; }
-    ul { list-style: none; padding: 0; margin: 0; display: grid; gap: 8px; }
-    li { color: #cbd5e1; font-size: 13px; }
-    .queue-item { width: 100%; min-height: 0; display: grid; grid-template-columns: auto minmax(0,1fr); gap: 8px; align-items: center; text-align: left; padding: 8px; background: #0f172a; }
-    .queue-item strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .queue-index { color: #86efac; font-variant-numeric: tabular-nums; }
-    .error { color: #fecaca; margin-top: 8px; font-size: 13px; }
-    .download { min-height: 38px; width: 40px; display: inline-grid; place-items: center; border-radius: 6px; border: 1px solid #475569; background: #172033; color: #e5edf5; text-decoration: none; }
-    body.focus-mode main { grid-template-columns: 1fr; }
-    body.focus-mode aside, body.focus-mode header, body.focus-mode .meta { display: none; }
-    body.focus-mode .player { height: 100vh; }
-    body.focus-mode .room-tabs, body.focus-mode .meta { opacity: .18; transition: opacity .15s ease; }
-    body.focus-mode .room-tabs:hover, body.focus-mode .meta:hover { opacity: 1; }
-    .utility-control { display: inline-grid; place-items: center; }
-    @media (max-width: 720px) {
-      .toolbar { gap: 4px; }
-      .volume { min-width: 112px; }
-      .volume span, .seekbar span { display: none; }
-      .seekbar { min-width: 140px; }
-    }
-    @media (prefers-reduced-motion: reduce) {
-      .activity-chrome { transition: none; }
-    }
-  </style>
-  <script src="${escapeHtml(clientUrl('/api/activity/hls', discordProxy))}"></script>
-</head>
-<body>
-  <main>
-    <section class="player">
-      <header>
-        <div>
-          <p class="muted">Discord Watch Requests</p>
-          <h1 id="room">Room ${escapeHtml(requestedSessionId)}</h1>
-        </div>
-        <div class="status" id="activity-status">Loading</div>
-      </header>
-      <div class="video-wrap">
-        <video id="video" class="${isAudioOnly || isEmbeddedVideo ? 'hidden' : ''}" autoplay muted playsinline ${nativeSrc ? `src="${escapeHtml(nativeSrc)}"` : ''}></video>
-        <iframe id="youtube" class="youtube-player ${isEmbeddedVideo ? '' : 'hidden'}" ${iframeSrc ? `src="${escapeHtml(iframeSrc)}"` : ''} allow="autoplay; fullscreen; encrypted-media; picture-in-picture" allowfullscreen></iframe>
-        <audio id="audio" class="audio-player ${isAudioOnly ? '' : 'hidden'}" autoplay ${audioSrc ? `src="${escapeHtml(audioSrc)}"` : ''}></audio>
-        <div class="empty ${current ? 'hidden' : ''}" id="empty"><strong>No media loaded</strong><span>Use Discord controls to request and control playback.</span></div>
-      </div>
-      <nav class="room-tabs activity-chrome" aria-label="Watch rooms">
-        <button class="room-tab" data-session-kind="movie" data-session-switch="${GLOBAL_WATCH_SESSION_ID}" type="button">Movies</button>
-        <button class="room-tab" data-session-kind="music" data-session-switch="${MUSIC_WATCH_SESSION_ID}" type="button">Music</button>
-        <button class="room-tab panel-btn" data-panel="request" type="button">Request</button>
-        <button class="room-tab panel-btn" data-panel="queue" type="button">Queue</button>
-        <button class="room-tab panel-btn" data-panel="events" type="button">Activity</button>
-      </nav>
-      <div class="toolbar activity-chrome" aria-label="Shared media controls">
-        <button class="icon-btn" id="play-pause" data-action="play-pause" title="Play" aria-label="Play">▶</button>
-        <div class="seekbar" title="Seek">
-          <span id="position-label">0:00 / --:--</span>
-          <input id="seek" type="range" min="0" max="1" value="0" step="1" disabled aria-label="Seek position" />
-        </div>
-        <button class="icon-btn" data-action="next" title="Next" aria-label="Next">⏭</button>
-        <button class="icon-btn" id="popout" type="button" disabled title="Pop out" aria-label="Pop out">↗</button>
-        <button class="icon-btn" id="fullscreen" type="button" title="Fullscreen" aria-label="Fullscreen">⛶</button>
-        <button id="media-mode" type="button" hidden>Video</button>
-        <select id="audio-track" hidden aria-label="Movie audio language" title="Audio language"></select>
-        <button class="icon-btn" id="mute" type="button" title="Mute" aria-label="Mute">🔊</button>
-        <div class="volume" title="Volume">
-          <input id="volume" type="range" min="0" max="100" value="85" aria-label="Video volume" />
-          <span id="volume-label">85%</span>
-        </div>
-        <button class="utility-control panel-btn" id="tts-toggle" type="button" title="Play all room TTS on this Discord Activity">TTS Off</button>
-        <button class="utility-control" id="download" type="button" disabled title="Download" aria-label="Download">⇩</button>
-      </div>
-      <div class="meta activity-chrome">
-        <strong id="title">${escapeHtml(title)}</strong>
-        <p class="muted" id="media">${escapeHtml(media)}</p>
-        <p class="error" id="error"></p>
-      </div>
-    </section>
-    <aside id="drawer" class="sr-only" aria-hidden="true">
-      <section data-panel-section="request" class="active">
-        <h2>Add Video</h2>
-        <form id="request-form">
-          <input id="query" placeholder="Try Big Buck Bunny, Sintel, HLS" />
-          <button type="submit">Request</button>
-        </form>
-        <button id="accept-recommendation" type="button" disabled style="display:none;margin-top:8px;width:100%;">Add Recommended Match</button>
-      </section>
-      <section data-panel-section="queue" class="active">
-        <h2>Queue</h2>
-        <ul id="queue"><li>Queue is empty.</li></ul>
-      </section>
-      <section data-panel-section="events" class="active">
-        <h2>Activity</h2>
-        <ul id="events"><li>No events yet.</li></ul>
-      </section>
-    </aside>
-  </main>
-          <script>
-${activityJs(DISCORD_CLIENT_ID, requestedSessionId, appBaseUrl)}
-  </script>
-</body>
-</html>`;
-}
-
 export async function GET(request: Request) {
-  return new NextResponse(await html(request), {
-    headers: {
-      'content-type': 'text/html; charset=utf-8',
-      'cache-control': 'no-store',
-    },
-  });
+  const url = new URL(request.url);
+  const discord = Boolean(url.searchParams.get('frame_id')) || url.hostname.endsWith('.discordsays.com');
+  // Ordinary player views never create a voice room. Only an actual Discord
+  // launch uses the optional Activity voice-room integration.
+  if (discord) await ensureDiscordActivityRoom();
+  const sessionId = getDefaultActivitySessionId(url.searchParams.get('sessionId') || url.searchParams.get('session_id'));
+  const base = process.env.NEXT_PUBLIC_BASE_URL || process.env.NEXT_PUBLIC_APP_URL || url.origin;
+  const script = js(DISCORD_CLIENT_ID, sessionId, base).replace(/<\/script/gi, '<\\/script');
+  return new NextResponse(`<!doctype html><html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>HearMeOut</title>
+<style>
+*{box-sizing:border-box}html,body{margin:0;width:100%;height:100%;background:#080d16;color:#edf2f7;font:14px system-ui,sans-serif}main{height:100%;display:flex;flex-direction:column;gap:10px;padding:12px}nav{display:flex;gap:8px}button,input{font:inherit;color:inherit;background:#182335;border:1px solid #40516a;border-radius:6px;padding:8px}button{cursor:pointer}button[aria-pressed=true]{border-color:#64d9cb}button:disabled{opacity:.5}video{width:100%;min-height:80px;flex:1;background:#000;object-fit:contain;pointer-events:none}#title{font-weight:600}#activity-status{font-size:12px;color:#acbdd3}.volume{display:flex;gap:10px;align-items:center}.volume input{flex:1;accent-color:#64d9cb}.volume output{min-width:3em}form{display:flex;gap:8px}form input{flex:1;min-width:0}details{max-height:25%;overflow:auto}ul{padding-left:20px}#error{color:#ffb6b6;font-size:12px}button[hidden]{display:none}
+</style><script src="${escapeHtml((discord ? '/.proxy' : '') + '/api/activity/hls')}"></script>
+</head><body><main>
+<nav aria-label="Media"><button data-session-switch="movie">Movies</button><button data-session-switch="music">Music</button></nav>
+<video id="video" autoplay playsinline disablepictureinpicture disableremoteplayback></video>
+<div id="title">Waiting for a request</div><div id="activity-status" role="status">Connecting</div>
+<label class="volume">My volume<input id="volume" aria-label="My volume" type="range" min="0" max="100" step="1" value="85"><output id="volume-label">85%</output></label>
+<form id="request-form"><input id="query" aria-label="Song or movie request" placeholder="Request a song or movie" autocomplete="off"><button id="request-button" type="submit">Request</button></form>
+<div id="error" role="alert"></div><button id="accept-recommendation" hidden></button>
+<details><summary>Queue</summary><ul id="queue"></ul></details>
+</main><script>${script}</script></body></html>`, { headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' } });
 }

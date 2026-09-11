@@ -12,6 +12,8 @@ const PUBLIC_PREFIXES = [
   '/api/webhooks/',
   '/api/discord/',
   '/api/worker/',
+  // Each callback checks the media worker credential itself.
+  '/api/watch/source',
   '/api/livekit/webhook',
   '/api/livekit-token',
   // Public chatbot interaction must never be stopped by the SPMT user-session

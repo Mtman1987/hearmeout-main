@@ -1,4 +1,5 @@
 'use client';
+import { useParticipantVolume } from '@/hooks/use-participant-volume';
 
 import React, { useState, useEffect } from 'react';
 import { useLocalParticipant, useRoomContext } from '@livekit/components-react';
@@ -153,15 +154,7 @@ function ParticipantItem({ participant }: { participant: Participant }) {
   const persona = parsePersonaMetadata(participant.metadata);
   const displayName = persona?.displayName || participant.name || 'User';
   const avatar = (isSpeaking ? persona?.talkingAvatar : persona?.idleAvatar) || persona?.avatar || '';
-  const [volume, setVolume] = React.useState(1);
-  const lastVolume = React.useRef(1);
-
-  React.useEffect(() => {
-    if (participant.isLocal) return;
-    if (volume > 0) lastVolume.current = volume;
-    const remote = participant as import('livekit-client').RemoteParticipant;
-    if (typeof remote.setVolume === 'function') remote.setVolume(volume);
-  }, [participant, volume]);
+  const { volume, setVolume } = useParticipantVolume(participant);
 
   return (
     <div
@@ -188,9 +181,6 @@ function ParticipantItem({ participant }: { participant: Participant }) {
       </div>
       {!participant.isLocal && (
         <div className="mt-1.5 flex items-center gap-2">
-          <button type="button" aria-label={`${displayName} local mute`} onClick={() => setVolume((current) => current > 0 ? 0 : lastVolume.current)}>
-            {volume > 0 ? <Volume2 className="h-3 w-3" /> : <VolumeX className="h-3 w-3" />}
-          </button>
           <Slider aria-label={`${displayName} volume`} value={[volume]} onValueChange={(next) => setVolume(next[0])} max={1} step={0.05} />
         </div>
       )}

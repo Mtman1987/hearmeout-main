@@ -3,7 +3,13 @@ import { GLOBAL_WATCH_SESSION_ID, MUSIC_WATCH_SESSION_ID, normalizeWatchSessionA
 // These two rooms are deliberately shared by Discord commands, Activities,
 // and HearMeOut. Discord's proxy cannot carry the website's SPMT cookie.
 function isSharedSession(value: string | null) {
-  const id = normalizeWatchSessionAlias(value, GLOBAL_WATCH_SESSION_ID);
+  const raw = value?.trim().toLowerCase() || '';
+  // Old Discord links and friendly media names resolve to the two public
+  // sources. Arbitrary room names do not bypass website authentication.
+  const allowed = !raw || [GLOBAL_WATCH_SESSION_ID, MUSIC_WATCH_SESSION_ID, 'music', 'movie', 'movies', 'watch'].includes(raw)
+    || /^watch-discord-[a-z0-9-]+-(music|movie)$/.test(raw);
+  if (!allowed) return false;
+  const id = normalizeWatchSessionAlias(raw, GLOBAL_WATCH_SESSION_ID);
   return id === GLOBAL_WATCH_SESSION_ID || id === MUSIC_WATCH_SESSION_ID;
 }
 
@@ -30,6 +36,7 @@ export function isPublicActivityRequest(url: URL, method: string) {
   // Only playback resources, not provider settings, worker controls, cache
   // uploads, or arbitrary private-room endpoints, bypass website login.
   if (!read) return false;
+  if (/^\/api\/watch\/stream\/(movie|music)\/(index\.m3u8|init\.mp4|seg_\d+\.m4s)$/.test(path)) return true;
   if (['/api/activity/hls', '/activity-hls', '/activity/hls', '/api/watch/proxy', '/activity-proxy', '/activity/proxy'].includes(path)) return true;
   return /^\/(?:api\/watch|activity\/watch|activity-provider)\/(?:youtube|xtream)\/hls\/[^/]+\/[^/]+$/.test(path)
     || /^\/activity-provider\/xtream\/(?:vod|series|episode)\/[^/]+$/.test(path)

@@ -1,43 +1,6 @@
 import { NextResponse } from 'next/server';
-import { parseJsonRequest } from '@/lib/request-json';
-import { controlWatchSession, getPublicWatchSession } from '@/lib/watch-request-service';
-
-const CORS_HEADERS = {
-  'access-control-allow-origin': '*',
-  'access-control-allow-methods': 'POST, OPTIONS',
-  'access-control-allow-headers': 'content-type',
-};
-
-export async function POST(request: Request, context: { params: Promise<{ sessionId: string }> }) {
-  try {
-    const { sessionId } = await context.params;
-    const body = await parseJsonRequest<any>(request);
-    const rawPosition = body?.position;
-    const parsedPosition = rawPosition === undefined || rawPosition === null || rawPosition === ''
-      ? undefined
-      : Number(rawPosition);
-    const session = await controlWatchSession(
-      sessionId,
-      String(body.action || '').toLowerCase(),
-      Number.isFinite(parsedPosition as number) ? (parsedPosition as number) : undefined,
-      Number(body.targetIndex),
-      {
-        actorUserId: body.actorUserId || body.userId,
-        roomId: body.roomId,
-        guildId: body.guildId,
-        channelId: body.channelId,
-        isHost: Boolean(body.isHost),
-        isAdmin: Boolean(body.isAdmin),
-        platform: body.platform || (body.guildId && body.channelId ? 'discord' : body.roomId ? 'room' : 'web'),
-        expectedRequestId: body.expectedRequestId || undefined,
-      },
-    );
-    return NextResponse.json(getPublicWatchSession(session), { headers: CORS_HEADERS });
-  } catch (error: any) {
-    return NextResponse.json({ error: error.message || 'Unsupported action' }, { status: 400, headers: CORS_HEADERS });
-  }
+import { PLAYBACK_CONTROLS_DISABLED } from '@/lib/watch-request-service';
+export async function POST(_request: Request, _context: {params: Promise<{sessionId: string}>}) {
+  return NextResponse.json({ error: PLAYBACK_CONTROLS_DISABLED }, { status: 410 });
 }
-
-export async function OPTIONS() {
-  return new NextResponse(null, { status: 204, headers: CORS_HEADERS });
-}
+export async function OPTIONS() { return new NextResponse(null, {status: 204}); }

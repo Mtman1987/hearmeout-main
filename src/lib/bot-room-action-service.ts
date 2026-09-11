@@ -2,8 +2,6 @@ import { db, ensureDb } from '@/lib/db';
 import { canManageRoom } from '@/lib/room-access';
 import { getDjWorkerUrl } from '@/lib/dj-worker-config';
 import { getDjWorkerRequestHeaders } from '@/lib/dj-worker-auth';
-import { ensureDiscordActivityRoom } from '@/lib/activity-room';
-import { isActivityRoomId } from '@/lib/watch-session';
 
 export type ServiceBotPersona = {
   id?: string;
@@ -234,7 +232,6 @@ export async function controlVoiceBridgeForBotAction(input: ServiceActor & {
   audioProfile?: string;
 }) {
   const { room, actor } = await resolveManagedRoomForBotAction(input.room, input);
-  if (isActivityRoomId(room.id)) await ensureDiscordActivityRoom();
   const current = readVoiceBridgeConfig(room);
   const now = new Date().toISOString();
 

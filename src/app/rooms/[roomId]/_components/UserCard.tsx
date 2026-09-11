@@ -1,4 +1,5 @@
 'use client';
+import { useParticipantVolume } from '@/hooks/use-participant-volume';
 
 import React, { useCallback, useEffect, useState } from 'react';
 import { Headphones, Mic, MicOff, MoreVertical, Move, ShieldOff, Trash2, UserX, Volume2, VolumeX, LoaderCircle, LogOut, Radio, MessageSquare, Music, ListMusic, Users } from 'lucide-react';
@@ -41,9 +42,7 @@ export default function UserCard({ participant, isLocal, isHost, roomId }: { par
   const [streamMode, setStreamMode] = React.useState(false);
   const [showOverlayControls, setShowOverlayControls] = React.useState(false);
   const { data: roomPreferences } = useDoc<{ overlayVisible?: Record<string, boolean>; overlayHiddenUsers?: string[] }>('rooms', roomId);
-  const [volume, setVolume] = React.useState(1);
-  const [isMutedByMe, setIsMutedByMe] = React.useState(false);
-  const lastNonZeroVolume = React.useRef(volume);
+  const { volume, setVolume } = useParticipantVolume(participant);
 
   const { devices: audioInputDevices, activeDeviceId: activeAudioInputDeviceId, setDevice: setAudioInputDevice } = useAudioDevice({ kind: 'audioinput' });
   const { devices: audioOutputDevices, activeDeviceId: activeAudioOutputDeviceId, setDevice: setAudioOutputDevice } = useAudioDevice({ kind: 'audiooutput' });
@@ -74,15 +73,6 @@ export default function UserCard({ participant, isLocal, isHost, roomId }: { par
     if (audioTrack?.audioTrack) (audioTrack.audioTrack as any).on('audioLevel', handleAudioLevel);
     return () => { const at = participant.getTrackPublication(LivekitClient.Track.Source.Microphone); if (at?.audioTrack) (at.audioTrack as any).off('audioLevel', handleAudioLevel); };
   }, [participant]);
-
-  useEffect(() => {
-    if (isLocal) return;
-    if (volume > 0) { lastNonZeroVolume.current = volume; setIsMutedByMe(false); } else { setIsMutedByMe(true); }
-    // Apply volume directly to the LiveKit remote participant
-    const remoteParticipant = participant as LivekitClient.RemoteParticipant;
-    if (typeof remoteParticipant.setVolume === 'function') remoteParticipant.setVolume(volume);
-  }, [volume, isLocal, participant]);
-  const toggleMuteByMe = () => { if (isLocal) return; setVolume(prev => (prev > 0 ? 0 : lastNonZeroVolume.current || 1)); };
 
   const { data: firestoreUser } = useDoc<RoomParticipantData>(userRecordId ? `rooms/${roomId}/users` : null, userRecordId || null);
 
@@ -333,7 +323,6 @@ export default function UserCard({ participant, isLocal, isHost, roomId }: { par
                 <SpeakingIndicator audioLevel={isMuted ? 0 : (isSpeaking ? trackAudioLevel : 0)} />
                 {!isLocal && (
                     <div className="flex items-center gap-2">
-                        <Tooltip><TooltipTrigger asChild><Button variant="outline" size="icon" className="h-8 w-8" onClick={toggleMuteByMe}>{isMutedByMe ? <VolumeX className="h-4 w-4" /> : <Volume2 className="h-4 w-4" />}</Button></TooltipTrigger><TooltipContent><p>{isMutedByMe ? 'Unmute' : 'Mute for me'}</p></TooltipContent></Tooltip>
                         <Slider aria-label="Participant Volume" value={[volume]} onValueChange={(value) => setVolume(value[0])} max={1} step={0.05} />
                     </div>
                 )}

@@ -20,7 +20,14 @@ jobs:
       - name: Install dependencies
         run: npm ci --no-audit --no-fund
       - name: Test Discord Activity proxy routing and playback startup
-        run: node --import tsx --test tests/discord-activity-startup.test.ts
+        run: node --import tsx --test tests/discord-activity-startup.test.ts tests/activity-room-lifecycle.test.ts
+      - name: Install ffmpeg for real shared-stream verification
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+      - name: Test shared source ownership and listener-only volume
+        run: |
+          node --check worker/src/server.js
+          node --test tests/shared-media-relay.test.cjs
+          node --import tsx --test tests/listener-volume.test.ts tests/shared-watch-session.test.ts
       - name: Test SPMT bot command routing
         run: node --import tsx --test tests/spmt-athena-route.test.ts
       - name: Test visible persona card talk flow

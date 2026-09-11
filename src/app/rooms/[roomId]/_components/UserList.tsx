@@ -6,10 +6,11 @@ import DJCard from "./DJCard";
 import MobileVoiceControl from './MobileVoiceControl';
 import WakeWordListener from './WakeWordListener';
 import React from "react";
+import { useListenerAudio } from '@/hooks/use-listener-audio';
+import { Slider } from '@/components/ui/slider';
 import { useSession } from '@/hooks/use-session';
 import { useCollection, useDoc } from '@/hooks/use-db';
-import { useLocalParticipant, useRemoteParticipants, useTracks, AudioTrack } from '@livekit/components-react';
-import { Track } from 'livekit-client';
+import { useLocalParticipant, useRemoteParticipants } from '@livekit/components-react';
 import '@livekit/components-styles';
 import { canManageRoom } from '@/lib/room-access';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
@@ -46,6 +47,11 @@ type PeerPresence = {
   lastSeen?: number;
 };
 
+function PeerVolume({ identity, name }: { identity: string; name: string }) {
+  const { volume, setVolume } = useListenerAudio(`voice:${identity}`);
+  return <Slider className="mt-3" aria-label={`${name} volume`} value={[volume]} onValueChange={value => setVolume(value[0])} max={1} step={0.05} />;
+}
+
 function PeerPresenceParticipants({ roomId, localUserId, connectedPeerIds }: { roomId: string; localUserId?: string; connectedPeerIds: string[] }) {
   const { data: users } = useCollection<PeerPresence>(`rooms/${roomId}/users`, { pollInterval: 3000 });
   const activeUsers = (users || []).filter((presence) => {
@@ -75,6 +81,7 @@ function PeerPresenceParticipants({ roomId, localUserId, connectedPeerIds }: { r
                 <p className={`mt-1 flex items-center gap-1.5 text-xs ${mediaConnected ? 'text-green-500' : 'text-amber-500'}`}>
                   <Radio className="h-3.5 w-3.5" /> {mediaConnected ? 'P2P audio connected' : 'Connecting P2P audio…'}
                 </p>
+                <PeerVolume identity={presence.uid || presence.id} name={displayName} />
               </div>
             </CardContent>
           </Card>
@@ -100,18 +107,6 @@ function LiveKitParticipants({ isHost, roomId }: { isHost: boolean; roomId: stri
     (participant) => !isHiddenBridgeParticipant(participant?.identity) && !isRoomTtsParticipant(participant?.identity),
   );
 
-  const allAudioTracks = useTracks(
-    [Track.Source.Microphone, Track.Source.Unknown],
-    { onlySubscribed: true }
-  ).filter(track =>
-    track.publication
-    && !track.participant.isLocal
-    && !isHiddenBridgeParticipant(track.participant.identity)
-    // RoomAudioPlayback already renders this system TTS track. Excluding it
-    // here prevents the same synthesized voice from being played twice.
-    && !isRoomTtsParticipant(track.participant.identity)
-  );
-
   return (
     <>
       {/* One authoritative human-speech path for the entire room. It records
@@ -122,9 +117,8 @@ function LiveKitParticipants({ isHost, roomId }: { isHost: boolean; roomId: stri
           another bot and feed back into itself. */}
       <WakeWordListener roomId={roomId} remoteParticipants={voiceInputParticipants} />
       <MobileVoiceControl roomId={roomId} remoteParticipants={voiceInputParticipants} />
-      {allAudioTracks.map((trackRef) => (
-        <AudioTrack key={trackRef.publication.trackSid} trackRef={trackRef} volume={1.0} muted={false} />
-      ))}
+      {/* RoomAudioPlayback owns audio rendering. Participant cards adjust
+          their LiveKit track gain; a second AudioTrack would reset it. */}
       {allParticipants.map((participant) => (
         isPersonaParticipant(participant)
           ? <PersonaCard key={participant.sid} participant={participant} roomId={roomId} isHost={isHost} />
