@@ -53,6 +53,9 @@ export function getOverlayWatchSessionId(roomId: string, kind: WatchMediaKind = 
 export function normalizeWatchSessionAlias(value?: string | null, fallback = GLOBAL_WATCH_SESSION_ID) {
   const raw = String(value || '').trim().toLowerCase();
   if (!raw) return fallback;
+  // Older Discord voice adapters sent bare guild-channel snowflake pairs.
+  // They refer to the shared movie player, never a separate private room.
+  if (/^(?:watch-)?\d{17,20}-\d{17,20}$/.test(raw)) return GLOBAL_WATCH_SESSION_ID;
   const discordScopedMatch = raw.match(/^watch-discord-[a-z0-9_]+-[a-z0-9_]+-(movie|music)$/);
   if (discordScopedMatch) return discordScopedMatch[1] === 'music' ? MUSIC_WATCH_SESSION_ID : GLOBAL_WATCH_SESSION_ID;
   if (raw === GLOBAL_WATCH_SESSION_ID || raw === MUSIC_WATCH_SESSION_ID || raw.startsWith('watch-')) return raw;
