@@ -2,7 +2,6 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth';
 import { db, ensureDb } from '@/lib/db';
 import { getDjWorkerUrl } from '@/lib/dj-worker-config';
-import { ensureDiscordActivityRoom } from '@/lib/activity-room';
 import { canManageRoom } from '@/lib/room-access';
 import { isActivityRoomId } from '@/lib/watch-session';
 import { getDjWorkerRequestHeaders } from '@/lib/dj-worker-auth';
@@ -101,7 +100,6 @@ export async function POST(req: NextRequest) {
 
   const { roomId, action, guildId, voiceChannelId, roomVoiceOutboundEnabled, audioProfile } = await req.json();
   if (!roomId || !action) return NextResponse.json({ error: 'Missing roomId or action' }, { status: 400 });
-  if (isActivityRoomId(roomId)) await ensureDiscordActivityRoom();
 
   const auth = authorize(roomId, session.uid);
   if (!auth.ok) return NextResponse.json({ error: auth.error }, { status: auth.status });

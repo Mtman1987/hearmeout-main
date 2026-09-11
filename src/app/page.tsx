@@ -13,7 +13,6 @@ import { useCollection } from '@/hooks/use-db';
 import { dbDelete } from '@/lib/db-helpers';
 import { Skeleton } from '@/components/ui/skeleton';
 import { useToast } from '@/hooks/use-toast';
-import { ACTIVITY_ROOM_ID, ACTIVITY_ROOM_NAME } from '@/lib/watch-session';
 import { effectiveRoomExpiry } from '@/lib/room-lifecycle';
 
 function DashboardHeader() {
@@ -53,19 +52,7 @@ export default function Home() {
   const { toast } = useToast();
   // Show ALL rooms — both public and private are visible
   const { data: allRooms, isLoading: roomsLoading } = useCollection<Room>('rooms');
-  const roomsWithActivity = React.useMemo(() => {
-    const rooms = allRooms || [];
-    if (rooms.some((room) => room.id === ACTIVITY_ROOM_ID)) return rooms;
-    return [{
-      id: ACTIVITY_ROOM_ID,
-      name: ACTIVITY_ROOM_NAME,
-      ownerId: ACTIVITY_ROOM_ID,
-      isPrivate: false,
-      occupantCount: 0,
-    }, ...rooms];
-  }, [allRooms]);
-
-
+  const rooms = allRooms || [];
 
   const isAdmin = !!user && ((user as any).isAdmin || user.discordId === '767875979561009173');
 
@@ -74,10 +61,6 @@ export default function Home() {
       if (window.self === window.top) return;
     } catch {}
     setIsEmbeddedLaunch(true);
-  }, []);
-
-  React.useEffect(() => {
-    fetch('/api/activity-room/ensure', { method: 'POST' }).catch(() => {});
   }, []);
 
   const handleDeleteRoom = (roomId: string, roomName: string) => {
@@ -108,10 +91,9 @@ export default function Home() {
                                 <Card><CardHeader><Skeleton className="h-5 w-3/4" /></CardHeader><CardContent><div className='h-4'></div></CardContent><CardFooter><Skeleton className="h-10 w-full" /></CardFooter></Card>
                              </div>
                         )}
-                        {!roomsLoading && roomsWithActivity.length > 0 && (
+                        {!roomsLoading && rooms.length > 0 && (
                             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                            {roomsWithActivity.map((room) => {
-                              const isSystemRoom = room.id === ACTIVITY_ROOM_ID;
+                            {rooms.map((room) => {
                               return (
                                 <Card key={room.id} className="flex flex-col hover:shadow-lg transition-shadow duration-300">
                                 <CardHeader>
@@ -120,7 +102,7 @@ export default function Home() {
                                             {room.isPrivate && <Lock className="h-4 w-4 text-muted-foreground shrink-0" />}
                                             {room.name}
                                         </span>
-                                        {user && !isSystemRoom && (room.ownerId === user.uid || isAdmin) && (
+                                        {user && (room.ownerId === user.uid || isAdmin) && (
                                             <Button variant="ghost" size="icon" onClick={() => handleDeleteRoom(room.id, room.name)}>
                                                 <Trash2 className="h-4 w-4 text-destructive" />
                                             </Button>
@@ -149,7 +131,7 @@ export default function Home() {
                             })}
                             </div>
                         )}
-                        {!roomsLoading && roomsWithActivity.length === 0 && (
+                        {!roomsLoading && rooms.length === 0 && (
                             <div className="text-center text-muted-foreground py-16">
                                 <h3 className="text-xl font-semibold">No rooms yet</h3>
                                 <p className="mt-2">Be the first to create one!</p>

@@ -20,7 +20,7 @@ jobs:
       - name: Install dependencies
         run: npm ci --no-audit --no-fund
       - name: Test Discord Activity proxy routing and playback startup
-        run: node --import tsx --test tests/discord-activity-startup.test.ts
+        run: node --import tsx --test tests/discord-activity-startup.test.ts tests/activity-room-lifecycle.test.ts
       - name: Test SPMT bot command routing
         run: node --import tsx --test tests/spmt-athena-route.test.ts
       - name: Test visible persona card talk flow
