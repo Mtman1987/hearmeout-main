@@ -59,7 +59,7 @@ export async function setSessionCookie(uid: string): Promise<void> {
   cookieStore.set(COOKIE_NAME, token, {
     httpOnly: true,
     secure: process.env.NODE_ENV !== 'development',
-    sameSite: 'lax',
+    sameSite: process.env.NODE_ENV === 'development' ? 'lax' : 'none',
     maxAge: COOKIE_MAX_AGE,
     path: '/',
   });

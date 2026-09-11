@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { HMO_SPMT_REFRESH_COOKIE, refreshHmoSpmtSession, type RefreshedHmoSpmtSession } from '@/lib/spmt-session';
+import { createRefreshedHmoLocalSession, HMO_SPMT_REFRESH_COOKIE, refreshHmoSpmtSession, type RefreshedHmoSpmtSession } from '@/lib/spmt-session';
 import { isActivityEntry, isPublicActivityRequest } from '@/lib/activity-access';
 
 const SPMT_BASE_URL = String(process.env.SPMT_BASE_URL || 'https://spmt.live').replace(/\/$/, '');
@@ -69,12 +69,14 @@ async function resolveIdentity(request: NextRequest): Promise<{ identity: any; r
   if (identity || bearer) return { identity, refreshed: null };
   const refreshed = await refreshHmoSpmtSession(request.cookies.get(HMO_SPMT_REFRESH_COOKIE)?.value || '');
   if (!refreshed) return { identity: null, refreshed: null };
-  identity = await fetchIdentity(refreshed.accessToken);
-  return { identity, refreshed: identity ? refreshed : null };
+  identity = refreshed.user?.id ? refreshed.user : await fetchIdentity(refreshed.accessToken);
+  if (identity?.id) refreshed.localSession = await createRefreshedHmoLocalSession(String(identity.id));
+  return { identity, refreshed };
 }
 
 function withRefresh(response: NextResponse, refreshed: RefreshedHmoSpmtSession | null) {
   if (refreshed) {
+    if (refreshed.localSession) response.cookies.set('hmo_session', refreshed.localSession, { httpOnly: true, secure: true, sameSite: 'none', path: '/', maxAge: 2592000 });
     response.cookies.set(SPMT_COOKIE, refreshed.accessToken, { httpOnly: true, secure: true, sameSite: 'none', path: '/', maxAge: refreshed.expiresIn });
     response.cookies.set(HMO_SPMT_REFRESH_COOKIE, refreshed.refreshToken, { httpOnly: true, secure: true, sameSite: 'none', path: '/', maxAge: refreshed.refreshExpiresIn });
   }
@@ -101,17 +103,22 @@ export async function middleware(request: NextRequest) {
 
   const { identity, refreshed } = await resolveIdentity(request);
   if (!identity) {
-    if (pathname.startsWith('/api/')) return NextResponse.json({ error: 'SPMT session required' }, { status: 401 });
+    if (pathname.startsWith('/api/')) return withRefresh(NextResponse.json({ error: 'SPMT session required' }, { status: 401 }), refreshed);
     const login = new URL('/login', request.url);
     login.searchParams.set('next', `${pathname}${request.nextUrl.search}`);
-    return NextResponse.redirect(login);
+    return withRefresh(NextResponse.redirect(login), refreshed);
   }
 
   if (ADMIN_PREFIXES.some((prefix) => pathname === prefix || pathname.startsWith(prefix)) && !isAdmin(identity)) {
-    if (pathname.startsWith('/api/')) return NextResponse.json({ error: 'SPMT admin required' }, { status: 403 });
+    if (pathname.startsWith('/api/')) return withRefresh(NextResponse.json({ error: 'SPMT admin required' }, { status: 403 }), refreshed);
     return withRefresh(NextResponse.redirect(new URL('/', request.url)), refreshed);
   }
 
+  if (refreshed) {
+    request.cookies.set('hmo_spmt_session', refreshed.accessToken);
+    request.cookies.set('hmo_spmt_refresh', refreshed.refreshToken);
+    if (refreshed.localSession) request.cookies.set('hmo_session', refreshed.localSession);
+  }
   const headers = new Headers(request.headers);
   headers.set('x-spmt-user-id', String(identity.id));
   headers.set('x-spmt-is-admin', isAdmin(identity) ? '1' : '0');

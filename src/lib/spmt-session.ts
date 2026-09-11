@@ -12,11 +12,25 @@ export const hmoSpmtCookieOptions = {
 };
 
 export type RefreshedHmoSpmtSession = {
+  user?: any;
+  localSession?: string;
   accessToken: string;
   refreshToken: string;
   expiresIn: number;
   refreshExpiresIn: number;
 };
+
+export async function createRefreshedHmoLocalSession(userId: string): Promise<string | undefined> {
+  const secret = process.env.HEARMEOUT_JWT_SECRET || process.env.JWT_SECRET || (process.env.NODE_ENV === 'production' ? '' : 'hearmeout-local-development-only');
+  if (!secret) return undefined;
+  const encode = (value: string) => btoa(value).replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_');
+  const header = encode(JSON.stringify({ alg: 'HS256', typ: 'JWT' }));
+  const body = encode(JSON.stringify({ uid: `spmt_${userId}`, exp: Math.floor(Date.now() / 1000) + 2592000 }));
+  const input = `${header}.${body}`;
+  const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+  const signature = new Uint8Array(await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(input)));
+  return `${input}.${encode(String.fromCharCode(...signature))}`;
+}
 
 export async function refreshHmoSpmtSession(refreshToken: string): Promise<RefreshedHmoSpmtSession | null> {
   const clientSecret = String(process.env.HEARMEOUT_CLIENT_SECRET || '').trim();
@@ -37,6 +51,7 @@ export async function refreshHmoSpmtSession(refreshToken: string): Promise<Refre
   const payload = await response.json().catch(() => null);
   if (!payload?.access_token || !payload?.refresh_token) return null;
   return {
+    user: payload.user,
     accessToken: String(payload.access_token),
     refreshToken: String(payload.refresh_token),
     expiresIn: Number(payload.expires_in || 604800),
