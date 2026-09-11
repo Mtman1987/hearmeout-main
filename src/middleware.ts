@@ -55,6 +55,7 @@ async function fetchIdentity(token: string) {
   const response = await fetch(`${SPMT_BASE_URL}/api/oauth/userinfo`, {
     headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
     cache: 'no-store',
+    signal: AbortSignal.timeout(5000),
   }).catch(() => null);
   if (!response?.ok) return null;
   const payload = await response.json().catch(() => null);
@@ -64,9 +65,12 @@ async function fetchIdentity(token: string) {
 
 async function resolveIdentity(request: NextRequest): Promise<{ identity: any; refreshed: RefreshedHmoSpmtSession | null }> {
   const bearer = request.headers.get('authorization')?.replace(/^Bearer\s+/i, '') || '';
-  const token = request.cookies.get(SPMT_COOKIE)?.value || bearer;
+  const cookieToken = request.cookies.get(SPMT_COOKIE)?.value || '';
+  const token = cookieToken || bearer;
   let identity = await fetchIdentity(token);
-  if (identity || bearer) return { identity, refreshed: null };
+  // When the browser cookie selected the identity, a stale Authorization header
+  // must not disable that cookie's refresh path. Bearer-only callers do not renew cookies.
+  if (identity || (!cookieToken && bearer)) return { identity, refreshed: null };
   const refreshed = await refreshHmoSpmtSession(request.cookies.get(HMO_SPMT_REFRESH_COOKIE)?.value || '');
   if (!refreshed) return { identity: null, refreshed: null };
   identity = refreshed.user?.id ? refreshed.user : await fetchIdentity(refreshed.accessToken);
