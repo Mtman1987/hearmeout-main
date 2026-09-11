@@ -53,7 +53,7 @@ test('Activity exceptions keep account, private sessions, uploads, and worker co
   }
 });
 
-function playerContext() {
+function playerContext(href = 'https://1279582181768957963.discordsays.com/activity?frame_id=frame-123') {
   // Evaluate the actual generated browser program, without importing server
   // services or connecting to Discord/YouTube during regression tests.
   const source = readFileSync(new URL('../src/app/activity-lite.js/route.ts', import.meta.url), 'utf8');
@@ -64,7 +64,7 @@ function playerContext() {
   const element: any = { value: '100', dataset: {}, textContent: '', style: {}, classList: { toggle() {}, remove() {}, contains() { return false; } },
     addEventListener() {}, setAttribute() {}, querySelectorAll() { return []; } };
   const messages: any[] = [];
-  const location = new URL('https://1279582181768957963.discordsays.com/activity?frame_id=frame-123');
+  const location = new URL(href);
   const context = vm.createContext({ URL, URLSearchParams, AbortSignal, console,
     location, navigator: { userAgent: 'test' },
     window: { location, parent: { postMessage(...args: any[]) { messages.push(args); } }, addEventListener() {} },
@@ -84,8 +84,91 @@ test('generated player starts Discord handshake and uses shared same-origin play
   assert.equal(messages[0][0][1].frame_id, 'frame-123');
   assert.equal(messages[0][1], 'https://discord.com');
   const media = vm.runInContext("appUrl('/api/watch/youtube/hls/abcdefghijk/index.m3u8')", context);
-  assert.equal(media, '/api/watch/sessions/discord-music-room/state?mediaVideoId=abcdefghijk&mediaFile=source.webm');
+  assert.equal(media, '/.proxy/api/watch/sessions/discord-music-room/state?mediaVideoId=abcdefghijk&mediaFile=source.webm');
   assert.equal(vm.runInContext("JSON.stringify(apiUrls('/api/watch/sessions/discord-music-room/state'))", context),
-    '["/api/watch/sessions/discord-music-room/state"]');
+    '["/.proxy/api/watch/sessions/discord-music-room/state"]');
   assert.equal(vm.runInContext("shouldResolveYoutubeInBrowser({id:'youtube-abcdefghijk', metadata:{playbackStrategy:'proxy'}})", context), false);
+});
+
+test('Activity routes API and same-app media URLs through the proxy exactly once', () => {
+  const { context } = playerContext();
+  for (const path of [
+    '/api/watch/sessions/discord-music-room/state',
+    '/api/watch/sessions/discord-music-room/request',
+    '/api/watch/sessions/discord-music-room/quick-control?action=play',
+    '/activity-provider/xtream/hls/vod-123/index.m3u8',
+    '/api/youtube-audio/abcdefghijk',
+  ]) {
+    for (const input of [path, '/.proxy' + path, 'https://hearmeout-main.fly.dev' + path]) {
+      assert.equal(vm.runInContext(`appUrl(${JSON.stringify(input)})`, context), '/.proxy' + path);
+    }
+  }
+  for (const external of ['https://www.youtube.com/embed/abcdefghijk', 'data:audio/mpeg;base64,AA', 'blob:https://example.com/audio']) {
+    assert.equal(vm.runInContext(`appUrl(${JSON.stringify(external)})`, context), external);
+  }
+  const browser = playerContext('https://hearmeout-main.fly.dev/activity');
+  assert.equal(vm.runInContext("appUrl('/api/watch/sessions/discord-music-room/state')", browser.context), '/api/watch/sessions/discord-music-room/state');
+});
+
+test('state and request calls use the mapped endpoint without replaying mutations', async () => {
+  const { context } = playerContext();
+  const requests: any[] = [];
+  context.fetch = async (url: string, options: any) => {
+    requests.push({ url, options });
+    // Reproduce Discord returning its HTML shell on an unmapped /api route.
+    if (!url.startsWith('/.proxy/')) return new Response('<!DOCTYPE html><html>Discord</html>', { headers: { 'content-type': 'text/html' } });
+    return Response.json({ id: 'discord-music-room', queue: [] });
+  };
+  const state = await vm.runInContext("api('/api/watch/sessions/discord-music-room/state')", context);
+  assert.equal(state.id, 'discord-music-room');
+  await vm.runInContext("api('/api/watch/sessions/discord-music-room/request', {method:'POST', body:JSON.stringify({query:'test song'})})", context);
+  assert.equal(requests.length, 2);
+  assert.equal(requests[1].url, '/.proxy/api/watch/sessions/discord-music-room/request');
+  assert.equal(requests[1].options.body, '{"query":"test song"}');
+});
+
+test('HTML and malformed JSON responses produce a useful error without another request', async () => {
+  for (const [contentType, body] of [['text/html', '<!DOCTYPE html><html>Discord</html>'], ['application/json', '{broken']]) {
+    const { context } = playerContext();
+    let calls = 0;
+    context.fetch = async () => {
+      calls++;
+      return new Response(body, { headers: { 'content-type': contentType } });
+    };
+    await assert.rejects(vm.runInContext("api('/api/watch/sessions/discord-music-room/request', {method:'POST', body:'{}'})", context), /could not connect through Discord/);
+    assert.equal(calls, 1);
+  }
+});
+
+test('JSON API errors retain their status and recommendation payload', async () => {
+  const { context } = playerContext();
+  context.fetch = async () => Response.json({ error: 'No matching item', recommendation: { title: 'Try this' } }, { status: 404 });
+  await assert.rejects(vm.runInContext("api('/api/watch/sessions/discord-music-room/request')", context), (error: any) => {
+    assert.equal(error.status, 404);
+    assert.equal(error.payload.recommendation.title, 'Try this');
+    return true;
+  });
+});
+
+test('initial Activity HTML loads its media library through Discord while browser URLs stay direct', async () => {
+  const source = readFileSync(new URL('../src/app/activity/route.ts', import.meta.url), 'utf8');
+  const compiled = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText;
+  const exports: any = {};
+  vm.runInNewContext(compiled, { exports, URL, process: { env: {} }, require(name: string) {
+    if (name === 'next/server') return { NextResponse: Response };
+    if (name === '@/lib/public-config') return { DISCORD_CLIENT_ID: '1279582181768957963' };
+    if (name === '@/lib/watch-session') return { GLOBAL_WATCH_SESSION_ID: 'discord-watch-room', MUSIC_WATCH_SESSION_ID: 'discord-music-room' };
+    if (name === '@/lib/watch/watch-request-service') return { getDefaultActivitySessionId: () => 'discord-music-room', getResolvedWatchSession: () => ({ current: null }), getPublicWatchSession: (state: any) => state };
+    if (name === '@/lib/activity-room') return { ensureDiscordActivityRoom: async () => {} };
+    if (name === '../activity-lite.js/route') return { js: () => '' };
+    throw new Error('Unexpected import ' + name);
+  } });
+  for (const [url, path] of [
+    ['https://hearmeout-main.fly.dev/activity?frame_id=f', '/.proxy/api/activity/hls'],
+    ['https://1279582181768957963.discordsays.com/activity', '/.proxy/api/activity/hls'],
+    ['https://hearmeout-main.fly.dev/activity', '/api/activity/hls'],
+  ]) {
+    const html = await (await exports.GET(new Request(url))).text();
+    assert.ok(html.includes(`<script src="${path}"></script>`), url);
+  }
 });

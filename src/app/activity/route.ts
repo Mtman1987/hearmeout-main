@@ -26,9 +26,10 @@ function isHlsPlaybackUrl(value: string) {
   }
 }
 
-function clientUrl(value: string) {
+function clientUrl(value: string, discordProxy = false) {
   if (!value || /^https?:\/\//i.test(value)) return value;
-  return value.startsWith('/') ? value : `/${value}`;
+  const path = value.startsWith('/') ? value : `/${value}`;
+  return discordProxy && !path.startsWith('/.proxy/') ? `/.proxy${path}` : path;
 }
 
 function activityAppBaseUrl(requestUrl: URL) {
@@ -42,6 +43,7 @@ async function html(request: Request) {
   await ensureDiscordActivityRoom();
   const configuredBaseUrl = process.env.NEXT_PUBLIC_BASE_URL || process.env.NEXT_PUBLIC_APP_URL;
   const requestUrl = new URL(request.url);
+  const discordProxy = Boolean(requestUrl.searchParams.get('frame_id')) || requestUrl.hostname.endsWith('.discordsays.com');
   const baseUrl = (configuredBaseUrl || requestUrl.origin).replace(/\/$/, '');
   const appBaseUrl = activityAppBaseUrl(requestUrl);
   const rawSessionId = requestUrl.searchParams.get('sessionId') || requestUrl.searchParams.get('session_id');
@@ -57,8 +59,8 @@ async function html(request: Request) {
     : current?.item.playbackUrl || '';
   const isEmbeddedVideo = src.includes('youtube.com/embed/') || src.includes('youtube-nocookie.com/embed/');
   const isAudioOnly = current?.item.type === 'tts' || current?.item.metadata?.provider === 'tts' || (current?.item.type === 'music' && src.includes('/api/youtube-audio/'));
-  const nativeSrc = src && !isAudioOnly && !isEmbeddedVideo && !isHlsPlaybackUrl(src) ? clientUrl(src) : '';
-  const audioSrc = src && isAudioOnly ? clientUrl(src) : '';
+  const nativeSrc = src && !isAudioOnly && !isEmbeddedVideo && !isHlsPlaybackUrl(src) ? clientUrl(src, discordProxy) : '';
+  const audioSrc = src && isAudioOnly ? clientUrl(src, discordProxy) : '';
   const iframeSrc = src && isEmbeddedVideo ? src : '';
 
   return `<!doctype html>
@@ -135,7 +137,7 @@ async function html(request: Request) {
       .activity-chrome { transition: none; }
     }
   </style>
-  <script src="${escapeHtml(clientUrl('/api/activity/hls'))}"></script>
+  <script src="${escapeHtml(clientUrl('/api/activity/hls', discordProxy))}"></script>
 </head>
 <body>
   <main>

@@ -314,7 +314,7 @@ function wakeControls() {
 
 function reportActivityMedia(message, details) {
   if (!IS_DISCORD_ACTIVITY) return;
-  fetch('/api/client-log', {
+  fetch(appUrl('/api/client-log'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -471,8 +471,18 @@ function downloadUrlForItem(item) {
 }
 
 function appUrl(path) {
-  if (!path || /^https?:\\/\\//i.test(path)) return path;
-  let nextPath = path.startsWith('/') ? path : '/' + path;
+  if (!path) return path;
+  let resource = path;
+  if (/^https?:\\/\\//i.test(resource)) {
+    if (!IS_DISCORD_ACTIVITY) return resource;
+    const absolute = new URL(resource);
+    const appOrigin = new URL(APP_BASE_URL, window.location.href).origin;
+    if (absolute.origin !== appOrigin && absolute.origin !== window.location.origin) return resource;
+    resource = absolute.pathname + absolute.search + absolute.hash;
+  }
+  if (/^(?:data|blob):/i.test(resource) || resource.startsWith('//')) return resource;
+  let nextPath = resource.startsWith('/') ? resource : '/' + resource;
+  if (IS_DISCORD_ACTIVITY && nextPath.startsWith('/.proxy/')) nextPath = nextPath.slice('/.proxy'.length);
   const youtubeHlsMatch = nextPath.match(/^\\/api\\/watch\\/youtube\\/hls\\/([^/]+)\\/(index\\.m3u8)(?:\\?.*)?$/i);
   if (IS_DISCORD_ACTIVITY) {
     if (youtubeHlsMatch) {
@@ -482,12 +492,12 @@ function appUrl(path) {
         // after the proxy succeeds. Play the cached WebM/Opus source directly.
         mediaFile: 'source.webm',
       });
-      return '/api/watch/sessions/' + encodeURIComponent(sessionId) + '/state?' + params.toString();
+      return '/.proxy/api/watch/sessions/' + encodeURIComponent(sessionId) + '/state?' + params.toString();
     }
-    // Discord serves Activities from its own proxied origin. Keep API and media
-    // requests relative so Discord's URL mapping carries them to HearMeOut;
-    // absolute fly.dev URLs are blocked by the Activity sandbox.
-    return nextPath;
+    // Discord reserves routes on the Activity origin. Its documented proxy
+    // prefix sends API/media requests through this application's URL mapping.
+    // Plain /api paths can return Discord HTML instead of HearMeOut JSON.
+    return '/.proxy' + nextPath;
   }
   if (youtubeHlsMatch) {
     nextPath = '/api/watch/youtube/hls/' + encodeURIComponent(youtubeHlsMatch[1]) + '/source.webm';
@@ -628,7 +638,7 @@ function discordHandshake() {
 
 async function api(path, options) {
   const requestOptions = options || {};
-  const headers = { ...((requestOptions && requestOptions.headers) || {}) };
+  const headers = { accept: 'application/json', ...((requestOptions && requestOptions.headers) || {}) };
   if (requestOptions.body && !headers['content-type']) headers['content-type'] = 'application/json';
   const urls = apiUrls(path);
   let lastError = null;
@@ -639,8 +649,18 @@ async function api(path, options) {
       headers,
       signal: requestOptions.signal || AbortSignal.timeout(15000),
     });
-    if (response.ok) return response.json();
-    const payload = await response.json().catch(() => null);
+    const contentType = response.headers.get('content-type') || '';
+    const isJson = contentType.includes('application/json') || contentType.includes('+json');
+    const payload = isJson ? await response.json().catch(() => null) : null;
+    if (response.ok && isJson && payload !== null) return payload;
+    if (response.ok || !isJson) {
+      const error = new Error(IS_DISCORD_ACTIVITY
+        ? 'HearMeOut could not connect through Discord. Close and reopen the Activity.'
+        : 'HearMeOut returned an unreadable response. Please try again.');
+      error.status = response.status;
+      error.url = response.url || url;
+      throw error;
+    }
     const error = new Error((payload && payload.error) || 'Request failed: ' + response.status);
     error.payload = payload;
     error.status = response.status;
