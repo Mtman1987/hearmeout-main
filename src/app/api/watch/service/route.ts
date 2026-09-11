@@ -56,34 +56,6 @@ export async function GET(request: NextRequest) {
   return NextResponse.json(result.body, { status: result.status });
 }
 
-export async function POST(request: NextRequest) {
-  const body = await request.json().catch(() => ({}));
-  const roomId = String(body.roomId || '');
-  const auth = await authorizeRoom(roomId);
-  if (!auth.ok) return NextResponse.json({ error: auth.error }, { status: auth.status });
-  const action = String(body.action || '');
-
-  if (action === 'prepare') {
-    const selected = body.itemId ? await findXtreamCatalogItemById(body.itemId) : null;
-    const current = body.sessionId ? getResolvedWatchSession(String(body.sessionId)).current?.item : null;
-    const item = selected || current;
-    const stream = streamKeyForItem(item);
-    if (!stream) return NextResponse.json({ error: 'Select an Xtream VOD or episode first' }, { status: 400 });
-    const sourceUrl = await getResolvedXtreamStreamUrl(stream.kind, stream.id);
-    const result = await callWorker('/watch/cache/control', {
-      method: 'POST',
-      body: JSON.stringify({ action: 'prepare', streamId: stream.streamId, sourceUrl: sourceUrl.toString() }),
-    });
-    return NextResponse.json(result.body, { status: result.status });
-  }
-
-  if (action === 'prune' || action === 'clear') {
-    const result = await callWorker('/watch/cache/control', {
-      method: 'POST',
-      body: JSON.stringify({ action, streamId: body.streamId, targetBytes: body.targetBytes }),
-    });
-    return NextResponse.json(result.body, { status: result.status });
-  }
-
-  return NextResponse.json({ error: 'Unsupported service action' }, { status: 400 });
+export async function POST() {
+  return NextResponse.json({ error: 'Playback controls are temporarily unavailable.' }, { status: 410 });
 }

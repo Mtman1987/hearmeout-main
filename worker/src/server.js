@@ -41,6 +41,22 @@ const {
   listVoiceBridges,
 } = require('./discord-voice-bridge');
 
+function describeError(err) {
+  if (!err) return { message: 'unknown error' };
+  return {
+    name: err.name,
+    message: err.message || String(err),
+    code: err.code,
+    status: err.status,
+    reason: err.reason,
+    stack: err.stack,
+  };
+}
+
+function delay(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
 const execFileAsync = promisify(execFile);
 
 function redactSensitiveLogText(value) {
@@ -1055,595 +1071,103 @@ app.get('/cache-stats', authorizeWorker, (req, res) => {
   res.status(410).json({ error: 'Legacy cache stats disabled' });
 });
 
-// ── Watch HLS Transcoder ────────────────────────────────────────────────
-const watchHlsJobs = new Map();
-const watchHlsJobMeta = new Map();
-const watchHlsFailures = new Map();
-const WATCH_HLS_FAILURE_TTL_MS = 2 * 60 * 1000;
-
-function cleanWatchStreamId(streamId) {
-  const raw = String(streamId || '').trim();
-  const youtubeMatch = raw.match(/^yt-([A-Za-z0-9_-]{11})$/) || raw.match(/^youtube-([A-Za-z0-9_-]{11})$/);
-  if (youtubeMatch) return youtubeWatchHlsId(youtubeMatch[1]);
-  const typedMatch = raw.toLowerCase().match(/^(vod|series|live)-(\d+)$/)
-    || raw.toLowerCase().match(/^(episode)-(\d+)-([a-z0-9]+)$/);
-  if (typedMatch) return `${typedMatch[1]}-${typedMatch[2]}${typedMatch[3] ? `-${typedMatch[3]}` : ''}-multiaudio-v2`;
-  const clean = raw.replace(/[^0-9]/g, '');
-  if (!clean) throw new Error('Invalid stream id');
-  return `vod-${clean}-multiaudio-v2`;
-}
-
-function cleanXtreamNumericId(streamId) {
-  const clean = String(streamId || '').replace(/[^0-9]/g, '');
-  if (!clean) throw new Error('Invalid Xtream stream id');
-  return clean;
-}
-
-function cleanHlsFileName(fileName) {
-  const clean = String(fileName || '').replace(/[^a-zA-Z0-9_.-]/g, '');
-  if (!clean || clean.includes('..')) throw new Error('Invalid HLS file');
-  return clean;
-}
-
-function cleanFlyMachineId(machineId) {
-  const clean = String(machineId || '').replace(/[^a-zA-Z0-9]/g, '');
-  return clean || null;
-}
-
-function isAllowedYoutubeMediaUrl(rawUrl) {
-  if (!rawUrl) return false;
-  try {
-    const parsed = new URL(String(rawUrl));
-    if (parsed.protocol !== 'https:') return false;
-    const host = parsed.hostname.toLowerCase();
-    return ['googlevideo.com', 'youtube.com', 'ytimg.com'].some((base) => host === base || host.endsWith(`.${base}`));
-  } catch {
-    return false;
-  }
-}
-
-function watchHlsPaths(streamId) {
-  const clean = cleanWatchStreamId(streamId);
-  const dir = join(WATCH_HLS_DIR, clean);
-  return {
-    clean,
-    dir,
-    indexPath: join(dir, 'index.m3u8'),
-  };
-}
-
-function hasUsableWatchHlsIndex(dir, indexPath) {
-  if (!existsSync(indexPath)) return false;
-  const indexStats = statSync(indexPath);
-  if (!indexStats.isFile() || indexStats.size <= 0) return false;
-
-  const manifest = readFileSync(indexPath, 'utf8');
-  if (manifest.includes('#EXT-X-PLAYLIST-TYPE:EVENT')) {
-    try { unlinkSync(indexPath); } catch {}
-    return false;
-  }
-
-  const firstSegment = manifest
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .find((line) => line && !line.startsWith('#'));
-  if (!firstSegment) return false;
-
-  const segmentPath = join(dir, cleanHlsFileName(firstSegment));
-  if (!existsSync(segmentPath)) return false;
-  const segmentStats = statSync(segmentPath);
-  return segmentStats.isFile() && segmentStats.size > 0;
-}
-
-function pinManifestSegmentsToMachine(manifest) {
-  if (!FLY_MACHINE_ID) return manifest;
-  const machineParam = `machine=${encodeURIComponent(FLY_MACHINE_ID)}`;
-  return manifest
-    .split(/\r?\n/)
-    .map((line) => {
-      const trimmed = line.trim();
-      if (/^#EXT-X-MEDIA:/i.test(trimmed) && /URI="[^"]+"/i.test(line)) {
-        return line.replace(/URI="([^"]+)"/i, (_match, uri) => {
-          if (/[?&]machine=/.test(uri)) return `URI="${uri}"`;
-          return `URI="${uri}${uri.includes('?') ? '&' : '?'}${machineParam}"`;
-        });
-      }
-      if (!trimmed || trimmed.startsWith('#') || /[?&]machine=/.test(trimmed)) return line;
-      return `${line}${line.includes('?') ? '&' : '?'}${machineParam}`;
-    })
-    .join('\n');
-}
-
-function pruneWatchHlsRoot(targetBytes = WATCH_HLS_BUDGET_BYTES) {
-  if (!Number.isFinite(targetBytes) || targetBytes < 0) return { bytes: 0, removed: [] };
-  mkdirSync(WATCH_HLS_DIR, { recursive: true });
-
-  const dirs = [];
-  for (const entry of readdirSync(WATCH_HLS_DIR, { withFileTypes: true })) {
-    if (!entry.isDirectory()) continue;
-    if (watchHlsJobs.has(entry.name)) continue;
-    const dir = join(WATCH_HLS_DIR, entry.name);
-    let size = 0;
-    let mtimeMs = 0;
-    for (const name of readdirSync(dir)) {
-      const filePath = join(dir, name);
-      let stats;
-      try { stats = statSync(filePath); } catch { continue; }
-      if (!stats.isFile()) continue;
-      size += stats.size;
-      mtimeMs = Math.max(mtimeMs, stats.mtimeMs);
-    }
-    dirs.push({ streamId: entry.name, dir, size, mtimeMs });
-  }
-
-  let total = dirs.reduce((sum, dir) => sum + dir.size, 0);
-  const removed = [];
-  for (const hlsDir of dirs.sort((left, right) => left.mtimeMs - right.mtimeMs)) {
-    if (total <= targetBytes) break;
-    try {
-      rmSync(hlsDir.dir, { recursive: true, force: true });
-      total -= hlsDir.size;
-      removed.push({ streamId: hlsDir.streamId, bytes: hlsDir.size });
-    } catch {}
-  }
-  return { bytes: total, removed };
-}
-
-function watchHlsCacheSnapshot() {
-  mkdirSync(WATCH_HLS_DIR, { recursive: true });
-  const entries = [];
-  for (const entry of readdirSync(WATCH_HLS_DIR, { withFileTypes: true })) {
-    if (!entry.isDirectory()) continue;
-    const dir = join(WATCH_HLS_DIR, entry.name);
-    let bytes = 0;
-    let updatedAt = 0;
-    let files = 0;
-    for (const name of readdirSync(dir)) {
-      let stats;
-      try { stats = statSync(join(dir, name)); } catch { continue; }
-      if (!stats.isFile()) continue;
-      bytes += stats.size;
-      files += 1;
-      updatedAt = Math.max(updatedAt, stats.mtimeMs);
-    }
-    entries.push({
-      streamId: entry.name,
-      bytes,
-      files,
-      ready: hasUsableWatchHlsIndex(dir, join(dir, 'index.m3u8')),
-      active: watchHlsJobs.has(entry.name),
-      updatedAt: updatedAt ? new Date(updatedAt).toISOString() : null,
+// All public player views use these two producer slots. Legacy extraction
+// functions remain available to the resolver, never one player per room.
+const { SharedMediaRelay } = require('./shared-media-relay');
+const { selectSharedAudioStream } = require('./shared-source-audio');
+const sharedMediaRelay = new SharedMediaRelay({
+  root: join(WATCH_HLS_DIR, 'shared'),
+  validateSource: async (kind, requestId) => {
+    const response = await fetch(`${APP_URL}/api/watch/source?kind=${kind}&requestId=${encodeURIComponent(requestId)}`, {
+      headers: WORKER_CALLBACK_HEADERS, signal: AbortSignal.timeout(15000),
     });
-  }
-  entries.sort((left, right) => String(right.updatedAt || '').localeCompare(String(left.updatedAt || '')));
-  return {
-    root: 'worker-managed',
-    bytes: entries.reduce((sum, entry) => sum + entry.bytes, 0),
-    budgetBytes: WATCH_HLS_BUDGET_BYTES,
-    segmentSeconds: WATCH_HLS_SEGMENT_SECONDS,
-    playlistWindow: WATCH_HLS_LIST_SIZE === 0 ? 'full' : `${WATCH_HLS_LIST_SIZE} segments`,
-    jobs: Array.from(watchHlsJobMeta.values()),
-    failures: Array.from(watchHlsFailures.entries()).map(([streamId, failure]) => ({ streamId, ...failure })),
-    entries,
-  };
-}
-
-function waitForWatchHlsIndex(streamId, timeoutMs = 45000) {
-  const { dir, indexPath } = watchHlsPaths(streamId);
-  const startedAt = Date.now();
-  return new Promise((resolve) => {
-    const timer = setInterval(() => {
-      if (hasUsableWatchHlsIndex(dir, indexPath)) {
-        clearInterval(timer);
-        resolve(true);
-        return;
-      }
-      if (Date.now() - startedAt >= timeoutMs) {
-        clearInterval(timer);
-        resolve(false);
-      }
-    }, 500);
-  });
-}
-
-function waitForWatchHlsFile(streamId, fileName, timeoutMs = 10000) {
-  const { dir } = watchHlsPaths(streamId);
-  const filePath = join(dir, cleanHlsFileName(fileName));
-  const startedAt = Date.now();
-  return new Promise((resolve) => {
-    const timer = setInterval(() => {
-      if (existsSync(filePath) && statSync(filePath).isFile()) {
-        clearInterval(timer);
-        resolve(filePath);
-        return;
-      }
-      if (Date.now() - startedAt >= timeoutMs) {
-        clearInterval(timer);
-        resolve(null);
-      }
-    }, 250);
-  });
-}
-
-function ensureWatchHls(streamId, sourceUrl) {
-  const { clean, dir, indexPath } = watchHlsPaths(streamId);
-  if (hasUsableWatchHlsIndex(dir, indexPath)) return Promise.resolve();
-  if (watchHlsJobs.has(clean)) return watchHlsJobs.get(clean);
-  if (!sourceUrl) return Promise.reject(new Error('Missing source URL for HLS conversion'));
-
-  mkdirSync(dir, { recursive: true });
-  pruneWatchHlsRoot();
-  try { if (existsSync(indexPath)) unlinkSync(indexPath); } catch {}
-
-  const promise = runWatchHlsFfmpeg(clean, sourceUrl, dir, indexPath)
-    .catch((error) => {
-      console.error(`[WatchHLS] Conversion failed for VOD ${clean}:`, error.message || error);
-      try { rmSync(dir, { recursive: true, force: true }); } catch {}
-      throw error;
-    })
-    .finally(() => {
-      watchHlsJobs.delete(clean);
-      watchHlsJobMeta.delete(clean);
-    });
-
-  watchHlsJobs.set(clean, promise);
-  watchHlsJobMeta.set(clean, { streamId: clean, kind: 'xtream', startedAt: new Date().toISOString() });
-  return promise;
-}
-
-function ensureYoutubeWatchHls(videoId, clientResolved = null) {
-  if (!isValidVideoId(videoId)) return Promise.reject(new Error('Invalid YouTube video id'));
-  const streamId = youtubeWatchHlsId(videoId);
-  const { clean, dir, indexPath } = watchHlsPaths(streamId);
-  if (hasUsableWatchHlsIndex(dir, indexPath)) return Promise.resolve();
-  if (watchHlsJobs.has(clean)) return watchHlsJobs.get(clean);
-  watchHlsFailures.delete(clean);
-  const clientVideoUrl = String(clientResolved?.videoUrl || '');
-  const clientAudioUrl = String(clientResolved?.audioUrl || '');
-  const hasClientResolvedStreams = Boolean(clientVideoUrl && clientAudioUrl);
-
-  mkdirSync(dir, { recursive: true });
-  pruneWatchHlsRoot();
-  try { if (existsSync(indexPath)) unlinkSync(indexPath); } catch {}
-
-  const promise = (async () => {
-    const cachedAudio = cachedAudioFilePath(videoId);
-    if (cachedAudio) {
-      console.log(`[WatchHLS] Using cached audio file for ${clean}`);
-      await runYoutubeAudioHlsFromFile(clean, cachedAudio, dir, indexPath);
-      return;
-    }
-
-    if (hasClientResolvedStreams) {
-      console.log(`[WatchHLS] Using client-resolved YouTube streams for ${clean}`);
-      await runYoutubeHlsFfmpeg(clean, clientVideoUrl, clientAudioUrl, dir, indexPath);
-      return;
-    }
-
-    const [videoInfo, audioInfo] = await Promise.all([
-      extractVideoInfo(videoId),
-      extractAudioInfo(videoId),
-    ]);
-
-    if (!videoInfo?.url) throw new Error('No YouTube video stream resolved');
-    if (!audioInfo?.url) throw new Error('No YouTube audio stream resolved');
-    await runYoutubeHlsFfmpeg(clean, videoInfo.url, audioInfo.url, dir, indexPath);
-  })()
-    .catch((error) => {
-      console.error(`[WatchHLS] YouTube conversion failed for ${clean}:`, error.message || error);
-      watchHlsFailures.set(clean, { at: Date.now(), message: error?.message || String(error) || 'YouTube HLS conversion failed' });
-      try { rmSync(dir, { recursive: true, force: true }); } catch {}
-      throw error;
-    })
-    .finally(() => {
-      watchHlsJobs.delete(clean);
-      watchHlsJobMeta.delete(clean);
-    });
-
-  watchHlsJobs.set(clean, promise);
-  watchHlsJobMeta.set(clean, { streamId: clean, kind: 'youtube', startedAt: new Date().toISOString() });
-  return promise;
-}
-
-function getRecentWatchHlsFailure(streamId) {
-  const clean = cleanWatchStreamId(streamId);
-  const failure = watchHlsFailures.get(clean);
-  if (!failure) return null;
-  if (Date.now() - failure.at > WATCH_HLS_FAILURE_TTL_MS) {
-    watchHlsFailures.delete(clean);
-    return null;
-  }
-  return failure;
-}
-
-try {
-  pruneWatchHlsRoot();
-} catch (error) {
-  console.error('[WatchHLS] Startup prune failed:', error?.message || error);
-}
-
-async function probeWatchMediaStreams(sourceUrl) {
-  try {
-    const { stdout } = await execFileAsync('ffprobe', [
-      '-v', 'error',
-      '-user_agent', 'DiscordStreamHub/1.0',
-      '-show_entries', 'stream=index,codec_type:stream_tags=language,title',
-      '-of', 'json',
-      sourceUrl,
-    ], { maxBuffer: 2 * 1024 * 1024 });
-    const streams = JSON.parse(stdout || '{}').streams || [];
-    return {
-      hasVideo: streams.some((stream) => stream.codec_type === 'video'),
-      audio: streams
-        .filter((stream) => stream.codec_type === 'audio')
-        .slice(0, 8)
-        .map((stream, index) => ({
-          sourceIndex: Number(stream.index),
-          language: String(stream.tags?.language || '').trim().toLowerCase(),
-          title: String(stream.tags?.title || '').trim(),
-          index,
-        })),
+    return response.ok;
+  },
+  resolveSource: async (kind, requestId) => {
+    const sourceEndpoint = `${APP_URL}/api/watch/source?kind=${kind}&requestId=${encodeURIComponent(requestId)}`;
+    const fetchSource = async () => {
+      const response = await fetch(sourceEndpoint, { headers: WORKER_CALLBACK_HEADERS, signal: AbortSignal.timeout(15000) });
+      return response.ok ? response.json() : null;
     };
-  } catch (error) {
-    console.warn(`[WatchHLS] ffprobe failed for ${sourceUrl}: ${error?.message || error}`);
-    return { hasVideo: true, audio: [{ sourceSpecifier: 'a:0', language: '', title: '', index: 0 }] };
-  }
-}
-
-function audioTrackName(track) {
-  const language = String(track.language || '').toLowerCase();
-  const title = String(track.title || '').trim();
-  const fallback = language || `track-${track.index + 1}`;
-  return (title || fallback).replace(/[^a-zA-Z0-9_-]+/g, '-').slice(0, 40) || `track-${track.index + 1}`;
-}
-
-function isEnglishAudioTrack(track) {
-  return /^(?:en|eng|english)$/i.test(track.language) || /\benglish\b/i.test(track.title);
-}
-
-async function runWatchHlsFfmpeg(streamId, sourceUrl, dir, indexPath) {
-  const media = await probeWatchMediaStreams(sourceUrl);
-  const audioTracks = media.audio;
-  const segmentPattern = join(dir, 'stream_%v_seg_%05d.ts');
-  console.log(`[WatchHLS] Starting HLS conversion for VOD ${streamId}`);
-
-  return new Promise((resolve, reject) => {
-    const defaultAudioIndex = Math.max(0, audioTracks.findIndex(isEnglishAudioTrack));
-    const mapArgs = [
-      ...(media.hasVideo ? ['-map', '0:v:0?'] : []),
-      ...audioTracks.flatMap((track) => ['-map', `0:${track.sourceSpecifier || track.sourceIndex}?`]),
-    ];
-    const streamMap = [
-      ...(media.hasVideo ? [audioTracks.length ? 'v:0,agroup:audio,name:video' : 'v:0,name:video'] : []),
-      ...audioTracks.map((track, index) => [
-        `a:${index}`,
-        'agroup:audio',
-        `name:${audioTrackName(track)}`,
-        track.language ? `language:${track.language.replace(/[^a-z0-9-]/g, '')}` : '',
-        index === defaultAudioIndex ? 'default:yes' : '',
-      ].filter(Boolean).join(',')),
-    ].join(' ');
-    const ffmpegArgs = [
-      '-hide_banner',
-      '-loglevel', 'warning',
-      '-threads', '2',
-      '-y',
-      '-user_agent', 'DiscordStreamHub/1.0',
-      '-reconnect', '1',
-      '-reconnect_streamed', '1',
-      '-reconnect_at_eof', '1',
-      '-reconnect_delay_max', '5',
-      '-i', sourceUrl,
-      ...mapArgs,
-      '-c:v', 'copy',
-      '-c:a', 'aac',
-      '-ac', '2',
-      '-f', 'hls',
-      '-hls_time', String(WATCH_HLS_SEGMENT_SECONDS),
-      '-hls_list_size', String(WATCH_HLS_LIST_SIZE),
-      ...(WATCH_HLS_LIST_SIZE > 0 ? ['-hls_delete_threshold', String(WATCH_HLS_DELETE_THRESHOLD)] : []),
-      '-hls_flags', WATCH_HLS_LIST_SIZE > 0 ? 'delete_segments+independent_segments' : 'independent_segments',
-      ...(streamMap ? ['-var_stream_map', streamMap, '-master_pl_name', 'index.m3u8'] : []),
-      '-hls_segment_filename', segmentPattern,
-      streamMap ? join(dir, 'stream_%v.m3u8') : indexPath,
-    ];
-
-    const command = process.platform === 'win32' ? 'ffmpeg' : 'nice';
-    const args = process.platform === 'win32' ? ffmpegArgs : ['-n', '10', 'ffmpeg', ...ffmpegArgs];
-    const child = spawn(command, args, { stdio: ['ignore', 'ignore', 'pipe'] });
-    let stderr = '';
-
-    child.stderr?.on('data', (chunk) => {
-      stderr = `${stderr}${chunk}`.slice(-4000);
-    });
-    child.once('error', reject);
-    child.once('exit', (code) => {
-      if (code === 0) {
-        resolve();
-        return;
+    const source = await fetchSource();
+    if (!source) return null;
+    let inputs;
+    let video = true;
+    let audioInput = 0;
+    let audioStreamIndex = null;
+    if (source.provider === 'youtube') {
+      const cached = cachedAudioFilePath(source.videoId);
+      if (cached) { inputs = [{ url: cached }]; video = false; }
+      else {
+        const visual = await extractVideoInfo(source.videoId);
+        const audio = await extractAudioInfo(source.videoId);
+        if (!visual?.url || !audio?.url) throw new Error('YouTube source unavailable');
+        inputs = [{ url: visual.url }, { url: audio.url }]; audioInput = 1;
       }
-      reject(new Error(stderr || `ffmpeg exited with ${code}`));
-    });
-  });
-}
-
-function runYoutubeHlsFfmpeg(streamId, videoUrl, audioUrl, dir, indexPath) {
-  const segmentPattern = join(dir, 'seg_%05d.ts');
-  const youtubeHeaders = 'Referer: https://www.youtube.com/\r\nOrigin: https://www.youtube.com\r\n';
-  const userAgent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
-  const inputArgs = (url) => [
-    '-user_agent', userAgent,
-    '-headers', youtubeHeaders,
-    '-reconnect', '1',
-    '-reconnect_streamed', '1',
-    '-reconnect_at_eof', '1',
-    '-reconnect_delay_max', '5',
-    '-i', url,
-  ];
-  console.log(`[WatchHLS] Starting YouTube HLS conversion for ${streamId}`);
-
-  return new Promise((resolve, reject) => {
-    const ffmpegArgs = [
-      '-hide_banner',
-      '-loglevel', 'warning',
-      '-threads', '2',
-      '-y',
-      ...inputArgs(videoUrl),
-      ...inputArgs(audioUrl),
-      '-map', '0:v:0',
-      '-map', '1:a:0',
-      '-c:v', 'libx264',
-      '-preset', 'veryfast',
-      '-pix_fmt', 'yuv420p',
-      '-c:a', 'aac',
-      '-b:a', '160k',
-      '-ac', '2',
-      '-shortest',
-      '-f', 'hls',
-      '-hls_time', String(WATCH_HLS_SEGMENT_SECONDS),
-      '-hls_list_size', String(WATCH_HLS_LIST_SIZE),
-      ...(WATCH_HLS_LIST_SIZE > 0 ? ['-hls_delete_threshold', String(WATCH_HLS_DELETE_THRESHOLD)] : []),
-      '-hls_flags', WATCH_HLS_LIST_SIZE > 0 ? 'delete_segments+independent_segments' : 'independent_segments',
-      '-hls_segment_filename', segmentPattern,
-      indexPath,
-    ];
-
-    const command = process.platform === 'win32' ? 'ffmpeg' : 'nice';
-    const args = process.platform === 'win32' ? ffmpegArgs : ['-n', '10', 'ffmpeg', ...ffmpegArgs];
-    const child = spawn(command, args, { stdio: ['ignore', 'ignore', 'pipe'] });
-    let stderr = '';
-
-    child.stderr?.on('data', (chunk) => {
-      stderr = `${stderr}${chunk}`.slice(-4000);
-    });
-    child.once('error', reject);
-    child.once('exit', (code) => {
-      if (code === 0) {
-        resolve();
-        return;
+    } else {
+      const local = new URL(source.sourceUrl).origin === new URL(APP_URL).origin;
+      inputs = [{ url: source.sourceUrl, ...(local && WORKER_SHARED_SECRET ? { headers: `Authorization: Bearer ${WORKER_SHARED_SECRET}\r\n` } : {}) }];
+      video = kind === 'movie';
+      if (video) {
+        // Probe one source before opening the relay, never one per viewer.
+        const probeArgs = ['-v', 'error', '-show_streams', '-of', 'json'];
+        if (inputs[0].headers) probeArgs.push('-headers', inputs[0].headers);
+        probeArgs.push(inputs[0].url);
+        try {
+          const { stdout } = await execFileAsync('ffprobe', probeArgs, { timeout: 20000, maxBuffer: 1024 * 1024 });
+          audioStreamIndex = selectSharedAudioStream(JSON.parse(stdout).streams || []);
+        } catch (_) { /* Fall back to the first audio stream if probing fails. */ }
       }
-      reject(new Error(stderr || `ffmpeg exited with ${code}`));
+    }
+    if (!await fetchSource()) return null;
+    return { inputs, video, audioInput, audioStreamIndex };
+  },
+  onEnded: async (kind, requestId, error) => {
+    const response = await fetch(`${APP_URL}/api/watch/source-ended`, {
+      method: 'POST', headers: { ...WORKER_CALLBACK_HEADERS, 'content-type': 'application/json' },
+      body: JSON.stringify({ kind, requestId, failed: Boolean(error) }),
+      signal: AbortSignal.timeout(15000),
     });
-  });
-}
-
-// Builds an audio-only HLS ladder from a locally cached file (no network).
-function runYoutubeAudioHlsFromFile(streamId, filePath, dir, indexPath) {
-  const segmentPattern = join(dir, 'seg_%05d.ts');
-  console.log(`[WatchHLS] Starting cached-audio HLS conversion for ${streamId}`);
-
-  return new Promise((resolve, reject) => {
-    const ffmpegArgs = [
-      '-hide_banner',
-      '-loglevel', 'warning',
-      '-threads', '2',
-      '-y',
-      '-i', filePath,
-      '-vn',
-      '-map', '0:a:0',
-      '-c:a', 'aac',
-      '-b:a', '160k',
-      '-ac', '2',
-      '-f', 'hls',
-      '-hls_time', String(WATCH_HLS_SEGMENT_SECONDS),
-      '-hls_list_size', String(WATCH_HLS_LIST_SIZE),
-      ...(WATCH_HLS_LIST_SIZE > 0 ? ['-hls_delete_threshold', String(WATCH_HLS_DELETE_THRESHOLD)] : []),
-      '-hls_flags', WATCH_HLS_LIST_SIZE > 0 ? 'delete_segments+independent_segments' : 'independent_segments',
-      '-hls_segment_filename', segmentPattern,
-      indexPath,
-    ];
-
-    const command = process.platform === 'win32' ? 'ffmpeg' : 'nice';
-    const args = process.platform === 'win32' ? ffmpegArgs : ['-n', '10', 'ffmpeg', ...ffmpegArgs];
-    const child = spawn(command, args, { stdio: ['ignore', 'ignore', 'pipe'] });
-    let stderr = '';
-
-    child.stderr?.on('data', (chunk) => {
-      stderr = `${stderr}${chunk}`.slice(-4000);
-    });
-    child.once('error', reject);
-    child.once('exit', (code) => {
-      if (code === 0) {
-        resolve();
-        return;
-      }
-      reject(new Error(stderr || `ffmpeg exited with ${code}`));
-    });
-  });
-}
-
-app.get('/watch/youtube/hls/:videoId/:file', authorizeWorker, async (req, res) => {
+    if (!response.ok) throw new Error(`Completion callback failed: ${response.status}`);
+  },
+});
+// Recover the same authoritative source after worker/app restarts, even if
+// no browser is open. Listener arrival/departure never owns its lifecycle.
+let reconcilingSharedMedia = false;
+async function reconcileSharedMedia() {
+  if (reconcilingSharedMedia) return;
+  reconcilingSharedMedia = true;
   try {
-    const videoId = String(req.params.videoId || '');
-    if (!isValidVideoId(videoId)) return res.status(400).json({ error: 'Invalid YouTube video id' });
-    const file = cleanHlsFileName(req.params.file);
-    const requestedMachine = cleanFlyMachineId(req.query.machine);
-    if (requestedMachine && FLY_MACHINE_ID && requestedMachine !== FLY_MACHINE_ID) {
-      res.setHeader('fly-replay', `instance=${requestedMachine};app=${FLY_APP_NAME}`);
-      return res.status(409).send('Replaying to HLS owner');
+    for (const [kind, sessionId] of [['movie', 'discord-watch-room'], ['music', 'discord-music-room']]) {
+      try {
+        const response = await fetch(`${APP_URL}/api/watch/sessions/${sessionId}/state`, { signal: AbortSignal.timeout(15000) });
+        if (!response.ok) continue;
+        const state = await response.json();
+        if (state.current?.requestId) await sharedMediaRelay.ensure(kind, state.current.requestId);
+      } catch (_) { /* Retry on the next pass; never start a fallback producer. */ }
     }
+  } finally { reconcilingSharedMedia = false; }
+}
+setInterval(reconcileSharedMedia, 10000).unref();
+void reconcileSharedMedia();
 
-    const streamId = youtubeWatchHlsId(videoId);
-    const { dir } = watchHlsPaths(streamId);
-
-    if (file === 'index.m3u8') {
-      const sourceUrl = String(req.query.source || '');
-      const audioSourceUrl = String(req.query.audioSource || '');
-      if (sourceUrl && !isAllowedYoutubeMediaUrl(sourceUrl)) return res.status(400).json({ error: 'Invalid source URL' });
-      if (audioSourceUrl && !isAllowedYoutubeMediaUrl(audioSourceUrl)) return res.status(400).json({ error: 'Invalid audio source URL' });
-      const hasClientResolvedStreams = Boolean(sourceUrl && audioSourceUrl);
-      const hasCachedAudio = Boolean(cachedAudioFilePath(videoId));
-      const priorFailure = (sourceUrl || hasClientResolvedStreams || hasCachedAudio)
-        ? null
-        : getRecentWatchHlsFailure(streamId);
-      if (priorFailure) return res.status(502).json({ error: priorFailure.message });
-      if (hasClientResolvedStreams) {
-        watchHlsFailures.delete(cleanWatchStreamId(streamId));
-        ensureYoutubeWatchHls(videoId, { videoUrl: sourceUrl, audioUrl: audioSourceUrl }).catch(() => {});
-      } else if (sourceUrl) {
-        watchHlsFailures.delete(cleanWatchStreamId(streamId));
-        ensureWatchHls(streamId, sourceUrl).catch(() => {});
-      } else {
-        ensureYoutubeWatchHls(videoId).catch(() => {});
-      }
-      const ready = await waitForWatchHlsIndex(streamId);
-      const failure = getRecentWatchHlsFailure(streamId);
-      if (failure) return res.status(502).json({ error: failure.message });
-      if (!ready) return res.status(202).json({ error: 'YouTube HLS stream is still preparing. Try again in a few seconds.' });
+app.get('/shared-media/:kind/:file', authorizeWorker, async (req, res) => {
+  const { kind, file } = req.params;
+  const requestId = String(req.query.requestId || '');
+  try {
+    let media = await sharedMediaRelay.file(kind, requestId, file);
+    const deadline = Date.now() + 45000;
+    while (!media && file === 'index.m3u8' && Date.now() < deadline) {
+      await new Promise(resolve => setTimeout(resolve, 500));
+      media = await sharedMediaRelay.file(kind, requestId, file);
     }
-
-    const filePath = join(dir, file);
-    const resolvedPath = existsSync(filePath) ? filePath : await waitForWatchHlsFile(streamId, file);
-    if (!resolvedPath) return res.status(404).json({ error: 'HLS file not found' });
-    try {
-      const indexPath = join(dir, 'index.m3u8');
-      if (existsSync(indexPath)) utimesSync(indexPath, new Date(), new Date());
-    } catch {}
-
-    const stats = statSync(resolvedPath);
-    const contentType = file.endsWith('.m3u8')
-      ? 'application/vnd.apple.mpegurl'
-      : file.endsWith('.ts')
-        ? 'video/mp2t'
-        : 'application/octet-stream';
-
-    res.setHeader('Content-Type', contentType);
-    res.setHeader('Cache-Control', file.endsWith('.m3u8') ? 'no-store' : 'public, max-age=3600');
-
-    if (file.endsWith('.m3u8')) {
-      const manifest = pinManifestSegmentsToMachine(readFileSync(resolvedPath, 'utf8'));
-      res.setHeader('Content-Length', String(Buffer.byteLength(manifest)));
-      return res.send(manifest);
-    }
-
-    res.setHeader('Content-Length', String(stats.size));
-    createReadStream(resolvedPath).pipe(res);
-  } catch (err) {
-    res.status(502).json({ error: err.message || 'YouTube HLS conversion failed' });
-  }
+    if (!media) return res.status(file === 'index.m3u8' ? 503 : 404).json({ error: 'Shared stream is preparing' });
+    res.setHeader('content-type', media.contentType);
+    res.setHeader('cache-control', 'no-store');
+    createReadStream(media.path).on('error', () => { if (!res.headersSent) res.status(404).end(); else res.destroy(); }).pipe(res);
+  } catch (_) { res.status(503).json({ error: 'Shared source unavailable' }); }
 });
 
-// Report whether an audio file is already cached for this video.
 app.get('/watch/youtube/cache/:videoId/stream', authorizeWorker, (req, res) => {
   try {
     const videoId = String(req.params.videoId || '');
@@ -1710,8 +1234,6 @@ app.post(
       const filePath = join(CACHE_DIR, `${videoId}.m4a`);
       writeFileSync(filePath, body);
       recordUserMusicPlay(req.query.user, videoId);
-      // A fresh upload supersedes any prior extraction failure.
-      try { watchHlsFailures.delete(cleanWatchStreamId(youtubeWatchHlsId(videoId))); } catch {}
 
       console.log(`[Cache] Stored client-uploaded audio for ${videoId} (${body.length} bytes)`);
       return res.json({ ok: true, videoId, bytes: body.length });
@@ -1721,884 +1243,21 @@ app.post(
   },
 );
 
-app.get('/watch/xtream/hls/:streamId/:file', authorizeWorker, async (req, res) => {
-  try {
-    const streamId = String(req.params.streamId || '');
-    const file = cleanHlsFileName(req.params.file);
-    const requestedMachine = cleanFlyMachineId(req.query.machine);
-    if (requestedMachine && FLY_MACHINE_ID && requestedMachine !== FLY_MACHINE_ID) {
-      res.setHeader('fly-replay', `instance=${requestedMachine};app=${FLY_APP_NAME}`);
-      return res.status(409).send('Replaying to HLS owner');
-    }
-
-    const { dir } = watchHlsPaths(streamId);
-
-    if (file === 'index.m3u8') {
-      const sourceUrl = String(req.query.source || '');
-      if (sourceUrl && !/^https?:\/\//i.test(sourceUrl)) return res.status(400).json({ error: 'Invalid source URL' });
-      ensureWatchHls(streamId, sourceUrl).catch(() => {});
-      const ready = await waitForWatchHlsIndex(streamId);
-      if (!ready) return res.status(202).json({ error: 'HLS stream is still preparing. Try again in a few seconds.' });
-    }
-
-    const filePath = join(dir, file);
-    const resolvedPath = existsSync(filePath) ? filePath : await waitForWatchHlsFile(streamId, file);
-    if (!resolvedPath) return res.status(404).json({ error: 'HLS file not found' });
-    try {
-      const activeIndexPath = join(dir, 'index.m3u8');
-      if (existsSync(activeIndexPath)) utimesSync(activeIndexPath, new Date(), new Date());
-    } catch {}
-
-    const stats = statSync(resolvedPath);
-    const contentType = file.endsWith('.m3u8')
-      ? 'application/vnd.apple.mpegurl'
-      : file.endsWith('.ts')
-        ? 'video/mp2t'
-        : 'application/octet-stream';
-
-    res.setHeader('Content-Type', contentType);
-    res.setHeader('Cache-Control', file.endsWith('.m3u8') ? 'no-store' : 'public, max-age=3600');
-
-    if (file.endsWith('.m3u8')) {
-      const manifest = pinManifestSegmentsToMachine(readFileSync(resolvedPath, 'utf8'));
-      res.setHeader('Content-Length', String(Buffer.byteLength(manifest)));
-      return res.send(manifest);
-    }
-
-    res.setHeader('Content-Length', String(stats.size));
-    createReadStream(resolvedPath).pipe(res);
-  } catch (err) {
-    res.status(502).json({ error: err.message || 'HLS conversion failed' });
-  }
-});
-
-app.get('/watch/cache/status', authorizeWorker, (_req, res) => {
-  return res.json(watchHlsCacheSnapshot());
-});
-
-app.post('/watch/cache/control', authorizeWorker, (req, res) => {
-  try {
-    const action = String(req.body?.action || '');
-    if (action === 'prepare') {
-      const streamId = String(req.body?.streamId || '');
-      const sourceUrl = String(req.body?.sourceUrl || '');
-      if (!streamId || !/^https?:\/\//i.test(sourceUrl)) {
-        return res.status(400).json({ error: 'prepare requires a streamId and HTTP(S) sourceUrl' });
-      }
-      ensureWatchHls(streamId, sourceUrl).catch((error) => {
-        const clean = cleanWatchStreamId(streamId);
-        watchHlsFailures.set(clean, { at: Date.now(), message: error?.message || String(error) });
-      });
-      return res.status(202).json({ accepted: true, streamId: cleanWatchStreamId(streamId), cache: watchHlsCacheSnapshot() });
-    }
-    if (action === 'prune') {
-      const requestedTarget = Number(req.body?.targetBytes);
-      const targetBytes = Number.isFinite(requestedTarget) && requestedTarget >= 0
-        ? Math.min(requestedTarget, WATCH_HLS_BUDGET_BYTES)
-        : Math.floor(WATCH_HLS_BUDGET_BYTES * 0.8);
-      const result = pruneWatchHlsRoot(targetBytes);
-      return res.json({ ok: true, ...result, cache: watchHlsCacheSnapshot() });
-    }
-    if (action === 'clear') {
-      const clean = cleanWatchStreamId(req.body?.streamId);
-      if (watchHlsJobs.has(clean)) return res.status(409).json({ error: 'Cannot clear an active cache job' });
-      rmSync(join(WATCH_HLS_DIR, clean), { recursive: true, force: true });
-      watchHlsFailures.delete(clean);
-      return res.json({ ok: true, streamId: clean, cache: watchHlsCacheSnapshot() });
-    }
-    return res.status(400).json({ error: 'Unsupported cache action' });
-  } catch (error) {
-    return res.status(400).json({ error: error?.message || 'Cache control failed' });
-  }
-});
-
-app.get('/watch/xtream/direct/:kind/:streamId', authorizeWorker, async (req, res) => {
-  try {
-    const kind = String(req.params.kind || '');
-    if (!['vod', 'live', 'series'].includes(kind)) return res.status(400).json({ error: 'Unsupported stream kind' });
-    const streamId = cleanXtreamNumericId(req.params.streamId);
-    const sourceResponse = await fetch(`${APP_URL}/api/watch/xtream/source/${encodeURIComponent(kind)}/${encodeURIComponent(streamId)}`, {
-      headers: WORKER_CALLBACK_HEADERS,
-    });
-    const source = await sourceResponse.json().catch(() => null);
-    if (!sourceResponse.ok || !source?.url) {
-      return res.status(sourceResponse.status || 502).json({ error: source?.error || 'Could not resolve Xtream source' });
-    }
-
-    const range = capRangeHeader(req.headers.range);
-    const headers = { 'user-agent': 'DiscordStreamHub/1.0', range };
-    console.log('[XtreamDirect] request', { kind, streamId, range });
-    const upstream = await fetch(source.url, { headers });
-    if (!upstream.ok || !upstream.body) return res.status(upstream.status || 502).send(`Xtream stream returned ${upstream.status}`);
-    console.log('[XtreamDirect] upstream', {
-      kind,
-      streamId,
-      status: upstream.status,
-      contentLength: upstream.headers.get('content-length'),
-      contentRange: upstream.headers.get('content-range'),
-    });
-
-    res.status(upstream.status);
-    res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Accept-Ranges', upstream.headers.get('accept-ranges') || 'bytes');
-    for (const header of ['content-type', 'content-length', 'content-range', 'etag', 'last-modified']) {
-      const value = upstream.headers.get(header);
-      if (value) res.setHeader(header, value);
-    }
-    res.setHeader('Cache-Control', 'no-store');
-
-    const reader = upstream.body.getReader();
-    req.on('close', () => {
-      reader.cancel().catch(() => {});
-    });
-
-    while (true) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      if (!res.write(Buffer.from(value))) {
-        await new Promise((resolve) => res.once('drain', resolve));
-      }
-    }
-    res.end();
-  } catch (err) {
-    if (!res.headersSent) res.status(502).json({ error: err.message || 'Xtream stream failed' });
-    else res.end();
-  }
-});
-
-// ══════════════════════════════════════════════════════════════════════════
-// ── DJ Engine — Server-side LiveKit audio publishing via ffmpeg ──────────
-// ══════════════════════════════════════════════════════════════════════════
-
-const SAMPLE_RATE = 48000;
-const CHANNELS = 2;
-const FRAME_DURATION_MS = 20;
-const SAMPLES_PER_FRAME = (SAMPLE_RATE * FRAME_DURATION_MS) / 1000; // 960
-const BYTES_PER_FRAME = SAMPLES_PER_FRAME * CHANNELS * 2; // 16-bit PCM = 2 bytes/sample
-const LIVEKIT_RETRY_COOLDOWN_MS = 5 * 60 * 1000;
-const liveKitFailuresByRoom = new Map();
-
-function describeError(err) {
-  if (!err) return { message: 'unknown error' };
-  return {
-    name: err.name,
-    message: err.message || String(err),
-    code: err.code,
-    status: err.status,
-    reason: err.reason,
-    stack: err.stack,
-  };
+// Retired per-item producers and direct-provider playback cannot fork the
+// shared source, including calls from cached clients.
+for (const path of ['/watch/youtube/hls/:videoId/:file', '/watch/xtream/hls/:streamId/:file', '/watch/xtream/direct/:kind/:streamId']) {
+  app.get(path, authorizeWorker, (_req, res) => res.status(410).json({ error: 'Reopen the shared player.' }));
 }
-
-function delay(ms) {
-  return new Promise(resolve => setTimeout(resolve, ms));
-}
-
-class DJSession {
-  constructor(roomId) {
-    this.roomId = roomId;
-    this.startedAt = new Date();
-    this.lkRoom = null;
-    this.audioSource = null;
-    this.localTrack = null;
-    this.peer = null;
-    this.peerAudioSource = null;
-    this.peerAudioTrack = null;
-    this.peerStream = null;
-    this.peerConnections = [];
-    this.peerFallback = false;
-    this.ffmpegProcess = null;
-    this.pollInterval = null;
-    this.currentVideoId = null;
-    this.stopped = false;
-    this.playing = false;
-    this.ready = false; // true once track is published and source can accept frames
-  }
-
-  async start() {
-    console.log(`[DJ:${this.roomId}] Starting session...`);
-
-    try {
-      const recentFailure = liveKitFailuresByRoom.get(this.roomId);
-      if (recentFailure && Date.now() - recentFailure.at < LIVEKIT_RETRY_COOLDOWN_MS) {
-        console.warn(`[DJ:${this.roomId}] Skipping LiveKit attempt; recent failure is still cooling down`, recentFailure);
-        throw new Error(`LiveKit cooldown active after prior failure: ${recentFailure.error?.message || 'unknown error'}`);
-      }
-
-      await this.startLiveKit();
-      liveKitFailuresByRoom.delete(this.roomId);
-      await this.patchRoom({ djActive: true, djStatus: 'DJ connected', peerFallback: false });
-    } catch (err) {
-      const errorDetails = describeError(err);
-      liveKitFailuresByRoom.set(this.roomId, { at: Date.now(), error: errorDetails });
-      console.warn(`[DJ:${this.roomId}] LiveKit failed, starting PeerJS fallback`, {
-        roomId: this.roomId,
-        livekitUrl: process.env.LIVEKIT_URL || process.env.NEXT_PUBLIC_LIVEKIT_URL || null,
-        error: errorDetails,
-      });
-      await this.startPeerFallback();
-      await this.patchRoom({ djActive: true, djStatus: 'DJ connected via PeerJS fallback', peerFallback: true });
-    }
-
-    // Start polling room state for track changes
-    this.startPolling();
-  }
-
-  async startLiveKit() {
-    // Get LiveKit token from main app
-    const token = await this.getLiveKitToken();
-    if (!token) throw new Error('Failed to get LiveKit token');
-
-    const livekitUrl = process.env.LIVEKIT_URL || process.env.NEXT_PUBLIC_LIVEKIT_URL || 'wss://hearmeout-6ntnbsdm.livekit.cloud';
-    if (!livekitUrl) throw new Error('LIVEKIT_URL not configured. Set LIVEKIT_URL or NEXT_PUBLIC_LIVEKIT_URL');
-
-    // Connect to LiveKit
-    this.lkRoom = new Room();
-    try {
-      await this.lkRoom.connect(livekitUrl, token);
-    } catch (err) {
-      console.error(`[DJ:${this.roomId}] LiveKit connect failed`, {
-        roomId: this.roomId,
-        musicRoom: `${this.roomId}-music`,
-        livekitUrl,
-        error: describeError(err),
-      });
-      throw err;
-    }
-    console.log(`[DJ:${this.roomId}] Connected to LiveKit room: ${this.roomId}-music`);
-
-    // Create audio source and publish track
-    this.audioSource = new AudioSource(SAMPLE_RATE, CHANNELS);
-    this.localTrack = LocalAudioTrack.createAudioTrack('dj-music', this.audioSource);
-    await this.lkRoom.localParticipant.publishTrack(this.localTrack, new TrackPublishOptions({
-      source: TrackSource.MICROPHONE,
-    }));
-    console.log(`[DJ:${this.roomId}] Audio track published`);
-
-    // Wait for the track to be fully negotiated before sending frames
-    await new Promise(r => setTimeout(r, 500));
-    this.ready = true;
-    await this.patchRoom({ djActive: true, peerFallback: false, djPeerId: null, djStatus: 'DJ connected (LiveKit)' });
-    console.log(`[DJ:${this.roomId}] Audio source ready for frames`);
-  }
-
-  async startPeerFallback() {
-    const basePeerId = `hmo-dj-${this.roomId}`;
-    let lastError = null;
-
-    for (let attempt = 1; attempt <= 4; attempt++) {
-      const peerId = attempt === 1
-        ? basePeerId
-        : `${basePeerId}-${Date.now().toString(36)}-${attempt}`;
-      this.cleanupPeerFallback();
-      this.peerAudioSource = new wrtc.nonstandard.RTCAudioSource();
-      this.peerAudioTrack = this.peerAudioSource.createTrack();
-      this.peerStream = new wrtc.MediaStream([this.peerAudioTrack]);
-
-      try {
-        await new Promise((resolve, reject) => {
-          let settled = false;
-          this.peer = new Peer(peerId, { debug: 1 });
-
-          this.peer.on('open', () => {
-            settled = true;
-            this.peerFallback = true;
-            this.ready = true;
-            console.log(`[DJ:${this.roomId}] PeerJS fallback ready as ${peerId}`);
-            this.patchRoom({ djActive: true, peerFallback: true, djPeerId: peerId, djStatus: 'DJ connected (P2P)' }).catch(() => {});
-            resolve();
-          });
-
-          this.peer.on('call', (call) => {
-            console.log(`[DJ:${this.roomId}] PeerJS listener connected: ${call.peer}`);
-            call.answer(this.peerStream);
-            this.peerConnections.push(call);
-            call.on('close', () => {
-              this.peerConnections = this.peerConnections.filter(c => c !== call);
-            });
-          });
-
-          this.peer.on('error', (err) => {
-            console.error(`[DJ:${this.roomId}] PeerJS error:`, err.message);
-            if (!settled) reject(err);
-          });
-
-          this.peer.on('disconnected', () => {
-            if (this.peer && !this.peer.destroyed) this.peer.reconnect();
-          });
-        });
-        return;
-      } catch (err) {
-        lastError = err;
-        const message = err?.message || String(err);
-        this.cleanupPeerFallback();
-        if (!/taken|unavailable|already/i.test(message) || attempt === 4) break;
-        const waitMs = attempt * 1500;
-        console.warn(`[DJ:${this.roomId}] PeerJS ID ${peerId} is taken; retrying with a fresh ID in ${waitMs}ms`, { attempt, error: message });
-        await delay(waitMs);
-      }
-    }
-
-    throw lastError || new Error(`Could not start PeerJS fallback as ${basePeerId}`);
-  }
-
-  cleanupPeerFallback() {
-    for (const conn of this.peerConnections) {
-      try { conn.close(); } catch {}
-    }
-    this.peerConnections = [];
-    try { this.peerAudioTrack?.stop(); } catch {}
-    try { this.peer?.destroy(); } catch {}
-    this.peer = null;
-    this.peerAudioSource = null;
-    this.peerAudioTrack = null;
-    this.peerStream = null;
-    this.peerFallback = false;
-  }
-
-  async getLiveKitToken() {
-    try {
-      const res = await fetch(`${APP_URL}/api/livekit-token`, {
-        method: 'POST',
-        headers: {
-          ...WORKER_CALLBACK_HEADERS,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          roomId: this.roomId,
-          userName: 'HearMeOut DJ',
-          musicRoom: true,
-          isDJ: true,
-        }),
-      });
-      if (!res.ok) {
-        console.error(`[DJ:${this.roomId}] Token request failed: ${res.status}`);
-        return null;
-      }
-      const { token } = await res.json();
-      return token;
-    } catch (err) {
-      console.error(`[DJ:${this.roomId}] Token request error:`, err.message);
-      return null;
-    }
-  }
-
-  startPolling() {
-    this.pollInterval = setInterval(() => this.pollRoom(), 2000);
-    this.pollRoom(); // immediate first poll
-  }
-
-  async pollRoom() {
-    if (this.stopped) return;
-    try {
-      const res = await fetch(`${APP_URL}/api/db?collection=rooms&id=${this.roomId}`, {
-        headers: WORKER_CALLBACK_HEADERS,
-      });
-      const result = await res.json();
-      if (!result?.exists) return;
-
-      const data = result.data;
-      const { currentTrackId, isPlaying, playlist, autoRadio, playHistory } = data;
-
-      if (!currentTrackId || !isPlaying) {
-        if (this.playing) this.stopPlayback();
-        if (!currentTrackId && autoRadio) {
-          this.requestAutoRadio();
-        }
-        return;
-      }
-
-      // Track changed — load new audio
-      if (currentTrackId !== this.currentVideoId) {
-        const track = playlist?.find(t => t.id === currentTrackId);
-        const videoId = this.extractVideoId(currentTrackId, track?.url);
-        console.log(`[DJ:${this.roomId}] Track changed: ${videoId} (${track?.title || 'unknown'})`);
-        this.currentVideoId = currentTrackId;
-        await this.patchRoom({ djStatus: `Playing: ${track?.title || videoId}` });
-        await this.playTrack(videoId, data);
-      } else if (!this.playing && isPlaying) {
-        // Resume if paused
-        const track = playlist?.find(t => t.id === currentTrackId);
-        const videoId = this.extractVideoId(currentTrackId, track?.url);
-        await this.playTrack(videoId, data);
-      }
-    } catch (err) {
-      // Non-fatal poll error
-    }
-  }
-
-  extractVideoId(trackId, trackUrl) {
-    if (trackUrl) {
-      try {
-        const u = new URL(trackUrl);
-        return u.searchParams.get('v') || u.pathname.slice(1) || trackId;
-      } catch {}
-    }
-    return trackId;
-  }
-
-  async playTrack(videoId, roomData) {
-    this.stopPlayback();
-    if (this.stopped || !this.ready) return;
-
-    // Try cached file first
-    let filePath = join(CACHE_DIR, `${videoId}.m4a`);
-    if (!existsSync(filePath)) filePath = join(CACHE_DIR, `${videoId}.mp3`);
-
-    if (existsSync(filePath)) {
-      console.log(`[DJ:${this.roomId}] Playing cached ${filePath}`);
-      return this._playFile(filePath, roomData);
-    }
-
-    // Extract URL and stream directly (no download required)
-    let audioInfo = getCachedExtractedInfo(videoId);
-    if (!audioInfo) audioInfo = await extractAudioInfo(videoId);
-    if (!audioInfo?.url) {
-      console.error(`[DJ:${this.roomId}] Failed to extract URL for ${videoId}, skipping`);
-      await this.patchRoom({ djStatus: 'Legacy extractor disabled' });
-      setTimeout(() => this.advanceTrack(roomData), 500);
-      return;
-    }
-    setCachedExtractedInfo(videoId, audioInfo);
-
-    console.log(`[DJ:${this.roomId}] Streaming ${videoId} from URL`);
-    this.playing = true;
-    this._spawnFfmpeg(audioInfo.url, roomData);
-  }
-
-  _playFile(filePath, roomData) {
-    this.playing = true;
-    this._spawnFfmpeg(filePath, roomData);
-  }
-
-  _spawnFfmpeg(input, roomData) {
-    this.ffmpegProcess = spawn('ffmpeg', [
-      '-i', input,
-      '-f', 's16le',
-      '-acodec', 'pcm_s16le',
-      '-ar', String(SAMPLE_RATE),
-      '-ac', String(CHANNELS),
-      '-loglevel', 'error',
-      'pipe:1',
-    ]);
-
-    let buffer = Buffer.alloc(0);
-    let frameQueue = [];
-    let draining = false;
-    let finalized = false;
-
-    const drainQueue = async () => {
-      if (draining) return;
-      draining = true;
-      while (frameQueue.length > 0 && !this.stopped && this.ready) {
-        const samples = frameQueue.shift();
-        try {
-          await this.captureSamples(samples);
-        } catch (err) {
-          console.warn(`[DJ:${this.roomId}] captureFrame error (non-fatal):`, err.message);
-          break;
-        }
-      }
-      draining = false;
-    };
-
-    this.ffmpegProcess.stdout.on('data', (chunk) => {
-      if (this.stopped || !this.ready) return;
-      buffer = Buffer.concat([buffer, chunk]);
-
-      while (buffer.length >= BYTES_PER_FRAME) {
-        const frameData = buffer.subarray(0, BYTES_PER_FRAME);
-        buffer = buffer.subarray(BYTES_PER_FRAME);
-        const copied = Buffer.from(frameData);
-        const samples = new Int16Array(copied.buffer, copied.byteOffset, copied.length / 2);
-        frameQueue.push(samples);
-      }
-      drainQueue();
-    });
-
-    this.ffmpegProcess.stderr.on('data', (data) => {
-      const msg = data.toString().trim();
-      if (msg) console.warn(`[DJ:${this.roomId}] ffmpeg: ${msg}`);
-    });
-
-    const finalize = (reason, codeOrErr) => {
-      if (finalized || this.stopped) return;
-      finalized = true;
-      this.playing = false;
-      this.ffmpegProcess = null;
-
-      if (reason === 'close') {
-        console.log(`[DJ:${this.roomId}] ffmpeg exited (code ${codeOrErr}), track ended`);
-      } else {
-        const message = codeOrErr?.message || String(codeOrErr || 'unknown error');
-        console.error(`[DJ:${this.roomId}] ffmpeg error:`, message);
-      }
-
-      // Keep playback moving even when ffmpeg dies mid-track.
-      setTimeout(() => this.advanceTrack(roomData).catch(() => {}), 500);
-    };
-
-    this.ffmpegProcess.on('close', (code) => {
-      if (this.stopped) return;
-      finalize('close', code);
-    });
-
-    this.ffmpegProcess.on('error', (err) => {
-      finalize('error', err);
-    });
-  }
-
-  stopPlayback() {
-    if (this.ffmpegProcess) {
-      try { this.ffmpegProcess.kill('SIGTERM'); } catch {}
-      this.ffmpegProcess = null;
-    }
-    this.playing = false;
-  }
-
-  async captureSamples(samples) {
-    if (this.peerFallback) {
-      if (!this.peerAudioSource) return;
-      this.peerAudioSource.onData({
-        samples,
-        sampleRate: SAMPLE_RATE,
-        bitsPerSample: 16,
-        channelCount: CHANNELS,
-        // samples is an Int16Array, so divide only by channels to get audio frames.
-        numberOfFrames: samples.length / CHANNELS,
-      });
-      return;
-    }
-
-    if (!this.audioSource) return;
-    const audioFrame = new AudioFrame(samples, SAMPLE_RATE, CHANNELS, SAMPLES_PER_FRAME);
-    await this.audioSource.captureFrame(audioFrame);
-  }
-
-  async waitReady() {
-    // Wait up to 5s for the session to be ready
-    for (let i = 0; i < 50 && !this.ready; i++) {
-      await new Promise(r => setTimeout(r, 100));
-    }
-    if (!this.ready) throw new Error('DJ session did not become ready in time');
-  }
-
-  async advanceTrack(roomData) {
-    if (this.stopped) return;
-    const { playlist, currentTrackId, autoRadio, playHistory } = roomData;
-
-    if (!playlist?.length) {
-      if (autoRadio) this.requestAutoRadio();
-      return;
-    }
-
-    const idx = playlist.findIndex(t => t.id === currentTrackId);
-    const isLast = idx === playlist.length - 1;
-
-    if (isLast && autoRadio) {
-      this.requestAutoRadio();
-      return;
-    }
-
-    const next = playlist[(idx + 1) % playlist.length];
-    if (!next || next.id === currentTrackId) return;
-
-    const updates = { currentTrackId: next.id, isPlaying: true };
-    if (currentTrackId) {
-      updates.playHistory = [...(playHistory || []), currentTrackId].slice(-50);
-    }
-
-    await this.patchRoom(updates);
-  }
-
-  requestAutoRadio() {
-    fetch(`${APP_URL}/api/auto-radio`, {
-      method: 'POST',
-      headers: {
-        ...WORKER_CALLBACK_HEADERS,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({ roomId: this.roomId }),
-    }).catch((err) => {
-      console.warn(`[DJ:${this.roomId}] Auto-radio request failed:`, err.message);
-    });
-  }
-
-  async patchRoom(data) {
-    try {
-      await fetch(`${APP_URL}/api/db`, {
-        method: 'PATCH',
-        headers: {
-          ...WORKER_CALLBACK_HEADERS,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ collection: 'rooms', id: this.roomId, data }),
-      });
-    } catch {}
-  }
-
-  async stop() {
-    console.log(`[DJ:${this.roomId}] Stopping session`);
-    this.stopped = true;
-    if (this.pollInterval) clearInterval(this.pollInterval);
-    this.stopPlayback();
-
-    if (this.localTrack) {
-      try { await this.lkRoom?.localParticipant.unpublishTrack(this.localTrack); } catch {}
-    }
-    if (this.lkRoom) {
-      try { await this.lkRoom.disconnect(); } catch {}
-    }
-
-    this.cleanupPeerFallback();
-
-    await this.patchRoom({ djActive: false, isPlaying: false, djStatus: 'DJ stopped', peerFallback: false, djPeerId: null });
-    console.log(`[DJ:${this.roomId}] Session stopped`);
-  }
-
-  async playFromUrl(audioUrl, title) {
-    this.stopPlayback();
-    if (this.stopped) return;
-
-    console.log(`[DJ:${this.roomId}] Playing from URL: ${title}`);
-    this.playing = true;
-    await this.patchRoom({ djStatus: `Playing: ${title}` });
-
-    // Use ffmpeg to fetch the URL and decode to raw PCM
-    this.ffmpegProcess = spawn('ffmpeg', [
-      '-i', audioUrl,
-      '-f', 's16le',
-      '-acodec', 'pcm_s16le',
-      '-ar', String(SAMPLE_RATE),
-      '-ac', String(CHANNELS),
-      '-loglevel', 'error',
-      'pipe:1',
-    ]);
-
-    let buffer = Buffer.alloc(0);
-    let frameQueue = [];
-    let draining = false;
-    let finalized = false;
-
-    const drainQueue = async () => {
-      if (draining) return;
-      draining = true;
-      while (frameQueue.length > 0 && !this.stopped && this.ready) {
-        const samples = frameQueue.shift();
-        try {
-          await this.captureSamples(samples);
-        } catch (err) {
-          console.warn(`[DJ:${this.roomId}] captureFrame error (non-fatal):`, err.message);
-          break;
-        }
-      }
-      draining = false;
-    };
-
-    this.ffmpegProcess.stdout.on('data', (chunk) => {
-      if (this.stopped || !this.ready) return;
-      buffer = Buffer.concat([buffer, chunk]);
-
-      while (buffer.length >= BYTES_PER_FRAME) {
-        const frameData = buffer.subarray(0, BYTES_PER_FRAME);
-        buffer = buffer.subarray(BYTES_PER_FRAME);
-        const copied = Buffer.from(frameData);
-        const samples = new Int16Array(copied.buffer, copied.byteOffset, copied.length / 2);
-        frameQueue.push(samples);
-      }
-      drainQueue();
-    });
-
-    this.ffmpegProcess.stderr.on('data', (data) => {
-      const msg = data.toString().trim();
-      if (msg) console.warn(`[DJ:${this.roomId}] ffmpeg: ${msg}`);
-    });
-
-    const finalize = async (reason, codeOrErr) => {
-      if (finalized || this.stopped) return;
-      finalized = true;
-      this.playing = false;
-      this.ffmpegProcess = null;
-
-      if (reason === 'close') {
-        console.log(`[DJ:${this.roomId}] ffmpeg exited (code ${codeOrErr}), track ended`);
-      } else {
-        const message = codeOrErr?.message || String(codeOrErr || 'unknown error');
-        console.error(`[DJ:${this.roomId}] ffmpeg error:`, message);
-        await this.patchRoom({ djStatus: `Playback error: ${message.slice(0, 120)}` }).catch(() => {});
-      }
-    };
-
-    this.ffmpegProcess.on('close', (code) => {
-      if (this.stopped) return;
-      finalize('close', code).catch(() => {});
-    });
-
-    this.ffmpegProcess.on('error', (err) => {
-      finalize('error', err).catch(() => {});
-    });
-  }
-}
-
-// ── Browser DJ Publisher ────────────────────────────────────────────────
-const browserDjInstances = new Map();
-
-async function startBrowserDJ(roomId) {
-  const existing = browserDjInstances.get(roomId);
-  if (existing) {
-    try {
-      const status = await existing.page.evaluate(() => globalThis.__HEARMEOUT_DJ__?.getStatus?.() || null);
-      if (status?.isLive) {
-        return { success: true, message: 'DJ already broadcasting.', mode: 'browser' };
-      }
-    } catch {}
-    await stopBrowserDJ(roomId, 'Restarting stale browser DJ');
-  }
-
-  if (browserDjInstances.size >= 5) {
-    return { success: false, message: 'Max concurrent DJ instances reached (5).' };
-  }
-
-  console.log(`[BrowserDJ:${roomId}] Launching Chromium publisher...`);
-  const browser = await puppeteer.launch({
-    executablePath: CHROMIUM_PATH,
-    headless: true,
-    args: [
-      '--no-sandbox',
-      '--disable-setuid-sandbox',
-      '--disable-dev-shm-usage',
-      '--disable-gpu',
-      '--autoplay-policy=no-user-gesture-required',
-      '--use-fake-ui-for-media-stream',
-    ],
-  });
-
-  const page = await browser.newPage();
-  page.on('console', (msg) => {
-    const text = redactSensitiveLogText(msg.text());
-    if (/\[DJ\]|\[PeerDJ\]|\[MusicRoom\]|LiveKit|ERROR|error/i.test(text)) {
-      console.log(`[BrowserDJ:${roomId}] ${msg.type()}: ${text}`);
-    }
-  });
-  page.on('pageerror', (err) => {
-    console.error(`[BrowserDJ:${roomId}] page error:`, redactSensitiveLogText(err.message));
-  });
-  page.on('requestfailed', (req) => {
-    const url = req.url();
-    if (/livekit|peer|youtube-audio|\/api\/music|\/api\/db/.test(url)) {
-      console.warn(`[BrowserDJ:${roomId}] request failed: ${redactSensitiveLogText(url)} ${redactSensitiveLogText(req.failure()?.errorText || '')}`);
-    }
-  });
-
-  const djUrl = `${APP_URL}/dj/${encodeURIComponent(roomId)}`;
-  await page.goto(djUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
-  await page.waitForFunction(() => !!globalThis.__HEARMEOUT_DJ__, { timeout: 30000 });
-
-  await page.evaluate(() => globalThis.__HEARMEOUT_DJ__.startSession());
-  await page.waitForFunction(() => {
-    const status = globalThis.__HEARMEOUT_DJ__?.getStatus?.();
-    return status?.isLive || /^ERROR:/i.test(status?.status || '');
-  }, { timeout: 60000 }).catch(() => {});
-
-  const started = await page.evaluate(() => globalThis.__HEARMEOUT_DJ__.getStatus());
-  if (!started?.isLive) {
-    await page.close().catch(() => {});
-    await browser.close().catch(() => {});
-    return {
-      success: false,
-      message: started?.status || 'DJ browser publisher did not become live.',
-      mode: 'browser',
-    };
-  }
-
-  browserDjInstances.set(roomId, { browser, page, roomId, startedAt: new Date() });
-  console.log(`[BrowserDJ:${roomId}] Started`, started);
-  return { success: true, message: started?.status || 'DJ browser publisher started.', mode: 'browser' };
-}
-
-async function stopBrowserDJ(roomId, reason = 'DJ stopped') {
-  const instance = browserDjInstances.get(roomId);
-  if (!instance) return { success: true, message: 'No DJ running.' };
-  console.log(`[BrowserDJ:${roomId}] Stopping: ${reason}`);
-  try {
-    await instance.page.evaluate(() => globalThis.__HEARMEOUT_DJ__?.stopSession?.()).catch(() => {});
-    await instance.page.close().catch(() => {});
-    await instance.browser.close().catch(() => {});
-  } finally {
-    browserDjInstances.delete(roomId);
-  }
-  return { success: true, message: 'DJ stopped.' };
-}
-
-async function getBrowserDJStatus(roomId) {
-  const instance = browserDjInstances.get(roomId);
-  if (!instance) return null;
-  try {
-    const status = await instance.page.evaluate(() => globalThis.__HEARMEOUT_DJ__?.getStatus?.() || null);
-    return { roomId, startedAt: instance.startedAt, mode: 'browser', status };
-  } catch {
-    return { roomId, startedAt: instance.startedAt, mode: 'browser', status: null };
-  }
-}
-
-// ── DJ API ──────────────────────────────────────────────────────────────
-const djInstances = new Map();
-
-app.post('/dj', authorizeWorker, async (req, res) => {
-  const { action, roomId, audioUrl, trackTitle } = req.body;
-  if (!roomId) return res.status(400).json({ success: false, message: 'Missing roomId' });
-
-  try {
-    if (action === 'start') {
-      try {
-        const result = await startBrowserDJ(roomId);
-        return res.status(result.success ? 200 : 429).json(result);
-      } catch (err) {
-        console.error(`[DJ:${roomId}] Start failed:`, err.message);
-        return res.status(500).json({ success: false, message: `DJ start failed: ${err.message}` });
-      }
-    }
-
-    if (action === 'play-url') {
-      return res.status(410).json({ success: false, message: 'Legacy play-url action disabled' });
-    }
-
-    if (action === 'debug-play-url') {
-      return res.status(410).json({ success: false, message: 'Legacy debug-play-url action disabled' });
-    }
-
-
-    if (action === 'stop') {
-      await stopBrowserDJ(roomId);
-      const session = djInstances.get(roomId);
-      if (!session) return res.json({ success: true, message: 'No DJ running.' });
-      await session.stop();
-      djInstances.delete(roomId);
-      return res.json({ success: true, message: 'DJ stopped.' });
-    }
-
-    return res.status(400).json({ success: false, message: 'Invalid action' });
-  } catch (err) {
-    console.error(`[DJ] Error:`, err.message);
-    return res.status(500).json({ success: false, message: err.message });
-  }
+app.get('/watch/cache/status', authorizeWorker, (_req, res) => res.json({ sharedMedia: sharedMediaRelay.snapshot() }));
+app.post('/watch/cache/control', authorizeWorker, (_req, res) => res.status(410).json({ error: 'Playback controls are unavailable.' }));
+
+// Legacy DJ routes describe the one music source; they never spawn Chromium
+// or a room-specific decoder. Voice/persona publishing stays independent.
+app.get('/dj', authorizeWorker, (_req, res) => {
+  const music = sharedMediaRelay.snapshot().find(source => source.kind === 'music');
+  res.json({ running: Boolean(music?.producing), mode: 'shared', instances: [] });
 });
-
-app.get('/dj', authorizeWorker, (req, res) => {
-  const { roomId } = req.query;
-  if (roomId) {
-    const session = djInstances.get(roomId);
-    const browserSession = browserDjInstances.get(roomId);
-    return res.json({
-      running: !!browserSession || !!session,
-      mode: browserSession ? 'browser' : session?.peerFallback ? 'peerjs' : session ? 'livekit' : null,
-    });
-  }
-  const browserInstances = Array.from(browserDjInstances.values()).map((s) => ({ roomId: s.roomId, startedAt: s.startedAt, mode: 'browser' }));
-  const nodeInstances = Array.from(djInstances.entries()).map(([id, s]) => ({ roomId: id, startedAt: s.startedAt, mode: s.peerFallback ? 'peerjs' : 'livekit' }));
-  const instances = [...browserInstances, ...nodeInstances];
-  return res.json({ instances });
-});
+app.post('/dj', authorizeWorker, (_req, res) => res.status(410).json({ success: false, message: 'Playback controls are temporarily unavailable.' }));
 
 // ── Discord voice bridge ────────────────────────────────────────────────
 const BRIDGE_LIVEKIT_URL =
@@ -2678,7 +1337,7 @@ app.post('/voice-bridge/audio-profile', authorizeWorker, (req, res) => {
 
 // ── Health ──────────────────────────────────────────────────────────────
 app.get('/health', (req, res) => {
-  res.json({ status: 'ok', uptime: process.uptime(), activeDJs: djInstances.size + browserDjInstances.size });
+  res.json({ status: 'ok', uptime: process.uptime(), activeDJs: 0, sharedMedia: sharedMediaRelay.snapshot() });
 });
 
 // ── Prevent uncaught errors from crashing the process ───────────────────

@@ -1,4 +1,5 @@
 'use client';
+import { useParticipantVolume } from '@/hooks/use-participant-volume';
 
 import React from 'react';
 import type { Participant, RemoteParticipant } from 'livekit-client';
@@ -54,22 +55,15 @@ export default function PersonaCard({ participant, roomId, isHost = false }: { p
   const displayName = metadata.displayName || participant.name || participant.identity.replace(/^persona:/, '') || 'StreamWeaver Persona';
   const isSpeaking = participant.isSpeaking;
   const avatar = (isSpeaking ? metadata.talkingAvatar : metadata.idleAvatar) || metadata.avatar || '';
-  const [volume, setVolume] = React.useState(1);
+  const { volume, setVolume } = useParticipantVolume(participant);
   const [pendingAction, setPendingAction] = React.useState('');
   const [talkStatus, setTalkStatus] = React.useState<TalkStatus>('idle');
   const [talkTranscript, setTalkTranscript] = React.useState('');
   const [talkReply, setTalkReply] = React.useState('');
   const [talkError, setTalkError] = React.useState('');
-  const lastVolume = React.useRef(1);
   const recorderRef = React.useRef<MediaRecorder | null>(null);
   const recorderStreamRef = React.useRef<MediaStream | null>(null);
   const recorderTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  React.useEffect(() => {
-    const remote = participant as RemoteParticipant;
-    if (volume > 0) lastVolume.current = volume;
-    if (typeof remote.setVolume === 'function') remote.setVolume(volume);
-  }, [participant, volume]);
 
   React.useEffect(() => () => {
     if (recorderTimerRef.current) clearTimeout(recorderTimerRef.current);
@@ -265,7 +259,6 @@ export default function PersonaCard({ participant, roomId, isHost = false }: { p
         </div>
 
         <div className="mt-auto flex items-center gap-2">
-          <Tooltip><TooltipTrigger asChild><Button variant="outline" size="icon" className="h-8 w-8" onClick={() => setVolume((current) => current > 0 ? 0 : lastVolume.current)}>{volume > 0 ? <Volume2 className="h-4 w-4" /> : <VolumeX className="h-4 w-4" />}</Button></TooltipTrigger><TooltipContent>{volume > 0 ? 'Mute for me' : 'Unmute for me'}</TooltipContent></Tooltip>
           <Slider aria-label={`${displayName} volume`} value={[volume]} onValueChange={(value) => setVolume(value[0])} max={1} step={0.05} />
         </div>
       </CardContent>

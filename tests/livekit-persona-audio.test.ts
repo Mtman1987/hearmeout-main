@@ -7,7 +7,7 @@ test('HearMeOut room renders and unlocks remote LiveKit audio', async () => {
   assert.match(source, /<RoomAudioRenderer\s*\/>/);
   assert.match(source, /RoomEvent\.AudioPlaybackStatusChanged/);
   assert.match(source, /await room\.startAudio\(\)/);
-  assert.match(source, /<RoomAudioPlayback volume=\{localVolume\}\s*\/>/);
+  assert.match(source, /<RoomAudioPlayback\s*\/>/);
   assert.match(source, /Enable room and bot audio/);
 });
 

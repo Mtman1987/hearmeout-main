@@ -11,7 +11,6 @@ import { findInternetArchiveRecommendation } from './internet-archive-provider';
 import { findWatchmodeRecommendation } from './watchmode-provider';
 import { autoRadioNext, getRoomState, rememberAutoRadioTrack, resolveSongRequest, setAutoRadioEnabled } from '@/lib/bot-actions';
 import { DISCORD_CLIENT_ID } from '@/lib/public-config';
-import { ensureDiscordActivityRoomForSession } from '@/lib/activity-room';
 import { ACTIVITY_ROOM_ID, getGlobalWatchSessionId, getMusicWatchSessionId, getScopedWatchSessionId, normalizeWatchSessionAlias, type WatchMediaKind } from '@/lib/watch-session';
 import { publishSpmtEvent } from '@/lib/spmt-client';
 import {
@@ -170,6 +169,8 @@ declare global {
 }
 
 const sessions = globalThis.__watchRequestSessions || new Map<string, WatchSession>();
+const retiredSessions = new Map<string, WatchSession>();
+let lastLoadedStateContent = '';
 globalThis.__watchRequestSessions = sessions;
 const pendingRecommendations = new Map<string, WatchCatalogItem>();
 const seriesProgress = new Map<string, SeriesProgress>();
@@ -189,14 +190,20 @@ function loadWatchStateFromDisk() {
       if (!existsSync(stateFile)) continue;
       const raw = readFileSync(stateFile);
       const mtime = statSync(stateFile).mtimeMs;
-    if (mtime && mtime <= lastLoadedStateMtime) return;
+    if (raw.toString('utf8') === lastLoadedStateContent) return;
+    lastLoadedStateContent = raw.toString('utf8');
     const payload = JSON.parse(raw.toString('utf8')) as {
       sessions?: Array<[string, WatchSession]>;
+      retiredSessions?: Array<[string, WatchSession]>;
       pendingRecommendations?: Array<[string, WatchCatalogItem]>;
       seriesProgress?: Array<[string, SeriesProgress]>;
     };
     sessions.clear();
-    for (const [id, session] of payload.sessions || []) sessions.set(id, session);
+    for (const [id, session] of payload.sessions || []) {
+      if (id === getGlobalWatchSessionId() || id === getMusicWatchSessionId()) sessions.set(id, session);
+      else retiredSessions.set(id, session);
+    }
+    for (const [id, session] of payload.retiredSessions || []) retiredSessions.set(id, session);
     pendingRecommendations.clear();
     for (const [key, item] of payload.pendingRecommendations || []) pendingRecommendations.set(key, item);
     seriesProgress.clear();
@@ -218,10 +225,12 @@ function saveWatchStateToDisk() {
     const tempFile = `${WATCH_STATE_FILE}.${process.pid}.tmp`;
     const payload = JSON.stringify({
       sessions: Array.from(sessions.entries()),
+      retiredSessions: Array.from(retiredSessions.entries()),
       pendingRecommendations: Array.from(pendingRecommendations.entries()),
       seriesProgress: Array.from(seriesProgress.entries()),
     }, null, 2);
     writeFileSync(tempFile, payload, 'utf8');
+    lastLoadedStateContent = payload;
     if (existsSync(WATCH_STATE_FILE)) copyFileSync(WATCH_STATE_FILE, WATCH_STATE_BACKUP_FILE);
     renameSync(tempFile, WATCH_STATE_FILE);
     lastLoadedStateMtime = statSync(WATCH_STATE_FILE).mtimeMs;
@@ -322,9 +331,23 @@ function getPublicWatchItem(item: WatchCatalogItem): WatchCatalogItem {
 }
 
 function getPublicWatchRequest(request: WatchRequest) {
+  if (request.item.type === 'tts') return { ...request, item: getPublicWatchItem(request.item) };
+  const kind = request.item.type === 'music' ? 'music' : 'movie';
+  const playbackUrl = `/api/watch/stream/${kind}/index.m3u8?requestId=${encodeURIComponent(request.requestId)}`;
   return {
     ...request,
-    item: getPublicWatchItem(request.item),
+    item: {
+      ...request.item,
+      playbackUrl,
+      metadata: {
+        ...request.item.metadata,
+        originalUrl: undefined,
+        embedPlaybackUrl: undefined,
+        audioPlaybackUrl: playbackUrl,
+        videoPlaybackUrl: playbackUrl,
+        playbackStrategy: 'proxy' as const,
+      },
+    },
   };
 }
 
@@ -357,44 +380,11 @@ function getActivityJoinUrl(preferredBaseUrl: string | undefined, sessionId: str
 }
 
 export function watchControlComponents(joinUrl?: string, sessionId = sessionIdFromJoinUrl(joinUrl)) {
-  const controlId = (action: string) => `hmo_watch_control:${action}:${sessionId}`;
-  const resolvedJoinUrl = joinUrl || getActivityJoinUrl(undefined, sessionId);
-  return [
-    {
-      type: 1,
-      components: [
-        { type: 2, style: 3, label: 'Play/Pause', custom_id: controlId('play-pause'), emoji: { name: '⏯️' } },
-        { type: 2, style: 1, label: 'Next', custom_id: controlId('next'), emoji: { name: '⏭️' } },
-        { type: 2, style: 4, label: 'Clear', custom_id: controlId('clear'), emoji: { name: '🧹' } },
-        { type: 2, style: 2, label: 'Volume', custom_id: `hmo_watch_volume:${sessionId}`, emoji: { name: '🔊' } },
-      ],
-    },
-    {
-      type: 1,
-      components: [
-        { type: 2, style: 5, label: 'Open Activity', url: resolvedJoinUrl, emoji: { name: '🎬' } },
-      ],
-    },
-  ];
+  return [{ type: 1, components: [{ type: 2, style: 5, label: 'Open player', url: joinUrl || getActivityUrl(undefined, sessionId) }] }];
 }
 
 export function watchControlsPromptComponents(joinUrl?: string, sessionId = sessionIdFromJoinUrl(joinUrl)) {
-  const preferredSessionId = sessionId || getGlobalWatchSessionId();
-  const otherSessionId = preferredSessionId === getMusicWatchSessionId() ? getGlobalWatchSessionId() : getMusicWatchSessionId();
-  const preferredLabel = preferredSessionId === getMusicWatchSessionId() ? 'Music Controls' : 'Movie Controls';
-  const otherLabel = otherSessionId === getMusicWatchSessionId() ? 'Music Controls' : 'Movie Controls';
-  return [
-    {
-      type: 1,
-      components: [
-        { type: 2, style: 1, label: preferredLabel, custom_id: `hmo_watch_controls:${preferredSessionId}`, emoji: { name: '🎛️' } },
-        { type: 2, style: 2, label: otherLabel, custom_id: `hmo_watch_controls:${otherSessionId}`, emoji: { name: '🎚️' } },
-      { type: 2, style: 2, label: 'Choose Lane', custom_id: `hmo_watch_lane:${preferredSessionId}`, emoji: { name: '🔀' } },
-        { type: 2, style: 2, label: 'Volume', custom_id: `hmo_watch_volume:${preferredSessionId}`, emoji: { name: '🔊' } },
-        ...(joinUrl ? [{ type: 2, style: 5, label: 'Join Activity', url: joinUrl, emoji: { name: '🎬' } }] : []),
-      ],
-    },
-  ];
+  return [{ type: 1, components: [{ type: 2, style: 5, label: 'Open player', url: joinUrl || getActivityUrl(undefined, sessionId) }] }];
 }
 
 export async function getWatchActivityJoinUrl(params: {
@@ -412,24 +402,15 @@ export function watchLaneComponents() {
     {
       type: 1,
       components: [
-        { type: 2, style: 1, label: 'Movie Controls', custom_id: `hmo_watch_controls:${getGlobalWatchSessionId()}`, emoji: { name: '🎛️' } },
-        { type: 2, style: 1, label: 'Music Controls', custom_id: `hmo_watch_controls:${getMusicWatchSessionId()}`, emoji: { name: '🎚️' } },
+        { type: 2, style: 5, label: 'Movies', url: getActivityUrl(undefined, getGlobalWatchSessionId()) },
+        { type: 2, style: 5, label: 'Music', url: getActivityUrl(undefined, getMusicWatchSessionId()) },
       ],
     },
   ];
 }
 
 export function watchVolumeComponents(sessionId = getGlobalWatchSessionId()) {
-  return [
-    {
-      type: 1,
-      components: [
-        { type: 2, style: 2, label: 'Mute', custom_id: `hmo_watch_control:mute:${sessionId}`, emoji: { name: '🔇' } },
-        { type: 2, style: 2, label: 'Unmute', custom_id: `hmo_watch_control:unmute:${sessionId}`, emoji: { name: '🔊' } },
-        { type: 2, style: 1, label: 'Set Volume', custom_id: `hmo_watch_volume_modal:${sessionId}`, emoji: { name: '🎚️' } },
-      ],
-    },
-  ];
+  return [{ type: 1, components: [{ type: 2, style: 5, label: 'Open player', url: getActivityUrl(undefined, sessionId) }] }];
 }
 
 export function buildWatchJoinMessage(title: string, position: string, joinUrl: string, item?: WatchCatalogItem, sessionId = sessionIdFromJoinUrl(joinUrl)): DiscordMessagePayload {
@@ -447,7 +428,7 @@ export function buildWatchJoinMessage(title: string, position: string, joinUrl: 
       color: 0x22c55e,
       fields,
       thumbnail: item?.poster ? { url: item.poster } : undefined,
-      footer: { text: 'Click Controls for a private control panel.' },
+      footer: { text: 'Open the player to watch and adjust your own volume.' },
     }],
     components: watchControlsPromptComponents(joinUrl, sessionId),
     allowed_mentions: { parse: [] },
@@ -515,8 +496,6 @@ function createSession(id: string, guildId = 'local', channelId = 'watch', media
       status: 'idle',
       position: 0,
       updatedAt: Date.now(),
-      muted: true,
-      volume: 85,
     },
     events: [],
   };
@@ -536,7 +515,7 @@ function enqueue(session: WatchSession, item: WatchCatalogItem, requestedBy: Wat
 
   if (!session.current) {
     session.current = request;
-    session.playback = { status: 'playing', position: 0, updatedAt: Date.now(), muted: session.playback.muted ?? true, volume: session.playback.volume ?? 85 };
+    session.playback = { status: 'playing', position: 0, updatedAt: Date.now() };
     addEvent(session, `${requestedBy.username} loaded ${item.title}`);
   } else {
     session.queue.push(request);
@@ -931,6 +910,7 @@ export function getDefaultActivitySessionId(rawSessionId?: string | null) {
 export function getPublicWatchSession(session: WatchSession, preferredBaseUrl?: string) {
   return {
     ...session,
+    playback: { status: session.playback.status, position: session.playback.position, updatedAt: session.playback.updatedAt },
     queue: session.queue.map(getPublicWatchRequest),
     ttsQueue: (session.ttsQueue || []).map(getPublicWatchRequest),
     current: session.current ? getPublicWatchRequest(session.current) : null,
@@ -948,7 +928,6 @@ export async function requestWatchItem(params: {
   username: string;
 }) {
   loadWatchStateFromDisk();
-  await ensureDiscordActivityRoomForSession(params.sessionId);
   const explicitEpisode = await findXtreamSeriesEpisode(params.query, (seriesId) => getProgressForUser(params.userId, seriesId)).catch((error) => {
     console.error('[WatchRequest] Xtream episode lookup failed:', error);
     return null;
@@ -978,7 +957,7 @@ export async function requestWatchItem(params: {
       return null;
     });
     if (recommendation) {
-      pendingRecommendations.set(`${params.sessionId}:${params.userId}`, recommendation);
+      pendingRecommendations.set(`${normalizeWatchSessionAlias(params.sessionId)}:${params.userId}`, recommendation);
       saveWatchStateToDisk();
       return { error: 'No matching provider item' as const, recommendation };
     }
@@ -989,7 +968,7 @@ export async function requestWatchItem(params: {
     } as const;
   }
 
-  const session = getWatchSession(params.sessionId, params.guildId, params.channelId, 'movie');
+  const session = getWatchSession(getGlobalWatchSessionId(), params.guildId, params.channelId, 'movie');
   const request = enqueue(session, item, {
     userId: params.userId,
     username: params.username,
@@ -1002,20 +981,6 @@ export async function requestWatchItem(params: {
   return { request, session };
 }
 
-function assertCanControlWatchSession(session: WatchSession, action: string, actor?: WatchControlActor) {
-  const metadata = session.metadata || inferSessionMetadata(session.id, session.guildId, session.channelId);
-  session.metadata = metadata;
-  const scopeType = metadata.scopeType;
-  if (scopeType === 'legacy' && (!actor || actor.platform === 'discord' || actor.platform === 'activity')) return;
-  if (actor?.isHost || actor?.isAdmin || actor?.platform === 'admin') return;
-  if (actor?.platform === 'discord') {
-    const sameChannel = (!metadata.guildId || metadata.guildId === actor.guildId) && (!metadata.channelId || metadata.channelId === actor.channelId);
-    const actorOwnsRequest = Boolean(actor.actorUserId) && [session.current, ...session.queue].some((request) => request?.requestedBy.userId === actor.actorUserId);
-    if (sameChannel && (action === 'next' || action === 'clear' || actorOwnsRequest)) return;
-  }
-  throw new Error('Only the room host or an admin can use that watch control.');
-}
-
 export async function requestWatchMusicItem(params: {
   sessionId: string;
   guildId?: string;
@@ -1026,7 +991,6 @@ export async function requestWatchMusicItem(params: {
   platform?: 'discord' | 'twitch' | 'admin' | 'activity' | 'web';
 }) {
   loadWatchStateFromDisk();
-  await ensureDiscordActivityRoomForSession(params.sessionId);
   const query = String(params.query || '').trim();
   if (!query) return { error: 'No matching music item' as const, result: { success: false, message: 'Missing song query.' } };
 
@@ -1036,12 +1000,10 @@ export async function requestWatchMusicItem(params: {
   }
 
   const item = musicTrackToWatchItem(resolved.track);
-  const session = getWatchSession(params.sessionId, params.guildId, params.channelId, 'music');
-  if (params.sessionId === getMusicWatchSessionId()) {
-    const roomState = await getRoomState(ACTIVITY_ROOM_ID);
-    session.autoRadio = roomState?.autoRadio === true;
-    await rememberAutoRadioTrack(ACTIVITY_ROOM_ID, resolved.track, params.userId);
-  }
+  await rememberAutoRadioTrack(ACTIVITY_ROOM_ID, resolved.track, params.userId);
+  const roomState = await getRoomState(ACTIVITY_ROOM_ID);
+  const session = getWatchSession(getMusicWatchSessionId(), params.guildId, params.channelId, 'music');
+  session.autoRadio = roomState?.autoRadio === true;
   const request = enqueue(session, item, {
     userId: params.userId,
     username: params.username,
@@ -1069,7 +1031,6 @@ export async function requestWatchTtsItem(params: {
   username: string;
 }) {
   loadWatchStateFromDisk();
-  await ensureDiscordActivityRoomForSession(params.sessionId);
   if (!isPlayableClientUrl(params.audioUrl)) {
     return { error: 'No matching TTS item' as const, result: { success: false, message: 'Missing or invalid TTS audio URL.' } };
   }
@@ -1080,7 +1041,7 @@ export async function requestWatchTtsItem(params: {
     title: params.title,
     botName: params.botName,
   });
-  const session = getWatchSession(params.sessionId, params.guildId, params.channelId, 'music');
+  const session = getWatchSession(getMusicWatchSessionId(), params.guildId, params.channelId, 'music');
   touchSession(session);
   const request: WatchRequest = {
     requestId: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
@@ -1111,12 +1072,12 @@ export function acceptWatchRecommendation(params: {
   username: string;
 }) {
   loadWatchStateFromDisk();
-  const key = `${params.sessionId}:${params.userId}`;
+  const key = `${normalizeWatchSessionAlias(params.sessionId)}:${params.userId}`;
   const item = pendingRecommendations.get(key);
   if (!item) return { error: 'No pending recommendation' as const };
 
   pendingRecommendations.delete(key);
-  const session = getWatchSession(params.sessionId, params.guildId, params.channelId, 'movie');
+  const session = getWatchSession(getGlobalWatchSessionId(), params.guildId, params.channelId, 'movie');
   const request = enqueue(session, item, {
     userId: params.userId,
     username: params.username,
@@ -1129,27 +1090,11 @@ export function acceptWatchRecommendation(params: {
 }
 
 function maybePrepareSharedHls(item: WatchCatalogItem) {
-  const youtubeMatch = item.playbackUrl.match(/^\/api\/watch\/youtube\/hls\/([A-Za-z0-9_-]{11})\/index\.m3u8$/);
-  if (youtubeMatch) {
-    fetch(`${getPublicBaseUrl()}/api/watch/youtube/hls/${youtubeMatch[1]}/index.m3u8`).catch((error) => {
-      console.error('[WatchRequest] YouTube shared HLS start failed:', error?.message || error);
-    });
-    return;
-  }
-
-  const match = item.playbackUrl.match(/^\/activity-provider\/xtream\/(vod|series)\/(\d+)$/);
-  const episodeMatch = item.playbackUrl.match(/^\/activity-provider\/xtream\/episode\/(\d+-[a-z0-9]+)$/i);
-  if (episodeMatch) {
-    fetch(`${getPublicBaseUrl()}/api/watch/xtream/hls/episode-${episodeMatch[1].toLowerCase()}/index.m3u8`).catch((error) => {
-      console.error('[WatchRequest] Xtream episode HLS start failed:', error?.message || error);
-    });
-    return;
-  }
-  if (!match) return;
-  if (!String(item.overview || '').toLowerCase().includes('(mkv)')) return;
-  fetch(`${getPublicBaseUrl()}/api/watch/xtream/hls/${match[1].toLowerCase()}-${match[2]}/index.m3u8`).catch((error) => {
-    console.error('[WatchRequest] Xtream shared HLS start failed:', error?.message || error);
-  });
+  const kind = item.type === 'music' ? 'music' : 'movie';
+  const session = getWatchSession(kind === 'music' ? getMusicWatchSessionId() : getGlobalWatchSessionId());
+  if (!session.current) return;
+  const requestId = session.current.requestId;
+  void fetch(`${getPublicBaseUrl()}/api/watch/stream/${kind}/index.m3u8?requestId=${encodeURIComponent(requestId)}`).catch(() => {});
 }
 
 async function getAutoNextEpisodeRequest(session: WatchSession) {
@@ -1186,130 +1131,41 @@ async function getAutoRadioRequest(sessionId: string): Promise<WatchRequest | nu
   };
 }
 
-export async function controlWatchSession(sessionId: string, action: string, position?: number, targetIndex?: number, actor?: WatchControlActor) {
-  const session = getWatchSession(sessionId);
-  touchSession(session);
-  assertCanControlWatchSession(session, action, actor);
+export const PLAYBACK_CONTROLS_DISABLED = 'Playback controls are temporarily unavailable. Use the volume slider in your player; it only changes what you hear.';
 
-  if (session.playback.muted === undefined) session.playback.muted = true;
-  if (session.playback.volume === undefined) session.playback.volume = 85;
+export async function controlWatchSession(_sessionId: string, _action: string, _position?: number, _targetIndex?: number, _actor?: WatchControlActor): Promise<WatchSession> {
+  throw new Error(PLAYBACK_CONTROLS_DISABLED);
+}
 
-  if (action === 'auto-radio') {
-    if (!(actor?.isHost || actor?.isAdmin || actor?.platform === 'admin')) {
-      throw new Error('Only the room host or an admin can change auto-radio.');
-    }
-    const enabled = Number(position || 0) > 0;
-    session.autoRadio = enabled;
-    if (sessionId === getMusicWatchSessionId()) await setAutoRadioEnabled(ACTIVITY_ROOM_ID, enabled);
-    if (enabled && !session.current && session.queue.length === 0) {
-      session.current = await getAutoRadioRequest(sessionId);
-      if (session.current) {
-        maybePrepareSharedHls(session.current.item);
-        session.playback = {
-          status: 'playing',
-          position: 0,
-          updatedAt: Date.now(),
-          muted: session.playback.muted ?? true,
-          volume: session.playback.volume ?? 85,
-        };
-      }
-    }
-    addEvent(session, `Auto-radio ${enabled ? 'enabled' : 'disabled'}`);
-    saveWatchStateToDisk();
-    return session;
-  }
+declare global { var __hmoAdvanceLocks: Map<string, Promise<unknown>> | undefined; }
+const advanceLocks = globalThis.__hmoAdvanceLocks ||= new Map<string, Promise<unknown>>();
 
-  if (!session.current && (action === 'play' || action === 'pause' || action === 'seek')) {
-    session.playback = {
-      status: 'idle',
-      position: 0,
-      updatedAt: Date.now(),
-      muted: session.playback.muted ?? true,
-      volume: session.playback.volume ?? 85,
-    };
-    saveWatchStateToDisk();
-    return session;
-  }
-
-  if (action === 'play' || action === 'pause') {
-    const now = Date.now();
-    const currentPosition = getEffectivePlaybackPosition(session, now);
-    session.playback.status = action === 'play' ? 'playing' : 'paused';
-    const nextPosition = position === undefined ? currentPosition : position;
-    session.playback.position = Math.max(0, Number(nextPosition || 0));
-    session.playback.updatedAt = now;
-    addEvent(session, `${action === 'play' ? 'Played' : 'Paused'} ${session.current?.item.title || 'session'}`);
-    saveWatchStateToDisk();
-    return session;
-  }
-
-  if (action === 'mute' || action === 'unmute') {
-    const now = Date.now();
-    session.playback.position = getEffectivePlaybackPosition(session, now);
-    session.playback.muted = action === 'mute';
-    session.playback.updatedAt = now;
-    addEvent(session, `${action === 'mute' ? 'Muted' : 'Unmuted'} ${session.current?.item.title || 'session'}`);
-    saveWatchStateToDisk();
-    return session;
-  }
-
-  if (action === 'volume') {
-    const now = Date.now();
-    const volume = Math.max(0, Math.min(100, Math.round(Number(position ?? session.playback.volume ?? 85))));
-    session.playback.position = getEffectivePlaybackPosition(session, now);
-    session.playback.volume = volume;
-    session.playback.muted = volume <= 0 ? true : false;
-    session.playback.updatedAt = now;
-    addEvent(session, `Set volume to ${volume}% for ${session.current?.item.title || 'session'}`);
-    saveWatchStateToDisk();
-    return session;
-  }
-
-  if (action === 'seek') {
-    session.playback.position = Math.max(0, Number(position ?? 0));
-    session.playback.updatedAt = Date.now();
-    addEvent(session, `Seeked to ${Math.round(session.playback.position)}s`);
-    saveWatchStateToDisk();
-    return session;
-  }
-
-  if (action === 'next') {
-    if (actor?.expectedRequestId && session.current?.requestId !== actor.expectedRequestId) return session;
-    session.current = session.queue.shift() || await getAutoNextEpisodeRequest(session);
-    if (!session.current && session.autoRadio && sessionId === getMusicWatchSessionId()) {
-      session.current = await getAutoRadioRequest(sessionId);
-    }
-    if (session.current) maybePrepareSharedHls(session.current.item);
-    if (session.current) await updateSeriesProgress(session.current.requestedBy.userId, session.current.item);
-    session.playback = { status: session.current ? 'playing' : 'idle', position: 0, updatedAt: Date.now(), muted: session.playback.muted ?? true, volume: session.playback.volume ?? 85 };
+// Only the authenticated shared producer calls this. Multiple viewers can
+// never skip multiple songs, and late completion from an old source is inert.
+export async function advanceSharedSource(kind: WatchMediaKind, expectedRequestId: string, failed = false) {
+  const sessionId = kind === 'music' ? getMusicWatchSessionId() : getGlobalWatchSessionId();
+  const previous = advanceLocks.get(sessionId) || Promise.resolve();
+  const work = previous.catch(() => {}).then(async () => {
+    const original = getWatchSession(sessionId);
+    if (original.current?.requestId !== expectedRequestId) return original;
+    const automatic = !original.queue.length && !failed
+      ? await getAutoNextEpisodeRequest(original) || (original.autoRadio ? await getAutoRadioRequest(sessionId) : null)
+      : null;
+    // Re-read after async provider work so requests queued meanwhile survive.
+    const session = getWatchSession(sessionId);
+    if (session.current?.requestId !== expectedRequestId) return session;
+    if (failed) addEvent(session, `Could not play ${session.current.item.title}`);
+    session.current = session.queue.shift() || automatic;
+    session.playback = { status: session.current ? 'playing' : 'idle', position: 0, updatedAt: Date.now() };
+    touchSession(session);
     addEvent(session, session.current ? `Loaded ${session.current.item.title}` : 'Queue ended');
     saveWatchStateToDisk();
+    if (session.current) maybePrepareSharedHls(session.current.item);
     return session;
-  }
-
-  if (action === 'jump') {
-    const index = Number.isFinite(targetIndex) ? Math.floor(Number(targetIndex)) : -1;
-    if (index < 0 || index >= session.queue.length) throw new Error('Queue item is no longer available');
-    const [request] = session.queue.splice(index, 1);
-    session.queue = session.queue.slice(index);
-    session.current = request;
-    maybePrepareSharedHls(request.item);
-    session.playback = { status: 'paused', position: 0, updatedAt: Date.now(), muted: session.playback.muted ?? true, volume: session.playback.volume ?? 85 };
-    addEvent(session, `Loaded ${request.item.title}`);
-    saveWatchStateToDisk();
-    return session;
-  }
-
-  if (action === 'clear') {
-    session.queue = [];
-    session.current = null;
-    session.playback = { status: 'idle', position: 0, updatedAt: Date.now(), muted: true, volume: session.playback.volume ?? 85 };
-    addEvent(session, 'Cleared queue');
-    saveWatchStateToDisk();
-    return session;
-  }
-
-  throw new Error('Unsupported watch control action');
+  });
+  advanceLocks.set(sessionId, work);
+  try { return await work; }
+  finally { if (advanceLocks.get(sessionId) === work) advanceLocks.delete(sessionId); }
 }
 
 export async function handleWatchRequestCommand(params: {

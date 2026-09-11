@@ -20,36 +20,24 @@ test('provider search ranks exact years and never silently replaces a selected i
   assert.match(searchRoute, /selectionRequired/);
 });
 
-test('multi-audio HLS keeps renditions and prefers an English track', () => {
-  const localHls = read('src/lib/watch/xtream-hls.ts');
-  const worker = read('worker/src/server.js');
-  const player = read('src/app/watch/[sessionId]/watch-room-client.tsx');
-  for (const source of [localHls, worker]) {
-    assert.match(source, /ffprobe/);
-    assert.match(source, /-var_stream_map/);
-    assert.match(source, /default:yes/);
-  }
-  assert.match(player, /AUDIO_TRACKS_UPDATED/);
-  assert.match(player, /Movie audio language/);
-  assert.match(player, /\benglish\b/i);
+test('the shared producer selects English once, otherwise the default or first audio track', () => {
+  const { selectSharedAudioStream } = require('../worker/src/shared-source-audio');
+  const streams = [
+    { index: 0, codec_type: 'video' },
+    { index: 1, codec_type: 'audio', tags: { language: 'fra' }, disposition: { default: 1 } },
+    { index: 2, codec_type: 'audio', tags: { language: 'eng' } },
+  ];
+  assert.equal(selectSharedAudioStream(streams), 2);
+  assert.equal(selectSharedAudioStream(streams.slice(0, 2)), 1);
+  assert.equal(selectSharedAudioStream([]), null);
 });
 
-test('owner cache controls expose prepare and bounded LRU pruning', () => {
-  const route = read('src/app/api/watch/service/route.ts');
-  const worker = read('worker/src/server.js');
-  assert.match(route, /getSession\(\)/);
-  assert.match(route, /canManageRoom/);
-  assert.match(worker, /app\.get\('\/watch\/cache\/status'/);
-  assert.match(worker, /app\.post\('\/watch\/cache\/control'/);
-  assert.match(worker, /pruneWatchHlsRoot/);
-  assert.match(worker, /watchHlsJobs\.has\(entry\.name\)/);
-});
-
-test('Discord Activity keeps the YouTube resolver credential server-side', () => {
-  const activity = read('src/app/activity-lite.js/route.ts');
-  const resolver = read('src/app/api/watch/youtube/player/route.ts');
-  assert.doesNotMatch(activity, /AIza[\w-]+/);
-  assert.match(activity, /fetch\('\/api\/watch\/youtube\/player'/);
-  assert.match(resolver, /process\.env\.YOUTUBE_INNERTUBE_API_KEY/);
-  assert.match(resolver, /isValidVideoId\(videoId\)/);
+// Per-item prepare/prune and client-side language controls were deliberately
+// retired. Real producer pacing, bounds, concurrency and retry behavior live
+// in shared-media-relay.test.cjs; listener-only controls in listener-volume.
+test('Discord player never resolves provider credentials or opens a direct provider fallback', () => {
+  const player = read('src/lib/shared-player-script.ts');
+  const resolver = read('src/app/api/watch/source/route.ts');
+  assert.doesNotMatch(player, /AIza[\w-]+|YOUTUBE_INNERTUBE_API_KEY|\/api\/watch\/youtube\/player|youtube\.com\/embed/);
+  assert.match(resolver, /isDjWorkerRequest/);
 });

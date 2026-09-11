@@ -2,6 +2,7 @@
 
 import { PlaylistItem } from "@/types/playlist";
 import { db, ensureDb } from '@/lib/db';
+import { ACTIVITY_ROOM_ID, MUSIC_WATCH_SESSION_ID } from '@/lib/watch-session';
 import YouTube from 'youtube-sr';
 import { getAi } from '@/ai/genkit';
 import { findOfflineMusicTrack, findSavedMusicTrack, saveSearchedMusicTrack } from '@/lib/offline-music';
@@ -152,47 +153,10 @@ ${banned}`;
   }
 }
 
-export async function addSongToPlaylist(
-  songQuery: string,
-  roomId: string,
-  requester: string
-): Promise<{ success: boolean; message: string }> {
-  if (!roomId) return { success: false, message: 'No room ID provided.' };
-
-  try {
-    await ensureDb();
-    const resolved = await resolveSongRequest(songQuery, requester);
-    if (!resolved.success || !resolved.track) return { success: false, message: resolved.message };
-    const newTrack = resolved.track;
-
-    const room = db.get('rooms', roomId);
-    if (!room) return { success: false, message: 'Room not found.' };
-
-    const playlist = room.playlist || [];
-    const newPlaylist = [...playlist, newTrack];
-    const updates: any = { playlist: newPlaylist };
-    updates.autoRadioProfiles = updateUserAutoRadioProfile(room.autoRadioProfiles, requester || 'unknown', {
-      id: newTrack.id,
-      title: newTrack.title,
-      artist: newTrack.artist,
-    });
-
-    if (!room.isPlaying || !room.currentTrackId) {
-      updates.currentTrackId = newTrack.id;
-      updates.isPlaying = true;
-      if (room.currentTrackId) {
-        updates.playHistory = [...(room.playHistory || []), room.currentTrackId].slice(-50);
-      }
-    }
-
-    db.update('rooms', roomId, updates);
-    console.log(`[!sr] Queued "${newTrack.title}" in room ${roomId}`);
-
-    return { success: true, message: `Queued up: "${newTrack.title}"` };
-  } catch (error: any) {
-    console.error(`[!sr] Error:`, error);
-    return { success: false, message: 'An internal error occurred.' };
-  }
+export async function addSongToPlaylist(songQuery: string, _roomId: string, requester: string): Promise<{ success: boolean; message: string }> {
+  const { requestWatchMusicItem } = await import('@/lib/watch-request-service');
+  const result = await requestWatchMusicItem({ sessionId: MUSIC_WATCH_SESSION_ID, query: songQuery, userId: requester, username: requester, platform: 'web' });
+  return result.result;
 }
 
 export async function resolveSongRequest(
@@ -445,25 +409,30 @@ function isConfidentStoredSongMatch(query: string, title: string, artist: string
   return isConfidentSongMatch(query, score);
 }
 
-export async function updateRoomPlayState(roomId: string, isPlaying: boolean): Promise<{ success: boolean; message: string }> {
-  if (!roomId) return { success: false, message: 'No room ID provided.' };
+export async function updateRoomPlayState(_roomId: string, _isPlaying: boolean): Promise<{ success: boolean; message: string }> {
+  return { success: false, message: 'Playback controls are temporarily unavailable.' };
+}
+
+async function ensureMusicProfile() {
   await ensureDb();
-  const room = db.get('rooms', roomId);
-  if (!room) return { success: false, message: 'Room not found.' };
-  if (!room.currentTrackId) return { success: false, message: 'No track is currently selected.' };
-  db.update('rooms', roomId, { isPlaying });
-  const trackTitle = room.playlist?.find((t: any) => t.id === room.currentTrackId)?.title || 'Current track';
-  return { success: true, message: `${isPlaying ? 'Playing' : 'Paused'}: "${trackTitle}"` };
+  if (!db.get('mediaProfiles', MUSIC_WATCH_SESSION_ID)) {
+    const legacy = db.get('rooms', ACTIVITY_ROOM_ID) || {};
+    db.set('mediaProfiles', MUSIC_WATCH_SESSION_ID, {
+      playlist: legacy.playlist || [], playHistory: legacy.playHistory || [],
+      autoRadio: legacy.autoRadio === true, autoRadioProfiles: legacy.autoRadioProfiles || {},
+      autoRadioFailures: legacy.autoRadioFailures || {}, autoRadioQueryStats: legacy.autoRadioQueryStats || {},
+    });
+  }
 }
 
 export async function rememberAutoRadioTrack(roomId: string, track: PlaylistItem, userId: string) {
   if (!roomId || !track?.id) return;
-  await ensureDb();
-  const room = db.get('rooms', roomId);
+  await ensureMusicProfile();
+  const room = db.get('mediaProfiles', MUSIC_WATCH_SESSION_ID);
   if (!room) return;
   const playlist: PlaylistItem[] = room.playlist || [];
   const alreadyStored = playlist.some((item) => item.id === track.id);
-  db.update('rooms', roomId, {
+  db.update('mediaProfiles', MUSIC_WATCH_SESSION_ID, {
     playlist: alreadyStored ? playlist : [...playlist, track].slice(-100),
     autoRadioProfiles: updateUserAutoRadioProfile(room.autoRadioProfiles || {}, userId || 'listener', {
       id: track.id,
@@ -475,33 +444,20 @@ export async function rememberAutoRadioTrack(roomId: string, track: PlaylistItem
 
 export async function setAutoRadioEnabled(roomId: string, enabled: boolean) {
   if (!roomId) return false;
-  await ensureDb();
-  if (!db.get('rooms', roomId)) return false;
-  db.update('rooms', roomId, { autoRadio: enabled });
+  await ensureMusicProfile();
+  if (!db.get('mediaProfiles', MUSIC_WATCH_SESSION_ID)) return false;
+  db.update('mediaProfiles', MUSIC_WATCH_SESSION_ID, { autoRadio: enabled });
   return true;
 }
 
-export async function skipTrack(roomId: string): Promise<{ success: boolean; message: string }> {
-  if (!roomId) return { success: false, message: 'No room ID provided.' };
-  await ensureDb();
-  const room = db.get('rooms', roomId);
-  if (!room) return { success: false, message: 'Room not found.' };
-  const playlist = room.playlist || [];
-  if (!playlist.length) return { success: false, message: 'Playlist is empty.' };
-  const currentIndex = playlist.findIndex((t: any) => t.id === room.currentTrackId);
-  const nextTrack = playlist[(currentIndex + 1) % playlist.length];
-  const updates: any = { currentTrackId: nextTrack.id, isPlaying: true };
-  if (room.currentTrackId) {
-    updates.playHistory = [...(room.playHistory || []), room.currentTrackId].slice(-50);
-  }
-  db.update('rooms', roomId, updates);
-  return { success: true, message: 'Skipped to next track.' };
+export async function skipTrack(_roomId: string): Promise<{ success: boolean; message: string }> {
+  return { success: false, message: 'Playback controls are temporarily unavailable.' };
 }
 
 export async function autoRadioNext(roomId: string): Promise<{ success: boolean; message: string }> {
   if (!roomId) return { success: false, message: 'No room ID provided.' };
-  await ensureDb();
-  const room = db.get('rooms', roomId);
+  await ensureMusicProfile();
+  const room = db.get('mediaProfiles', MUSIC_WATCH_SESSION_ID);
   if (!room) return { success: false, message: 'Room not found.' };
   if (!room.autoRadio) return { success: false, message: 'Auto-radio is not enabled.' };
 
@@ -563,7 +519,7 @@ export async function autoRadioNext(roomId: string): Promise<{ success: boolean;
       nextStats = markQueryStat(nextStats, query, false);
     }
     if (!picked?.id) {
-      db.update('rooms', roomId, { autoRadioQueryStats: nextStats });
+      db.update('mediaProfiles', MUSIC_WATCH_SESSION_ID, { autoRadioQueryStats: nextStats });
       return { success: false, message: 'No new songs found for auto-radio.' };
     }
 
@@ -587,7 +543,7 @@ export async function autoRadioNext(roomId: string): Promise<{ success: boolean;
       ? [...playHistory, room.currentTrackId]
       : playHistory;
     const newHistory = [...historySeed, videoId].slice(-50);
-    db.update('rooms', roomId, {
+    db.update('mediaProfiles', MUSIC_WATCH_SESSION_ID, {
       playlist: newPlaylist,
       currentTrackId: videoId,
       isPlaying: true,
@@ -610,8 +566,8 @@ export async function autoRadioNext(roomId: string): Promise<{ success: boolean;
 
 export async function getRoomState(roomId: string) {
   if (!roomId) return null;
-  await ensureDb();
-  const data = db.get('rooms', roomId);
+  await ensureMusicProfile();
+  const data = db.get('mediaProfiles', MUSIC_WATCH_SESSION_ID);
   if (!data) return null;
   return {
     isPlaying: data.isPlaying || false,
@@ -624,8 +580,8 @@ export async function getRoomState(roomId: string) {
 
 export async function markTrackExtractFailure(roomId: string, videoId: string, reason?: string): Promise<void> {
   if (!roomId || !videoId) return;
-  await ensureDb();
-  const room = db.get('rooms', roomId);
+  await ensureMusicProfile();
+  const room = db.get('mediaProfiles', MUSIC_WATCH_SESSION_ID);
   if (!room) return;
   const failures: AutoRadioFailures = room.autoRadioFailures || {};
   const existing = failures[videoId] || { count: 0, lastFailedAt: 0 };
@@ -634,5 +590,5 @@ export async function markTrackExtractFailure(roomId: string, videoId: string, r
     lastFailedAt: Date.now(),
     reason: reason || existing.reason,
   };
-  db.update('rooms', roomId, { autoRadioFailures: failures });
+  db.update('mediaProfiles', MUSIC_WATCH_SESSION_ID, { autoRadioFailures: failures });
 }

@@ -5,6 +5,7 @@ import vm from 'node:vm';
 import ts from 'typescript';
 import { NextRequest } from 'next/server';
 import { middleware } from '../src/middleware';
+import { sharedPlayerScript } from '../src/lib/shared-player-script';
 import { GET as legacyEntry } from '../src/app/activity-lite/route';
 
 test('Discord opens without a website cookie and keeps its launch parameters', async () => {
@@ -22,6 +23,7 @@ test('shared Activity player, queue, controls, and media bypass browser login', 
   for (const path of [
     '/activity', '/activity?sessionId=music', '/activity-lite', '/activity-lite.js',
     '/api/watch/activity-default', '/api/activity/hls', '/activity-hls',
+    '/api/watch/stream/music/index.m3u8?requestId=one', '/api/watch/stream/movie/init.mp4?requestId=two', '/api/watch/stream/movie/seg_123.m4s?requestId=two',
     '/api/watch/sessions/discord-music-room/state',
     '/api/watch/sessions/discord-watch-room/state',
     '/api/watch/sessions/watch-discord-123-456-music/state',
@@ -56,10 +58,7 @@ test('Activity exceptions keep account, private sessions, uploads, and worker co
 function playerContext(href = 'https://1279582181768957963.discordsays.com/activity?frame_id=frame-123') {
   // Evaluate the actual generated browser program, without importing server
   // services or connecting to Discord/YouTube during regression tests.
-  const source = readFileSync(new URL('../src/app/activity-lite.js/route.ts', import.meta.url), 'utf8');
-  const generator = source.slice(source.indexOf('export function js'), source.indexOf('\nexport async function GET')).replace('export function', 'function');
-  const compiled = ts.transpileModule(generator, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
-  const js = vm.runInNewContext(compiled + '\njs("1279582181768957963", "discord-music-room", "https://hearmeout-main.fly.dev")');
+  const js = sharedPlayerScript('1279582181768957963', 'discord-music-room', 'https://hearmeout-main.fly.dev');
   new vm.Script(js);
   const element: any = { value: '100', dataset: {}, textContent: '', style: {}, classList: { toggle() {}, remove() {}, contains() { return false; } },
     addEventListener() {}, setAttribute() {}, querySelectorAll() { return []; } };
@@ -84,10 +83,10 @@ test('generated player starts Discord handshake and uses shared same-origin play
   assert.equal(messages[0][0][1].frame_id, 'frame-123');
   assert.equal(messages[0][1], 'https://discord.com');
   const media = vm.runInContext("appUrl('/api/watch/youtube/hls/abcdefghijk/index.m3u8')", context);
-  assert.equal(media, '/.proxy/api/watch/sessions/discord-music-room/state?mediaVideoId=abcdefghijk&mediaFile=source.webm');
+  assert.equal(media, '/.proxy/api/watch/youtube/hls/abcdefghijk/index.m3u8');
   assert.equal(vm.runInContext("JSON.stringify(apiUrls('/api/watch/sessions/discord-music-room/state'))", context),
     '["/.proxy/api/watch/sessions/discord-music-room/state"]');
-  assert.equal(vm.runInContext("shouldResolveYoutubeInBrowser({id:'youtube-abcdefghijk', metadata:{playbackStrategy:'proxy'}})", context), false);
+  assert.equal(vm.runInContext("typeof shouldResolveYoutubeInBrowser", context), "undefined");
 });
 
 test('Activity routes API and same-app media URLs through the proxy exactly once', () => {
@@ -158,7 +157,7 @@ test('initial Activity HTML loads its media library through Discord while browse
     if (name === 'next/server') return { NextResponse: Response };
     if (name === '@/lib/public-config') return { DISCORD_CLIENT_ID: '1279582181768957963' };
     if (name === '@/lib/watch-session') return { GLOBAL_WATCH_SESSION_ID: 'discord-watch-room', MUSIC_WATCH_SESSION_ID: 'discord-music-room' };
-    if (name === '@/lib/watch/watch-request-service') return { getDefaultActivitySessionId: () => 'discord-music-room', getResolvedWatchSession: () => ({ current: null }), getPublicWatchSession: (state: any) => state };
+    if (name === '@/lib/watch-request-service') return { getDefaultActivitySessionId: () => 'discord-music-room', getResolvedWatchSession: () => ({ current: null }), getPublicWatchSession: (state: any) => state };
     if (name === '@/lib/activity-room') return { ensureDiscordActivityRoom: async () => {} };
     if (name === '../activity-lite.js/route') return { js: () => '' };
     throw new Error('Unexpected import ' + name);

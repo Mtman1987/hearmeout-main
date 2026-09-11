@@ -17,6 +17,10 @@ import { useToast } from '@/hooks/use-toast';
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { useSession } from '@/hooks/use-session';
+import { useListenerAudio } from '@/hooks/use-listener-audio';
+import { LISTENER_AUDIO_EVENT, parseListenerAudio, readListenerAudioSnapshot } from '@/lib/listener-audio';
+import { createLocalMediaGain } from '@/lib/local-media-gain';
+import { peerVoiceIdentity } from '@/lib/participant-volume';
 import { useDoc } from '@/hooks/use-db';
 import { dbUpdate, dbSet } from '@/lib/db-helpers';
 import { usePopout } from '@/components/PopoutWidgets/PopoutProvider';
@@ -59,17 +63,9 @@ type WatchCardState = {
 };
 
 
-function RoomAudioPlayback({ volume }: { volume: number }) {
+function RoomAudioPlayback() {
     const room = useRoomContext();
-    const audioRootRef = useRef<HTMLDivElement>(null);
     const [audioBlocked, setAudioBlocked] = useState(false);
-
-    const applyVolume = useCallback(() => {
-        const normalizedVolume = Math.max(0, Math.min(1, Number(volume) || 0));
-        audioRootRef.current?.querySelectorAll<HTMLAudioElement>('audio').forEach((audio) => {
-            audio.volume = normalizedVolume;
-        });
-    }, [volume]);
 
     useEffect(() => {
         const updatePlaybackStatus = (canPlayback: boolean) => setAudioBlocked(!canPlayback);
@@ -80,19 +76,9 @@ function RoomAudioPlayback({ volume }: { volume: number }) {
         };
     }, [room]);
 
-    useEffect(() => {
-        applyVolume();
-        const root = audioRootRef.current;
-        if (!root) return;
-        const observer = new MutationObserver(applyVolume);
-        observer.observe(root, { childList: true, subtree: true });
-        return () => observer.disconnect();
-    }, [applyVolume]);
-
     const enableAudio = async () => {
         try {
             await room.startAudio();
-            applyVolume();
             setAudioBlocked(false);
         } catch (error) {
             setAudioBlocked(true);
@@ -102,7 +88,7 @@ function RoomAudioPlayback({ volume }: { volume: number }) {
 
     return (
         <>
-            <div ref={audioRootRef} aria-hidden="true" data-room-audio-renderer>
+            <div aria-hidden="true" data-room-audio-renderer>
                 <RoomAudioRenderer />
             </div>
             {audioBlocked && (
@@ -116,112 +102,22 @@ function RoomAudioPlayback({ volume }: { volume: number }) {
     );
 }
 
-function watchUrlForRoom(url: string, canPause: boolean) {
-    try {
-        const next = new URL(url, window.location.origin);
-        next.searchParams.set('canPause', canPause ? '1' : '0');
-        return next.pathname + next.search;
-    } catch {
-        return `${url}${url.includes('?') ? '&' : '?'}canPause=${canPause ? '1' : '0'}`;
-    }
-}
-
-function SharedWatchCard({ roomId, onOpenWatch, sessionScope = 'discord', canPause = false }: { roomId: string; onOpenWatch: (kind: WatchMediaKind) => void; sessionScope?: 'discord' | 'overlay'; canPause?: boolean }) {
-    const [states, setStates] = useState<Partial<Record<WatchMediaKind, WatchCardState | null>>>({});
-    const [selectedKind, setSelectedKind] = useState<WatchMediaKind>('movie');
-    const [dismissedRequests, setDismissedRequests] = useState<Partial<Record<WatchMediaKind, string>>>({});
-
+function SharedWatchCard({ roomId }: { roomId: string; onOpenWatch: (kind: WatchMediaKind) => void; sessionScope?: 'discord' | 'overlay'; canPause?: boolean }) {
+    const [active, setActive] = useState(false);
     useEffect(() => {
         let cancelled = false;
         const refresh = async () => {
-            const entries = await Promise.all((['movie', 'music'] as const).map(async (kind) => {
-                try {
-                    const sessionId = getRoomWatchSessionId(roomId, kind);
-                    const res = await fetch(`/api/watch/sessions/${sessionId}/state`, { cache: 'no-store' });
-                    return [kind, res.ok ? await res.json() : null] as const;
-                } catch {
-                    return [kind, null] as const;
-                }
+            const states = await Promise.all((['movie', 'music'] as const).map(async kind => {
+                const response = await fetch(`/api/watch/sessions/${getRoomWatchSessionId(roomId, kind)}/state`, { cache: 'no-store' }).catch(() => null);
+                return response?.ok ? response.json().catch(() => null) : null;
             }));
-            if (!cancelled) setStates(Object.fromEntries(entries));
+            if (!cancelled) setActive(states.some(state => state?.current));
         };
-        refresh();
-        const interval = setInterval(refresh, 3000);
-        return () => {
-            cancelled = true;
-            clearInterval(interval);
-        };
+        void refresh(); const timer = setInterval(refresh, 2000);
+        return () => { cancelled = true; clearInterval(timer); };
     }, [roomId]);
-
-    const visibleKinds = (['movie', 'music'] as const).filter((kind) =>
-        states[kind]?.current && states[kind]?.current?.requestId !== dismissedRequests[kind]);
-    const kind = visibleKinds.includes(selectedKind) ? selectedKind : visibleKinds[0];
-    const state = kind ? states[kind] : null;
-    if (!state?.current) return null;
-    const sessionId = getRoomWatchSessionId(roomId, kind);
-
-    const watchRoomUrl = watchUrlForRoom(state.roomUrl || `/watch/${sessionId}`, canPause);
-    const overlayUrl = `/overlay/${encodeURIComponent(roomId)}?media=auto`;
-    const closeWatchCard = () => setDismissedRequests(Object.fromEntries(
-        (['movie', 'music'] as const).map((kind) => [kind, states[kind]?.current?.requestId]),
-    ));
-
-    return (
-        <Card>
-            <CardHeader className="flex flex-row items-center justify-between gap-3 pb-3">
-                <CardTitle className="flex items-center gap-2 text-lg font-headline">
-                    {kind === 'music' ? <Music className="h-5 w-5" /> : <Film className="h-5 w-5" />}
-                    {kind === 'music' ? 'Room Music' : 'Room Watch Party'}
-                </CardTitle>
-                <div className="flex gap-2">
-                    {visibleKinds.length > 1 && visibleKinds.map((tab) => (
-                        <Button key={tab} variant={kind === tab ? 'secondary' : 'outline'} size="sm" onClick={() => setSelectedKind(tab)}>
-                            {tab === 'music' ? 'Music' : 'Movies'}
-                        </Button>
-                    ))}
-                    <Button variant="outline" size="sm" onClick={() => onOpenWatch(kind)}>Controls</Button>
-                    <Button variant="outline" size="sm" asChild>
-                        <a href={sessionScope === 'overlay' ? overlayUrl : watchRoomUrl} target="_blank" rel="noreferrer">
-                            <ExternalLink className="mr-1 h-3.5 w-3.5" /> {sessionScope === 'overlay' ? 'Overlay' : 'Open'}
-                        </a>
-                    </Button>
-                    <Button variant="ghost" size="icon" onClick={closeWatchCard} aria-label="Close Watch Party card">
-                        <X className="h-4 w-4" />
-                    </Button>
-                </div>
-            </CardHeader>
-            <CardContent className="space-y-3">
-                {sessionScope === 'overlay' ? (
-                    <div className="flex aspect-video w-full flex-col items-center justify-center gap-2 rounded-md border border-dashed bg-black/80 p-4 text-center text-sm text-muted-foreground">
-                        <Music className="h-6 w-6 text-emerald-300" />
-                        <p>Stream Mode is on. Media is playing through the OBS overlay URL, while room voices stay here.</p>
-                        <Button variant="outline" size="sm" asChild>
-                            <a href={overlayUrl} target="_blank" rel="noreferrer">Open Overlay</a>
-                        </Button>
-                    </div>
-                ) : (
-                    <div className="aspect-video w-full overflow-hidden rounded-md border bg-black">
-                        <iframe
-                            src={watchRoomUrl}
-                            title={kind === 'music' ? 'Room music playback' : 'Room movie playback'}
-                            className="h-full w-full"
-                            allow="autoplay; fullscreen; encrypted-media; picture-in-picture"
-                            sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-presentation"
-                        />
-                    </div>
-                )}
-                <div className="min-w-0">
-                    <p className="truncate text-sm font-medium">
-                        {state.current.item.title}{state.current.item.year ? ` (${state.current.item.year})` : ''}
-                    </p>
-                    <p className="truncate text-xs text-muted-foreground">
-                        {state.current.item.source || 'watch'} · {state.playback?.status || 'idle'}
-                        {state.current.requestedBy?.username ? ` · by ${state.current.requestedBy.username}` : ''}
-                    </p>
-                </div>
-            </CardContent>
-        </Card>
-    );
+    if (!active) return null;
+    return <iframe title="HearMeOut player" src="/activity" className="h-[520px] w-full rounded-md border" allow="autoplay" />;
 }
 
 function screenShareLabel(peerId: string) {
@@ -529,8 +425,24 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
     const peerVoiceStartingRef = useRef(false);
     const [peerVoiceStreams, setPeerVoiceStreams] = useState<Map<string, MediaStream>>(new Map());
     const peerVoiceAudioRefs = useRef<Map<string, HTMLAudioElement>>(new Map());
+    const peerGains = useRef(new Map<string, ReturnType<typeof createLocalMediaGain>>());
+    const peerGainContext = useRef<AudioContext | null>(null);
     const [peerAudioBlocked, setPeerAudioBlocked] = useState(false);
-    const [localVolume, setLocalVolume] = useState(0.5);
+    const { volume: localVolume, setVolume: setLocalVolume } = useListenerAudio('music');
+    useEffect(() => {
+        const apply = () => {
+            for (const [peerId, audio] of peerVoiceAudioRefs.current) {
+                const identity = peerVoiceIdentity(roomId, peerId);
+                const volume = parseListenerAudio(readListenerAudioSnapshot(`voice:${identity}`), 1).volume;
+                const gain = peerGains.current.get(peerId);
+                if (gain) { gain.setVolume(volume); void gain.resume(); }
+                else audio.volume = volume;
+            }
+        };
+        window.addEventListener('storage', apply);
+        window.addEventListener(LISTENER_AUDIO_EVENT, apply);
+        return () => { window.removeEventListener('storage', apply); window.removeEventListener(LISTENER_AUDIO_EVENT, apply); };
+    }, [roomId]);
     const [showDJ, setShowDJ] = useState(false);
     const [showVoiceBridge, setShowVoiceBridge] = useState(false);
     const isActivityRoom = isActivityRoomId(roomId);
@@ -583,15 +495,19 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
                         audioEl = new Audio();
                         audioEl.autoplay = true;
                         audioEl.setAttribute('playsinline', '');
-                        audioEl.muted = false;
-                        audioEl.volume = 1;
+                        const Context = window.AudioContext || (window as any).webkitAudioContext;
+                        if (Context && !peerGainContext.current) peerGainContext.current = new Context();
+                        const gain = createLocalMediaGain(audioEl, peerGainContext.current);
+                        peerGains.current.set(peerId, gain);
+                        const identity = peerVoiceIdentity(roomId, peerId);
+                        gain.setVolume(parseListenerAudio(readListenerAudioSnapshot(`voice:${identity}`), 1).volume);
                         audioEl.style.display = 'none';
                         document.body.appendChild(audioEl);
                         peerVoiceAudioRefs.current.set(peerId, audioEl);
                     }
                     audioEl.srcObject = stream;
                     audioEl.play().then(() => {
-                        setPeerAudioBlocked(false);
+                        setPeerAudioBlocked(peerGains.current.get(peerId)?.blocked || false);
                     }).catch((playbackError) => {
                         setPeerAudioBlocked(true);
                         fetch('/api/client-log', {
@@ -618,6 +534,7 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
                         audioEl.srcObject = null;
                         audioEl.remove();
                         peerVoiceAudioRefs.current.delete(peerId);
+                        peerGains.current.get(peerId)?.close(); peerGains.current.delete(peerId);
                     }
                 },
                 true,
@@ -646,6 +563,9 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
                 audioEl.remove();
             }
             peerVoiceAudioRefs.current.clear();
+            for (const gain of peerGains.current.values()) gain.close();
+            peerGains.current.clear();
+            void peerGainContext.current?.close().catch(() => {}); peerGainContext.current = null;
             setPeerVoiceStreams(new Map());
             setPeerMicEnabled(false);
             fallbackRoomRef.current = null;
@@ -667,6 +587,7 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
     }, [mintVoiceToken, userId, voiceRetrying]);
 
     const unlockPeerAudio = useCallback(async () => {
+        void peerGainContext.current?.resume();
         const results = await Promise.allSettled(
             Array.from(peerVoiceAudioRefs.current.values()).map((audioEl) => audioEl.play()),
         );
@@ -798,6 +719,9 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
               audioEl.remove();
             }
             peerVoiceAudioRefs.current.clear();
+            for (const gain of peerGains.current.values()) gain.close();
+            peerGains.current.clear();
+            void peerGainContext.current?.close().catch(() => {}); peerGainContext.current = null;
         };
     }, [isUserLoading, roomId, mintVoiceToken, startPeerVoiceFallback, userDisplayName, userId, userPhotoURL]);
 
@@ -832,7 +756,7 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
     return (
       voiceReady ? (
       <LiveKitRoom key={voiceConnectionGeneration} serverUrl={livekitUrl} token={voiceToken} connect={true} audio={false} video={false}
-          options={{ audioCaptureDefaults: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } }}
+          options={{ webAudioMix: true, audioCaptureDefaults: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } }}
           onConnected={() => setVoiceFailureMessage(null)}
           onDisconnected={(reason) => {
             if (reason === DisconnectReason.CLIENT_INITIATED || voiceFallbackActiveRef.current) return;
@@ -847,7 +771,7 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
             }).catch(() => {});
             void startPeerVoiceFallback(err);
           }}>
-        <RoomAudioPlayback volume={localVolume} />
+        <RoomAudioPlayback />
         {renderRoomUI()}
       </LiveKitRoom>
       ) : fallbackRoom ? (
@@ -859,7 +783,7 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
 
     function getFallbackRoom() {
       if (!fallbackRoomRef.current) {
-        fallbackRoomRef.current = new LKRoom();
+        fallbackRoomRef.current = new LKRoom({ webAudioMix: true });
       }
       const fallbackRoom = fallbackRoomRef.current;
       const localParticipant = fallbackRoom.localParticipant as any;

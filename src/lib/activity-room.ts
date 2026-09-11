@@ -17,7 +17,7 @@ export function isDiscordActivityWatchSession(sessionId: unknown) {
 export async function ensureDiscordActivityRoom() {
   await ensureDb();
   const stored = db.get('rooms', ACTIVITY_ROOM_ID);
-  // Only an explicit Activity launch or media request starts a new lifetime.
+  // Only an explicit Activity launch starts a new lifetime.
   // State polling and dashboard/room visits never call this creation path.
   if (stored) {
     const existing = normalizeActivityRoomLifecycle(stored);
