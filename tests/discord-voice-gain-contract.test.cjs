@@ -134,3 +134,37 @@ test('stop during a failed start observes cleanup without leaking the provider r
   assert.equal(stops, 1);
   assert.equal(bridge.testBridges.has('failed-room'), false);
 });
+
+test('one guild cannot be claimed by a second room during startup or while connected', async () => {
+  const bridge = loadBridge();
+  let finishStart, enteredStart;
+  const pending = new Promise(resolve => { finishStart = resolve; });
+  const entered = new Promise(resolve => { enteredStart = resolve; });
+  bridge.testBridge.prototype.start = function () {
+    if (this.roomId === 'first') { enteredStart(); return pending; }
+    return Promise.resolve();
+  };
+  bridge.testBridge.prototype.stop = async function () {};
+  const opts = { guildId: '12345', voiceChannelId: '54321' };
+  const first = bridge.startVoiceBridge({ ...opts, roomId: 'first' });
+  await entered;
+  await assert.rejects(bridge.startVoiceBridge({ ...opts, roomId: 'second', voiceChannelId: '65432' }), /already connected to another/);
+  assert.equal((await bridge.startVoiceBridge({ ...opts, guildId: '23456', roomId: 'unrelated' })).success, true);
+  finishStart();
+  await first;
+  await assert.rejects(bridge.startVoiceBridge({ ...opts, roomId: 'second' }), /already connected to another/);
+  await bridge.stopVoiceBridge('first');
+  assert.equal((await bridge.startVoiceBridge({ ...opts, roomId: 'second' })).success, true);
+});
+
+test('failed provider startup releases the guild claim for another room', async () => {
+  const bridge = loadBridge();
+  bridge.testBridge.prototype.start = async function () {
+    if (this.roomId === 'failed') throw new Error('fixture connection failed');
+  };
+  bridge.testBridge.prototype.stop = async function () {};
+  bridge.testBridge.prototype.markStopCooldown = () => {};
+  const opts = { guildId: '12345', voiceChannelId: '54321' };
+  await assert.rejects(bridge.startVoiceBridge({ ...opts, roomId: 'failed' }), /fixture connection failed/);
+  assert.equal((await bridge.startVoiceBridge({ ...opts, roomId: 'replacement' })).success, true);
+});

@@ -83,6 +83,7 @@ let sharedClient = null;
 let sharedClientReady = null;
 const bridgesByChannel = new Map(); // voiceChannelId -> VoiceBridge
 const bridgeStartInFlight = new Map(); // roomId -> Promise
+const bridgeGuildStartOwners = new Map(); // guildId -> roomId; one bot connection per guild
 const bridgeStartCooldowns = new Map(); // roomId -> { until: number; reason: string }
 
 function getDiscordClient(token) {
@@ -813,6 +814,11 @@ const bridges = new Map();
 async function startVoiceBridge(opts) {
   const existingPromise = bridgeStartInFlight.get(opts.roomId);
   if (existingPromise) return existingPromise;
+  const guildOwner = bridgeGuildStartOwners.get(opts.guildId);
+  const connected = Array.from(bridges.values()).find(bridge => bridge.guildId === opts.guildId && bridge.roomId !== opts.roomId);
+  if (connected || (guildOwner && guildOwner !== opts.roomId)) {
+    throw new Error('This Discord server is already connected to another HearMeOut room; disconnect it before switching rooms.');
+  }
 
   const cooldown = bridgeStartCooldowns.get(opts.roomId);
   if (cooldown && cooldown.until > Date.now()) {
@@ -823,6 +829,7 @@ async function startVoiceBridge(opts) {
     };
   }
 
+  bridgeGuildStartOwners.set(opts.guildId, opts.roomId);
   const startPromise = (async () => {
   const existing = bridges.get(opts.roomId);
   if (existing) {
@@ -854,6 +861,7 @@ async function startVoiceBridge(opts) {
     return await startPromise;
   } finally {
     bridgeStartInFlight.delete(opts.roomId);
+    if (bridgeGuildStartOwners.get(opts.guildId) === opts.roomId) bridgeGuildStartOwners.delete(opts.guildId);
   }
 }
 
