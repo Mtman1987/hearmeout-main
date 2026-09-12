@@ -1,0 +1,27 @@
+name: Owner-approved Apollo HearMeOut migration export
+on:
+  push:
+    branches: [diagnostics/hmo-cutover-transfer-20260912]
+    paths: [.github/workflows/export-apollo-hmo-cutover.yml, scripts/export-apollo-hmo-cutover.mjs, scripts/hmo-transfer-public.pem]
+permissions:
+  contents: read
+jobs:
+  transfer:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    env:
+      FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN_MAIN || secrets.FLY_API_TOKEN }}
+      HMO_FLY_WORKER_TOKEN: ${{ secrets.FLY_API_TOKEN_WORKER || secrets.FLY_API_TOKEN }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/checkout@v5
+        with:
+          repository: Mtman1987/ApolloStation
+          ref: 04dd2e99a058b4050a5c66f7459c0a1b8ae1a5c7
+          path: apollo
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+      - uses: superfly/flyctl-actions/setup-flyctl@v1
+      - name: Snapshot, verify, classify, and encrypt for the protected destination
+        run: node scripts/export-apollo-hmo-cutover.mjs
