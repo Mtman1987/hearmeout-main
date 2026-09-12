@@ -668,7 +668,6 @@ class VoiceBridge {
     }
 
     bridgesByChannel.set(this.voiceChannelId, this);
-
     console.log(`[VoiceBridge:${this.roomId}] Joined Discord voice channel ${this.voiceChannelId}`);
 
     await this.startOrRepairPlayback('post-discord-join');
