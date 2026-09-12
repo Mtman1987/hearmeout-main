@@ -89,3 +89,48 @@ test('old callers retain the default and malformed gain never starts a bridge', 
   }
   assert.equal(starts, 1);
 });
+
+test('stop waits for a delayed start and removes the bridge before reporting success', async () => {
+  const bridge = loadBridge();
+  let finishStart;
+  const pending = new Promise(resolve => { finishStart = resolve; });
+  let enteredStart;
+  const entered = new Promise(resolve => { enteredStart = resolve; });
+  let stops = 0, stopSettled = false;
+  bridge.testBridge.prototype.start = () => { enteredStart(); return pending; };
+  bridge.testBridge.prototype.stop = async function () { stops++; };
+  const request = loadRoutes(bridge);
+  const starting = request('/voice-bridge', { action: 'start', roomId: 'delayed-room', guildId: '12345', voiceChannelId: '54321' });
+  await entered;
+  const stopping = request('/voice-bridge', { action: 'stop', roomId: 'delayed-room' }).then(result => { stopSettled = true; return result; });
+  await Promise.resolve();
+  assert.equal(stopSettled, false);
+  const unrelated = await request('/voice-bridge', { action: 'stop', roomId: 'other-room' });
+  assert.equal(unrelated.payload.success, true);
+  finishStart();
+  await starting;
+  assert.equal((await stopping).payload.success, true);
+  assert.equal(stops, 1);
+  assert.equal(bridge.testBridges.has('delayed-room'), false);
+});
+
+test('stop during a failed start observes cleanup without leaking the provider rejection', async () => {
+  const bridge = loadBridge();
+  let rejectStart;
+  const pending = new Promise((_resolve, reject) => { rejectStart = reject; });
+  let enteredStart;
+  const entered = new Promise(resolve => { enteredStart = resolve; });
+  let stops = 0;
+  bridge.testBridge.prototype.start = () => { enteredStart(); return pending; };
+  bridge.testBridge.prototype.stop = async function () { stops++; };
+  bridge.testBridge.prototype.markStopCooldown = () => {};
+  const request = loadRoutes(bridge);
+  const starting = request('/voice-bridge', { action: 'start', roomId: 'failed-room', guildId: '12345', voiceChannelId: '54321' });
+  await entered;
+  const stopping = request('/voice-bridge', { action: 'stop', roomId: 'failed-room' });
+  rejectStart(new Error('fixture provider refused startup'));
+  assert.equal((await starting).status, 500);
+  assert.equal((await stopping).payload.success, true);
+  assert.equal(stops, 1);
+  assert.equal(bridge.testBridges.has('failed-room'), false);
+});
