@@ -1,0 +1,260 @@
+#!/usr/bin/env node
+// Bounded HMO profile adapted from the existing Rotator read-only inventory.
+
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+
+const execFileAsync = promisify(execFile);
+
+const INVENTORY_PROFILES = Object.freeze({
+  'hearmeout-main': { healthUrl: 'https://hearmeout-main.fly.dev/api/health', kind: 'hearmeout-main' },
+  'hmo-dj-worker': { healthUrl: 'https://hmo-dj-worker.fly.dev/health', kind: 'hmo-dj-worker' },
+});
+
+function redact(value) {
+  return String(value ?? '')
+    .replace(/(Bearer\s+)[A-Za-z0-9._~+/=-]{8,}/gi, '$1[REDACTED]')
+    .replace(/(FlyV1\s*)[A-Za-z0-9._~+/=-]{8,}/gi, '$1[REDACTED]')
+    .replace(/\bsk-[A-Za-z0-9_-]{12,}\b/g, '[REDACTED]')
+    .replace(/\bgithub_pat_[A-Za-z0-9_]{12,}\b/g, '[REDACTED]')
+    .slice(0, 12000);
+}
+
+function decodePayload(encoded) {
+  if (!/^[A-Za-z0-9+/=_-]{4,12000}$/.test(String(encoded || ''))) throw new Error('Invalid control payload encoding.');
+  const raw = Buffer.from(encoded, 'base64').toString('utf8');
+  if (raw.length > 8000) throw new Error('Control payload is too large.');
+  const value = JSON.parse(raw);
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Control payload must be an object.');
+  return value;
+}
+
+function requireInventoryApp(value) {
+  const appName = String(value || '').trim().slice(0, 120);
+  if (!appName || !Object.hasOwn(INVENTORY_PROFILES, appName)) {
+    throw new Error('inventory requires hearmeout-main or hmo-dj-worker.');
+  }
+  return appName;
+}
+
+async function run(program, args, options = {}) {
+  try {
+    const { stdout, stderr } = await execFileAsync(program, args, {
+      env: options.env || process.env,
+      encoding: 'utf8',
+      timeout: options.timeout ?? 120000,
+      maxBuffer: 4 * 1024 * 1024,
+    });
+    return { ok: true, stdout: String(stdout || ''), stderr: String(stderr || '') };
+  } catch (error) {
+    return {
+      ok: false,
+      stdout: String(error?.stdout || ''),
+      stderr: redact(error?.stderr || error?.message || error),
+      exitCode: Number.isInteger(error?.code) ? error.code : 1,
+    };
+  }
+}
+
+async function fly(args, options = {}) {
+  const token = String(process.env.FLY_API_TOKEN || '');
+  if (!token) throw new Error('FLY_API_TOKEN is not available to the GitHub control workflow.');
+  return run('flyctl', args, { ...options, env: { ...process.env, FLY_API_TOKEN: token } });
+}
+
+function parseJson(raw, label) {
+  const text = String(raw || '').trim();
+  try { return JSON.parse(text || 'null'); }
+  catch { throw new Error(`${label} returned malformed JSON.`); }
+}
+
+function parseFixedProbe(raw) {
+  const match = String(raw || '').match(/SPMT_INVENTORY_JSON=([A-Za-z0-9+/=]+)/);
+  if (!match) throw new Error('fixed data probe did not return its inventory sentinel.');
+  try {
+    const value = JSON.parse(Buffer.from(match[1], 'base64').toString('utf8'));
+    if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('not an object');
+    return value;
+  } catch {
+    throw new Error('fixed data probe returned malformed sentinel JSON.');
+  }
+}
+
+function machineMounts(machine) {
+  return Array.isArray(machine?.config?.mounts) ? machine.config.mounts : [];
+}
+
+function hasDataMount(machine) {
+  return machineMounts(machine).some((mount) => (mount?.path ?? mount?.destination ?? null) === '/data');
+}
+
+function safeMachine(machine) {
+  const guest = machine?.config?.guest || machine?.guest || {};
+  const mounts = machineMounts(machine);
+  return {
+    id: machine?.id ?? null,
+    name: machine?.name ?? null,
+    state: machine?.state ?? null,
+    region: machine?.region ?? null,
+    createdAt: machine?.created_at ?? null,
+    updatedAt: machine?.updated_at ?? null,
+    image: machine?.config?.image ?? null,
+    resources: { cpuKind: guest?.cpu_kind ?? null, cpus: guest?.cpus ?? null, memoryMb: guest?.memory_mb ?? null },
+    mounts: mounts.map((mount) => ({ volume: mount?.volume ?? null, path: mount?.path ?? mount?.destination ?? null, name: mount?.name ?? null })),
+  };
+}
+
+function safeVolume(volume) {
+  return {
+    id: volume?.id ?? null,
+    name: volume?.name ?? null,
+    region: volume?.region ?? null,
+    sizeGb: volume?.size_gb ?? volume?.sizeGb ?? volume?.size ?? null,
+    state: volume?.state ?? null,
+    attachedMachineId: volume?.attached_machine_id ?? volume?.attachedMachineId ?? null,
+    createdAt: volume?.created_at ?? volume?.createdAt ?? null,
+    snapshotRetention: volume?.snapshot_retention ?? volume?.snapshotRetention ?? null,
+  };
+}
+
+function safeSnapshot(snapshot) {
+  return {
+    id: snapshot?.id ?? null,
+    status: snapshot?.status ?? snapshot?.state ?? null,
+    storedSizeBytes: snapshot?.stored_size_bytes ?? snapshot?.storedSizeBytes ?? snapshot?.size ?? null,
+    volumeSizeGb: snapshot?.volume_size_gb ?? snapshot?.volumeSizeGb ?? snapshot?.volume_size ?? null,
+    createdAt: snapshot?.created_at ?? snapshot?.createdAt ?? null,
+    retentionDays: snapshot?.retention_days ?? snapshot?.retentionDays ?? null,
+  };
+}
+
+async function readVolumeSnapshots(appName, volumes) {
+  const output = [];
+  for (const volume of volumes) {
+    if (!volume.id) {
+      output.push({ volumeId: null, ok: false, error: 'Volume has no ID.' });
+      continue;
+    }
+    const read = await fly(['volumes', 'snapshots', 'list', String(volume.id), '--app', appName, '--json']);
+    if (!read.ok) {
+      output.push({ volumeId: volume.id, ok: false, error: read.stderr || 'Unable to list volume snapshots.' });
+      continue;
+    }
+    const parsed = parseJson(read.stdout, `Fly snapshots list for ${volume.id}`);
+    const rows = Array.isArray(parsed) ? parsed : (Array.isArray(parsed?.snapshots) ? parsed.snapshots : []);
+    output.push({ volumeId: volume.id, ok: true, snapshotCount: rows.length, snapshots: rows.map(safeSnapshot) });
+  }
+  return output;
+}
+
+const COMMON_FS = String.raw`
+const fs=require('fs'),path=require('path');
+const emit=(value)=>process.stdout.write('SPMT_INVENTORY_JSON='+Buffer.from(JSON.stringify(value),'utf8').toString('base64'));
+function file(p){try{const s=fs.statSync(p);return {present:s.isFile(),bytes:s.isFile()?s.size:null}}catch{return {present:false,bytes:null}}}
+function tree(root,limit=20000){let files=0,bytes=0,truncated=false;const stack=[root];while(stack.length){const cur=stack.pop();let entries;try{entries=fs.readdirSync(cur,{withFileTypes:true})}catch{continue}for(const e of entries){const full=path.join(cur,e.name);if(e.isDirectory())stack.push(full);else if(e.isFile()){files++;try{bytes+=fs.statSync(full).size}catch{}if(files>=limit){truncated=true;return {present:true,files,bytes,truncated}}}}}return {present:fs.existsSync(root),files,bytes,truncated}}
+function disk(root='/data'){try{const s=fs.statfsSync(root);return {present:true,totalBytes:Number(s.blocks)*Number(s.bsize),freeBytes:Number(s.bavail)*Number(s.bsize),usedBytes:(Number(s.blocks)-Number(s.bfree))*Number(s.bsize)}}catch{return {present:false}}}
+`;
+
+const HMO_MAIN_PROBE = COMMON_FS + String.raw`
+(async()=>{const out={disk:disk(),files:{appDb:file('/data/app.db'),appDbBackup:file('/data/app.db.bak'),watchState:file('/data/watch-state.json'),watchStateBackup:file('/data/watch-state.backup.json')},directories:{watchCache:tree('/data/watch-cache'),watchHls:tree('/data/watch-hls'),music:tree('/data/music')}};try{const init=(await import('sql.js')).default;const SQL=await init();if(out.files.appDb.present){const db=new SQL.Database(fs.readFileSync('/data/app.db'));let q=db.exec('PRAGMA quick_check;');out.sqlite={integrity:q?.[0]?.values?.[0]?.[0]??'unknown'};q=db.exec("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name");const tables=(q?.[0]?.values||[]).map(r=>String(r[0]));out.sqlite.tableCount=tables.length;out.sqlite.tables=tables.slice(0,100);out.sqlite.collectionRows={};if(tables.includes('docs')){let c=db.exec('SELECT COUNT(*) FROM docs');out.sqlite.collectionRows.docs=Number(c?.[0]?.values?.[0]?.[0]||0);c=db.exec('SELECT CASE WHEN instr(collection_path, '/')>0 THEN substr(collection_path,1,instr(collection_path,'/')-1) ELSE collection_path END AS collection,COUNT(*) FROM docs GROUP BY collection ORDER BY collection');out.sqlite.collections=(c?.[0]?.values||[]).map(r=>({collection:String(r[0]),rows:Number(r[1]||0)})).slice(0,200)}db.close()}}catch(e){out.sqlite={error:String(e?.message||e).slice(0,500)}}emit(out)})().catch(e=>{emit({error:String(e?.message||e).slice(0,500)});process.exitCode=1});
+`;
+
+const HMO_WORKER_PROBE = COMMON_FS + String.raw`
+(async()=>{
+ const crypto=require('crypto');
+ const sourceFiles={};
+ for(const name of ['server.js','discord-voice-bridge.js','discord-pcm-jitter.js']){
+  try{sourceFiles[name]=crypto.createHash('sha256').update(fs.readFileSync('/app/src/'+name)).digest('hex')}catch{sourceFiles[name]=null}
+ }
+ const out={disk:disk(),directories:{music:tree('/data/music'),watchHls:tree('/data/watch-hls'),watchCache:tree('/data/watch-cache')},files:{youtubeCookies:file('/data/youtube-cookies.txt')},sourceFiles};
+ const secret=String(process.env.HMO_WORKER_SHARED_SECRET||'').trim();
+ out.configuration={workerAuthorizationPresent:secret.length>=16,discordTokenPresent:Boolean(process.env.DISCORD_BOT_TOKEN),livekitUrlPresent:Boolean(process.env.NEXT_PUBLIC_LIVEKIT_URL||process.env.LIVEKIT_URL)};
+ if(secret.length>=16){
+  const headers={Authorization:'Bearer '+secret,Accept:'application/json'};
+  const response=await fetch('http://127.0.0.1:3002/voice-bridge',{headers,signal:AbortSignal.timeout(10000)});
+  const body=await response.json();
+  const rows=Array.isArray(body.instances)?body.instances:[];
+  out.bridges={status:response.status,count:rows.length,running:rows.filter(x=>x.running===true).length,outboundEnabled:rows.filter(x=>x.roomVoiceOutboundEnabled===true).length,gains:rows.map(x=>x.discordReceiveGain).filter(x=>typeof x==='number')};
+  // Missing roomId exits at validation; this probe cannot reach any bridge setter.
+  const gain=await fetch('http://127.0.0.1:3002/voice-bridge/receive-gain',{method:'POST',headers:{...headers,'Content-Type':'application/json'},body:'{}',signal:AbortSignal.timeout(10000)});
+  out.gainRouteValidationStatus=gain.status;
+ }
+ emit(out);
+})().catch(()=>{emit({error:'bounded worker inspection failed'});process.exitCode=1});
+`;
+
+
+function probeFor(kind) {
+  if (kind === 'hearmeout-main') return HMO_MAIN_PROBE;
+  if (kind === 'hmo-dj-worker') return HMO_WORKER_PROBE;
+  throw new Error('Unsupported inventory profile.');
+}
+
+async function readHealth(url) {
+  const response = await run('curl', ['-fsS', '--max-time', '15', url], { timeout: 20000 });
+  if (!response.ok) return { ok: false, error: response.stderr || 'health request failed' };
+  const text = response.stdout.trim();
+  let body;
+  try { body = JSON.parse(text); } catch { body = text.slice(0, 1000); }
+  return { ok: true, body: { status: body?.status ?? null, activeDJs: body?.activeDJs ?? null, uptime: body?.uptime ?? null } };
+}
+
+async function inventory(appName) {
+  const profile = INVENTORY_PROFILES[appName];
+  const machinesRead = await fly(['machines', 'list', '--app', appName, '--json']);
+  if (!machinesRead.ok) throw new Error(machinesRead.stderr || 'Unable to list Machines.');
+  const machinesRaw = parseJson(machinesRead.stdout, 'Fly Machines list');
+  const machines = Array.isArray(machinesRaw) ? machinesRaw : [];
+  const active = machines.find((m) => m?.state === 'started' && hasDataMount(m))
+    || machines.find((m) => m?.state === 'starting' && hasDataMount(m))
+    || machines.find((m) => m?.state === 'started')
+    || machines.find((m) => m?.state === 'starting');
+
+  const volumesRead = await fly(['volumes', 'list', '--app', appName, '--json']);
+  const volumesRaw = volumesRead.ok ? parseJson(volumesRead.stdout, 'Fly volumes list') : [];
+  const volumes = Array.isArray(volumesRaw) ? volumesRaw.map(safeVolume) : [];
+  const snapshotInventory = await readVolumeSnapshots(appName, volumes);
+  const snapshotInventoryComplete = snapshotInventory.every((item) => item.ok);
+
+  let data = { ok: false, error: 'No active Machine is available for the fixed read-only data probe.' };
+  if (active?.id) {
+    const encodedProbe = Buffer.from(probeFor(profile.kind), 'utf8').toString('base64');
+    const fixedCommand = `node -e "eval(Buffer.from('${encodedProbe}','base64').toString('utf8'))"`;
+    const probe = await fly(['ssh', 'console', '--app', appName, '--machine', active.id, '--command', fixedCommand, '--quiet'], { timeout: 120000 });
+    if (probe.ok) data = { ok: true, ...parseFixedProbe(`${probe.stdout}\n${probe.stderr}`) };
+    else data = { ok: false, error: probe.stderr || 'fixed data probe failed' };
+  }
+
+  const health = await readHealth(profile.healthUrl);
+  return {
+    ok: Boolean(active?.id) && data.ok && health.ok && snapshotInventoryComplete,
+    readOnly: true,
+    appName,
+    capturedAt: new Date().toISOString(),
+    machineCount: machines.length,
+    activeMachineId: active?.id ?? null,
+    machines: machines.map(safeMachine),
+    volumeCount: volumes.length,
+    volumes,
+    snapshotInventoryComplete,
+    snapshotInventory,
+    health,
+    data,
+  };
+}
+
+async function main() {
+  try {
+    const payload = decodePayload(process.argv[2]);
+    if (String(payload.command || '').toLowerCase() !== 'inventory') throw new Error('Unsupported inventory command.');
+    const appName = requireInventoryApp(payload.appName);
+    const result = await inventory(appName);
+    process.stdout.write(JSON.stringify(result, null, 2));
+    if (!result.ok) process.exitCode = 1;
+  } catch (error) {
+    process.stdout.write(JSON.stringify({ ok: false, readOnly: true, error: redact(error instanceof Error ? error.message : error) }, null, 2));
+    process.exitCode = 1;
+  }
+}
+
+void main();

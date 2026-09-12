@@ -1,0 +1,31 @@
+name: Apollo HearMeOut read-only inventory
+
+on:
+  push:
+    branches: [diagnostics/apollo-hmo-inventory-20260912]
+    paths:
+      - .github/workflows/apollo-hmo-inventory.yml
+      - scripts/apollo-hmo-inventory.mjs
+
+permissions:
+  contents: read
+
+jobs:
+  inventory:
+    if: github.actor == 'Mtman1987'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        app: [hearmeout-main, hmo-dj-worker]
+    env:
+      FLY_API_TOKEN: ${{ matrix.app == 'hmo-dj-worker' && (secrets.FLY_API_TOKEN_WORKER || secrets.FLY_API_TOKEN) || (secrets.FLY_API_TOKEN_MAIN || secrets.FLY_API_TOKEN) }}
+      INVENTORY_APP: ${{ matrix.app }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: superfly/flyctl-actions/setup-flyctl@v1
+      - name: Capture bounded runtime and storage evidence
+        run: |
+          payload="$(node -e "process.stdout.write(Buffer.from(JSON.stringify({command:'inventory',appName:process.env.INVENTORY_APP})).toString('base64'))")"
+          node scripts/apollo-hmo-inventory.mjs "$payload"
