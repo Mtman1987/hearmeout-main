@@ -39,7 +39,7 @@ const {
   NoSubscriberBehavior,
 } = require('@discordjs/voice');
 const prism = require('prism-media');
-const { DiscordPcmJitterSource, normalizeAudioProfile } = require('./discord-pcm-jitter');
+const { DiscordPcmJitterSource, normalizeAudioProfile, DEFAULT_DISCORD_INGRESS_GAIN } = require('./discord-pcm-jitter');
 
 const SAMPLE_RATE = 48000;
 const CHANNELS = 2;
@@ -134,7 +134,7 @@ function getDiscordClient(token) {
 
 // ── One bridge per HearMeOut room ─────────────────────────────────────────
 class VoiceBridge {
-  constructor({ roomId, guildId, voiceChannelId, token, appUrl, workerHeaders, livekitUrl, roomVoiceOutboundEnabled = false, audioProfile = 'balanced' }) {
+  constructor({ roomId, guildId, voiceChannelId, token, appUrl, workerHeaders, livekitUrl, roomVoiceOutboundEnabled = false, audioProfile = 'balanced', discordReceiveGain = DEFAULT_DISCORD_INGRESS_GAIN }) {
     this.roomId = roomId;
     this.guildId = guildId;
     this.voiceChannelId = voiceChannelId;
@@ -147,6 +147,7 @@ class VoiceBridge {
     // HearMeOut room microphones.
     this.roomVoiceOutboundEnabled = roomVoiceOutboundEnabled === true;
     this.audioProfile = normalizeAudioProfile(audioProfile);
+    this.discordReceiveGain = receiveGain(discordReceiveGain);
 
     this.startedAt = new Date();
     this.client = null;
@@ -255,6 +256,7 @@ class VoiceBridge {
       frameBytes: BYTES_PER_FRAME,
       channels: CHANNELS,
       profile: this.audioProfile,
+      outputGain: this.discordReceiveGain,
     }));
 
     opusStream.on('error', () => {});
@@ -407,6 +409,12 @@ class VoiceBridge {
     this.audioProfile = normalizeAudioProfile(profile);
     for (const source of this.discordMixSources.values()) source.setProfile(this.audioProfile);
     console.log(`[VoiceBridge:${this.roomId}] Discord playout profile set to ${this.audioProfile}`);
+    return this.status();
+  }
+
+  setDiscordReceiveGain(value) {
+    this.discordReceiveGain = receiveGain(value);
+    for (const source of this.discordMixSources.values()) source.setOutputGain(this.discordReceiveGain);
     return this.status();
   }
 
@@ -660,6 +668,7 @@ class VoiceBridge {
     }
 
     bridgesByChannel.set(this.voiceChannelId, this);
+
     console.log(`[VoiceBridge:${this.roomId}] Joined Discord voice channel ${this.voiceChannelId}`);
 
     await this.startOrRepairPlayback('post-discord-join');
@@ -759,6 +768,7 @@ class VoiceBridge {
       roomVoiceOutboundEnabled: this.roomVoiceOutboundEnabled,
       mode: this.roomVoiceOutboundEnabled ? 'two-way' : 'listen-only',
       audioProfile: this.audioProfile,
+      discordReceiveGain: this.discordReceiveGain,
       discordJitter: { ...discordJitter, captureErrors: this.discordCaptureErrors },
       noiseCancellation: {
         krispEnabled: false,
@@ -821,6 +831,7 @@ async function startVoiceBridge(opts) {
       if (typeof opts.roomVoiceOutboundEnabled === 'boolean') {
         existing.setRoomVoiceOutboundEnabled(opts.roomVoiceOutboundEnabled);
       }
+      if (opts.discordReceiveGain !== undefined) existing.setDiscordReceiveGain(opts.discordReceiveGain);
       return { success: true, message: 'Bridge already running', status: existing.status() };
     }
     await existing.stop();
@@ -888,6 +899,18 @@ function setVoiceBridgeAudioProfile(roomId, profile) {
   };
 }
 
+function receiveGain(value) {
+  if (typeof value !== 'number' || !Number.isFinite(value)) throw new Error('discordReceiveGain must be finite');
+  return Math.max(0.05, Math.min(1, value));
+}
+
+function setVoiceBridgeDiscordReceiveGain(roomId, value) {
+  const gain = receiveGain(value);
+  const bridge = bridges.get(roomId);
+  if (!bridge) return { success: true, status: { running: false, discordReceiveGain: gain } };
+  return { success: true, status: bridge.setDiscordReceiveGain(gain) };
+}
+
 function getVoiceBridgeStatus(roomId) {
   const bridge = bridges.get(roomId);
   if (!bridge) return { running: false };
@@ -903,6 +926,7 @@ module.exports = {
   stopVoiceBridge,
   setVoiceBridgeRoomOutbound,
   setVoiceBridgeAudioProfile,
+  setVoiceBridgeDiscordReceiveGain,
   getVoiceBridgeStatus,
   listVoiceBridges,
 };
