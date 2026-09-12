@@ -858,6 +858,13 @@ async function startVoiceBridge(opts) {
 }
 
 async function stopVoiceBridge(roomId) {
+  // A caller may time out while provider startup is still in flight. Wait for
+  // that attempt to settle before declaring the room stopped; otherwise it can
+  // register a running bridge after we have returned "No bridge running".
+  const starting = bridgeStartInFlight.get(roomId);
+  if (starting) {
+    try { await starting; } catch { /* Failed starts already clean up their bridge. */ }
+  }
   const bridge = bridges.get(roomId);
   if (!bridge) return { success: true, message: 'No bridge running' };
   await bridge.stop();
