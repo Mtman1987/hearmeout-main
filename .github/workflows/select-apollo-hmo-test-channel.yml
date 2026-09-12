@@ -1,0 +1,17 @@
+name: Inspect idle HearMeOut test channel
+on:
+  push:
+    branches: [diagnostics/hmo-cutover-transfer-20260912]
+    paths: [.github/workflows/select-apollo-hmo-test-channel.yml, scripts/select-apollo-hmo-test-channel.mjs]
+permissions:
+  contents: read
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    env:
+      FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN_WORKER || secrets.FLY_API_TOKEN }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: superfly/flyctl-actions/setup-flyctl@v1
+      - run: node scripts/select-apollo-hmo-test-channel.mjs
