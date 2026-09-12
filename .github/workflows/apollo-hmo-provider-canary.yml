@@ -1,0 +1,30 @@
+name: Apollo HearMeOut bounded provider canary
+
+on:
+  push:
+    branches: [diagnostics/apollo-hmo-canary-20260912]
+    paths:
+      - .github/workflows/apollo-hmo-provider-canary.yml
+      - scripts/apollo-hmo-provider-canary.mjs
+
+permissions:
+  contents: read
+
+concurrency:
+  group: apollo-hmo-provider-canary
+  cancel-in-progress: false
+
+jobs:
+  canary:
+    if: github.actor == 'Mtman1987'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN_WORKER || secrets.FLY_API_TOKEN }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: superfly/flyctl-actions/setup-flyctl@v1
+      - name: Run one idle-worker and empty-test-channel canary
+        run: |
+          payload="$(node -e "process.stdout.write(Buffer.from(JSON.stringify({command:'hmocanary'})).toString('base64'))")"
+          node scripts/apollo-hmo-provider-canary.mjs "$payload"
