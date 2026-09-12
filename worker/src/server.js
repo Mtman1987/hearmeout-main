@@ -37,6 +37,7 @@ const {
   stopVoiceBridge,
   setVoiceBridgeRoomOutbound,
   setVoiceBridgeAudioProfile,
+  setVoiceBridgeDiscordReceiveGain,
   getVoiceBridgeStatus,
   listVoiceBridges,
 } = require('./discord-voice-bridge');
@@ -2619,11 +2620,12 @@ async function resolveDiscordBotToken() {
 }
 
 app.post('/voice-bridge', authorizeWorker, async (req, res) => {
-  const { action, roomId, guildId, voiceChannelId, audioProfile } = req.body || {};
+  const { action, roomId, guildId, voiceChannelId, audioProfile, discordReceiveGain } = req.body || {};
   if (!roomId) return res.status(400).json({ success: false, message: 'Missing roomId' });
 
   try {
     if (action === 'start') {
+      if (discordReceiveGain !== undefined && (typeof discordReceiveGain !== 'number' || !Number.isFinite(discordReceiveGain))) return res.status(400).json({ success: false, message: 'discordReceiveGain must be finite' });
       if (!BRIDGE_LIVEKIT_URL) {
         return res.status(500).json({ success: false, message: 'LIVEKIT_URL/NEXT_PUBLIC_LIVEKIT_URL is not configured on the worker' });
       }
@@ -2640,6 +2642,7 @@ app.post('/voice-bridge', authorizeWorker, async (req, res) => {
         workerHeaders: WORKER_CALLBACK_HEADERS,
         livekitUrl: BRIDGE_LIVEKIT_URL,
         audioProfile,
+        discordReceiveGain,
       });
       return res.json(result);
     }
@@ -2674,6 +2677,14 @@ app.post('/voice-bridge/audio-profile', authorizeWorker, (req, res) => {
   const { roomId, audioProfile } = req.body || {};
   if (!roomId) return res.status(400).json({ success: false, message: 'Missing roomId' });
   return res.json(setVoiceBridgeAudioProfile(roomId, audioProfile));
+});
+
+app.post('/voice-bridge/receive-gain', authorizeWorker, (req, res) => {
+  const { roomId, discordReceiveGain } = req.body || {};
+  if (!roomId || typeof discordReceiveGain !== 'number' || !Number.isFinite(discordReceiveGain)) {
+    return res.status(400).json({ success: false, message: 'roomId and finite discordReceiveGain are required' });
+  }
+  return res.json(setVoiceBridgeDiscordReceiveGain(roomId, discordReceiveGain));
 });
 
 // ── Health ──────────────────────────────────────────────────────────────

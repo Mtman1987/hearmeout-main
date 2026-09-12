@@ -127,6 +127,12 @@ class DiscordPcmJitterSource {
     return this.snapshot();
   }
 
+  setOutputGain(value) {
+    if (typeof value !== 'number' || !Number.isFinite(value)) throw new Error('outputGain must be finite');
+    this.outputGain = clampNumber(value, DEFAULT_DISCORD_INGRESS_GAIN, 0.05, 1);
+    return this.snapshot();
+  }
+
   push(pcm, now = Date.now()) {
     if (!pcm || pcm.length === 0) return;
     const bytes = Buffer.isBuffer(pcm) ? pcm : Buffer.from(pcm);

@@ -75,3 +75,11 @@ flyctl deploy --config worker/fly.toml
 ```
 
 Make sure `FLY_API_TOKEN_WORKER` is set in GitHub Secrets for CI/CD deployment.
+
+### Discord receive gain
+
+`POST /voice-bridge` accepts optional numeric `discordReceiveGain` when starting a bridge. Existing callers retain 0.32. `POST /voice-bridge/receive-gain` accepts `{ "roomId": "...", "discordReceiveGain": 0.6 }` and uses the same worker authorization as the other voice routes. Values are clamped to 0.05–1.0; invalid nonnumeric values receive HTTP 400.
+
+The response reports the applied value in `status.discordReceiveGain`. Updates affect current jitter buffers and future speakers without restarting the Discord connection or applying gain twice. An inactive room reports `running: false`; its durable preference remains the calling app's responsibility and must be supplied again at startup.
+
+This endpoint is required by Apollo's cutover gain adapter. Deploy the worker change before switching an Apollo canary to it. Validate locally with `node --test tests/discord-voice-gain-contract.test.cjs tests/discord-voice-jitter-buffer.test.cjs tests/voice-bridge-privacy-gate.test.cjs` from the repository root. These tests exercise the actual route handlers, bridge registry and PCM gain with external connections stubbed; live Discord/LiveKit audio still needs the room canary.
