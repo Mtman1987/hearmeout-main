@@ -30,7 +30,10 @@ jobs:
           node --test tests/persona-runtime.test.cjs
           node --import tsx --test tests/livekit-persona-audio.test.ts
       - name: Test Discord receive gain, jitter and privacy contracts
-        run: node --test tests/discord-voice-gain-contract.test.cjs tests/discord-voice-jitter-buffer.test.cjs tests/voice-bridge-privacy-gate.test.cjs
+        run: |
+          node worker/scripts/patch-voice-bridge-audio-state.cjs
+          node --check worker/src/discord-voice-bridge.js
+          node --test tests/discord-voice-gain-contract.test.cjs tests/discord-voice-jitter-buffer.test.cjs tests/voice-bridge-privacy-gate.test.cjs
       - name: Test SPMT OAuth callback routing
         run: node --import tsx --test tests/spmt-auth-callback.test.ts
       - name: Test private Athena bootstrap routing

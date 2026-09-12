@@ -62,6 +62,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+      - name: Apply the worker Docker build audio-state patch
+        run: node worker/scripts/patch-voice-bridge-audio-state.cjs
       - name: Check worker JavaScript syntax
         run: |
           node --check worker/src/discord-pcm-jitter.js
