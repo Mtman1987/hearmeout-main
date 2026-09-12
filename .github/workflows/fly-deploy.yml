@@ -66,10 +66,11 @@ jobs:
         run: |
           node --check worker/src/discord-pcm-jitter.js
           node --check worker/src/discord-voice-bridge.js
+          node --check worker/src/server.js
           node --check worker/src/persona-runtime-adapter.js
           node --check worker/src/persona-bootstrap.js
       - name: Test Discord bridge and HearMeOut persona runtime
-        run: node --test tests/voice-bridge-privacy-gate.test.cjs tests/discord-voice-jitter-buffer.test.cjs tests/persona-runtime.test.cjs
+        run: node --test tests/voice-bridge-privacy-gate.test.cjs tests/discord-voice-jitter-buffer.test.cjs tests/discord-voice-gain-contract.test.cjs tests/persona-runtime.test.cjs
 
   deploy-main:
     needs: [branch-housekeeping, validate]
@@ -90,13 +91,15 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - uses: superfly/flyctl-actions/setup-flyctl@master
-      - name: Ensure hmo-dj-worker data volumes
+      - name: Verify existing hmo-dj-worker data volume
         run: |
           set -euo pipefail
-          flyctl scale count 1 -a hmo-dj-worker --yes
-          unattached="$(flyctl volumes list -a hmo-dj-worker --json | jq '[.[] | select(.name == "data" and .region == "iad" and ((.attached_machine_id // "") == ""))] | length')"
-          if [ "$unattached" -lt 1 ]; then
-            flyctl volume create data -a hmo-dj-worker -r iad -n 1 --size 10 --yes
+          # Ordinary code releases reuse the mounted disk and machine count.
+          # Provisioning or scaling is a separate operation, not a deploy prerequisite.
+          existing="$(flyctl volumes list -a hmo-dj-worker --json | jq '[.[] | select(.name == "data" and .region == "iad")] | length')"
+          if [ "$existing" -lt 1 ]; then
+            echo "No existing data volume in iad; restore/provision storage before deploying." >&2
+            exit 1
           fi
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN_WORKER || secrets.FLY_API_TOKEN }}
