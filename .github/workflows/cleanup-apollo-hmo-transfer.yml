@@ -1,0 +1,21 @@
+name: Remove completed encrypted HearMeOut transit logs
+on:
+  push:
+    branches: [diagnostics/hmo-cutover-transfer-20260912]
+    paths: [.github/workflows/cleanup-apollo-hmo-transfer.yml]
+permissions:
+  contents: read
+  actions: write
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Delete consumed encrypted capsule logs
+        run: |
+          node --input-type=module <<'JS'
+          const response=await fetch('https://api.github.com/repos/Mtman1987/hearmeout-main/actions/runs/34719785077/logs',{method:'DELETE',headers:{Authorization:'Bearer '+process.env.GH_TOKEN,Accept:'application/vnd.github+json'}});
+          if(response.status!==204)throw Error('Encrypted transit log removal failed ('+response.status+')');
+          console.log('Consumed encrypted transfer logs removed; run status retained');
+          JS
