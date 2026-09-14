@@ -23,6 +23,7 @@ try {
 }
 const wrtc = require('@roamhq/wrtc');
 const puppeteer = require('puppeteer');
+const { captureYoutubeBroadcast } = require('./youtube-broadcast-capture');
 
 Object.assign(globalThis, {
   RTCPeerConnection: wrtc.RTCPeerConnection,
@@ -1368,6 +1369,11 @@ function ensureYoutubeWatchHls(videoId, clientResolved = null) {
       return;
     }
 
+    if (clientResolved?.capture === true) {
+      await captureYoutubeBroadcast({ videoId, directory: dir, indexPath, chromiumPath: CHROMIUM_PATH, puppeteer, onEncoder: protectWatchHlsStorage });
+      return;
+    }
+
     const [videoInfo, audioInfo] = await Promise.all([
       extractVideoInfo(videoId),
       extractAudioInfo(videoId),
@@ -1629,6 +1635,16 @@ app.get('/watch/youtube/browser/:videoId', authorizeWorker, (req, res) => {
   }
   catch { res.status(400).json({ error: 'Invalid browser media request' }); }
 });
+app.post('/watch/youtube/browser/:videoId/prepare', authorizeWorker, async (req, res) => {
+  const videoId = String(req.params.videoId);
+  if (!isValidVideoId(videoId)) return res.status(400).json({ error: 'Invalid YouTube video' });
+  const streamId = youtubeWatchHlsId(videoId);
+  ensureYoutubeWatchHls(videoId, { capture: true }).catch(() => {});
+  const ready = await waitForWatchHlsIndex(streamId);
+  const failure = getRecentWatchHlsFailure(streamId);
+  if (failure) return res.status(502).json({ error: failure.message });
+  return res.status(ready ? 200 : 202).json({ hls: ready, preparing: !ready });
+});
 app.post('/watch/youtube/browser/:videoId/:track', authorizeWorker,
   express.raw({ type: 'application/octet-stream', limit: '200mb' }), (req, res) => {
     try {
@@ -1661,7 +1677,7 @@ app.get('/watch/youtube/hls/:videoId/:file', authorizeWorker, async (req, res) =
       const hasClientResolvedStreams = Boolean(sourceUrl && audioSourceUrl);
       const hasCachedAudio = Boolean(browserMediaCache.file(videoId, 'audio'));
       const hasCachedHls = hasUsableWatchHlsIndex(dir, join(dir, 'index.m3u8'));
-      if (req.headers['x-hmo-browser-media'] === '1' && !hasCachedAudio && !hasCachedHls) {
+      if (req.headers['x-hmo-browser-media'] === '1' && !hasCachedAudio && !hasCachedHls && !watchHlsJobs.has(cleanWatchStreamId(streamId))) {
         return res.status(409).json({ error: 'Browser media must be uploaded before playback' });
       }
       const priorFailure = (sourceUrl || hasClientResolvedStreams || hasCachedAudio || hasCachedHls)
