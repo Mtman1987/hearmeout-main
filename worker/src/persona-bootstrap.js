@@ -4,6 +4,7 @@ const { timingSafeEqual } = require('crypto');
 const { PersonaSession } = require('./persona-session');
 const { PersonaRuntimeAdapter, audioDataUriToPcm } = require('./persona-runtime-adapter');
 const { setVoiceBridgeRoomOutbound } = require('./discord-voice-bridge');
+const { listDiscordGuilds, listDiscordVoiceChannels, listDiscordVoiceDirectory } = require('./discord-directory');
 
 const sessions = new Map();
 
@@ -259,6 +260,21 @@ function installRoutes(app, express) {
         runtime: record.runtime.status(),
       })),
     });
+  });
+  app.get('/discord/directory', authorize, (_req, res) => {
+    listDiscordVoiceDirectory()
+      .then((guilds) => res.json({ success: true, guilds }))
+      .catch((error) => res.status(502).json({ success: false, error: error instanceof Error ? error.message : 'Discord voice directory failed' }));
+  });
+  app.get('/discord/guilds', authorize, (_req, res) => {
+    listDiscordGuilds()
+      .then((guilds) => res.json({ success: true, guilds }))
+      .catch((error) => res.status(502).json({ success: false, error: error instanceof Error ? error.message : 'Discord guild directory failed' }));
+  });
+  app.get('/discord/channels', authorize, (req, res) => {
+    listDiscordVoiceChannels(req.query?.guildId)
+      .then((channels) => res.json({ success: true, channels }))
+      .catch((error) => res.status(502).json({ success: false, error: error instanceof Error ? error.message : 'Discord channel directory failed' }));
   });
 
   // Voice-bridge privacy is intentionally separate from persona/bot joining.
