@@ -4,7 +4,7 @@ const { timingSafeEqual } = require('crypto');
 const { PersonaSession } = require('./persona-session');
 const { PersonaRuntimeAdapter, audioDataUriToPcm } = require('./persona-runtime-adapter');
 const { setVoiceBridgeRoomOutbound } = require('./discord-voice-bridge');
-const { listDiscordGuilds, listDiscordVoiceChannels } = require('./discord-directory');
+const { listDiscordGuilds, listDiscordVoiceChannels, listDiscordVoiceDirectory } = require('./discord-directory');
 
 const sessions = new Map();
 
@@ -260,6 +260,11 @@ function installRoutes(app, express) {
         runtime: record.runtime.status(),
       })),
     });
+  });
+  app.get('/discord/directory', authorize, (_req, res) => {
+    listDiscordVoiceDirectory()
+      .then((guilds) => res.json({ success: true, guilds }))
+      .catch((error) => res.status(502).json({ success: false, error: error instanceof Error ? error.message : 'Discord voice directory failed' }));
   });
   app.get('/discord/guilds', authorize, (_req, res) => {
     listDiscordGuilds()
