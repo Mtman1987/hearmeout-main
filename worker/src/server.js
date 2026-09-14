@@ -1621,7 +1621,12 @@ function runYoutubeAudioHlsFromFile(streamId, filePath, dir, indexPath) {
 }
 
 app.get('/watch/youtube/browser/:videoId', authorizeWorker, (req, res) => {
-  try { res.json(browserMediaCache.status(String(req.params.videoId))); }
+  try {
+    const videoId = String(req.params.videoId);
+    const cached = browserMediaCache.status(videoId);
+    const { dir, indexPath } = watchHlsPaths(youtubeWatchHlsId(videoId));
+    res.json({ ...cached, hls: hasUsableWatchHlsIndex(dir, indexPath) });
+  }
   catch { res.status(400).json({ error: 'Invalid browser media request' }); }
 });
 app.post('/watch/youtube/browser/:videoId/:track', authorizeWorker,
@@ -1655,10 +1660,11 @@ app.get('/watch/youtube/hls/:videoId/:file', authorizeWorker, async (req, res) =
       if (audioSourceUrl && !isAllowedYoutubeMediaUrl(audioSourceUrl)) return res.status(400).json({ error: 'Invalid audio source URL' });
       const hasClientResolvedStreams = Boolean(sourceUrl && audioSourceUrl);
       const hasCachedAudio = Boolean(browserMediaCache.file(videoId, 'audio'));
-      if (req.headers['x-hmo-browser-media'] === '1' && !hasCachedAudio) {
+      const hasCachedHls = hasUsableWatchHlsIndex(dir, join(dir, 'index.m3u8'));
+      if (req.headers['x-hmo-browser-media'] === '1' && !hasCachedAudio && !hasCachedHls) {
         return res.status(409).json({ error: 'Browser media must be uploaded before playback' });
       }
-      const priorFailure = (sourceUrl || hasClientResolvedStreams || hasCachedAudio)
+      const priorFailure = (sourceUrl || hasClientResolvedStreams || hasCachedAudio || hasCachedHls)
         ? null
         : getRecentWatchHlsFailure(streamId);
       if (priorFailure) return res.status(502).json({ error: priorFailure.message });
