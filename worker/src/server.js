@@ -1,4 +1,4 @@
-const { resolve, join, dirname } = require('path');
+const { resolve, join, dirname, basename } = require('path');
 const { tmpdir } = require('os');
 const rootDir = resolve(__dirname, '..', '..');
 
@@ -14,7 +14,7 @@ const cors = require('cors');
 const { execFile, spawn } = require('child_process');
 const { promisify } = require('util');
 const { timingSafeEqual } = require('crypto');
-const { existsSync, mkdirSync, unlinkSync, statSync, readdirSync, readFileSync, writeFileSync, createReadStream, mkdtempSync, rmSync, openSync, readSync, closeSync, utimesSync } = require('fs');
+const { existsSync, mkdirSync, unlinkSync, statSync, statfsSync, readdirSync, readFileSync, writeFileSync, createReadStream, mkdtempSync, rmSync, openSync, readSync, closeSync, utimesSync } = require('fs');
 let AudioSource, AudioFrame, LocalAudioTrack, Room, RoomEvent, TrackPublishOptions, TrackSource;
 try {
   ({ AudioSource, AudioFrame, LocalAudioTrack, Room, RoomEvent, TrackPublishOptions, TrackSource } = require('@livekit/rtc-node'));
@@ -1113,27 +1113,66 @@ function watchHlsPaths(streamId) {
   };
 }
 
-function hasUsableWatchHlsIndex(dir, indexPath) {
-  if (!existsSync(indexPath)) return false;
+function hasUsableWatchHlsIndex(dir, indexPath, depth = 0) {
+  // A VOD cache must retain segment zero. A rolling tail is not a reusable
+  // movie: accepting it skips the beginning and can make playout end early.
+  if (depth > 2 || !existsSync(indexPath)) return false;
   const indexStats = statSync(indexPath);
   if (!indexStats.isFile() || indexStats.size <= 0) return false;
-
   const manifest = readFileSync(indexPath, 'utf8');
-  if (manifest.includes('#EXT-X-PLAYLIST-TYPE:EVENT')) {
-    try { unlinkSync(indexPath); } catch {}
-    return false;
-  }
+  if (!manifest.startsWith('#EXTM3U')) return false;
+  const live = /(?:^|[/\\])live-/.test(dir);
+  if (!live && Number(manifest.match(/#EXT-X-MEDIA-SEQUENCE:(\d+)/)?.[1] || 0) > 0) return false;
+  if (!live && manifest.includes('#EXTINF:') && !manifest.includes('#EXT-X-ENDLIST') && !watchHlsJobs.has(basename(dir))) return false;
+  const references = manifest.split(/\r?\n/).flatMap(line => {
+    const value = line.trim();
+    if (value && !value.startsWith('#')) return [value];
+    const audio = value.match(/^#EXT-X-MEDIA:.*URI="([^"]+)"/);
+    return audio ? [audio[1]] : [];
+  });
+  if (!references.length) return false;
+  // Masters must have ready variants; media playlists need a complete first
+  // segment. EVENT playlists are deliberately usable before preparation ends.
+  return references.filter((value, index) => value.endsWith('.m3u8') || index === 0).every(value => {
+    const path = join(dir, cleanHlsFileName(value));
+    if (value.endsWith('.m3u8')) return hasUsableWatchHlsIndex(dir, path, depth + 1);
+    return existsSync(path) && statSync(path).isFile() && statSync(path).size > 0;
+  });
+}
 
-  const firstSegment = manifest
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .find((line) => line && !line.startsWith('#'));
-  if (!firstSegment) return false;
+function watchHlsOutputArgs(streamId) {
+  // This is the source cache, not the broadcast's bounded live output.
+  // Keep finite movies/songs from the beginning so independent playout can
+  // seek to its durable clock without depending on any viewing window.
+  if (!String(streamId).startsWith('live-')) return [
+    '-hls_list_size', '0', '-hls_playlist_type', 'event',
+    '-hls_flags', 'independent_segments+temp_file',
+  ];
+  return [
+    '-hls_list_size', String(WATCH_HLS_LIST_SIZE),
+    ...(WATCH_HLS_LIST_SIZE > 0 ? ['-hls_delete_threshold', String(WATCH_HLS_DELETE_THRESHOLD)] : []),
+    '-hls_flags', WATCH_HLS_LIST_SIZE > 0 ? 'delete_segments+independent_segments+temp_file' : 'independent_segments+temp_file',
+  ];
+}
 
-  const segmentPath = join(dir, cleanHlsFileName(firstSegment));
-  if (!existsSync(segmentPath)) return false;
-  const segmentStats = statSync(segmentPath);
-  return segmentStats.isFile() && segmentStats.size > 0;
+function protectWatchHlsStorage(child, dir) {
+  // Full VOD sources need more space than rolling live output. Stop the
+  // preparation with an explicit error before it exhausts the worker volume.
+  let failure = '';
+  const timer = setInterval(() => {
+    try {
+      const stats = statfsSync(dir);
+      if (stats.bavail * stats.bsize < 512 * 1024 * 1024) {
+        failure = 'Movie preparation needs more free worker cache space';
+        child.kill('SIGTERM');
+        clearInterval(timer);
+      }
+    } catch { /* Job teardown may already have removed its directory. */ }
+  }, 1000);
+  timer.unref();
+  child.once('exit', () => clearInterval(timer));
+  child.once('error', () => clearInterval(timer));
+  return () => failure;
 }
 
 function pinManifestSegmentsToMachine(manifest) {
@@ -1181,6 +1220,7 @@ function pruneWatchHlsRoot(targetBytes = WATCH_HLS_BUDGET_BYTES) {
   const removed = [];
   for (const hlsDir of dirs.sort((left, right) => left.mtimeMs - right.mtimeMs)) {
     if (total <= targetBytes) break;
+    if (Date.now() - hlsDir.mtimeMs < 120000) continue;
     try {
       rmSync(hlsDir.dir, { recursive: true, force: true });
       total -= hlsDir.size;
@@ -1222,7 +1262,7 @@ function watchHlsCacheSnapshot() {
     bytes: entries.reduce((sum, entry) => sum + entry.bytes, 0),
     budgetBytes: WATCH_HLS_BUDGET_BYTES,
     segmentSeconds: WATCH_HLS_SEGMENT_SECONDS,
-    playlistWindow: WATCH_HLS_LIST_SIZE === 0 ? 'full' : `${WATCH_HLS_LIST_SIZE} segments`,
+    playlistWindow: 'full for movies and songs; rolling for live channels',
     jobs: Array.from(watchHlsJobMeta.values()),
     failures: Array.from(watchHlsFailures.entries()).map(([streamId, failure]) => ({ streamId, ...failure })),
     entries,
@@ -1439,7 +1479,7 @@ async function runWatchHlsFfmpeg(streamId, sourceUrl, dir, indexPath) {
       '-user_agent', 'DiscordStreamHub/1.0',
       '-reconnect', '1',
       '-reconnect_streamed', '1',
-      '-reconnect_at_eof', '1',
+      ...(String(streamId).startsWith('live-') ? ['-reconnect_at_eof', '1'] : []),
       '-reconnect_delay_max', '5',
       '-i', sourceUrl,
       ...mapArgs,
@@ -1448,9 +1488,7 @@ async function runWatchHlsFfmpeg(streamId, sourceUrl, dir, indexPath) {
       '-ac', '2',
       '-f', 'hls',
       '-hls_time', String(WATCH_HLS_SEGMENT_SECONDS),
-      '-hls_list_size', String(WATCH_HLS_LIST_SIZE),
-      ...(WATCH_HLS_LIST_SIZE > 0 ? ['-hls_delete_threshold', String(WATCH_HLS_DELETE_THRESHOLD)] : []),
-      '-hls_flags', WATCH_HLS_LIST_SIZE > 0 ? 'delete_segments+independent_segments' : 'independent_segments',
+      ...watchHlsOutputArgs(streamId),
       ...(streamMap ? ['-var_stream_map', streamMap, '-master_pl_name', 'index.m3u8'] : []),
       '-hls_segment_filename', segmentPattern,
       streamMap ? join(dir, 'stream_%v.m3u8') : indexPath,
@@ -1459,6 +1497,7 @@ async function runWatchHlsFfmpeg(streamId, sourceUrl, dir, indexPath) {
     const command = process.platform === 'win32' ? 'ffmpeg' : 'nice';
     const args = process.platform === 'win32' ? ffmpegArgs : ['-n', '10', 'ffmpeg', ...ffmpegArgs];
     const child = spawn(command, args, { stdio: ['ignore', 'ignore', 'pipe'] });
+    const storageFailure = protectWatchHlsStorage(child, dir);
     let stderr = '';
 
     child.stderr?.on('data', (chunk) => {
@@ -1466,6 +1505,7 @@ async function runWatchHlsFfmpeg(streamId, sourceUrl, dir, indexPath) {
     });
     child.once('error', reject);
     child.once('exit', (code) => {
+      if (storageFailure()) { reject(new Error(storageFailure())); return; }
       if (code === 0) {
         resolve();
         return;
@@ -1509,9 +1549,7 @@ function runYoutubeHlsFfmpeg(streamId, videoUrl, audioUrl, dir, indexPath) {
       '-shortest',
       '-f', 'hls',
       '-hls_time', String(WATCH_HLS_SEGMENT_SECONDS),
-      '-hls_list_size', String(WATCH_HLS_LIST_SIZE),
-      ...(WATCH_HLS_LIST_SIZE > 0 ? ['-hls_delete_threshold', String(WATCH_HLS_DELETE_THRESHOLD)] : []),
-      '-hls_flags', WATCH_HLS_LIST_SIZE > 0 ? 'delete_segments+independent_segments' : 'independent_segments',
+      ...watchHlsOutputArgs(streamId),
       '-hls_segment_filename', segmentPattern,
       indexPath,
     ];
@@ -1519,6 +1557,7 @@ function runYoutubeHlsFfmpeg(streamId, videoUrl, audioUrl, dir, indexPath) {
     const command = process.platform === 'win32' ? 'ffmpeg' : 'nice';
     const args = process.platform === 'win32' ? ffmpegArgs : ['-n', '10', 'ffmpeg', ...ffmpegArgs];
     const child = spawn(command, args, { stdio: ['ignore', 'ignore', 'pipe'] });
+    const storageFailure = protectWatchHlsStorage(child, dir);
     let stderr = '';
 
     child.stderr?.on('data', (chunk) => {
@@ -1526,6 +1565,7 @@ function runYoutubeHlsFfmpeg(streamId, videoUrl, audioUrl, dir, indexPath) {
     });
     child.once('error', reject);
     child.once('exit', (code) => {
+      if (storageFailure()) { reject(new Error(storageFailure())); return; }
       if (code === 0) {
         resolve();
         return;
@@ -1554,9 +1594,7 @@ function runYoutubeAudioHlsFromFile(streamId, filePath, dir, indexPath) {
       '-ac', '2',
       '-f', 'hls',
       '-hls_time', String(WATCH_HLS_SEGMENT_SECONDS),
-      '-hls_list_size', String(WATCH_HLS_LIST_SIZE),
-      ...(WATCH_HLS_LIST_SIZE > 0 ? ['-hls_delete_threshold', String(WATCH_HLS_DELETE_THRESHOLD)] : []),
-      '-hls_flags', WATCH_HLS_LIST_SIZE > 0 ? 'delete_segments+independent_segments' : 'independent_segments',
+      ...watchHlsOutputArgs(streamId),
       '-hls_segment_filename', segmentPattern,
       indexPath,
     ];
@@ -1564,6 +1602,7 @@ function runYoutubeAudioHlsFromFile(streamId, filePath, dir, indexPath) {
     const command = process.platform === 'win32' ? 'ffmpeg' : 'nice';
     const args = process.platform === 'win32' ? ffmpegArgs : ['-n', '10', 'ffmpeg', ...ffmpegArgs];
     const child = spawn(command, args, { stdio: ['ignore', 'ignore', 'pipe'] });
+    const storageFailure = protectWatchHlsStorage(child, dir);
     let stderr = '';
 
     child.stderr?.on('data', (chunk) => {
@@ -1571,6 +1610,7 @@ function runYoutubeAudioHlsFromFile(streamId, filePath, dir, indexPath) {
     });
     child.once('error', reject);
     child.once('exit', (code) => {
+      if (storageFailure()) { reject(new Error(storageFailure())); return; }
       if (code === 0) {
         resolve();
         return;
