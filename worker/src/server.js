@@ -1292,6 +1292,8 @@ function ensureWatchHls(streamId, sourceUrl) {
   return promise;
 }
 
+const browserMediaCache = require('./browser-media-cache').createBrowserMediaCache(CACHE_DIR, cachedAudioFilePath);
+
 function ensureYoutubeWatchHls(videoId, clientResolved = null) {
   if (!isValidVideoId(videoId)) return Promise.reject(new Error('Invalid YouTube video id'));
   const streamId = youtubeWatchHlsId(videoId);
@@ -1308,7 +1310,12 @@ function ensureYoutubeWatchHls(videoId, clientResolved = null) {
   try { if (existsSync(indexPath)) unlinkSync(indexPath); } catch {}
 
   const promise = (async () => {
-    const cachedAudio = cachedAudioFilePath(videoId);
+    const cachedAudio = browserMediaCache.file(videoId, 'audio');
+    const cachedVideo = browserMediaCache.file(videoId, 'video');
+    if (cachedAudio && cachedVideo) {
+      await runYoutubeHlsFfmpeg(clean, cachedVideo, cachedAudio, dir, indexPath);
+      return;
+    }
     if (cachedAudio) {
       console.log(`[WatchHLS] Using cached audio file for ${clean}`);
       await runYoutubeAudioHlsFromFile(clean, cachedAudio, dir, indexPath);
@@ -1472,7 +1479,7 @@ function runYoutubeHlsFfmpeg(streamId, videoUrl, audioUrl, dir, indexPath) {
   const segmentPattern = join(dir, 'seg_%05d.ts');
   const youtubeHeaders = 'Referer: https://www.youtube.com/\r\nOrigin: https://www.youtube.com\r\n';
   const userAgent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
-  const inputArgs = (url) => [
+  const inputArgs = (url) => !/^https?:/.test(url) ? ['-i', url] : [
     '-user_agent', userAgent,
     '-headers', youtubeHeaders,
     '-reconnect', '1',
@@ -1573,6 +1580,20 @@ function runYoutubeAudioHlsFromFile(streamId, filePath, dir, indexPath) {
   });
 }
 
+app.get('/watch/youtube/browser/:videoId', authorizeWorker, (req, res) => {
+  try { res.json(browserMediaCache.status(String(req.params.videoId))); }
+  catch { res.status(400).json({ error: 'Invalid browser media request' }); }
+});
+app.post('/watch/youtube/browser/:videoId/:track', authorizeWorker,
+  express.raw({ type: 'application/octet-stream', limit: '200mb' }), (req, res) => {
+    try {
+      const videoId = String(req.params.videoId);
+      const bytes = browserMediaCache.write(videoId, String(req.params.track), req.body);
+      watchHlsFailures.delete(cleanWatchStreamId(youtubeWatchHlsId(videoId)));
+      res.json({ ok: true, bytes });
+    } catch { res.status(400).json({ error: 'Could not store browser media' }); }
+  });
+
 app.get('/watch/youtube/hls/:videoId/:file', authorizeWorker, async (req, res) => {
   try {
     const videoId = String(req.params.videoId || '');
@@ -1593,7 +1614,10 @@ app.get('/watch/youtube/hls/:videoId/:file', authorizeWorker, async (req, res) =
       if (sourceUrl && !isAllowedYoutubeMediaUrl(sourceUrl)) return res.status(400).json({ error: 'Invalid source URL' });
       if (audioSourceUrl && !isAllowedYoutubeMediaUrl(audioSourceUrl)) return res.status(400).json({ error: 'Invalid audio source URL' });
       const hasClientResolvedStreams = Boolean(sourceUrl && audioSourceUrl);
-      const hasCachedAudio = Boolean(cachedAudioFilePath(videoId));
+      const hasCachedAudio = Boolean(browserMediaCache.file(videoId, 'audio'));
+      if (req.headers['x-hmo-browser-media'] === '1' && !hasCachedAudio) {
+        return res.status(409).json({ error: 'Browser media must be uploaded before playback' });
+      }
       const priorFailure = (sourceUrl || hasClientResolvedStreams || hasCachedAudio)
         ? null
         : getRecentWatchHlsFailure(streamId);

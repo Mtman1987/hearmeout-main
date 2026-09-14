@@ -29,6 +29,8 @@ const PUBLIC_PREFIXES = [
   // This route performs its own service-auth check; SPMT user middleware must
   // not consume its machine credential first.
   '/api/internal/bot/actions',
+  // Authenticated with the existing DJ worker credential inside the route.
+  '/api/internal/watch/search',
   '/overlay',
   '/embed',
   '/room-overlay',
