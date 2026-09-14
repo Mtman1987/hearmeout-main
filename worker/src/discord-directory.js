@@ -3,6 +3,7 @@
 const API = 'https://discord.com/api/v10';
 const REQUEST_TIMEOUT_MS = 10_000;
 const MAX_RETRY_MS = 5_000;
+const MAX_GUILDS = 100;
 
 function token() {
   const value = String(process.env.DISCORD_BOT_TOKEN || '').trim();
@@ -41,6 +42,7 @@ async function listDiscordGuilds() {
   const values = await request('/users/@me/guilds');
   return (Array.isArray(values) ? values : [])
     .filter(value => /^\d{5,30}$/.test(String(value?.id || '')) && typeof value?.name === 'string')
+    .slice(0, MAX_GUILDS)
     .map(value => ({
       id: String(value.id),
       name: String(value.name).slice(0, 120),
@@ -64,4 +66,16 @@ async function listDiscordVoiceChannels(guildIdValue) {
     .sort((a, b) => a.position - b.position || a.name.localeCompare(b.name));
 }
 
-module.exports = { listDiscordGuilds, listDiscordVoiceChannels };
+async function listDiscordVoiceDirectory() {
+  const guilds = await listDiscordGuilds();
+  const result = [];
+  // Keep this sequential. Discord rate limits guild-channel reads by route and
+  // the bridge picker does not need a burst of parallel API requests.
+  for (const guild of guilds) {
+    const channels = await listDiscordVoiceChannels(guild.id);
+    result.push({ ...guild, channels });
+  }
+  return result;
+}
+
+module.exports = { listDiscordGuilds, listDiscordVoiceChannels, listDiscordVoiceDirectory };
