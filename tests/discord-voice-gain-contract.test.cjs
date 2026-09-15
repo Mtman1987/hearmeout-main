@@ -13,6 +13,7 @@ function loadBridge() {
     require(name) {
       if (name === 'stream') return require('node:stream');
       if (name === './discord-pcm-jitter') return jitter;
+      if (name === './discord-speaker-presence') return require('../worker/src/discord-speaker-presence');
       return {};
     },
   };

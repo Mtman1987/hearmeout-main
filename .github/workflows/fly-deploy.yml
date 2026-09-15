@@ -72,7 +72,7 @@ jobs:
           node --check worker/src/persona-runtime-adapter.js
           node --check worker/src/persona-bootstrap.js
       - name: Test Discord bridge and HearMeOut persona runtime
-        run: node --test tests/voice-bridge-privacy-gate.test.cjs tests/discord-voice-jitter-buffer.test.cjs tests/discord-voice-gain-contract.test.cjs tests/persona-runtime.test.cjs
+        run: node --test tests/discord-speaker-presence.test.cjs tests/voice-bridge-privacy-gate.test.cjs tests/discord-voice-jitter-buffer.test.cjs tests/discord-voice-gain-contract.test.cjs tests/persona-runtime.test.cjs
 
   deploy-main:
     needs: [branch-housekeeping, validate]

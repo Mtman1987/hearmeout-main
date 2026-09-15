@@ -1,3 +1,4 @@
+const { DiscordSpeakerPresence } = require('./discord-speaker-presence');
 // ══════════════════════════════════════════════════════════════════════════
 // Discord <-> HearMeOut voice bridge
 // ──────────────────────────────────────────────────────────────────────────
@@ -182,6 +183,10 @@ class VoiceBridge {
     this.publishReconnectTimer = null;
     this.publishReconnectAttempts = 0;
 
+    this.speakerPresence = new DiscordSpeakerPresence({
+      resolveMember: userId => this.resolveMember(userId),
+      publish: metadata => this.publishRoom?.localParticipant?.setMetadata(JSON.stringify(metadata)),
+    });
     this.stopped = false;
   }
 
@@ -220,6 +225,7 @@ class VoiceBridge {
       const member = await this.guild.members.fetch(userId);
       return {
         displayName: member.displayName || member.user.username || fallback.displayName,
+        username: member.user.username || member.displayName || fallback.displayName,
         photoURL: member.user.displayAvatarURL({ extension: 'png', size: 128 }),
       };
     } catch {
@@ -239,6 +245,7 @@ class VoiceBridge {
   handleMemberJoined(userId) {
     if (this.stopped || userId === this.client?.user?.id) return;
     if (this.userDecoders.has(userId)) return;
+    this.speakerPresence.join(userId);
 
     const opusStream = this.connection.receiver.subscribe(userId, {
       // Keep one decoder alive for the member's whole VC stay. Recreating the
@@ -275,6 +282,7 @@ class VoiceBridge {
   }
 
   handleMemberLeft(userId) {
+    this.speakerPresence.leave(userId);
     const state = this.userDecoders.get(userId);
     if (!state) return;
     state.stopped = true;
@@ -692,7 +700,8 @@ class VoiceBridge {
     });
 
     // Wire up Discord speaker subscriptions
-    this.connection.receiver.speaking.on('start', (userId) => this.handleMemberJoined(userId));
+    this.connection.receiver.speaking.on('start', (userId) => { this.handleMemberJoined(userId); this.speakerPresence.speaking(userId, true); });
+    this.connection.receiver.speaking.on('end', (userId) => this.speakerPresence.speaking(userId, false));
     for (const userId of this.currentMemberIds()) this.handleMemberJoined(userId);
 
     // Start mix timers
@@ -724,6 +733,7 @@ class VoiceBridge {
       new TrackPublishOptions({ source: TrackSource.MICROPHONE }),
     );
     this.publishReconnectAttempts = 0;
+    this.speakerPresence.changed();
     console.log(`[VoiceBridge:${this.roomId}] Publisher room connected — discord-mixed-${this.roomId}`);
   }
 
@@ -764,6 +774,7 @@ class VoiceBridge {
       voiceChannelId: this.voiceChannelId,
       startedAt: this.startedAt,
       discordSpeakers: this.userDecoders.size,
+      discordPresence: this.speakerPresence.snapshot(),
       appSources: this.mixSources.size,
       roomVoiceOutboundEnabled: this.roomVoiceOutboundEnabled,
       mode: this.roomVoiceOutboundEnabled ? 'two-way' : 'listen-only',
@@ -780,6 +791,7 @@ class VoiceBridge {
 
   async stop() {
     this.stopped = true;
+    this.speakerPresence.close();
     if (this.appMixTimer) { clearInterval(this.appMixTimer); this.appMixTimer = null; }
     if (this.publishReconnectTimer) { clearTimeout(this.publishReconnectTimer); this.publishReconnectTimer = null; }
     bridgesByChannel.delete(this.voiceChannelId);

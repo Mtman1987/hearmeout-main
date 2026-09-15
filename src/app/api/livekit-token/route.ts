@@ -129,7 +129,7 @@ export async function POST(request: NextRequest) {
         metadata: typeof bridgeMetadata === 'string' ? bridgeMetadata.slice(0, 2048) : undefined,
         ttl: '6h',
       });
-      at.addGrant({ roomJoin: true, room: roomId, canPublish: true, canSubscribe: true });
+      at.addGrant({ roomJoin: true, room: roomId, canPublish: true, canSubscribe: true, canUpdateOwnMetadata: true });
       const bridgeToken = await at.toJwt();
       return NextResponse.json({ token: bridgeToken });
     }
