@@ -151,8 +151,12 @@ export default function OverlayPage() {
   const requestedLane = (searchParams.get('media') || searchParams.get('lane') || 'auto').toLowerCase();
   const lane: MediaLane = requestedLane === 'music' || requestedLane === 'movie' ? requestedLane : 'auto';
   const cleanMode = ['1', 'true', 'yes', 'on'].includes(String(searchParams.get('clean') || '').toLowerCase());
-  const requestedVolume = Number(searchParams.get('volume'));
-  const initialVolume = Number.isFinite(requestedVolume) ? Math.max(0, Math.min(1, requestedVolume)) : 0.5;
+  const volumeParam = searchParams.get('volume');
+  const requestedVolume = Number(volumeParam);
+  const hasRequestedVolume = volumeParam !== null && Number.isFinite(requestedVolume);
+  const initialVolume = hasRequestedVolume ? Math.max(0, Math.min(1, requestedVolume)) : 0.5;
+  const mutedParam = searchParams.get('muted');
+  const requestedMuted = mutedParam === null ? null : ['1', 'true', 'yes', 'on'].includes(mutedParam.toLowerCase());
   const { popouts, openPopout, closePopout } = usePopout();
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -163,13 +167,13 @@ export default function OverlayPage() {
   const embeddedCurrentTimeRef = useRef(0);
   const lastEmbeddedPlaybackKeyRef = useRef('');
   const volumeRef = useRef(initialVolume);
-  const mutedRef = useRef(false);
+  const mutedRef = useRef(requestedMuted ?? false);
 
   const [movieState, setMovieState] = useState<WatchState | null>(null);
   const [musicState, setMusicState] = useState<WatchState | null>(null);
   const [connected, setConnected] = useState(false);
   const [volume, setVolume] = useState(initialVolume);
-  const [isMuted, setIsMuted] = useState(false);
+  const [isMuted, setIsMuted] = useState(requestedMuted ?? false);
   const [audioReady, setAudioReady] = useState(false);
   const [mediaStatus, setMediaStatus] = useState('Waiting for media');
   const [audioTracks, setAudioTracks] = useState<Array<{ index: number; name: string; language: string }>>([]);
@@ -190,14 +194,17 @@ export default function OverlayPage() {
   useEffect(() => {
     try {
       const saved = JSON.parse(window.localStorage.getItem(`hearmeout-overlay-view:v1:${roomId}`) || '{}') as Partial<OverlayViewState>;
-      if (typeof saved.volume === 'number') {
+      if (!hasRequestedVolume && typeof saved.volume === 'number') {
         const nextVolume = Math.max(0, Math.min(1, saved.volume));
         volumeRef.current = nextVolume;
         setVolume(nextVolume);
       }
-      if (typeof saved.muted === 'boolean') {
+      if (requestedMuted === null && typeof saved.muted === 'boolean') {
         mutedRef.current = saved.muted;
         setIsMuted(saved.muted);
+      } else if (requestedMuted !== null) {
+        mutedRef.current = requestedMuted;
+        setIsMuted(requestedMuted);
       }
       if (saved.musicPlaybackMode === 'audio' || saved.musicPlaybackMode === 'video') setMusicPlaybackMode(saved.musicPlaybackMode);
       if (typeof saved.showNowPlaying === 'boolean') setShowNowPlaying(saved.showNowPlaying);
@@ -205,7 +212,7 @@ export default function OverlayPage() {
       if (typeof saved.showProfiles === 'boolean') setShowProfiles(saved.showProfiles);
     } catch {}
     setViewStateHydrated(true);
-  }, [roomId]);
+  }, [hasRequestedVolume, requestedMuted, roomId]);
 
   useEffect(() => {
     if (!viewStateHydrated) return;
