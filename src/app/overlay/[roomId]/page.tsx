@@ -185,6 +185,21 @@ export default function OverlayPage() {
   const [viewStateHydrated, setViewStateHydrated] = useState(false);
   const { data: roomProfiles } = useCollection<OverlayProfile>(`rooms/${roomId}/users`, { pollInterval: 3000 });
 
+  useEffect(() => {
+    if (roomId !== 'system-spacemountainlive-lounge') return;
+    let cancelled = false;
+    const ensure = async () => {
+      if (cancelled) return;
+      await fetch('/api/system/spacemountainlive-lounge/ensure', { cache: 'no-store' }).catch(() => null);
+    };
+    void ensure();
+    const timer = window.setInterval(() => void ensure(), 30_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [roomId]);
+
   const activeProfiles = useMemo(() => (roomProfiles || []).filter((profile) => {
     if (profile.bot) return true;
     const lastSeen = Number(profile.lastSeen || 0);
