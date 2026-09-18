@@ -585,7 +585,7 @@ export default function OverlayPage() {
         )}
         <video
           ref={videoRef}
-          className={`h-full w-full bg-black object-contain ${embeddedMode ? 'hidden' : ''}`}
+          className={`h-full w-full object-contain ${cleanMode && !currentPlaybackUrl ? 'bg-transparent opacity-0' : 'bg-black'} ${embeddedMode ? 'hidden' : ''}`}
           muted={isMuted}
           playsInline
           onCanPlay={() => {
