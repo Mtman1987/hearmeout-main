@@ -106,6 +106,13 @@
   }
 }
 
+html.overlay-document,
+body.overlay-document {
+  background: transparent !important;
+  background-color: transparent !important;
+  background-image: none !important;
+}
+
 /* Custom slim scrollbars */
 * {
   scrollbar-width: thin;

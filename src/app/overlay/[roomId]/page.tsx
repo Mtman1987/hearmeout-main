@@ -159,6 +159,17 @@ export default function OverlayPage() {
   const requestedMuted = mutedParam === null ? null : ['1', 'true', 'yes', 'on'].includes(mutedParam.toLowerCase());
   const { popouts, openPopout, closePopout } = usePopout();
 
+  useEffect(() => {
+    // The shared HearMeOut shell paints bg-background on html/body. Browser
+    // sources must clear that shell paint or clean-mode cannot be transparent.
+    document.documentElement.classList.add('overlay-document');
+    document.body.classList.add('overlay-document');
+    return () => {
+      document.documentElement.classList.remove('overlay-document');
+      document.body.classList.remove('overlay-document');
+    };
+  }, []);
+
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
   const hlsRef = useRef<any>(null);
