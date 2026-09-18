@@ -150,6 +150,13 @@ export default function OverlayPage() {
   const musicSessionId = getRoomWatchSessionId(roomId, 'music');
   const requestedLane = (searchParams.get('media') || searchParams.get('lane') || 'auto').toLowerCase();
   const lane: MediaLane = requestedLane === 'music' || requestedLane === 'movie' ? requestedLane : 'auto';
+  const cleanMode = ['1', 'true', 'yes', 'on'].includes(String(searchParams.get('clean') || '').toLowerCase());
+  const volumeParam = searchParams.get('volume');
+  const requestedVolume = Number(volumeParam);
+  const hasRequestedVolume = volumeParam !== null && Number.isFinite(requestedVolume);
+  const initialVolume = hasRequestedVolume ? Math.max(0, Math.min(1, requestedVolume)) : 0.5;
+  const mutedParam = searchParams.get('muted');
+  const requestedMuted = mutedParam === null ? null : ['1', 'true', 'yes', 'on'].includes(mutedParam.toLowerCase());
   const { popouts, openPopout, closePopout } = usePopout();
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -159,14 +166,14 @@ export default function OverlayPage() {
   const applyingRemoteState = useRef(false);
   const embeddedCurrentTimeRef = useRef(0);
   const lastEmbeddedPlaybackKeyRef = useRef('');
-  const volumeRef = useRef(0.5);
-  const mutedRef = useRef(false);
+  const volumeRef = useRef(initialVolume);
+  const mutedRef = useRef(requestedMuted ?? false);
 
   const [movieState, setMovieState] = useState<WatchState | null>(null);
   const [musicState, setMusicState] = useState<WatchState | null>(null);
   const [connected, setConnected] = useState(false);
-  const [volume, setVolume] = useState(0.5);
-  const [isMuted, setIsMuted] = useState(false);
+  const [volume, setVolume] = useState(initialVolume);
+  const [isMuted, setIsMuted] = useState(requestedMuted ?? false);
   const [audioReady, setAudioReady] = useState(false);
   const [mediaStatus, setMediaStatus] = useState('Waiting for media');
   const [audioTracks, setAudioTracks] = useState<Array<{ index: number; name: string; language: string }>>([]);
@@ -187,14 +194,17 @@ export default function OverlayPage() {
   useEffect(() => {
     try {
       const saved = JSON.parse(window.localStorage.getItem(`hearmeout-overlay-view:v1:${roomId}`) || '{}') as Partial<OverlayViewState>;
-      if (typeof saved.volume === 'number') {
+      if (!hasRequestedVolume && typeof saved.volume === 'number') {
         const nextVolume = Math.max(0, Math.min(1, saved.volume));
         volumeRef.current = nextVolume;
         setVolume(nextVolume);
       }
-      if (typeof saved.muted === 'boolean') {
+      if (requestedMuted === null && typeof saved.muted === 'boolean') {
         mutedRef.current = saved.muted;
         setIsMuted(saved.muted);
+      } else if (requestedMuted !== null) {
+        mutedRef.current = requestedMuted;
+        setIsMuted(requestedMuted);
       }
       if (saved.musicPlaybackMode === 'audio' || saved.musicPlaybackMode === 'video') setMusicPlaybackMode(saved.musicPlaybackMode);
       if (typeof saved.showNowPlaying === 'boolean') setShowNowPlaying(saved.showNowPlaying);
@@ -202,7 +212,7 @@ export default function OverlayPage() {
       if (typeof saved.showProfiles === 'boolean') setShowProfiles(saved.showProfiles);
     } catch {}
     setViewStateHydrated(true);
-  }, [roomId]);
+  }, [hasRequestedVolume, requestedMuted, roomId]);
 
   useEffect(() => {
     if (!viewStateHydrated) return;
@@ -582,7 +592,7 @@ export default function OverlayPage() {
         )}
         <video
           ref={videoRef}
-          className={`h-full w-full bg-black object-contain ${embeddedMode ? 'hidden' : ''}`}
+          className={`h-full w-full object-contain ${cleanMode && !currentPlaybackUrl ? 'bg-transparent opacity-0' : 'bg-black'} ${embeddedMode ? 'hidden' : ''}`}
           muted={isMuted}
           playsInline
           onCanPlay={() => {
@@ -604,7 +614,7 @@ export default function OverlayPage() {
         />
       </div>
 
-      {showProfiles && (
+      {!cleanMode && showProfiles && (
         <div style={{ position: 'absolute', left: 20, top: 20 }}>
           <div className="min-w-[240px] max-w-[360px] rounded-lg bg-black/80 p-3 shadow-2xl backdrop-blur-md">
             <div className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-sky-300">
@@ -632,7 +642,7 @@ export default function OverlayPage() {
         </div>
       )}
 
-      {showNowPlaying && (
+      {!cleanMode && showNowPlaying && (
         <div style={{ position: 'absolute', left: 20, bottom: 20 }}>
           <div className="flex min-w-[320px] max-w-[520px] items-center gap-4 rounded-lg bg-black/80 p-4 shadow-2xl backdrop-blur-md">
             {mediaImage ? (
@@ -653,7 +663,7 @@ export default function OverlayPage() {
         </div>
       )}
 
-      {showMusicQueue && (
+      {!cleanMode && showMusicQueue && (
         <div style={{ position: 'absolute', right: 20, bottom: 20 }}>
           <div className="w-[340px] max-w-[calc(100vw-40px)] rounded-lg bg-black/80 p-4 shadow-2xl backdrop-blur-md">
             <div className="mb-3 flex items-center justify-between gap-3">
@@ -683,7 +693,7 @@ export default function OverlayPage() {
         </div>
       )}
 
-      <div style={{ position: 'absolute', right: 20, top: 20 }} className="opacity-20 transition-opacity hover:opacity-100">
+      {!cleanMode && <div style={{ position: 'absolute', right: 20, top: 20 }} className="opacity-20 transition-opacity hover:opacity-100">
         <div className="flex items-center gap-2 rounded-lg bg-black/80 p-3 shadow-2xl backdrop-blur-md">
           <Tooltip>
             <TooltipTrigger asChild>
@@ -860,7 +870,7 @@ export default function OverlayPage() {
             className="w-24"
           />
         </div>
-      </div>
+      </div>}
     </div>
   );
 }
