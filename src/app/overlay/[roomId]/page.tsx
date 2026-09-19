@@ -271,6 +271,7 @@ export default function OverlayPage() {
     ? hlsFallbackUrlFor(currentItem, currentItem?.type === 'music' ? musicPlaybackMode : 'video')
     : '';
   const embeddedMode = Boolean(currentPlaybackUrl && isEmbeddedVideoUrl(currentPlaybackUrl));
+  const cleanIdle = cleanMode && !currentPlaybackUrl;
 
   const youtubeCommand = useCallback((func: string, args: unknown[] = []) => {
     const frame = iframeRef.current;
@@ -599,8 +600,23 @@ export default function OverlayPage() {
   const laneLabel = activeBundle.lane === 'music' ? 'Music Videos' : 'Watch Party';
   const musicQueue = musicState?.queue || [];
 
+  if (cleanIdle) {
+    return (
+      <>
+        <style jsx global>{`
+          html, body, #__next { background: transparent !important; background-color: transparent !important; }
+        `}</style>
+        <div className="h-screen w-screen bg-transparent" aria-hidden="true" />
+      </>
+    );
+  }
+
   return (
-    <div className="relative min-h-screen overflow-hidden bg-transparent text-white">
+    <>
+      <style jsx global>{`
+        html, body, #__next { background: transparent !important; background-color: transparent !important; }
+      `}</style>
+      <div className="relative min-h-screen overflow-hidden bg-transparent text-white">
       <div className="absolute inset-0 bg-transparent">
         {embeddedMode && currentPlaybackUrl && (
           <iframe
@@ -897,6 +913,7 @@ export default function OverlayPage() {
           />
         </div>
       </div>}
-    </div>
+      </div>
+    </>
   );
 }
