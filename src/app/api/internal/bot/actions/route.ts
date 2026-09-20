@@ -4,9 +4,10 @@ import {
   controlWatchSession,
   getPublicWatchSession,
   getWatchSession,
+  requestWatchItem,
   requestWatchMusicItem,
 } from '@/lib/watch-request-service';
-import { ACTIVITY_ROOM_ID, getMusicWatchSessionId, getRoomWatchSessionId } from '@/lib/watch-session';
+import { ACTIVITY_ROOM_ID, getGlobalWatchSessionId, getMusicWatchSessionId, getRoomWatchSessionId } from '@/lib/watch-session';
 import {
   changeRoomPersonaForBotAction,
   controlVoiceBridgeForBotAction,
@@ -127,20 +128,23 @@ export async function POST(request: NextRequest) {
     }
 
     if (action === 'hmo.media.state.read') {
-      const session = getPublicWatchSession(getWatchSession(sessionId, undefined, undefined, 'music'), publicBaseUrl(request));
+      const mediaKind = sessionId === getGlobalWatchSessionId() ? 'movie' : 'music';
+      const session = getPublicWatchSession(getWatchSession(sessionId, undefined, undefined, mediaKind), publicBaseUrl(request));
       return NextResponse.json({ success: true, action, session });
     }
 
     if (action === 'hmo.media.request') {
       const query = text(body?.query, 500);
       if (!query) return NextResponse.json({ error: 'A song, story, or audio request is required' }, { status: 400 });
-      const result = await requestWatchMusicItem({
+      const requestIdentity = {
         sessionId,
         query,
         username: text(body?.actorName, 100) || 'StreamWeaver bot action',
         userId: text(body?.actorUserId, 160) || text(body?.tenantId, 160) || 'streamweaver',
-        platform: 'admin',
-      });
+      };
+      const result = sessionId === getGlobalWatchSessionId()
+        ? await requestWatchItem(requestIdentity)
+        : await requestWatchMusicItem({ ...requestIdentity, platform: 'admin' });
       if ('error' in result) {
         return NextResponse.json({ error: result.result?.message || result.error }, { status: 404 });
       }
