@@ -153,7 +153,8 @@ export async function POST(request: NextRequest) {
         ? await requestWatchItem(requestIdentity)
         : await requestWatchMusicItem({ ...requestIdentity, platform: 'admin' });
       if ('error' in result) {
-        return NextResponse.json({ error: result.result?.message || result.error }, { status: 404 });
+        const failed = result as { error: string; result?: { message?: string } };
+        return NextResponse.json({ error: failed.result?.message || failed.error }, { status: 404 });
       }
       return NextResponse.json({
         success: true,
