@@ -52,16 +52,23 @@ function publicBaseUrl(request: Request) {
 }
 
 export async function POST(request: NextRequest) {
-  if (!isBotActionServiceRequest(request)) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-  }
-
   const body = await request.json().catch(() => null) as any;
   const action = text(body?.action, 80) as HearMeOutAction;
   if (!ACTIONS.has(action)) return NextResponse.json({ error: 'Unknown HearMeOut bot action' }, { status: 400 });
   const roomId = text(body?.roomId, 160);
   const room = roomId || text(body?.room, 160) || undefined;
   const sessionId = text(body?.sessionId, 160) || (roomId ? getRoomWatchSessionId(roomId, 'music') : getMusicWatchSessionId());
+  // Chat may request media or inspect the two public 24/7 queues without an
+  // internal service credential. Every room-scoped action and every playback
+  // control remains behind service authentication.
+  const isPublicQueueRequest = !room && (
+    action === 'hmo.media.request' || action === 'hmo.media.state.read'
+  ) && (
+    sessionId === getMusicWatchSessionId() || sessionId === getGlobalWatchSessionId()
+  );
+  if (!isPublicQueueRequest && !isBotActionServiceRequest(request)) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
 
   try {
     const actor = {
