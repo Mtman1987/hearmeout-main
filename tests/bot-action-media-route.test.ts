@@ -7,9 +7,12 @@ function source(relativePath: string) {
   return readFileSync(fileURLToPath(new URL(`../${relativePath}`, import.meta.url)), 'utf8');
 }
 
-test('HearMeOut bot media actions require service authentication', () => {
+test('HearMeOut public queue requests are open while controls and rooms require service authentication', () => {
   const route = source('src/app/api/internal/bot/actions/route.ts');
-  assert.ok(route.indexOf('isBotActionServiceRequest') < route.indexOf('requestWatchMusicItem({'));
+  assert.match(route, /isPublicQueueRequest/);
+  assert.match(route, /action === 'hmo\.media\.request' \|\| action === 'hmo\.media\.state\.read'/);
+  assert.match(route, /sessionId === getMusicWatchSessionId\(\) \|\| sessionId === getGlobalWatchSessionId\(\)/);
+  assert.match(route, /!isPublicQueueRequest && !isBotActionServiceRequest\(request\)/);
   assert.match(source('src/lib/bot-action-service-auth.ts'), /timingSafeEqual/);
 });
 

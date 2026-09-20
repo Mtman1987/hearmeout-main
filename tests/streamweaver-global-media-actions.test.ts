@@ -9,3 +9,12 @@ test('StreamWeaver bot actions select the canonical music and movie request serv
   assert.match(route, /await requestWatchMusicItem\(\{ \.\.\.requestIdentity, platform: 'admin' \}\)/);
   assert.match(route, /mediaKind = sessionId === getGlobalWatchSessionId\(\) \? 'movie' : 'music'/);
 });
+
+test('public chat requests can reach only the two global queues without service authentication', () => {
+  const route = fs.readFileSync('src/app/api/internal/bot/actions/route.ts', 'utf8');
+  assert.match(route, /const isPublicQueueRequest = !room/);
+  assert.match(route, /action === 'hmo\.media\.request'/);
+  assert.match(route, /getMusicWatchSessionId\(\)/);
+  assert.match(route, /getGlobalWatchSessionId\(\)/);
+  assert.match(route, /!isPublicQueueRequest && !isBotActionServiceRequest\(request\)/);
+});
