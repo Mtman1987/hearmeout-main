@@ -84,6 +84,16 @@ function apolloLoungeUrl(path: string | undefined) {
   return value.startsWith('/api/watch/') ? `${APOLLO_LOUNGE_PROXY}${value}` : '';
 }
 
+function apolloFallbackPlaybackUrl(item: any) {
+  const metadata = item?.metadata || {};
+  const directVideoId = String(metadata.videoId || '').trim();
+  const sourceUrl = String(metadata.sourceUrl || '').trim();
+  const sourceVideoId = sourceUrl.match(/(?:youtu\.be\/|[?&]v=|\/embed\/)([A-Za-z0-9_-]{11})/)?.[1] || '';
+  const videoId = /^[A-Za-z0-9_-]{11}$/.test(directVideoId) ? directVideoId : sourceVideoId;
+  if (videoId) return `https://www.youtube-nocookie.com/embed/${videoId}`;
+  return String(item?.playbackUrl || '');
+}
+
 function playbackPosition(playback?: WatchPlayback) {
   if (!playback) return 0;
   if (playback.status !== 'playing') return playback.position || 0;
@@ -297,7 +307,9 @@ export default function OverlayPage() {
   const activeState = activeBundle.state;
   const currentItem = activeState?.current?.item || null;
   const currentPlaybackUrl = systemLounge
-    ? (activeState?.broadcast?.ready ? apolloLoungeUrl(activeState.broadcast.playbackUrl) : '')
+    ? (activeState?.broadcast?.ready
+        ? apolloLoungeUrl(activeState.broadcast.playbackUrl)
+        : apolloFallbackPlaybackUrl(currentItem))
     : currentItem
       ? hlsFallbackUrlFor(currentItem, currentItem?.type === 'music' ? musicPlaybackMode : 'video')
       : '';

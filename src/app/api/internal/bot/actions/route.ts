@@ -16,6 +16,7 @@ import {
 } from '@/lib/bot-room-action-service';
 import { getDjWorkerUrl } from '@/lib/dj-worker-config';
 import { getDjWorkerRequestHeaders } from '@/lib/dj-worker-auth';
+import { randomUUID } from 'node:crypto';
 
 export const dynamic = 'force-dynamic';
 
@@ -39,6 +40,56 @@ const ACTIONS = new Set<HearMeOutAction>([
   'hmo.tts.speak',
 ]);
 const CONTROLS = new Set(['play', 'pause', 'next', 'clear', 'mute', 'unmute', 'volume']);
+const APOLLO_LOUNGE_ROOM_ID = 'system-spacemountainlive-lounge';
+
+function getApolloLoungeOrigin() {
+  return String(process.env.APOLLO_LOUNGE_ORIGIN || 'https://web-terminal-bvesa.sprites.app').replace(/\/$/, '');
+}
+
+function isSpaceMountainLoungeSession(tenantId: string, sessionId: string) {
+  return tenantId === 'spacemountainlive'
+    && (sessionId === getMusicWatchSessionId() || sessionId === getGlobalWatchSessionId());
+}
+
+async function readApolloLoungeState() {
+  const url = new URL('/api/watch/broadcast/state', getApolloLoungeOrigin());
+  url.searchParams.set('roomId', APOLLO_LOUNGE_ROOM_ID);
+  const response = await fetch(url, {
+    cache: 'no-store',
+    headers: { Accept: 'application/json' },
+    signal: typeof AbortSignal.timeout === 'function' ? AbortSignal.timeout(15_000) : undefined,
+  });
+  const result = await response.json().catch(() => ({})) as any;
+  if (!response.ok) throw new Error(result?.error || `Apollo Lounge state failed (${response.status})`);
+  return result;
+}
+
+async function requestApolloLounge(input: {
+  command: 'sr' | 'wr';
+  query: string;
+  actorUserId: string;
+  actorName: string;
+  messageId?: string;
+}) {
+  const messageId = text(input.messageId, 160).replace(/[^A-Za-z0-9-]/g, '-') || randomUUID();
+  const userId = text(input.actorUserId, 160).replace(/[^A-Za-z0-9._:-]/g, '-') || 'streamweaver';
+  const response = await fetch(`${getApolloLoungeOrigin()}/api/watch/broadcast/lounge-twitch-request`, {
+    method: 'POST',
+    cache: 'no-store',
+    headers: getDjWorkerRequestHeaders({ 'Content-Type': 'application/json', Accept: 'application/json' }),
+    body: JSON.stringify({
+      channel: 'spacemountainlive',
+      command: `!${input.command} ${input.query}`,
+      messageId,
+      userId,
+      displayName: text(input.actorName, 120) || 'Twitch viewer',
+    }),
+    signal: typeof AbortSignal.timeout === 'function' ? AbortSignal.timeout(30_000) : undefined,
+  });
+  const result = await response.json().catch(() => ({})) as any;
+  if (!response.ok) throw new Error(result?.error || `Apollo Lounge request failed (${response.status})`);
+  return result;
+}
 
 function text(value: unknown, max = 500) {
   return String(value || '').trim().slice(0, max);
@@ -145,6 +196,9 @@ export async function POST(request: NextRequest) {
     }
 
     if (action === 'hmo.media.state.read') {
+      if (isSpaceMountainLoungeSession(tenantId, sessionId)) {
+        return NextResponse.json({ success: true, action, session: await readApolloLoungeState() });
+      }
       const mediaKind = sessionId === getGlobalWatchSessionId() ? 'movie' : 'music';
       const session = getPublicWatchSession(getWatchSession(sessionId, undefined, undefined, mediaKind), publicBaseUrl(request));
       return NextResponse.json({ success: true, action, session });
@@ -153,6 +207,26 @@ export async function POST(request: NextRequest) {
     if (action === 'hmo.media.request') {
       const query = text(body?.query, 500);
       if (!query) return NextResponse.json({ error: 'A song, story, or audio request is required' }, { status: 400 });
+      if (isSpaceMountainLoungeSession(tenantId, sessionId)) {
+        const actorUserId = text(body?.actorUserId, 160) || 'streamweaver';
+        const relay = await requestApolloLounge({
+          command: sessionId === getGlobalWatchSessionId() ? 'wr' : 'sr',
+          query,
+          actorUserId,
+          actorName: text(body?.actorName, 120),
+          messageId: text(body?.idempotencyKey, 160),
+        });
+        const session = await readApolloLoungeState();
+        const requests = [session.current, ...(Array.isArray(session.queue) ? session.queue : [])].filter(Boolean);
+        const request = [...requests].reverse().find((entry: any) => entry?.requestedBy?.userId === `twitch:${actorUserId}`) || null;
+        return NextResponse.json({
+          success: true,
+          action,
+          message: relay?.text || 'Added to the 24-Hour Lounge queue.',
+          request,
+          session,
+        });
+      }
       const requestIdentity = {
         sessionId,
         query,

@@ -53,7 +53,7 @@ function getApolloLoungeOrigin() {
 }
 
 function getApolloLoungeChannel() {
-  return String(process.env.APOLLO_LOUNGE_TWITCH_CHANNEL || 'mtman1987').trim().replace(/^#/, '').toLowerCase();
+  return 'spacemountainlive';
 }
 
 async function relayApolloLoungeCommand(input: { channel: string; command: string; messageId: string; userId: string; displayName: string }) {
@@ -256,10 +256,10 @@ function syncChannels(serverId: string, instance: BotInstance) {
     const primaryRoomId = rooms[0]?.id;
 
     // Only attach global Twitch channels to an existing HearMeOut room.
-    if (primaryRoomId) newChannels.set('mtman1987', primaryRoomId);
+    if (primaryRoomId) newChannels.set(getApolloLoungeChannel(), primaryRoomId);
 
     // Join the bot user's own channel if different
-    if (primaryRoomId && tokens.username && tokens.username.toLowerCase() !== 'mtman1987') {
+    if (primaryRoomId && tokens.username && tokens.username.toLowerCase() !== getApolloLoungeChannel()) {
       newChannels.set(tokens.username.toLowerCase(), primaryRoomId);
     }
 

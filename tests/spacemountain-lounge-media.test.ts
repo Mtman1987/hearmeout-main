@@ -7,12 +7,13 @@ const source = fs.readFileSync(path.join(process.cwd(), 'src/app/overlay/[roomId
 const apolloProxy = fs.readFileSync(path.join(process.cwd(), 'src/app/api/system/spacemountainlive-lounge/apollo/[...path]/route.ts'), 'utf8');
 const commands = fs.readFileSync(path.join(process.cwd(), 'src/lib/music-command-service.ts'), 'utf8');
 const twitch = fs.readFileSync(path.join(process.cwd(), 'src/app/api/twitch-bot/route.ts'), 'utf8');
+const botActions = fs.readFileSync(path.join(process.cwd(), 'src/app/api/internal/bot/actions/route.ts'), 'utf8');
 
 test('SpaceMountain Lounge consumes Apollo while ordinary overlays retain HearMeOut sessions', () => {
   assert.match(source, /roomId === 'system-spacemountainlive-lounge'/);
   assert.match(source, /APOLLO_LOUNGE_PROXY.*spacemountainlive-lounge\/apollo/);
   assert.match(source, /api\(`\$\{APOLLO_LOUNGE_PROXY\}\/api\/watch\/broadcast\/state`\)/);
-  assert.match(source, /activeState\?\.broadcast\?\.ready \? apolloLoungeUrl/);
+  assert.match(source, /activeState\?\.broadcast\?\.ready[\s\S]*apolloLoungeUrl[\s\S]*apolloFallbackPlaybackUrl/);
   assert.match(source, /getRoomWatchSessionId\(roomId, 'movie'\)/);
   assert.match(source, /getRoomWatchSessionId\(roomId, 'music'\)/);
   assert.doesNotMatch(source, /getGlobalWatchSessionId/);
@@ -38,6 +39,19 @@ test('YouTube music uses the browser embed before the proxy fallback', () => {
   assert.match(source, /metadata\.embedPlaybackUrl \|\| metadata\.videoPlaybackUrl/);
   assert.match(source, /if \(mode === 'video' && options\.video\) return options\.video/);
   assert.match(source, /searchParams\.set\('autoplay', '1'\)/);
+});
+
+test('Apollo Lounge remains visible while its HLS worker is starting', () => {
+  assert.match(source, /function apolloFallbackPlaybackUrl/);
+  assert.match(source, /youtube-nocookie\.com\/embed/);
+  assert.match(source, /metadata\.videoId/);
+});
+
+test('legacy StreamWeaver Lounge actions are adapted to Apollo state and requests', () => {
+  assert.match(botActions, /isSpaceMountainLoungeSession/);
+  assert.match(botActions, /api\/watch\/broadcast\/state/);
+  assert.match(botActions, /api\/watch\/broadcast\/lounge-twitch-request/);
+  assert.match(botActions, /channel: 'spacemountainlive'/);
 });
 
 test('Twitch moderators can control Lounge media from chat', () => {
