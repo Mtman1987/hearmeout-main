@@ -4,13 +4,28 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 const source = fs.readFileSync(path.join(process.cwd(), 'src/app/overlay/[roomId]/page.tsx'), 'utf8');
+const apolloProxy = fs.readFileSync(path.join(process.cwd(), 'src/app/api/system/spacemountainlive-lounge/apollo/[...path]/route.ts'), 'utf8');
 const commands = fs.readFileSync(path.join(process.cwd(), 'src/lib/music-command-service.ts'), 'utf8');
 const twitch = fs.readFileSync(path.join(process.cwd(), 'src/app/api/twitch-bot/route.ts'), 'utf8');
 
-test('SpaceMountain Lounge consumes the same global queues as !sr and !wr', () => {
+test('SpaceMountain Lounge consumes Apollo while ordinary overlays retain HearMeOut sessions', () => {
   assert.match(source, /roomId === 'system-spacemountainlive-lounge'/);
-  assert.match(source, /systemLounge \? getGlobalWatchSessionId\(\)/);
-  assert.match(source, /systemLounge \? getMusicWatchSessionId\(\)/);
+  assert.match(source, /APOLLO_LOUNGE_PROXY.*spacemountainlive-lounge\/apollo/);
+  assert.match(source, /api\(`\$\{APOLLO_LOUNGE_PROXY\}\/api\/watch\/broadcast\/state`\)/);
+  assert.match(source, /activeState\?\.broadcast\?\.ready \? apolloLoungeUrl/);
+  assert.match(source, /getRoomWatchSessionId\(roomId, 'movie'\)/);
+  assert.match(source, /getRoomWatchSessionId\(roomId, 'music'\)/);
+  assert.doesNotMatch(source, /getGlobalWatchSessionId/);
+  assert.doesNotMatch(source, /getMusicWatchSessionId/);
+  assert.doesNotMatch(source, /spacemountainlive-lounge\/ensure/);
+});
+
+test('Apollo Lounge proxy is read-only and limited to canonical state and HLS', () => {
+  assert.match(apolloProxy, /APOLLO_LOUNGE_ORIGIN/);
+  assert.match(apolloProxy, /api\/watch\/broadcast\/state/);
+  assert.match(apolloProxy, /api\/watch\/sessions\/\$\{ROOM_ID\}\/broadcast/);
+  assert.match(apolloProxy, /Unsupported Apollo Lounge path/);
+  assert.doesNotMatch(apolloProxy, /export async function POST/);
 });
 
 test('auto lane follows the most recently controlled playing queue', () => {
@@ -32,19 +47,18 @@ test('Twitch moderators can control Lounge media from chat', () => {
   assert.match(twitch, /isAdmin: Boolean\(context\.mod\)/);
 });
 
-test('SpaceMountain Lounge advances the global queue when embedded or native media ends', () => {
+test('SpaceMountain Lounge leaves automatic advancement to Apollo', () => {
   assert.match(source, /const advanceEndedMedia = useCallback/);
-  assert.match(source, /action: 'next'/);
-  assert.match(source, /expectedRequestId: requestId/);
+  assert.match(source, /Apollo owns the durable clock and advances even with no viewers/);
+  assert.doesNotMatch(source, /quick-control/);
   assert.match(source, /code === 0[\s\S]*void advanceEndedMedia\(\)/);
   assert.match(source, /onEnded=\{\(\) => void advanceEndedMedia\(\)\}/);
 });
 
-test('an ended song stays stopped while the queue or auto-radio resolves its replacement', () => {
+test('an ended Apollo song stays stopped until Apollo reports its replacement', () => {
   assert.match(source, /advancingEndedRequestRef\.current === nextState\.current\.requestId/);
   assert.match(source, /youtubeCommand\('pauseVideo'\)/);
-  assert.match(source, /const payload = await response\.json\(\)/);
-  assert.match(source, /activeBundle\.lane === 'music'[\s\S]*setMusicState\(nextState\)/);
+  assert.match(source, /setLoungeState\(state\)/);
   assert.match(source, /advancingEndedRequestRef\.current !== activeRequestId[\s\S]*advancingEndedRequestRef\.current = null/);
 });
 

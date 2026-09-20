@@ -22,13 +22,13 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { usePopout } from '@/components/PopoutWidgets/PopoutProvider';
-import { getGlobalWatchSessionId, getMusicWatchSessionId, getRoomWatchSessionId } from '@/lib/watch-session';
+import { getRoomWatchSessionId } from '@/lib/watch-session';
 import { useCollection } from '@/hooks/use-db';
 
 type WatchPlayback = {
   status: 'idle' | 'paused' | 'playing';
   position: number;
-  updatedAt: number;
+  updatedAt: number | string;
   muted?: boolean;
 };
 
@@ -39,10 +39,16 @@ type WatchRequest = {
 };
 
 type WatchState = {
-  id: string;
+  id?: string;
+  sessionId?: string;
   queue: WatchRequest[];
   current: WatchRequest | null;
   playback: WatchPlayback;
+  broadcast?: {
+    configured?: boolean;
+    ready?: boolean;
+    playbackUrl?: string;
+  };
 };
 
 type MediaLane = 'auto' | 'music' | 'movie';
@@ -71,10 +77,18 @@ async function api(path: string) {
   return response.json();
 }
 
+const APOLLO_LOUNGE_PROXY = '/api/system/spacemountainlive-lounge/apollo';
+
+function apolloLoungeUrl(path: string | undefined) {
+  const value = String(path || '');
+  return value.startsWith('/api/watch/') ? `${APOLLO_LOUNGE_PROXY}${value}` : '';
+}
+
 function playbackPosition(playback?: WatchPlayback) {
   if (!playback) return 0;
   if (playback.status !== 'playing') return playback.position || 0;
-  return (playback.position || 0) + (Date.now() - playback.updatedAt) / 1000;
+  const updatedAt = typeof playback.updatedAt === 'string' ? Date.parse(playback.updatedAt) : playback.updatedAt;
+  return (playback.position || 0) + (Date.now() - updatedAt) / 1000;
 }
 
 function musicModeOptions(item: any) {
@@ -162,12 +176,11 @@ export default function OverlayPage() {
   const params = useParams<{ roomId: string }>();
   const searchParams = useSearchParams();
   const roomId = params.roomId;
-  // SpaceMountain's permanent channel is intentionally one global player.
-  // Twitch/Discord !wr and !sr already write to these canonical sessions, so
-  // the public overlay must watch the same queues instead of private room IDs.
+  // Only this permanent Lounge route is cut over to Apollo's isolated player.
+  // Ordinary HearMeOut room overlays continue to use their existing sessions.
   const systemLounge = roomId === 'system-spacemountainlive-lounge';
-  const movieSessionId = systemLounge ? getGlobalWatchSessionId() : getRoomWatchSessionId(roomId, 'movie');
-  const musicSessionId = systemLounge ? getMusicWatchSessionId() : getRoomWatchSessionId(roomId, 'music');
+  const movieSessionId = getRoomWatchSessionId(roomId, 'movie');
+  const musicSessionId = getRoomWatchSessionId(roomId, 'music');
   const requestedLane = (searchParams.get('media') || searchParams.get('lane') || 'auto').toLowerCase();
   const lane: MediaLane = requestedLane === 'music' || requestedLane === 'movie' ? requestedLane : 'auto';
   const cleanMode = ['1', 'true', 'yes', 'on'].includes(String(searchParams.get('clean') || '').toLowerCase());
@@ -203,6 +216,7 @@ export default function OverlayPage() {
 
   const [movieState, setMovieState] = useState<WatchState | null>(null);
   const [musicState, setMusicState] = useState<WatchState | null>(null);
+  const [loungeState, setLoungeState] = useState<WatchState | null>(null);
   const [connected, setConnected] = useState(false);
   const [volume, setVolume] = useState(initialVolume);
   const [isMuted, setIsMuted] = useState(requestedMuted ?? false);
@@ -216,21 +230,6 @@ export default function OverlayPage() {
   const [showProfiles, setShowProfiles] = useState(true);
   const [viewStateHydrated, setViewStateHydrated] = useState(false);
   const { data: roomProfiles } = useCollection<OverlayProfile>(`rooms/${roomId}/users`, { pollInterval: 3000 });
-
-  useEffect(() => {
-    if (roomId !== 'system-spacemountainlive-lounge') return;
-    let cancelled = false;
-    const ensure = async () => {
-      if (cancelled) return;
-      await fetch('/api/system/spacemountainlive-lounge/ensure', { cache: 'no-store' }).catch(() => null);
-    };
-    void ensure();
-    const timer = window.setInterval(() => void ensure(), 30_000);
-    return () => {
-      cancelled = true;
-      window.clearInterval(timer);
-    };
-  }, [roomId]);
 
   const activeProfiles = useMemo(() => (roomProfiles || []).filter((profile) => {
     if (profile.bot) return true;
@@ -277,6 +276,11 @@ export default function OverlayPage() {
   useEffect(() => { mutedRef.current = isMuted; }, [isMuted]);
 
   const activeBundle = useMemo(() => {
+    if (systemLounge) return {
+      lane: loungeState?.current?.item?.type === 'movie' ? 'movie' as const : 'music' as const,
+      sessionId: roomId,
+      state: loungeState,
+    };
     if (lane === 'music') return { lane: 'music' as const, sessionId: musicSessionId, state: musicState };
     if (lane === 'movie') return { lane: 'movie' as const, sessionId: movieSessionId, state: movieState };
 
@@ -288,13 +292,15 @@ export default function OverlayPage() {
     if (playing[0]) return playing[0];
     const loaded = bundles.filter((bundle) => bundle.state?.current).sort(newerPlaybackFirst);
     return loaded[0] || bundles[0];
-  }, [lane, movieSessionId, movieState, musicSessionId, musicState]);
+  }, [lane, loungeState, movieSessionId, movieState, musicSessionId, musicState, roomId, systemLounge]);
 
   const activeState = activeBundle.state;
   const currentItem = activeState?.current?.item || null;
-  const currentPlaybackUrl = currentItem
-    ? hlsFallbackUrlFor(currentItem, currentItem?.type === 'music' ? musicPlaybackMode : 'video')
-    : '';
+  const currentPlaybackUrl = systemLounge
+    ? (activeState?.broadcast?.ready ? apolloLoungeUrl(activeState.broadcast.playbackUrl) : '')
+    : currentItem
+      ? hlsFallbackUrlFor(currentItem, currentItem?.type === 'music' ? musicPlaybackMode : 'video')
+      : '';
   const embeddedMode = Boolean(currentPlaybackUrl && isEmbeddedVideoUrl(currentPlaybackUrl));
   const cleanIdle = cleanMode && !currentPlaybackUrl;
 
@@ -420,29 +426,10 @@ export default function OverlayPage() {
     const requestId = activeState?.current?.requestId;
     if (!systemLounge || !requestId || advancingEndedRequestRef.current === requestId) return;
     advancingEndedRequestRef.current = requestId;
-    setMediaStatus('Advancing to the next queued item');
-    const params = new URLSearchParams({
-      action: 'next',
-      expectedRequestId: requestId,
-      format: 'json',
-      platform: 'activity',
-      isHost: 'true',
-    });
-    try {
-      const response = await fetch(`/api/watch/sessions/${encodeURIComponent(activeBundle.sessionId)}/quick-control?${params}`, { cache: 'no-store' });
-      if (!response.ok) throw new Error(`next returned ${response.status}`);
-      const payload = await response.json();
-      const nextState = payload?.session as WatchState | undefined;
-      if (nextState) {
-        if (activeBundle.lane === 'music') setMusicState(nextState);
-        else setMovieState(nextState);
-      }
-    } catch (error) {
-      advancingEndedRequestRef.current = null;
-      setMediaStatus('Unable to advance the media queue');
-      console.warn('[Overlay] failed to advance ended media', error);
-    }
-  }, [activeBundle.lane, activeBundle.sessionId, activeState?.current?.requestId, systemLounge]);
+    // Apollo owns the durable clock and advances even with no viewers. The
+    // legacy overlay must never mutate its retired HearMeOut global sessions.
+    setMediaStatus('Apollo is choosing the next track');
+  }, [activeState?.current?.requestId, systemLounge]);
 
   useEffect(() => {
     const activeRequestId = activeState?.current?.requestId || null;
@@ -454,6 +441,12 @@ export default function OverlayPage() {
   useEffect(() => {
     const refresh = async () => {
       try {
+        if (systemLounge) {
+          const state = await api(`${APOLLO_LOUNGE_PROXY}/api/watch/broadcast/state`);
+          setLoungeState(state);
+          setConnected(true);
+          return;
+        }
         const [movie, music] = await Promise.all([
           api(`/api/watch/sessions/${movieSessionId}/state`),
           api(`/api/watch/sessions/${musicSessionId}/state`),
@@ -470,7 +463,7 @@ export default function OverlayPage() {
     refresh();
     const interval = window.setInterval(refresh, 1000);
     return () => window.clearInterval(interval);
-  }, [movieSessionId, musicSessionId]);
+  }, [movieSessionId, musicSessionId, systemLounge]);
 
   useEffect(() => {
     const unlockOverlayAudio = () => {
@@ -668,7 +661,7 @@ export default function OverlayPage() {
   const mediaImage = currentItem?.thumbnail || currentItem?.poster || currentItem?.image;
   const queueLength = activeState?.queue?.length || 0;
   const laneLabel = activeBundle.lane === 'music' ? 'Music Videos' : 'Watch Party';
-  const musicQueue = musicState?.queue || [];
+  const musicQueue = systemLounge ? loungeState?.queue || [] : musicState?.queue || [];
 
   if (cleanIdle) {
     return (
