@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import tmi from 'tmi.js';
 import { handleMusicCommand } from '@/lib/music-command-service';
 import { handleWatchRequestCommand, parseWatchCommand } from '@/lib/watch-request-service';
+import { getDjWorkerRequestHeaders } from '@/lib/dj-worker-auth';
 import { db, ensureDb } from '@/lib/db';
 import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
@@ -45,6 +46,27 @@ function getPublicBaseUrl() {
     process.env.APP_URL ||
     'https://hearmeout-main.fly.dev'
   ).replace(/\/$/, '');
+}
+
+function getApolloLoungeOrigin() {
+  return String(process.env.APOLLO_LOUNGE_ORIGIN || 'https://web-terminal-bvesa.sprites.app').replace(/\/$/, '');
+}
+
+function getApolloLoungeChannel() {
+  return String(process.env.APOLLO_LOUNGE_TWITCH_CHANNEL || 'mtman1987').trim().replace(/^#/, '').toLowerCase();
+}
+
+async function relayApolloLoungeCommand(input: { channel: string; command: string; messageId: string; userId: string; displayName: string }) {
+  const headers = getDjWorkerRequestHeaders({ 'Content-Type': 'application/json', Accept: 'application/json' });
+  const response = await fetch(`${getApolloLoungeOrigin()}/api/watch/broadcast/lounge-twitch-request`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify(input),
+    signal: AbortSignal.timeout(30_000),
+  });
+  const result = await response.json().catch(() => ({})) as { text?: string; error?: string };
+  if (!response.ok) throw new Error(result.error || `Apollo Lounge rejected the request (${response.status})`);
+  return result.text || 'Added to the 24-Hour Lounge queue.';
 }
 
 function getIgnoredCommandBotNames() {
@@ -276,7 +298,7 @@ function syncChannels(serverId: string, instance: BotInstance) {
 // --- Message handler ---
 
 function createMessageHandler(instance: BotInstance) {
-  return function onMessage(target: string, context: tmi.ChatUserstate, msg: string, self: boolean) {
+  return async function onMessage(target: string, context: tmi.ChatUserstate, msg: string, self: boolean) {
     if (self || !instance.client) return;
 
     const channelName = target.replace('#', '').toLowerCase();
@@ -291,6 +313,23 @@ function createMessageHandler(instance: BotInstance) {
 
     if (isCommand && isIgnoredCommandBot(context, instance.tokens.username)) {
       console.log(`[Twitch Bot] Ignoring bot-authored command from ${context.username || requester}: ${msg.trim()}`);
+      return;
+    }
+
+    if (channelName === getApolloLoungeChannel() && /^!(sr|wr)\s+\S/i.test(msg.trim())) {
+      try {
+        const text = await relayApolloLoungeCommand({
+          channel: channelName,
+          command: msg.trim(),
+          messageId: String(context.id || Date.now()),
+          userId: String(context['user-id'] || context.username || 'twitch'),
+          displayName: String(requester),
+        });
+        await client.say(target, `@${requester} ${text}`);
+      } catch (error) {
+        console.error('[Twitch Bot] Apollo Lounge request failed:', error);
+        await client.say(target, `@${requester} The 24-Hour Lounge could not accept that request yet.`);
+      }
       return;
     }
 
