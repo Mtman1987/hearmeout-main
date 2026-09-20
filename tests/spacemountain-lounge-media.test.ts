@@ -21,6 +21,7 @@ test('auto lane follows the most recently controlled playing queue', () => {
 
 test('YouTube music uses the browser embed before the proxy fallback', () => {
   assert.match(source, /metadata\.embedPlaybackUrl \|\| metadata\.videoPlaybackUrl/);
+  assert.match(source, /if \(mode === 'video' && options\.video\) return options\.video/);
   assert.match(source, /searchParams\.set\('autoplay', '1'\)/);
 });
 

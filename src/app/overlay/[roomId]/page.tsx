@@ -93,9 +93,14 @@ function hasMusicModeToggle(item: any) {
 }
 
 function playbackUrlForItem(item: any, mode: 'video' | 'audio' = 'video') {
-  if (hasMusicModeToggle(item)) {
+  if (item?.type === 'music') {
     const options = musicModeOptions(item);
-    return mode === 'audio' ? options.audio : options.video;
+    // Video playback must not depend on an optional audio-only URL. YouTube
+    // requests normally have a browser embed plus the proxy HLS fallback, but
+    // no separate audio URL. Requiring both sent those requests back to the
+    // hanging proxy and left the Lounge black while it reported "playing".
+    if (mode === 'video' && options.video) return options.video;
+    if (mode === 'audio' && options.audio) return options.audio;
   }
   return item?.playbackUrl || '';
 }
