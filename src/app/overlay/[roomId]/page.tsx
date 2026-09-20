@@ -143,7 +143,14 @@ function isHlsPlaybackUrl(value: string) {
 }
 
 function sessionHasActiveMedia(state: WatchState | null) {
-  return Boolean(state?.current && state.playback?.status !== 'idle');
+  return Boolean(state?.current && state.playback?.status === 'playing');
+}
+
+function newerPlaybackFirst(
+  left: { state: WatchState | null },
+  right: { state: WatchState | null },
+) {
+  return Number(right.state?.playback?.updatedAt || 0) - Number(left.state?.playback?.updatedAt || 0);
 }
 
 export default function OverlayPage() {
@@ -268,10 +275,14 @@ export default function OverlayPage() {
     if (lane === 'music') return { lane: 'music' as const, sessionId: musicSessionId, state: musicState };
     if (lane === 'movie') return { lane: 'movie' as const, sessionId: movieSessionId, state: movieState };
 
-    if (sessionHasActiveMedia(musicState)) return { lane: 'music' as const, sessionId: musicSessionId, state: musicState };
-    if (sessionHasActiveMedia(movieState)) return { lane: 'movie' as const, sessionId: movieSessionId, state: movieState };
-    if (musicState?.current) return { lane: 'music' as const, sessionId: musicSessionId, state: musicState };
-    return { lane: 'movie' as const, sessionId: movieSessionId, state: movieState };
+    const bundles = [
+      { lane: 'music' as const, sessionId: musicSessionId, state: musicState },
+      { lane: 'movie' as const, sessionId: movieSessionId, state: movieState },
+    ];
+    const playing = bundles.filter((bundle) => sessionHasActiveMedia(bundle.state)).sort(newerPlaybackFirst);
+    if (playing[0]) return playing[0];
+    const loaded = bundles.filter((bundle) => bundle.state?.current).sort(newerPlaybackFirst);
+    return loaded[0] || bundles[0];
   }, [lane, movieSessionId, movieState, musicSessionId, musicState]);
 
   const activeState = activeBundle.state;

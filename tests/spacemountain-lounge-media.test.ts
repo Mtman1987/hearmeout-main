@@ -13,6 +13,12 @@ test('SpaceMountain Lounge consumes the same global queues as !sr and !wr', () =
   assert.match(source, /systemLounge \? getMusicWatchSessionId\(\)/);
 });
 
+test('auto lane follows the most recently controlled playing queue', () => {
+  assert.match(source, /state\.playback\?\.status === 'playing'/);
+  assert.match(source, /newerPlaybackFirst/);
+  assert.match(source, /bundles\.filter\(\(bundle\) => sessionHasActiveMedia\(bundle\.state\)\)\.sort\(newerPlaybackFirst\)/);
+});
+
 test('YouTube music uses the browser embed before the proxy fallback', () => {
   assert.match(source, /metadata\.embedPlaybackUrl \|\| metadata\.videoPlaybackUrl/);
   assert.match(source, /searchParams\.set\('autoplay', '1'\)/);
