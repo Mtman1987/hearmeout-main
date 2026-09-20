@@ -313,7 +313,7 @@ function createMessageHandler(instance: BotInstance) {
       return;
     }
 
-    if (message.startsWith('!sr') || message === '!np' || message === '!status' || message === '!skip' || message === '!next') {
+    if (message.startsWith('!sr') || message === '!np' || message === '!nowplaying' || message === '!status' || message === '!skip' || message === '!next' || message === '!play' || message === '!pause' || message === '!stop' || message === '!mute' || message === '!unmute' || message.startsWith('!volume ')) {
       handleMusicCommand({
         message: msg,
         userId: context.username || context['user-id'] || 'twitch',
@@ -323,6 +323,8 @@ function createMessageHandler(instance: BotInstance) {
         guildId: instance.tokens.serverId || 'local',
         channelId: process.env.DISCORD_CHANNEL_ID || `twitch-${channelName}`,
         publicBaseUrl: getPublicBaseUrl(),
+        isHost: context.badges?.broadcaster === '1' || String(context.username || '').toLowerCase() === channelName,
+        isAdmin: Boolean(context.mod) || context.badges?.moderator === '1',
         reply: (content) => {
           client.say(target, `@${requester} ${content}`);
         },
@@ -333,7 +335,7 @@ function createMessageHandler(instance: BotInstance) {
     }
 
     if (message === '!help' || message === '!commands') {
-      client.say(target, "🎵 Commands: !sr [song/URL] | !wr [movie/show] | !np | !status | !help");
+      client.say(target, "🎵 Commands: !sr [song/URL] | !wr [movie/show] | !play | !pause | !skip | !np | !volume 0-100 | !mute | !unmute");
     }
   };
 }

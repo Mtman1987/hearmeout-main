@@ -122,6 +122,8 @@ function iframeUrlFor(value: string) {
     if (!isEmbeddedVideoUrl(url.toString())) return value;
     url.searchParams.set('enablejsapi', '1');
     url.searchParams.set('origin', window.location.origin);
+    url.searchParams.set('autoplay', '1');
+    url.searchParams.set('playsinline', '1');
     return url.toString();
   } catch {
     return value;

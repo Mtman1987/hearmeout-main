@@ -17,6 +17,12 @@ export function parseMusicCommand(message: string) {
   if (/^!(np|nowplaying)$/i.test(trimmed)) return { command: '!np', action: 'nowPlaying' as const };
   if (/^!status$/i.test(trimmed)) return { command: '!status', action: 'status' as const };
   if (/^!(skip|next)$/i.test(trimmed)) return { command: '!skip', action: 'skip' as const };
+  if (/^!play$/i.test(trimmed)) return { command: '!play', action: 'play' as const };
+  if (/^!(pause|stop)$/i.test(trimmed)) return { command: '!pause', action: 'pause' as const };
+  if (/^!mute$/i.test(trimmed)) return { command: '!mute', action: 'mute' as const };
+  if (/^!unmute$/i.test(trimmed)) return { command: '!unmute', action: 'unmute' as const };
+  const volumeMatch = trimmed.match(/^!volume\s+(\d{1,3})$/i);
+  if (volumeMatch) return { command: '!volume', action: 'volume' as const, value: Math.max(0, Math.min(100, Number(volumeMatch[1]))) };
   return null;
 }
 
@@ -30,6 +36,8 @@ export async function handleMusicCommand(params: {
   channelId?: string;
   activityVoiceChannelId?: string;
   publicBaseUrl?: string;
+  isHost?: boolean;
+  isAdmin?: boolean;
   // eslint-disable-next-line no-unused-vars
   reply?: (content: string) => void | Promise<void>;
   // eslint-disable-next-line no-unused-vars
@@ -111,8 +119,28 @@ export async function handleMusicCommand(params: {
       guildId: params.guildId,
       channelId: params.channelId,
       platform: params.platform,
+      isHost: params.isHost,
+      isAdmin: params.isAdmin,
     });
     await reply(session.current ? `Skipped to: ${session.current.item.title}` : 'Skipped. Queue is now empty.');
+    return true;
+  }
+
+  if (['play', 'pause', 'mute', 'unmute', 'volume'].includes(parsed.action)) {
+    const value = parsed.action === 'volume' && 'value' in parsed ? parsed.value : undefined;
+    const session = await controlWatchSession(sessionId, parsed.action, value, undefined, {
+      actorUserId: params.userId,
+      guildId: params.guildId,
+      channelId: params.channelId,
+      platform: params.platform,
+      isHost: params.isHost,
+      isAdmin: params.isAdmin,
+    });
+    const title = session.current?.item.title || 'the media player';
+    const replyText = parsed.action === 'volume'
+      ? `Volume set to ${value}% for ${title}.`
+      : `${parsed.action === 'play' ? 'Playing' : parsed.action === 'pause' ? 'Paused' : parsed.action === 'mute' ? 'Muted' : 'Unmuted'}: ${title}`;
+    await reply(replyText);
     return true;
   }
 
