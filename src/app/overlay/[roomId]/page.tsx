@@ -337,6 +337,15 @@ export default function OverlayPage() {
   const applyPlaybackState = useCallback((nextState = activeState) => {
     if (!nextState?.current) return;
 
+    // Once this request reports that it ended, do not let the normal state poll
+    // restart it while the server is resolving the queued or auto-radio track.
+    if (advancingEndedRequestRef.current === nextState.current.requestId) {
+      if (embeddedMode) youtubeCommand('pauseVideo');
+      else videoRef.current?.pause();
+      setMediaStatus('Choosing the next track');
+      return;
+    }
+
     if (embeddedMode) {
       const remotePosition = playbackPosition(nextState.playback);
       const playbackKey = [
@@ -422,12 +431,25 @@ export default function OverlayPage() {
     try {
       const response = await fetch(`/api/watch/sessions/${encodeURIComponent(activeBundle.sessionId)}/quick-control?${params}`, { cache: 'no-store' });
       if (!response.ok) throw new Error(`next returned ${response.status}`);
+      const payload = await response.json();
+      const nextState = payload?.session as WatchState | undefined;
+      if (nextState) {
+        if (activeBundle.lane === 'music') setMusicState(nextState);
+        else setMovieState(nextState);
+      }
     } catch (error) {
       advancingEndedRequestRef.current = null;
       setMediaStatus('Unable to advance the media queue');
       console.warn('[Overlay] failed to advance ended media', error);
     }
-  }, [activeBundle.sessionId, activeState?.current?.requestId, systemLounge]);
+  }, [activeBundle.lane, activeBundle.sessionId, activeState?.current?.requestId, systemLounge]);
+
+  useEffect(() => {
+    const activeRequestId = activeState?.current?.requestId || null;
+    if (advancingEndedRequestRef.current && advancingEndedRequestRef.current !== activeRequestId) {
+      advancingEndedRequestRef.current = null;
+    }
+  }, [activeState?.current?.requestId]);
 
   useEffect(() => {
     const refresh = async () => {
