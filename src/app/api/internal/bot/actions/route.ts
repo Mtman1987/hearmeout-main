@@ -159,7 +159,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({
         success: true,
         action,
-        message: result.result.message,
+        message: ('result' in result ? result.result?.message : '') || 'Request added to queue',
         request: result.request,
         session: getPublicWatchSession(result.session, publicBaseUrl(request)),
       });
