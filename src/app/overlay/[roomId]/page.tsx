@@ -185,6 +185,7 @@ export default function OverlayPage() {
   const applyingRemoteState = useRef(false);
   const embeddedCurrentTimeRef = useRef(0);
   const lastEmbeddedPlaybackKeyRef = useRef('');
+  const advancingEndedRequestRef = useRef<string | null>(null);
   const volumeRef = useRef(initialVolume);
   const mutedRef = useRef(requestedMuted ?? false);
 
@@ -390,6 +391,28 @@ export default function OverlayPage() {
     setMediaStatus('Overlay media unlocked');
   }, [applyVolume, embeddedMode, youtubeCommand]);
 
+  const advanceEndedMedia = useCallback(async () => {
+    const requestId = activeState?.current?.requestId;
+    if (!systemLounge || !requestId || advancingEndedRequestRef.current === requestId) return;
+    advancingEndedRequestRef.current = requestId;
+    setMediaStatus('Advancing to the next queued item');
+    const params = new URLSearchParams({
+      action: 'next',
+      expectedRequestId: requestId,
+      format: 'json',
+      platform: 'activity',
+      isHost: 'true',
+    });
+    try {
+      const response = await fetch(`/api/watch/sessions/${encodeURIComponent(activeBundle.sessionId)}/quick-control?${params}`, { cache: 'no-store' });
+      if (!response.ok) throw new Error(`next returned ${response.status}`);
+    } catch (error) {
+      advancingEndedRequestRef.current = null;
+      setMediaStatus('Unable to advance the media queue');
+      console.warn('[Overlay] failed to advance ended media', error);
+    }
+  }, [activeBundle.sessionId, activeState?.current?.requestId, systemLounge]);
+
   useEffect(() => {
     const refresh = async () => {
       try {
@@ -582,13 +605,14 @@ export default function OverlayPage() {
         setMediaStatus('Overlay media paused');
       } else if (code === 0) {
         setMediaStatus('Overlay media ended');
+        void advanceEndedMedia();
       } else if (code === 3) {
         setMediaStatus('Overlay media buffering');
       }
     };
     window.addEventListener('message', onMessage);
     return () => window.removeEventListener('message', onMessage);
-  }, []);
+  }, [advanceEndedMedia]);
 
   const hasPopout = (source: string) => popouts.some((p) => p.type === 'chat' && p.customSettings?.source === source);
   const hasQueue = popouts.some((p) => p.type === 'queue');
@@ -657,6 +681,7 @@ export default function OverlayPage() {
           onPause={() => {
             if (!applyingRemoteState.current) setMediaStatus('Overlay media paused');
           }}
+          onEnded={() => void advanceEndedMedia()}
           onError={() => {
             const error = videoRef.current?.error;
             setMediaStatus(error ? `Overlay media error ${error.code}` : 'Overlay media error');

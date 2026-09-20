@@ -24,3 +24,18 @@ test('Twitch moderators can control Lounge media from chat', () => {
   assert.match(twitch, /message === '!play'/);
   assert.match(twitch, /isAdmin: Boolean\(context\.mod\)/);
 });
+
+test('SpaceMountain Lounge advances the global queue when embedded or native media ends', () => {
+  assert.match(source, /const advanceEndedMedia = useCallback/);
+  assert.match(source, /action: 'next'/);
+  assert.match(source, /expectedRequestId: requestId/);
+  assert.match(source, /code === 0[\s\S]*void advanceEndedMedia\(\)/);
+  assert.match(source, /onEnded=\{\(\) => void advanceEndedMedia\(\)\}/);
+});
+
+test('play skips an expired current item or restarts it when the queue is empty', () => {
+  const service = fs.readFileSync(path.join(process.cwd(), 'src/lib/watch/watch-request-service.ts'), 'utf8');
+  assert.match(service, /const duration = runtimeSeconds\(session\.current\.item\.runtime\)/);
+  assert.match(service, /if \(session\.queue\.length > 0\) action = 'next'/);
+  assert.match(service, /else position = 0/);
+});

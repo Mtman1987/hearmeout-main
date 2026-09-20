@@ -1186,6 +1186,16 @@ async function getAutoRadioRequest(sessionId: string): Promise<WatchRequest | nu
   };
 }
 
+function runtimeSeconds(value: unknown): number | null {
+  const runtime = String(value || '').trim().toLowerCase();
+  if (!runtime) return null;
+  const hours = Number(runtime.match(/(\d+(?:\.\d+)?)\s*h/)?.[1] || 0);
+  const minutes = Number(runtime.match(/(\d+(?:\.\d+)?)\s*m/)?.[1] || 0);
+  const seconds = Number(runtime.match(/(\d+(?:\.\d+)?)\s*s/)?.[1] || 0);
+  const total = (hours * 3600) + (minutes * 60) + seconds;
+  return Number.isFinite(total) && total > 0 ? total : null;
+}
+
 export async function controlWatchSession(sessionId: string, action: string, position?: number, targetIndex?: number, actor?: WatchControlActor) {
   const session = getWatchSession(sessionId);
   touchSession(session);
@@ -1229,6 +1239,15 @@ export async function controlWatchSession(sessionId: string, action: string, pos
     };
     saveWatchStateToDisk();
     return session;
+  }
+
+  if (action === 'play' && session.current) {
+    const effectivePosition = getEffectivePlaybackPosition(session);
+    const duration = runtimeSeconds(session.current.item.runtime);
+    if (duration && effectivePosition >= Math.max(0, duration - 2)) {
+      if (session.queue.length > 0) action = 'next';
+      else position = 0;
+    }
   }
 
   if (action === 'play' || action === 'pause') {
