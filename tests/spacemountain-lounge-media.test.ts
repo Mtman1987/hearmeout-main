@@ -40,6 +40,14 @@ test('SpaceMountain Lounge advances the global queue when embedded or native med
   assert.match(source, /onEnded=\{\(\) => void advanceEndedMedia\(\)\}/);
 });
 
+test('an ended song stays stopped while the queue or auto-radio resolves its replacement', () => {
+  assert.match(source, /advancingEndedRequestRef\.current === nextState\.current\.requestId/);
+  assert.match(source, /youtubeCommand\('pauseVideo'\)/);
+  assert.match(source, /const payload = await response\.json\(\)/);
+  assert.match(source, /activeBundle\.lane === 'music'[\s\S]*setMusicState\(nextState\)/);
+  assert.match(source, /advancingEndedRequestRef\.current !== activeRequestId[\s\S]*advancingEndedRequestRef\.current = null/);
+});
+
 test('play skips an expired current item or restarts it when the queue is empty', () => {
   const service = fs.readFileSync(path.join(process.cwd(), 'src/lib/watch/watch-request-service.ts'), 'utf8');
   assert.match(service, /const duration = runtimeSeconds\(session\.current\.item\.runtime\)/);
