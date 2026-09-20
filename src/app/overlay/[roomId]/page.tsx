@@ -22,7 +22,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { usePopout } from '@/components/PopoutWidgets/PopoutProvider';
-import { getRoomWatchSessionId } from '@/lib/watch-session';
+import { getGlobalWatchSessionId, getMusicWatchSessionId, getRoomWatchSessionId } from '@/lib/watch-session';
 import { useCollection } from '@/hooks/use-db';
 
 type WatchPlayback = {
@@ -80,7 +80,9 @@ function playbackPosition(playback?: WatchPlayback) {
 function musicModeOptions(item: any) {
   const metadata = item?.metadata || {};
   return {
-    video: metadata.videoPlaybackUrl || item?.playbackUrl || '',
+    // The browser embed is the proven public playback path. The HLS proxy is
+    // retained as metadata/fallback for clients that explicitly request it.
+    video: metadata.embedPlaybackUrl || metadata.videoPlaybackUrl || item?.playbackUrl || '',
     audio: metadata.audioPlaybackUrl || '',
   };
 }
@@ -146,8 +148,12 @@ export default function OverlayPage() {
   const params = useParams<{ roomId: string }>();
   const searchParams = useSearchParams();
   const roomId = params.roomId;
-  const movieSessionId = getRoomWatchSessionId(roomId, 'movie');
-  const musicSessionId = getRoomWatchSessionId(roomId, 'music');
+  // SpaceMountain's permanent channel is intentionally one global player.
+  // Twitch/Discord !wr and !sr already write to these canonical sessions, so
+  // the public overlay must watch the same queues instead of private room IDs.
+  const systemLounge = roomId === 'system-spacemountainlive-lounge';
+  const movieSessionId = systemLounge ? getGlobalWatchSessionId() : getRoomWatchSessionId(roomId, 'movie');
+  const musicSessionId = systemLounge ? getMusicWatchSessionId() : getRoomWatchSessionId(roomId, 'music');
   const requestedLane = (searchParams.get('media') || searchParams.get('lane') || 'auto').toLowerCase();
   const lane: MediaLane = requestedLane === 'music' || requestedLane === 'movie' ? requestedLane : 'auto';
   const cleanMode = ['1', 'true', 'yes', 'on'].includes(String(searchParams.get('clean') || '').toLowerCase());
