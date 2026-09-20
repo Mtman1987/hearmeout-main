@@ -7,12 +7,16 @@ function source(relativePath: string) {
   return readFileSync(fileURLToPath(new URL(`../${relativePath}`, import.meta.url)), 'utf8');
 }
 
-test('HearMeOut public queue requests are open while controls and rooms require service authentication', () => {
+test('HearMeOut public queues and scoped SpaceMountain owner controls remain usable', () => {
   const route = source('src/app/api/internal/bot/actions/route.ts');
   assert.match(route, /isPublicQueueRequest/);
   assert.match(route, /action === 'hmo\.media\.request' \|\| action === 'hmo\.media\.state\.read'/);
-  assert.match(route, /sessionId === getMusicWatchSessionId\(\) \|\| sessionId === getGlobalWatchSessionId\(\)/);
-  assert.match(route, /!isPublicQueueRequest && !isBotActionServiceRequest\(request\)/);
+  assert.match(route, /const isGlobalSession = sessionId === getMusicWatchSessionId\(\) \|\| sessionId === getGlobalWatchSessionId\(\)/);
+  assert.match(route, /const isSpaceMountainLoungeControl = !room/);
+  assert.match(route, /action === 'hmo\.media\.control'/);
+  assert.match(route, /tenantId === 'spacemountainlive'/);
+  assert.match(route, /actorRole === 'owner' \|\| actorRole === 'moderator'/);
+  assert.match(route, /!isPublicQueueRequest && !isSpaceMountainLoungeControl && !isBotActionServiceRequest\(request\)/);
   assert.match(source('src/lib/bot-action-service-auth.ts'), /timingSafeEqual/);
 });
 
@@ -35,6 +39,12 @@ test('media controls are restricted to the explicit safe control set', () => {
   const route = source('src/app/api/internal/bot/actions/route.ts');
   assert.match(route, /new Set\(\['play', 'pause', 'next', 'clear', 'mute', 'unmute', 'volume'\]\)/);
   assert.match(route, /Unsupported media control/);
+});
+
+test('clean overlay keeps its embedded video directly interactive', () => {
+  const overlay = source('src/app/overlay/[roomId]/page.tsx');
+  assert.match(overlay, /className="pointer-events-auto h-full w-full border-0 bg-black"/);
+  assert.match(overlay, /style=\{\{ pointerEvents: 'auto' \}\}/);
 });
 
 test('the internal adapter exposes room, tenant persona, and voice bridge actions', () => {

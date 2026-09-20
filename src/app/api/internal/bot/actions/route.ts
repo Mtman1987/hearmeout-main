@@ -58,23 +58,33 @@ export async function POST(request: NextRequest) {
   const roomId = text(body?.roomId, 160);
   const room = roomId || text(body?.room, 160) || undefined;
   const sessionId = text(body?.sessionId, 160) || (roomId ? getRoomWatchSessionId(roomId, 'music') : getMusicWatchSessionId());
+  const actorRole = text(body?.actorRole, 40).toLowerCase();
+  const tenantId = text(body?.tenantId, 160).toLowerCase();
+  const isGlobalSession = sessionId === getMusicWatchSessionId() || sessionId === getGlobalWatchSessionId();
   // Chat may request media or inspect the two public 24/7 queues without an
-  // internal service credential. Every room-scoped action and every playback
-  // control remains behind service authentication.
+  // internal service credential. Room-scoped actions and controls remain
+  // behind service authentication.
   const isPublicQueueRequest = !room && (
     action === 'hmo.media.request' || action === 'hmo.media.state.read'
-  ) && (
-    sessionId === getMusicWatchSessionId() || sessionId === getGlobalWatchSessionId()
-  );
-  if (!isPublicQueueRequest && !isBotActionServiceRequest(request)) {
+  ) && isGlobalSession;
+  // StreamWeaver has already verified Twitch broadcaster/mod badges before it
+  // sends this payload. Keep the credential-independent fallback deliberately
+  // limited to SpaceMountain's two public 24/7 players; private room controls
+  // and every other bot action still require the shared service credential.
+  const isSpaceMountainLoungeControl = !room
+    && action === 'hmo.media.control'
+    && isGlobalSession
+    && tenantId === 'spacemountainlive'
+    && (actorRole === 'owner' || actorRole === 'moderator');
+  if (!isPublicQueueRequest && !isSpaceMountainLoungeControl && !isBotActionServiceRequest(request)) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
   try {
     const actor = {
       actorUserId: text(body?.actorUserId, 160),
-      tenantId: text(body?.tenantId, 160),
-      actorRole: text(body?.actorRole, 40),
+      tenantId,
+      actorRole,
     };
 
     if (action === 'hmo.tts.speak') {

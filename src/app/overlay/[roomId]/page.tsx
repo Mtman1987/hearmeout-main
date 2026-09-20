@@ -629,7 +629,8 @@ export default function OverlayPage() {
         {embeddedMode && currentPlaybackUrl && (
           <iframe
             ref={iframeRef}
-            className="h-full w-full border-0 bg-black"
+            className="pointer-events-auto h-full w-full border-0 bg-black"
+            style={{ pointerEvents: 'auto' }}
             title="Overlay media player"
             src={iframeUrlFor(currentPlaybackUrl)}
             allow="autoplay; fullscreen; encrypted-media; picture-in-picture"
