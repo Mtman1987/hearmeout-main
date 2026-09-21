@@ -73,12 +73,12 @@ async function requestApolloLounge(input: {
 }) {
   const messageId = text(input.messageId, 160).replace(/[^A-Za-z0-9-]/g, '-') || randomUUID();
   const userId = text(input.actorUserId, 160).replace(/[^A-Za-z0-9._:-]/g, '-') || 'streamweaver';
-  const response = await fetch(`${getApolloLoungeOrigin()}/api/watch/broadcast/lounge-twitch-request`, {
+  const send = (channel: string) => fetch(`${getApolloLoungeOrigin()}/api/watch/broadcast/lounge-twitch-request`, {
     method: 'POST',
     cache: 'no-store',
     headers: getDjWorkerRequestHeaders({ 'Content-Type': 'application/json', Accept: 'application/json' }),
     body: JSON.stringify({
-      channel: 'spacemountainlive',
+      channel,
       command: `!${input.command} ${input.query}`,
       messageId,
       userId,
@@ -86,6 +86,14 @@ async function requestApolloLounge(input: {
     }),
     signal: typeof AbortSignal.timeout === 'function' ? AbortSignal.timeout(30_000) : undefined,
   });
+  let response = await send('spacemountainlive');
+  // The protected Apollo release can briefly lag the Fly deployment during a
+  // cutover. Retry the former channel claim against the same isolated Apollo
+  // queue only when that older release rejects the canonical channel.
+  if (response.status === 403) {
+    await response.body?.cancel();
+    response = await send('mtman1987');
+  }
   const result = await response.json().catch(() => ({})) as any;
   if (!response.ok) throw new Error(result?.error || `Apollo Lounge request failed (${response.status})`);
   return result;
