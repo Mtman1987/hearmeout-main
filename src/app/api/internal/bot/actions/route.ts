@@ -4,9 +4,15 @@ import {
   controlWatchSession,
   getPublicWatchSession,
   getWatchSession,
+  requestWatchItem,
   requestWatchMusicItem,
 } from '@/lib/watch-request-service';
-import { ACTIVITY_ROOM_ID, getMusicWatchSessionId, getRoomWatchSessionId } from '@/lib/watch-session';
+import {
+  ACTIVITY_ROOM_ID,
+  getGlobalWatchSessionId,
+  getMusicWatchSessionId,
+  getRoomWatchSessionId,
+} from '@/lib/watch-session';
 import {
   changeRoomPersonaForBotAction,
   controlVoiceBridgeForBotAction,
@@ -21,6 +27,7 @@ export const dynamic = 'force-dynamic';
 type HearMeOutAction =
   | 'hmo.media.state.read'
   | 'hmo.media.request'
+  | 'hmo.watch.request'
   | 'hmo.media.control'
   | 'hmo.rooms.read'
   | 'hmo.bot.control'
@@ -30,6 +37,7 @@ type HearMeOutAction =
 const ACTIONS = new Set<HearMeOutAction>([
   'hmo.media.state.read',
   'hmo.media.request',
+  'hmo.watch.request',
   'hmo.media.control',
   'hmo.rooms.read',
   'hmo.bot.control',
@@ -148,6 +156,40 @@ export async function POST(request: NextRequest) {
         success: true,
         action,
         message: result.result.message,
+        request: result.request,
+        session: getPublicWatchSession(result.session, publicBaseUrl(request)),
+      });
+    }
+
+    if (action === 'hmo.watch.request') {
+      const query = text(body?.query, 500);
+      if (!query) return NextResponse.json({ error: 'A movie, show, or video request is required' }, { status: 400 });
+
+      const watchSessionId = text(body?.sessionId, 160)
+        || (roomId ? getRoomWatchSessionId(roomId, 'movie') : getGlobalWatchSessionId());
+      const result = await requestWatchItem({
+        sessionId: watchSessionId,
+        query,
+        username: text(body?.actorName, 100) || 'StreamWeaver bot action',
+        userId: text(body?.actorUserId, 160) || text(body?.tenantId, 160) || 'streamweaver',
+      });
+
+      if ('error' in result) {
+        const message = result.discovery
+          ? `No playable provider match found for "${query}".`
+          : result.recommendation
+            ? `No playable provider match found. Best fallback was "${result.recommendation.title}".`
+            : String(result.error || 'No playable watch item found');
+        return NextResponse.json({ error: message }, { status: 404 });
+      }
+
+      const position = result.session.current?.requestId === result.request.requestId
+        ? 'now playing'
+        : `queue position ${result.session.queue.length}`;
+      return NextResponse.json({
+        success: true,
+        action,
+        message: `Added "${result.request.item.title}" (${position}).`,
         request: result.request,
         session: getPublicWatchSession(result.session, publicBaseUrl(request)),
       });
