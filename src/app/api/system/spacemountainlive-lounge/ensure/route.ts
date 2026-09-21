@@ -60,7 +60,7 @@ export async function GET() {
     description: existing.description || 'Permanent Hear Me Out media room for the SpaceMountainLive channel.',
     ownerId: 'spacemountainlive',
     ownerName: 'SpaceMountainLive',
-    isPrivate: true,
+    isPrivate: false,
     password: undefined,
     systemRoom: true,
     persistent: true,
