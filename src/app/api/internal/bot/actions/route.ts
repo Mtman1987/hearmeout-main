@@ -84,7 +84,7 @@ async function requestApolloLounge(input: {
       userId,
       displayName: text(input.actorName, 120) || 'Twitch viewer',
     }),
-    signal: typeof AbortSignal.timeout === 'function' ? AbortSignal.timeout(30_000) : undefined,
+    signal: typeof AbortSignal.timeout === 'function' ? AbortSignal.timeout(75_000) : undefined,
   });
   let response = await send('spacemountainlive');
   // The protected Apollo release can briefly lag the Fly deployment during a
