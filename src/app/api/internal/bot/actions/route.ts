@@ -74,6 +74,15 @@ async function requestApolloLounge(input: {
   const messageId = text(input.messageId, 160).replace(/[^A-Za-z0-9-]/g, '-') || randomUUID();
   const userId = text(input.actorUserId, 160).replace(/[^A-Za-z0-9._:-]/g, '-') || 'streamweaver';
   const deadline = Date.now() + 75_000;
+  const stateUrl = new URL('/api/watch/broadcast/state', getApolloLoungeOrigin());
+  stateUrl.searchParams.set('roomId', APOLLO_LOUNGE_ROOM_ID);
+  const wake = () => fetch(stateUrl, {
+    cache: 'no-store',
+    headers: { Accept: 'application/json' },
+    signal: typeof AbortSignal.timeout === 'function'
+      ? AbortSignal.timeout(Math.max(1, deadline - Date.now()))
+      : undefined,
+  });
   const send = (channel: string) => fetch(`${getApolloLoungeOrigin()}/api/watch/broadcast/lounge-twitch-request`, {
     method: 'POST',
     cache: 'no-store',
@@ -92,11 +101,24 @@ async function requestApolloLounge(input: {
   let channel = 'spacemountainlive';
   let lastError: Error | undefined;
   while (Date.now() < deadline) {
-    let response: Response | undefined;
+    let awake = false;
     try {
-      response = await send(channel);
+      const stateResponse = await wake();
+      awake = stateResponse.ok;
+      if (!awake) {
+        const state = await stateResponse.json().catch(() => ({})) as any;
+        lastError = new Error(state?.error || `Apollo Lounge wake failed (${stateResponse.status})`);
+      }
     } catch (error) {
       lastError = error instanceof Error ? error : new Error(String(error));
+    }
+    let response: Response | undefined;
+    if (awake) {
+      try {
+        response = await send(channel);
+      } catch (error) {
+        lastError = error instanceof Error ? error : new Error(String(error));
+      }
     }
     if (response) {
       const result = await response.json().catch(() => ({})) as any;
