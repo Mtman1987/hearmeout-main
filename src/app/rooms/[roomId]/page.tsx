@@ -45,6 +45,8 @@ interface RoomData {
   password?: string;
   createdAt?: string;
   expiresAt?: string;
+  persistent?: boolean;
+  systemRoom?: boolean;
 }
 
 type WatchCardState = {
@@ -903,7 +905,7 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
     }
 
     // Room expiry check
-    const expiresAt = effectiveRoomExpiry(room.expiresAt, room.createdAt);
+    const expiresAt = effectiveRoomExpiry(room.expiresAt, room.createdAt, room.persistent === true || room.systemRoom === true);
     const isExpired = expiresAt ? Date.now() > expiresAt : false;
     if (isExpired) {
       return (
