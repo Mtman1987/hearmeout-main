@@ -71,8 +71,8 @@ jobs:
           node --check worker/src/server.js
           node --check worker/src/persona-runtime-adapter.js
           node --check worker/src/persona-bootstrap.js
-      - name: Test Discord bridge and HearMeOut persona runtime
-        run: node --test tests/discord-speaker-presence.test.cjs tests/voice-bridge-privacy-gate.test.cjs tests/discord-voice-jitter-buffer.test.cjs tests/discord-voice-gain-contract.test.cjs tests/persona-runtime.test.cjs
+      - name: Test Discord bridge, media, and HearMeOut persona runtime
+        run: node --test tests/discord-speaker-presence.test.cjs tests/voice-bridge-privacy-gate.test.cjs tests/discord-voice-jitter-buffer.test.cjs tests/discord-voice-gain-contract.test.cjs tests/youtube-two-input-hls-contract.test.cjs tests/persona-runtime.test.cjs
 
   deploy-main:
     needs: [branch-housekeeping, validate]

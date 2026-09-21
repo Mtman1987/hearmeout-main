@@ -1374,14 +1374,19 @@ function ensureYoutubeWatchHls(videoId, clientResolved = null) {
       return;
     }
 
-    const [videoInfo, audioInfo] = await Promise.all([
-      extractVideoInfo(videoId),
-      extractAudioInfo(videoId),
-    ]);
-
-    if (!videoInfo?.url) throw new Error('No YouTube video stream resolved');
-    if (!audioInfo?.url) throw new Error('No YouTube audio stream resolved');
-    await runYoutubeHlsFfmpeg(clean, videoInfo.url, audioInfo.url, dir, indexPath);
+    // Keep video and audio as two independent inputs, but let yt-dlp perform
+    // each authenticated media request. Passing its signed URLs to a second
+    // HTTP client loses the player-specific request context and now returns
+    // HTTP 403 from YouTube before FFmpeg can decode either track.
+    try {
+      await runYoutubeHlsFromYtDlp(clean, videoId, dir, indexPath, true);
+    } catch (error) {
+      if (!ytDlpCookieArgs().length) throw error;
+      console.warn(`[WatchHLS] Retrying ${clean} without stale YouTube cookies`);
+      try { rmSync(dir, { recursive: true, force: true }); } catch {}
+      mkdirSync(dir, { recursive: true });
+      await runYoutubeHlsFromYtDlp(clean, videoId, dir, indexPath, false);
+    }
   })()
     .catch((error) => {
       console.error(`[WatchHLS] YouTube conversion failed for ${clean}:`, error.message || error);
@@ -1518,6 +1523,94 @@ async function runWatchHlsFfmpeg(streamId, sourceUrl, dir, indexPath) {
       }
       reject(new Error(stderr || `ffmpeg exited with ${code}`));
     });
+  });
+}
+
+function youtubeYtDlpStreamArgs(videoId, mode, useCookies) {
+  const format = mode === 'video'
+    ? 'bestvideo[ext=mp4][height<=720][vcodec^=avc1]/bestvideo[ext=mp4][height<=720]/bestvideo[height<=720]/bestvideo'
+    : 'bestaudio[ext=m4a]/bestaudio[ext=mp4]/bestaudio';
+  return [
+    '--no-playlist',
+    '--no-warnings',
+    '--quiet',
+    '--no-part',
+    '--js-runtimes',
+    'node',
+    '--extractor-args',
+    'youtube:player_client=mweb',
+    ...(YTDLP_BGUTIL_SERVER_HOME
+      ? ['--extractor-args', `youtubepot-bgutilscript:server_home=${YTDLP_BGUTIL_SERVER_HOME}`]
+      : []),
+    '--format',
+    format,
+    ...(useCookies ? ytDlpCookieArgs() : []),
+    '--output',
+    '-',
+    `https://www.youtube.com/watch?v=${videoId}`,
+  ];
+}
+
+function runYoutubeHlsFromYtDlp(streamId, videoId, dir, indexPath, useCookies = true) {
+  const segmentPattern = join(dir, 'seg_%05d.ts');
+  console.log(`[WatchHLS] Starting two-input yt-dlp/FFmpeg conversion for ${streamId}`);
+
+  return new Promise((resolve, reject) => {
+    const video = spawn('yt-dlp', youtubeYtDlpStreamArgs(videoId, 'video', useCookies), { stdio: ['ignore', 'pipe', 'pipe'] });
+    const audio = spawn('yt-dlp', youtubeYtDlpStreamArgs(videoId, 'audio', useCookies), { stdio: ['ignore', 'pipe', 'pipe'] });
+    const ffmpegArgs = [
+      '-hide_banner',
+      '-loglevel', 'warning',
+      '-threads', '2',
+      '-y',
+      '-i', 'pipe:3',
+      '-i', 'pipe:4',
+      '-map', '0:v:0',
+      '-map', '1:a:0',
+      '-c:v', 'libx264',
+      '-preset', 'veryfast',
+      '-pix_fmt', 'yuv420p',
+      '-c:a', 'aac',
+      '-b:a', '160k',
+      '-ac', '2',
+      '-shortest',
+      '-f', 'hls',
+      '-hls_time', String(WATCH_HLS_SEGMENT_SECONDS),
+      ...watchHlsOutputArgs(streamId),
+      '-hls_segment_filename', segmentPattern,
+      indexPath,
+    ];
+    const command = process.platform === 'win32' ? 'ffmpeg' : 'nice';
+    const args = process.platform === 'win32' ? ffmpegArgs : ['-n', '10', 'ffmpeg', ...ffmpegArgs];
+    const ffmpeg = spawn(command, args, { stdio: ['ignore', 'ignore', 'pipe', 'pipe', 'pipe'] });
+    const storageFailure = protectWatchHlsStorage(ffmpeg, dir);
+    let videoError = '', audioError = '', ffmpegError = '', settled = false, ffmpegExited = false;
+    const stop = (child) => { if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL'); };
+    const fail = (error) => {
+      if (settled) return;
+      settled = true;
+      stop(video); stop(audio); stop(ffmpeg);
+      reject(error);
+    };
+    video.stderr.on('data', chunk => { videoError = `${videoError}${chunk}`.slice(-2000); });
+    audio.stderr.on('data', chunk => { audioError = `${audioError}${chunk}`.slice(-2000); });
+    ffmpeg.stderr.on('data', chunk => { ffmpegError = `${ffmpegError}${chunk}`.slice(-4000); });
+    video.once('error', fail);
+    audio.once('error', fail);
+    ffmpeg.once('error', fail);
+    video.once('exit', code => { if (!ffmpegExited && code !== 0) fail(new Error(videoError || `video yt-dlp exited with ${code}`)); });
+    audio.once('exit', code => { if (!ffmpegExited && code !== 0) fail(new Error(audioError || `audio yt-dlp exited with ${code}`)); });
+    ffmpeg.once('exit', code => {
+      ffmpegExited = true;
+      if (settled) return;
+      if (storageFailure()) { fail(new Error(storageFailure())); return; }
+      if (code !== 0) { fail(new Error(ffmpegError || videoError || audioError || `ffmpeg exited with ${code}`)); return; }
+      settled = true;
+      stop(video); stop(audio);
+      resolve();
+    });
+    video.stdout.pipe(ffmpeg.stdio[3]);
+    audio.stdout.pipe(ffmpeg.stdio[4]);
   });
 }
 
