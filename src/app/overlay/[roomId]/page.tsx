@@ -77,23 +77,6 @@ async function api(path: string) {
   return response.json();
 }
 
-const APOLLO_LOUNGE_PROXY = '/api/system/spacemountainlive-lounge/apollo';
-
-function apolloLoungeUrl(path: string | undefined) {
-  const value = String(path || '');
-  return value.startsWith('/api/watch/') ? `${APOLLO_LOUNGE_PROXY}${value}` : '';
-}
-
-function apolloFallbackPlaybackUrl(item: any) {
-  const metadata = item?.metadata || {};
-  const directVideoId = String(metadata.videoId || '').trim();
-  const sourceUrl = String(metadata.sourceUrl || '').trim();
-  const sourceVideoId = sourceUrl.match(/(?:youtu\.be\/|[?&]v=|\/embed\/)([A-Za-z0-9_-]{11})/)?.[1] || '';
-  const videoId = /^[A-Za-z0-9_-]{11}$/.test(directVideoId) ? directVideoId : sourceVideoId;
-  if (videoId) return `https://www.youtube-nocookie.com/embed/${videoId}`;
-  return String(item?.playbackUrl || '');
-}
-
 function playbackPosition(playback?: WatchPlayback) {
   if (!playback) return 0;
   if (playback.status !== 'playing') return playback.position || 0;
@@ -186,9 +169,6 @@ export default function OverlayPage() {
   const params = useParams<{ roomId: string }>();
   const searchParams = useSearchParams();
   const roomId = params.roomId;
-  // Only this permanent Lounge route is cut over to Apollo's isolated player.
-  // Ordinary HearMeOut room overlays continue to use their existing sessions.
-  const systemLounge = roomId === 'system-spacemountainlive-lounge';
   const movieSessionId = getRoomWatchSessionId(roomId, 'movie');
   const musicSessionId = getRoomWatchSessionId(roomId, 'music');
   const requestedLane = (searchParams.get('media') || searchParams.get('lane') || 'auto').toLowerCase();
@@ -220,13 +200,11 @@ export default function OverlayPage() {
   const applyingRemoteState = useRef(false);
   const embeddedCurrentTimeRef = useRef(0);
   const lastEmbeddedPlaybackKeyRef = useRef('');
-  const advancingEndedRequestRef = useRef<string | null>(null);
   const volumeRef = useRef(initialVolume);
   const mutedRef = useRef(requestedMuted ?? false);
 
   const [movieState, setMovieState] = useState<WatchState | null>(null);
   const [musicState, setMusicState] = useState<WatchState | null>(null);
-  const [loungeState, setLoungeState] = useState<WatchState | null>(null);
   const [connected, setConnected] = useState(false);
   const [volume, setVolume] = useState(initialVolume);
   const [isMuted, setIsMuted] = useState(requestedMuted ?? false);
@@ -286,11 +264,6 @@ export default function OverlayPage() {
   useEffect(() => { mutedRef.current = isMuted; }, [isMuted]);
 
   const activeBundle = useMemo(() => {
-    if (systemLounge) return {
-      lane: loungeState?.current?.item?.type === 'movie' ? 'movie' as const : 'music' as const,
-      sessionId: roomId,
-      state: loungeState,
-    };
     if (lane === 'music') return { lane: 'music' as const, sessionId: musicSessionId, state: musicState };
     if (lane === 'movie') return { lane: 'movie' as const, sessionId: movieSessionId, state: movieState };
 
@@ -302,17 +275,13 @@ export default function OverlayPage() {
     if (playing[0]) return playing[0];
     const loaded = bundles.filter((bundle) => bundle.state?.current).sort(newerPlaybackFirst);
     return loaded[0] || bundles[0];
-  }, [lane, loungeState, movieSessionId, movieState, musicSessionId, musicState, roomId, systemLounge]);
+  }, [lane, movieSessionId, movieState, musicSessionId, musicState]);
 
   const activeState = activeBundle.state;
   const currentItem = activeState?.current?.item || null;
-  const currentPlaybackUrl = systemLounge
-    ? (activeState?.broadcast?.ready
-        ? apolloLoungeUrl(activeState.broadcast.playbackUrl)
-        : apolloFallbackPlaybackUrl(currentItem))
-    : currentItem
-      ? hlsFallbackUrlFor(currentItem, currentItem?.type === 'music' ? musicPlaybackMode : 'video')
-      : '';
+  const currentPlaybackUrl = currentItem
+    ? hlsFallbackUrlFor(currentItem, currentItem?.type === 'music' ? musicPlaybackMode : 'video')
+    : '';
   const embeddedMode = Boolean(currentPlaybackUrl && isEmbeddedVideoUrl(currentPlaybackUrl));
   const cleanIdle = cleanMode && !currentPlaybackUrl;
 
@@ -354,15 +323,6 @@ export default function OverlayPage() {
 
   const applyPlaybackState = useCallback((nextState = activeState) => {
     if (!nextState?.current) return;
-
-    // Once this request reports that it ended, do not let the normal state poll
-    // restart it while the server is resolving the queued or auto-radio track.
-    if (advancingEndedRequestRef.current === nextState.current.requestId) {
-      if (embeddedMode) youtubeCommand('pauseVideo');
-      else videoRef.current?.pause();
-      setMediaStatus('Choosing the next track');
-      return;
-    }
 
     if (embeddedMode) {
       const remotePosition = playbackPosition(nextState.playback);
@@ -434,31 +394,9 @@ export default function OverlayPage() {
     setMediaStatus('Overlay media unlocked');
   }, [applyVolume, embeddedMode, youtubeCommand]);
 
-  const advanceEndedMedia = useCallback(async () => {
-    const requestId = activeState?.current?.requestId;
-    if (!systemLounge || !requestId || advancingEndedRequestRef.current === requestId) return;
-    advancingEndedRequestRef.current = requestId;
-    // Apollo owns the durable clock and advances even with no viewers. The
-    // legacy overlay must never mutate its retired HearMeOut global sessions.
-    setMediaStatus('Apollo is choosing the next track');
-  }, [activeState?.current?.requestId, systemLounge]);
-
-  useEffect(() => {
-    const activeRequestId = activeState?.current?.requestId || null;
-    if (advancingEndedRequestRef.current && advancingEndedRequestRef.current !== activeRequestId) {
-      advancingEndedRequestRef.current = null;
-    }
-  }, [activeState?.current?.requestId]);
-
   useEffect(() => {
     const refresh = async () => {
       try {
-        if (systemLounge) {
-          const state = await api(`${APOLLO_LOUNGE_PROXY}/api/watch/broadcast/state`);
-          setLoungeState(state);
-          setConnected(true);
-          return;
-        }
         const [movie, music] = await Promise.all([
           api(`/api/watch/sessions/${movieSessionId}/state`),
           api(`/api/watch/sessions/${musicSessionId}/state`),
@@ -475,7 +413,7 @@ export default function OverlayPage() {
     refresh();
     const interval = window.setInterval(refresh, 1000);
     return () => window.clearInterval(interval);
-  }, [movieSessionId, musicSessionId, systemLounge]);
+  }, [movieSessionId, musicSessionId]);
 
   useEffect(() => {
     const unlockOverlayAudio = () => {
@@ -648,14 +586,13 @@ export default function OverlayPage() {
         setMediaStatus('Overlay media paused');
       } else if (code === 0) {
         setMediaStatus('Overlay media ended');
-        void advanceEndedMedia();
       } else if (code === 3) {
         setMediaStatus('Overlay media buffering');
       }
     };
     window.addEventListener('message', onMessage);
     return () => window.removeEventListener('message', onMessage);
-  }, [advanceEndedMedia]);
+  }, []);
 
   const hasPopout = (source: string) => popouts.some((p) => p.type === 'chat' && p.customSettings?.source === source);
   const hasQueue = popouts.some((p) => p.type === 'queue');
@@ -673,7 +610,7 @@ export default function OverlayPage() {
   const mediaImage = currentItem?.thumbnail || currentItem?.poster || currentItem?.image;
   const queueLength = activeState?.queue?.length || 0;
   const laneLabel = activeBundle.lane === 'music' ? 'Music Videos' : 'Watch Party';
-  const musicQueue = systemLounge ? loungeState?.queue || [] : musicState?.queue || [];
+  const musicQueue = musicState?.queue || [];
 
   if (cleanIdle) {
     return (
@@ -724,7 +661,7 @@ export default function OverlayPage() {
           onPause={() => {
             if (!applyingRemoteState.current) setMediaStatus('Overlay media paused');
           }}
-          onEnded={() => void advanceEndedMedia()}
+          onEnded={() => setMediaStatus('Overlay media ended')}
           onError={() => {
             const error = videoRef.current?.error;
             setMediaStatus(error ? `Overlay media error ${error.code}` : 'Overlay media error');
