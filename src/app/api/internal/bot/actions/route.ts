@@ -40,6 +40,9 @@ const ACTIONS = new Set<HearMeOutAction>([
 ]);
 const CONTROLS = new Set(['play', 'pause', 'next', 'clear', 'mute', 'unmute', 'volume']);
 const APOLLO_LOUNGE_ROOM_ID = 'system-spacemountainlive-lounge';
+// Keep the existing !sr destination as the one permanent mixed SpaceMountain player.
+// Movies, music, state reads, and controls all use this exact durable session.
+const SPACEMOUNTAIN_LOUNGE_SESSION_ID = getRoomWatchSessionId(APOLLO_LOUNGE_ROOM_ID, 'music');
 
 function isSpaceMountainLoungeSession(tenantId: string, sessionId: string) {
   return tenantId === 'spacemountainlive'
@@ -145,9 +148,7 @@ export async function POST(request: NextRequest) {
 
     if (action === 'hmo.media.state.read') {
       if (isSpaceMountainLoungeSession(tenantId, sessionId)) {
-        const kind = sessionId === getGlobalWatchSessionId() ? 'movie' : 'music';
-        const loungeSessionId = getRoomWatchSessionId(APOLLO_LOUNGE_ROOM_ID, kind);
-        const session = getPublicWatchSession(getWatchSession(loungeSessionId, undefined, undefined, kind), publicBaseUrl(request));
+        const session = getPublicWatchSession(getWatchSession(SPACEMOUNTAIN_LOUNGE_SESSION_ID, undefined, undefined, 'music'), publicBaseUrl(request));
         return NextResponse.json({ success: true, action, session });
       }
       const mediaKind = sessionId === getGlobalWatchSessionId() ? 'movie' : 'music';
@@ -160,9 +161,8 @@ export async function POST(request: NextRequest) {
       if (!query) return NextResponse.json({ error: 'A song, story, or audio request is required' }, { status: 400 });
       if (isSpaceMountainLoungeSession(tenantId, sessionId)) {
         const kind = sessionId === getGlobalWatchSessionId() ? 'movie' : 'music';
-        const loungeSessionId = getRoomWatchSessionId(APOLLO_LOUNGE_ROOM_ID, kind);
         const requestIdentity = {
-          sessionId: loungeSessionId,
+          sessionId: SPACEMOUNTAIN_LOUNGE_SESSION_ID,
           query,
           username: text(body?.actorName, 100) || 'SpaceMountainLive',
           userId: text(body?.actorUserId, 160) || 'spacemountainlive',
@@ -208,7 +208,8 @@ export async function POST(request: NextRequest) {
     if (!CONTROLS.has(control)) return NextResponse.json({ error: 'Unsupported media control' }, { status: 400 });
     const rawValue = body?.value;
     const value = rawValue === undefined || rawValue === null || rawValue === '' ? undefined : Number(rawValue);
-    const session = await controlWatchSession(sessionId, control, Number.isFinite(value) ? value : undefined, undefined, {
+    const controlSessionId = isSpaceMountainLoungeSession(tenantId, sessionId) ? SPACEMOUNTAIN_LOUNGE_SESSION_ID : sessionId;
+    const session = await controlWatchSession(controlSessionId, control, Number.isFinite(value) ? value : undefined, undefined, {
       actorUserId: text(body?.actorUserId, 160),
       isAdmin: true,
       platform: 'admin',
