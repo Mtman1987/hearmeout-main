@@ -1094,6 +1094,14 @@ export default function WatchRoomClient({ sessionId, activityMode = false, canPa
                 if (canSkip) nextItem();
               }}
             />
+            {state?.current && (
+              <img
+                src="/munch-tv-bug.svg"
+                alt="Munch TV"
+                className="pointer-events-none absolute bottom-3 right-3 z-20 w-[clamp(72px,11vw,118px)] select-none opacity-80 drop-shadow-[0_2px_5px_rgba(0,0,0,0.9)]"
+                draggable={false}
+              />
+            )}
             {!state?.current && (
               <div className="absolute inset-0 grid place-content-center gap-2 bg-black text-center text-slate-400">
                 <strong className="text-slate-100">No video loaded</strong>
