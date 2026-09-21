@@ -53,10 +53,10 @@ function getApolloLoungeOrigin() {
 }
 
 function getApolloLoungeChannel() {
-  return 'spacemountainlive';
+  return String(process.env.APOLLO_LOUNGE_TWITCH_CHANNEL || 'mtman1987').trim().replace(/^#/, '').toLowerCase();
 }
 
-async function relayApolloLoungeCommand(input: { channel: string; command: string; messageId: string; userId: string; displayName: string }) {
+async function relayApolloLoungeCommand(input: { channel: string; command: string; messageId: string; userId: string; displayName: string; canManage: boolean }) {
   const headers = getDjWorkerRequestHeaders({ 'Content-Type': 'application/json', Accept: 'application/json' });
   const response = await fetch(`${getApolloLoungeOrigin()}/api/watch/broadcast/lounge-twitch-request`, {
     method: 'POST',
@@ -256,10 +256,10 @@ function syncChannels(serverId: string, instance: BotInstance) {
     const primaryRoomId = rooms[0]?.id;
 
     // Only attach global Twitch channels to an existing HearMeOut room.
-    if (primaryRoomId) newChannels.set(getApolloLoungeChannel(), primaryRoomId);
+    if (primaryRoomId) newChannels.set('mtman1987', primaryRoomId);
 
     // Join the bot user's own channel if different
-    if (primaryRoomId && tokens.username && tokens.username.toLowerCase() !== getApolloLoungeChannel()) {
+    if (primaryRoomId && tokens.username && tokens.username.toLowerCase() !== 'mtman1987') {
       newChannels.set(tokens.username.toLowerCase(), primaryRoomId);
     }
 
@@ -316,7 +316,7 @@ function createMessageHandler(instance: BotInstance) {
       return;
     }
 
-    if (channelName === getApolloLoungeChannel() && /^!(sr|wr)\s+\S/i.test(msg.trim())) {
+    if (channelName === getApolloLoungeChannel() && (/^!(sr|wr)\s+\S/i.test(msg.trim()) || /^!radio(?:\s+(?:on|off|status))?\s*$/i.test(msg.trim()))) {
       try {
         const text = await relayApolloLoungeCommand({
           channel: channelName,
@@ -324,6 +324,7 @@ function createMessageHandler(instance: BotInstance) {
           messageId: String(context.id || Date.now()),
           userId: String(context['user-id'] || context.username || 'twitch'),
           displayName: String(requester),
+          canManage: context.badges?.broadcaster === '1' || Boolean(context.mod) || context.badges?.moderator === '1' || String(context.username || '').toLowerCase() === channelName,
         });
         await client.say(target, `@${requester} ${text}`);
       } catch (error) {
