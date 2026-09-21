@@ -12,6 +12,8 @@ test('YouTube HLS keeps separate yt-dlp video and audio inputs', () => {
   assert.match(source, /'-map', '0:v:0',[\s\S]*'-map', '1:a:0'/);
   assert.match(source, /video\.stdout\.pipe\(ffmpeg\.stdio\[3\]\)/);
   assert.match(source, /audio\.stdout\.pipe\(ffmpeg\.stdio\[4\]\)/);
+  const streamArgs = source.slice(source.indexOf('function youtubeYtDlpStreamArgs'), source.indexOf('function runYoutubeHlsFromYtDlp'));
+  assert.doesNotMatch(streamArgs, /player_client=mweb/);
 });
 
 test('normal worker HLS no longer hands extracted signed URLs back to FFmpeg', () => {

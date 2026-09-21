@@ -1537,8 +1537,6 @@ function youtubeYtDlpStreamArgs(videoId, mode, useCookies) {
     '--no-part',
     '--js-runtimes',
     'node',
-    '--extractor-args',
-    'youtube:player_client=mweb',
     ...(YTDLP_BGUTIL_SERVER_HOME
       ? ['--extractor-args', `youtubepot-bgutilscript:server_home=${YTDLP_BGUTIL_SERVER_HOME}`]
       : []),
