@@ -35,10 +35,12 @@ interface Room {
     occupantCount?: number;
     expiresAt?: string;
     createdAt?: string;
+    persistent?: boolean;
+    systemRoom?: boolean;
 }
 
-function timeRemaining(expiresAt?: string, createdAt?: string) {
-  const expiry = effectiveRoomExpiry(expiresAt, createdAt);
+function timeRemaining(expiresAt?: string, createdAt?: string, permanent = false) {
+  const expiry = effectiveRoomExpiry(expiresAt, createdAt, permanent);
   if (!expiry) return null;
   const ms = expiry - Date.now();
   if (ms <= 0) return 'Expired';
@@ -111,7 +113,7 @@ export default function Home() {
                         {!roomsLoading && roomsWithActivity.length > 0 && (
                             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                             {roomsWithActivity.map((room) => {
-                              const isSystemRoom = room.id === ACTIVITY_ROOM_ID;
+                              const isSystemRoom = room.id === ACTIVITY_ROOM_ID || room.systemRoom === true;
                               return (
                                 <Card key={room.id} className="flex flex-col hover:shadow-lg transition-shadow duration-300">
                                 <CardHeader>
@@ -132,10 +134,10 @@ export default function Home() {
                                         <Users className="h-3.5 w-3.5" />
                                         <span>{room.occupantCount || 0} in room</span>
                                     </div>
-                                    {effectiveRoomExpiry(room.expiresAt, room.createdAt) && (
+                                    {effectiveRoomExpiry(room.expiresAt, room.createdAt, room.persistent === true || room.systemRoom === true) && (
                                         <div className="flex items-center gap-2 text-xs text-muted-foreground">
                                             <Clock className="h-3 w-3" />
-                                            <span>{timeRemaining(room.expiresAt, room.createdAt)}</span>
+                                            <span>{timeRemaining(room.expiresAt, room.createdAt, room.persistent === true || room.systemRoom === true)}</span>
                                         </div>
                                     )}
                                 </CardContent>
