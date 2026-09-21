@@ -16,7 +16,6 @@ import {
 } from '@/lib/bot-room-action-service';
 import { getDjWorkerUrl } from '@/lib/dj-worker-config';
 import { getDjWorkerRequestHeaders } from '@/lib/dj-worker-auth';
-import { randomUUID } from 'node:crypto';
 
 export const dynamic = 'force-dynamic';
 
@@ -42,105 +41,9 @@ const ACTIONS = new Set<HearMeOutAction>([
 const CONTROLS = new Set(['play', 'pause', 'next', 'clear', 'mute', 'unmute', 'volume']);
 const APOLLO_LOUNGE_ROOM_ID = 'system-spacemountainlive-lounge';
 
-function getApolloLoungeOrigin() {
-  return String(process.env.APOLLO_LOUNGE_ORIGIN || 'https://web-terminal-bvesa.sprites.app').replace(/\/$/, '');
-}
-
 function isSpaceMountainLoungeSession(tenantId: string, sessionId: string) {
   return tenantId === 'spacemountainlive'
     && (sessionId === getMusicWatchSessionId() || sessionId === getGlobalWatchSessionId());
-}
-
-async function readApolloLoungeState() {
-  const url = new URL('/api/watch/broadcast/state', getApolloLoungeOrigin());
-  url.searchParams.set('roomId', APOLLO_LOUNGE_ROOM_ID);
-  const response = await fetch(url, {
-    cache: 'no-store',
-    headers: { Accept: 'application/json' },
-    signal: typeof AbortSignal.timeout === 'function' ? AbortSignal.timeout(15_000) : undefined,
-  });
-  const result = await response.json().catch(() => ({})) as any;
-  if (!response.ok) throw new Error(result?.error || `Apollo Lounge state failed (${response.status})`);
-  return result;
-}
-
-async function requestApolloLounge(input: {
-  command: 'sr' | 'wr';
-  query: string;
-  actorUserId: string;
-  actorName: string;
-  messageId?: string;
-}) {
-  const messageId = text(input.messageId, 160).replace(/[^A-Za-z0-9-]/g, '-') || randomUUID();
-  const userId = text(input.actorUserId, 160).replace(/[^A-Za-z0-9._:-]/g, '-') || 'streamweaver';
-  const deadline = Date.now() + 75_000;
-  const stateUrl = new URL('/api/watch/broadcast/state', getApolloLoungeOrigin());
-  stateUrl.searchParams.set('roomId', APOLLO_LOUNGE_ROOM_ID);
-  const wake = () => fetch(stateUrl, {
-    cache: 'no-store',
-    headers: { Accept: 'application/json' },
-    signal: typeof AbortSignal.timeout === 'function'
-      ? AbortSignal.timeout(Math.max(1, deadline - Date.now()))
-      : undefined,
-  });
-  const send = (channel: string) => fetch(`${getApolloLoungeOrigin()}/api/watch/broadcast/lounge-twitch-request`, {
-    method: 'POST',
-    cache: 'no-store',
-    headers: getDjWorkerRequestHeaders({ 'Content-Type': 'application/json', Accept: 'application/json' }),
-    body: JSON.stringify({
-      channel,
-      command: `!${input.command} ${input.query}`,
-      messageId,
-      userId,
-      displayName: text(input.actorName, 120) || 'Twitch viewer',
-    }),
-    signal: typeof AbortSignal.timeout === 'function'
-      ? AbortSignal.timeout(Math.max(1, deadline - Date.now()))
-      : undefined,
-  });
-  let channel = 'spacemountainlive';
-  let lastError: Error | undefined;
-  while (Date.now() < deadline) {
-    let awake = false;
-    try {
-      const stateResponse = await wake();
-      awake = stateResponse.ok;
-      if (!awake) {
-        const state = await stateResponse.json().catch(() => ({})) as any;
-        lastError = new Error(state?.error || `Apollo Lounge wake failed (${stateResponse.status})`);
-      }
-    } catch (error) {
-      lastError = error instanceof Error ? error : new Error(String(error));
-    }
-    let response: Response | undefined;
-    if (awake) {
-      try {
-        response = await send(channel);
-      } catch (error) {
-        lastError = error instanceof Error ? error : new Error(String(error));
-      }
-    }
-    if (response) {
-      const result = await response.json().catch(() => ({})) as any;
-      if (response.ok) return result;
-      // The protected Apollo release can briefly lag the Fly deployment during
-      // a cutover. Retry the former channel claim against the same isolated
-      // Apollo queue only when that older release rejects the canonical channel.
-      if (response.status === 403 && channel === 'spacemountainlive') {
-        channel = 'mtman1987';
-        continue;
-      }
-      lastError = new Error(result?.error || `Apollo Lounge request failed (${response.status})`);
-      // A sleeping Sprite answers immediately with a gateway error while it
-      // starts. Reuse the same message id so Apollo can safely deduplicate a
-      // request if the connection failed after it was accepted.
-      if (![502, 503, 504].includes(response.status)) throw lastError;
-    }
-    const remaining = deadline - Date.now();
-    if (remaining <= 0) break;
-    await new Promise((resolve) => setTimeout(resolve, Math.min(2_000, remaining)));
-  }
-  throw lastError || new Error('Apollo Lounge did not wake within 75 seconds');
 }
 
 function text(value: unknown, max = 500) {
@@ -164,16 +67,9 @@ export async function POST(request: NextRequest) {
   const actorRole = text(body?.actorRole, 40).toLowerCase();
   const tenantId = text(body?.tenantId, 160).toLowerCase();
   const isGlobalSession = sessionId === getMusicWatchSessionId() || sessionId === getGlobalWatchSessionId();
-  // Chat may request media or inspect the two public 24/7 queues without an
-  // internal service credential. Room-scoped actions and controls remain
-  // behind service authentication.
   const isPublicQueueRequest = !room && (
     action === 'hmo.media.request' || action === 'hmo.media.state.read'
   ) && isGlobalSession;
-  // StreamWeaver has already verified Twitch broadcaster/mod badges before it
-  // sends this payload. Keep the credential-independent fallback deliberately
-  // limited to SpaceMountain's two public 24/7 players; private room controls
-  // and every other bot action still require the shared service credential.
   const isSpaceMountainLoungeControl = !room
     && action === 'hmo.media.control'
     && isGlobalSession
@@ -249,7 +145,10 @@ export async function POST(request: NextRequest) {
 
     if (action === 'hmo.media.state.read') {
       if (isSpaceMountainLoungeSession(tenantId, sessionId)) {
-        return NextResponse.json({ success: true, action, session: await readApolloLoungeState() });
+        const kind = sessionId === getGlobalWatchSessionId() ? 'movie' : 'music';
+        const loungeSessionId = getRoomWatchSessionId(APOLLO_LOUNGE_ROOM_ID, kind);
+        const session = getPublicWatchSession(getWatchSession(loungeSessionId, undefined, undefined, kind), publicBaseUrl(request));
+        return NextResponse.json({ success: true, action, session });
       }
       const mediaKind = sessionId === getGlobalWatchSessionId() ? 'movie' : 'music';
       const session = getPublicWatchSession(getWatchSession(sessionId, undefined, undefined, mediaKind), publicBaseUrl(request));
@@ -260,23 +159,27 @@ export async function POST(request: NextRequest) {
       const query = text(body?.query, 500);
       if (!query) return NextResponse.json({ error: 'A song, story, or audio request is required' }, { status: 400 });
       if (isSpaceMountainLoungeSession(tenantId, sessionId)) {
-        const actorUserId = text(body?.actorUserId, 160) || 'streamweaver';
-        const relay = await requestApolloLounge({
-          command: sessionId === getGlobalWatchSessionId() ? 'wr' : 'sr',
+        const kind = sessionId === getGlobalWatchSessionId() ? 'movie' : 'music';
+        const loungeSessionId = getRoomWatchSessionId(APOLLO_LOUNGE_ROOM_ID, kind);
+        const requestIdentity = {
+          sessionId: loungeSessionId,
           query,
-          actorUserId,
-          actorName: text(body?.actorName, 120),
-          messageId: text(body?.idempotencyKey, 160),
-        });
-        const session = await readApolloLoungeState();
-        const requests = [session.current, ...(Array.isArray(session.queue) ? session.queue : [])].filter(Boolean);
-        const request = [...requests].reverse().find((entry: any) => entry?.requestedBy?.userId === `twitch:${actorUserId}`) || null;
+          username: text(body?.actorName, 100) || 'SpaceMountainLive',
+          userId: text(body?.actorUserId, 160) || 'spacemountainlive',
+        };
+        const result = kind === 'movie'
+          ? await requestWatchItem(requestIdentity)
+          : await requestWatchMusicItem({ ...requestIdentity, platform: 'twitch' });
+        if ('error' in result) {
+          const failed = result as { error: string; result?: { message?: string } };
+          return NextResponse.json({ error: failed.result?.message || failed.error }, { status: 404 });
+        }
         return NextResponse.json({
           success: true,
           action,
-          message: relay?.text || 'Added to the 24-Hour Lounge queue.',
-          request,
-          session,
+          message: ('result' in result ? result.result?.message : '') || 'Added to the SpaceMountain lounge queue.',
+          request: result.request,
+          session: getPublicWatchSession(result.session, publicBaseUrl(request)),
         });
       }
       const requestIdentity = {
