@@ -51,8 +51,11 @@ test('legacy StreamWeaver Lounge actions are adapted to Apollo state and request
   assert.match(botActions, /isSpaceMountainLoungeSession/);
   assert.match(botActions, /api\/watch\/broadcast\/state/);
   assert.match(botActions, /api\/watch\/broadcast\/lounge-twitch-request/);
-  assert.match(botActions, /send\('spacemountainlive'\)/);
-  assert.match(botActions, /response\.status === 403[\s\S]*send\('mtman1987'\)/);
+  assert.match(botActions, /let channel = 'spacemountainlive'/);
+  assert.match(botActions, /response\.status === 403[\s\S]*channel = 'mtman1987'/);
+  assert.match(botActions, /\[502, 503, 504\]\.includes\(response\.status\)/);
+  assert.match(botActions, /deadline = Date\.now\(\) \+ 75_000/);
+  assert.match(botActions, /setTimeout\(resolve, Math\.min\(2_000, remaining\)\)/);
 });
 
 test('Twitch moderators can control Lounge media from chat', () => {

@@ -73,6 +73,7 @@ async function requestApolloLounge(input: {
 }) {
   const messageId = text(input.messageId, 160).replace(/[^A-Za-z0-9-]/g, '-') || randomUUID();
   const userId = text(input.actorUserId, 160).replace(/[^A-Za-z0-9._:-]/g, '-') || 'streamweaver';
+  const deadline = Date.now() + 75_000;
   const send = (channel: string) => fetch(`${getApolloLoungeOrigin()}/api/watch/broadcast/lounge-twitch-request`, {
     method: 'POST',
     cache: 'no-store',
@@ -84,19 +85,40 @@ async function requestApolloLounge(input: {
       userId,
       displayName: text(input.actorName, 120) || 'Twitch viewer',
     }),
-    signal: typeof AbortSignal.timeout === 'function' ? AbortSignal.timeout(75_000) : undefined,
+    signal: typeof AbortSignal.timeout === 'function'
+      ? AbortSignal.timeout(Math.max(1, deadline - Date.now()))
+      : undefined,
   });
-  let response = await send('spacemountainlive');
-  // The protected Apollo release can briefly lag the Fly deployment during a
-  // cutover. Retry the former channel claim against the same isolated Apollo
-  // queue only when that older release rejects the canonical channel.
-  if (response.status === 403) {
-    await response.body?.cancel();
-    response = await send('mtman1987');
+  let channel = 'spacemountainlive';
+  let lastError: Error | undefined;
+  while (Date.now() < deadline) {
+    let response: Response | undefined;
+    try {
+      response = await send(channel);
+    } catch (error) {
+      lastError = error instanceof Error ? error : new Error(String(error));
+    }
+    if (response) {
+      const result = await response.json().catch(() => ({})) as any;
+      if (response.ok) return result;
+      // The protected Apollo release can briefly lag the Fly deployment during
+      // a cutover. Retry the former channel claim against the same isolated
+      // Apollo queue only when that older release rejects the canonical channel.
+      if (response.status === 403 && channel === 'spacemountainlive') {
+        channel = 'mtman1987';
+        continue;
+      }
+      lastError = new Error(result?.error || `Apollo Lounge request failed (${response.status})`);
+      // A sleeping Sprite answers immediately with a gateway error while it
+      // starts. Reuse the same message id so Apollo can safely deduplicate a
+      // request if the connection failed after it was accepted.
+      if (![502, 503, 504].includes(response.status)) throw lastError;
+    }
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) break;
+    await new Promise((resolve) => setTimeout(resolve, Math.min(2_000, remaining)));
   }
-  const result = await response.json().catch(() => ({})) as any;
-  if (!response.ok) throw new Error(result?.error || `Apollo Lounge request failed (${response.status})`);
-  return result;
+  throw lastError || new Error('Apollo Lounge did not wake within 75 seconds');
 }
 
 function text(value: unknown, max = 500) {
