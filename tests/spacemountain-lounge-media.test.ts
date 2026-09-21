@@ -30,15 +30,12 @@ test('YouTube music uses the browser embed before the proxy fallback', () => {
   assert.match(source, /searchParams\.set\('autoplay', '1'\)/);
 });
 
-test('legacy StreamWeaver Lounge actions are adapted to Apollo state and requests', () => {
-  assert.match(botActions, /isSpaceMountainLoungeSession/);
-  assert.match(botActions, /api\/watch\/broadcast\/state/);
-  assert.match(botActions, /api\/watch\/broadcast\/lounge-twitch-request/);
-  assert.match(botActions, /let channel = 'spacemountainlive'/);
-  assert.match(botActions, /response\.status === 403[\s\S]*channel = 'mtman1987'/);
-  assert.match(botActions, /\[502, 503, 504\]\.includes\(response\.status\)/);
-  assert.match(botActions, /deadline = Date\.now\(\) \+ 75_000/);
-  assert.match(botActions, /setTimeout\(resolve, Math\.min\(2_000, remaining\)\)/);
+test('SpaceMountain StreamWeaver actions share one permanent lounge queue', () => {
+  assert.match(botActions, /SPACEMOUNTAIN_LOUNGE_SESSION_ID = getRoomWatchSessionId\(APOLLO_LOUNGE_ROOM_ID, 'music'\)/);
+  assert.match(botActions, /getWatchSession\(SPACEMOUNTAIN_LOUNGE_SESSION_ID/);
+  assert.match(botActions, /sessionId: SPACEMOUNTAIN_LOUNGE_SESSION_ID/);
+  assert.match(botActions, /controlSessionId = isSpaceMountainLoungeSession\(tenantId, sessionId\) \? SPACEMOUNTAIN_LOUNGE_SESSION_ID : sessionId/);
+  assert.doesNotMatch(botActions, /requestApolloLounge|readApolloLoungeState|api\/watch\/broadcast\/lounge-twitch-request/);
 });
 
 test('Twitch moderators can control Lounge media from chat', () => {
