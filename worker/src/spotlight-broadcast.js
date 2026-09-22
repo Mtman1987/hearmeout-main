@@ -1,0 +1,168 @@
+const { createServer } = require('node:http');
+const { spawn } = require('node:child_process');
+const { mkdir, mkdtemp, rm, access } = require('node:fs/promises');
+const { existsSync } = require('node:fs');
+const { join } = require('node:path');
+const { tmpdir } = require('node:os');
+
+const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
+const SAFE_FILE = /^(?:index\.m3u8|spotlight_\d{6}\.ts)$/;
+
+function createSpotlightBroadcast({ directory, chromiumPath, puppeteer, spotlightEndpoint = 'https://discord-stream-hub-new.fly.dev/api/community-spotlight' }) {
+  let root, display, pulse, browser, page, host, encoder, startTask, active = false, activated = false, failure = '', currentLogin = '';
+  const children = [];
+
+  function child(command, args, options = {}) {
+    const proc = spawn(command, args, { stdio: ['ignore', 'ignore', 'pipe'], ...options });
+    children.push(proc);
+    proc.stderr?.resume();
+    proc.on('error', error => { failure ||= error.message || String(error); });
+    return proc;
+  }
+
+  async function stopProcess(proc) {
+    if (!proc?.pid || proc.exitCode !== null || proc.signalCode !== null) return;
+    await new Promise(resolve => {
+      const timer = setTimeout(() => proc.kill('SIGKILL'), 1500);
+      proc.once('close', () => { clearTimeout(timer); resolve(); });
+      proc.kill('SIGTERM');
+    });
+  }
+
+  async function ensureSource() {
+    if (active && page && encoder && encoder.exitCode === null) return;
+    if (startTask) return startTask;
+    startTask = (async () => {
+      failure = '';
+      activated = false;
+      currentLogin = '';
+      await cleanup(false);
+      root = await mkdtemp(join(tmpdir(), 'hmo-spotlight-source-'));
+      await mkdir(directory, { recursive: true });
+
+      display = child('Xvfb', ['-displayfd', '3', '-screen', '0', '1280x720x24', '-nolisten', 'tcp', '-ac'], { stdio: ['ignore', 'ignore', 'pipe', 'pipe'] });
+      const displayNumber = await new Promise((resolve, reject) => {
+        let output = '';
+        const timer = setTimeout(() => reject(Error('The Spotlight display did not start')), 8000);
+        display.once('error', () => { clearTimeout(timer); reject(Error('The Spotlight display is unavailable')); });
+        display.stdio[3].on('data', bytes => {
+          output += bytes.toString();
+          if (/^\d+\s*$/.test(output) && output.includes('\n')) { clearTimeout(timer); resolve(output.trim()); }
+        });
+      });
+
+      const socket = join(root, 'pulse.sock');
+      const environment = { ...process.env, DISPLAY: ':' + displayNumber, PULSE_SERVER: 'unix:' + socket, PULSE_SINK: 'spotlight', XDG_RUNTIME_DIR: root, PULSE_RUNTIME_PATH: root, PULSE_STATE_PATH: root };
+      pulse = child('pulseaudio', ['--daemonize=no', '--use-pid-file=no', '--exit-idle-time=-1', '--log-target=stderr', '--high-priority=no', '--realtime=no', '-n', '--load=module-native-protocol-unix socket=' + socket + ' auth-anonymous=1', '--load=module-null-sink sink_name=spotlight rate=48000 channels=2'], { env: environment });
+      let audioReady = false;
+      for (let attempt = 0; attempt < 40; attempt++) {
+        if (pulse.exitCode !== null || failure) break;
+        try { await access(socket); audioReady = true; break; } catch { await delay(100); }
+      }
+      if (!audioReady) throw Error('The Spotlight audio device did not start');
+
+      host = createServer((request, response) => {
+        if (request.url !== '/') { response.writeHead(404); response.end(); return; }
+        response.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'referrer-policy': 'strict-origin-when-cross-origin' });
+        response.end(sourcePage(spotlightEndpoint));
+      });
+      await new Promise(resolve => host.listen(0, '127.0.0.1', resolve));
+
+      browser = await puppeteer.launch({
+        executablePath: chromiumPath, headless: false, defaultViewport: null,
+        userDataDir: join(root, 'chromium'), env: environment,
+        ignoreDefaultArgs: ['--mute-audio'],
+        args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu', '--kiosk', '--window-position=0,0', '--window-size=1280,720', '--force-device-scale-factor=1', '--disable-background-timer-throttling', '--disable-renderer-backgrounding'],
+      });
+      browser.on('disconnected', () => { active = false; failure ||= 'The Spotlight browser disconnected'; });
+      page = (await browser.pages())[0] || await browser.newPage();
+      await page.goto('http://127.0.0.1:' + host.address().port + '/', { waitUntil: 'domcontentloaded', timeout: 30000 });
+      await page.waitForFunction(() => window.spotlightSource?.ready || window.spotlightSource?.error, { timeout: 30000 });
+      const state = await page.evaluate(() => window.spotlightSource);
+      if (state.error) throw Error(String(state.error));
+
+      encoder = child('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-y',
+        '-thread_queue_size', '512', '-f', 'x11grab', '-draw_mouse', '0', '-video_size', '1280x720', '-framerate', '24', '-i', ':' + displayNumber + '.0',
+        '-thread_queue_size', '512', '-f', 'pulse', '-sample_rate', '48000', '-channels', '2', '-i', 'spotlight.monitor',
+        '-map', '0:v:0', '-map', '1:a:0', '-c:v', 'libx264', '-threads', '2', '-preset', 'veryfast', '-crf', '23', '-pix_fmt', 'yuv420p', '-g', '48',
+        '-c:a', 'aac', '-b:a', '160k', '-ac', '2', '-af', 'aresample=async=1:first_pts=0',
+        '-f', 'hls', '-hls_time', '2', '-hls_list_size', '15', '-hls_delete_threshold', '5', '-hls_flags', 'delete_segments+omit_endlist+independent_segments+temp_file',
+        '-hls_segment_filename', join(directory, 'spotlight_%06d.ts'), join(directory, 'index.m3u8')], { env: environment });
+      encoder.on('error', () => { active = false; failure ||= 'The Spotlight recorder could not start'; });
+      encoder.once('close', code => { active = false; if (code !== 0) failure ||= 'The Spotlight recorder stopped'; });
+      active = true;
+    })().catch(async error => {
+      failure = error.message || String(error);
+      await cleanup(false);
+      throw error;
+    }).finally(() => { startTask = undefined; });
+    return startTask;
+  }
+
+  async function start() {
+    await ensureSource();
+    if (!page) throw Error('The Spotlight source is unavailable');
+    await page.click('#start');
+    await page.waitForFunction(() => window.spotlightSource?.activated === true, { timeout: 10000 });
+    const state = await page.evaluate(() => ({ activated: window.spotlightSource?.activated === true, currentLogin: window.spotlightSource?.currentLogin || '' }));
+    activated = state.activated;
+    currentLogin = state.currentLogin;
+    return status();
+  }
+
+  async function status() {
+    if (page && active) {
+      try {
+        const state = await page.evaluate(() => ({ activated: window.spotlightSource?.activated === true, currentLogin: window.spotlightSource?.currentLogin || '', error: window.spotlightSource?.error || '' }));
+        activated = state.activated; currentLogin = state.currentLogin; if (state.error) failure = String(state.error);
+      } catch {}
+    }
+    return { configured: true, active, activated, currentLogin, ready: active && activated && existsSync(join(directory, 'index.m3u8')), error: failure || null };
+  }
+
+  function file(name) {
+    if (!SAFE_FILE.test(String(name || ''))) return null;
+    const path = join(directory, name);
+    return existsSync(path) ? path : null;
+  }
+
+  async function cleanup(removeRoot = true) {
+    active = false;
+    await stopProcess(encoder); encoder = undefined;
+    await browser?.close().catch(() => {}); browser = undefined; page = undefined;
+    await Promise.all(children.splice(0).map(stopProcess));
+    if (host) { host.closeAllConnections(); await new Promise(resolve => host.close(resolve)); host = undefined; }
+    if (removeRoot && root) await rm(root, { recursive: true, force: true });
+    root = undefined; display = undefined; pulse = undefined;
+  }
+
+  return { start, status, file, close: () => cleanup(true) };
+}
+
+function sourcePage(endpoint) {
+  return `<!doctype html><html><head><meta charset="utf-8"><style>html,body,#player{margin:0;width:100%;height:100%;overflow:hidden;background:#000}iframe{border:0}#start{position:fixed;z-index:5;left:50%;top:50%;transform:translate(-50%,-50%);padding:18px 28px;font:700 18px system-ui}</style></head><body><div id="player"></div><button id="start" type="button">Start Spotlight</button><script src="https://player.twitch.tv/js/embed/v1.js"></script><script>
+window.spotlightSource={ready:false,activated:false,currentLogin:'',error:''};
+let player=null,currentLogin='',activated=false,switching=false;
+const endpoint=${JSON.stringify(endpoint)},button=document.getElementById('start');
+function audio(){if(!player||!activated)return;try{player.setVolume(.58);player.setMuted(false);player.play()}catch{}}
+function playBootstrap(){if(!player)return;try{player.setVolume(.58);player.setMuted(!activated);player.play()}catch{}}
+function mount(login){
+ const clean=String(login||'').replace(/^@/,'').trim().toLowerCase();
+ if(!clean)return;
+ if(clean===currentLogin&&player)return;
+ if(player){currentLogin=clean;window.spotlightSource.currentLogin=clean;switching=true;try{player.setChannel(clean)}catch{};playBootstrap();[350,1200,2500,4000].forEach(ms=>setTimeout(()=>{playBootstrap();audio()},ms));return}
+ currentLogin=clean;window.spotlightSource.currentLogin=clean;
+ player=new Twitch.Player('player',{channel:clean,parent:[location.hostname],autoplay:true,muted:true,controls:false,width:'100%',height:'100%'});
+ player.addEventListener(Twitch.Player.READY,()=>{window.spotlightSource.ready=true;playBootstrap()});
+ player.addEventListener(Twitch.Player.PLAY,()=>{switching=false;audio()});
+ player.addEventListener(Twitch.Player.PLAYING,()=>{switching=false;audio();setTimeout(audio,250);setTimeout(audio,1000)});
+ player.addEventListener(Twitch.Player.PAUSE,()=>{if(switching)setTimeout(playBootstrap,300)});
+ player.addEventListener(Twitch.Player.OFFLINE,()=>{currentLogin='';window.spotlightSource.currentLogin=''});
+}
+button.addEventListener('click',()=>{activated=true;window.spotlightSource.activated=true;button.remove();playBootstrap();audio();[150,500,1000].forEach(ms=>setTimeout(audio,ms))});
+async function refresh(){try{const r=await fetch(endpoint,{cache:'no-store',headers:{Accept:'application/json'}});if(!r.ok)throw Error('spotlight '+r.status);const data=await r.json();mount(data?.spotlight?.twitchLogin||data?.spotlight?.user?.twitchLogin||'')}catch(error){window.spotlightSource.error=String(error?.message||error)}}
+refresh();setInterval(refresh,15000);
+</script></body></html>`;
+}
+
+module.exports = { createSpotlightBroadcast };
