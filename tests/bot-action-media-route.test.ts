@@ -91,3 +91,14 @@ test('room persona worker no longer forwards speech commands or owns STT', () =>
   assert.match(bootstrap, /serviceSession: req\.body\?\.serviceSession === true/);
   assert.match(bootstrap, /app\.post\('\/persona\/speak'/);
 });
+
+test('Apollo Lounge bridge is worker-authenticated and targets the permanent live queue', () => {
+  const bridge = source('src/app/api/internal/lounge/media/route.ts');
+  assert.match(bridge, /isDjWorkerRequest/);
+  assert.match(bridge, /system-spacemountainlive-lounge/);
+  assert.match(bridge, /getRoomWatchSessionId\(LOUNGE_ROOM_ID, 'music'\)/);
+  assert.match(bridge, /expectedRequestId/);
+  assert.match(bridge, /requestedAction === 'skip' \? 'next'/);
+  const middleware = source('src/middleware.ts');
+  assert.match(middleware, /\/api\/internal\/lounge\/media/);
+});
