@@ -24,6 +24,7 @@ try {
 const wrtc = require('@roamhq/wrtc');
 const puppeteer = require('puppeteer');
 const { captureYoutubeBroadcast } = require('./youtube-broadcast-capture');
+const { createSpotlightBroadcast } = require('./spotlight-broadcast');
 
 Object.assign(globalThis, {
   RTCPeerConnection: wrtc.RTCPeerConnection,
@@ -86,6 +87,13 @@ const WATCH_HLS_DELETE_THRESHOLD = Number(process.env.WATCH_HLS_DELETE_THRESHOLD
 const WATCH_HLS_BUDGET_BYTES = Number(process.env.WATCH_HLS_BUDGET_BYTES || 1536 * 1024 * 1024);
 const FLY_MACHINE_ID = process.env.FLY_MACHINE_ID || '';
 const FLY_APP_NAME = process.env.FLY_APP_NAME || 'hmo-dj-worker';
+const SPOTLIGHT_HLS_DIR = join(WATCH_HLS_DIR, 'spotlight');
+const spotlightBroadcast = createSpotlightBroadcast({
+  directory: SPOTLIGHT_HLS_DIR,
+  chromiumPath: CHROMIUM_PATH,
+  puppeteer,
+  spotlightEndpoint: process.env.SPOTLIGHT_ENDPOINT || 'https://discord-stream-hub-new.fly.dev/api/community-spotlight',
+});
 
 const VIDEO_ID_RE = /^[A-Za-z0-9_-]{11}$/;
 const OFFLINE_AUDIO_EXTENSIONS = new Set(['.mp3', '.m4a', '.aac', '.ogg', '.opus', '.wav', '.flac']);
@@ -2862,6 +2870,26 @@ app.post('/voice-bridge/receive-gain', authorizeWorker, (req, res) => {
     return res.status(400).json({ success: false, message: 'roomId and finite discordReceiveGain are required' });
   }
   return res.json(setVoiceBridgeDiscordReceiveGain(roomId, discordReceiveGain));
+});
+
+// ── Persistent community Spotlight source ──────────────────────────────
+app.get('/spotlight/status', authorizeWorker, async (_req, res) => {
+  try { res.json(await spotlightBroadcast.status()); }
+  catch (error) { res.status(500).json({ error: error.message || String(error) }); }
+});
+
+app.post('/spotlight/start', authorizeWorker, async (_req, res) => {
+  try { res.json(await spotlightBroadcast.start()); }
+  catch (error) { res.status(502).json({ error: error.message || String(error) }); }
+});
+
+app.get('/spotlight/hls/:file', authorizeWorker, async (req, res) => {
+  const file = String(req.params.file || '');
+  const path = spotlightBroadcast.file(file);
+  if (!path) return res.status(404).json({ error: 'Spotlight broadcast is not ready' });
+  res.setHeader('cache-control', 'no-store');
+  res.type(file.endsWith('.m3u8') ? 'application/vnd.apple.mpegurl' : 'video/mp2t');
+  return res.sendFile(path);
 });
 
 // ── Health ──────────────────────────────────────────────────────────────
