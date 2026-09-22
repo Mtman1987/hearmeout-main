@@ -31,6 +31,9 @@ const PUBLIC_PREFIXES = [
   '/api/internal/bot/actions',
   // Authenticated with the existing DJ worker credential inside the route.
   '/api/internal/watch/search',
+  // Authenticated by the DJ-worker bearer inside the route. Apollo uses this
+  // narrow bridge to render/control the existing SpaceMountain Lounge queue.
+  '/api/internal/lounge/media',
   '/overlay',
   '/embed',
   '/room-overlay',

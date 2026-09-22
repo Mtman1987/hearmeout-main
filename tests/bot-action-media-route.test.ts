@@ -39,6 +39,7 @@ test('media controls are restricted to the explicit safe control set', () => {
   const route = source('src/app/api/internal/bot/actions/route.ts');
   assert.match(route, /new Set\(\['play', 'pause', 'next', 'clear', 'mute', 'unmute', 'volume'\]\)/);
   assert.match(route, /Unsupported media control/);
+  assert.match(route, /expectedRequestId: text\(body\?\.expectedRequestId, 200\) \|\| undefined/);
 });
 
 test('clean overlay keeps its embedded video directly interactive', () => {
@@ -89,4 +90,15 @@ test('room persona worker no longer forwards speech commands or owns STT', () =>
   assert.match(runtime, /speechInputRoute:\s*'browser-persona-transcribe-to-bot-commands'/);
   assert.match(bootstrap, /serviceSession: req\.body\?\.serviceSession === true/);
   assert.match(bootstrap, /app\.post\('\/persona\/speak'/);
+});
+
+test('Apollo Lounge bridge is worker-authenticated and targets the permanent live queue', () => {
+  const bridge = source('src/app/api/internal/lounge/media/route.ts');
+  assert.match(bridge, /isDjWorkerRequest/);
+  assert.match(bridge, /system-spacemountainlive-lounge/);
+  assert.match(bridge, /getRoomWatchSessionId\(LOUNGE_ROOM_ID, 'music'\)/);
+  assert.match(bridge, /expectedRequestId/);
+  assert.match(bridge, /requestedAction === 'skip' \? 'next'/);
+  const middleware = source('src/middleware.ts');
+  assert.match(middleware, /\/api\/internal\/lounge\/media/);
 });

@@ -213,6 +213,7 @@ export async function POST(request: NextRequest) {
       actorUserId: text(body?.actorUserId, 160),
       isAdmin: true,
       platform: 'admin',
+      expectedRequestId: text(body?.expectedRequestId, 200) || undefined,
     });
     return NextResponse.json({
       success: true,
