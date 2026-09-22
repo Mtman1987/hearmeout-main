@@ -39,6 +39,7 @@ test('media controls are restricted to the explicit safe control set', () => {
   const route = source('src/app/api/internal/bot/actions/route.ts');
   assert.match(route, /new Set\(\['play', 'pause', 'next', 'clear', 'mute', 'unmute', 'volume'\]\)/);
   assert.match(route, /Unsupported media control/);
+  assert.match(route, /expectedRequestId: text\(body\?\.expectedRequestId, 200\) \|\| undefined/);
 });
 
 test('clean overlay keeps its embedded video directly interactive', () => {
