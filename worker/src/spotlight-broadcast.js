@@ -36,7 +36,7 @@ function createSpotlightBroadcast({ directory, chromiumPath, puppeteer, spotligh
       failure = '';
       activated = false;
       currentLogin = '';
-      await cleanup(false);
+      await cleanup(true);
       root = await mkdtemp(join(tmpdir(), 'hmo-spotlight-source-'));
       await mkdir(directory, { recursive: true });
 
@@ -76,7 +76,7 @@ function createSpotlightBroadcast({ directory, chromiumPath, puppeteer, spotligh
       });
       browser.on('disconnected', () => { active = false; failure ||= 'The Spotlight browser disconnected'; });
       page = (await browser.pages())[0] || await browser.newPage();
-      await page.goto('http://127.0.0.1:' + host.address().port + '/', { waitUntil: 'domcontentloaded', timeout: 30000 });
+      await page.goto('http://localhost:' + host.address().port + '/', { waitUntil: 'domcontentloaded', timeout: 30000 });
       await page.waitForFunction(() => window.spotlightSource?.ready || window.spotlightSource?.error, { timeout: 30000 });
       const state = await page.evaluate(() => window.spotlightSource);
       if (state.error) throw Error(String(state.error));
@@ -93,7 +93,7 @@ function createSpotlightBroadcast({ directory, chromiumPath, puppeteer, spotligh
       active = true;
     })().catch(async error => {
       failure = error.message || String(error);
-      await cleanup(false);
+      await cleanup(true);
       throw error;
     }).finally(() => { startTask = undefined; });
     return startTask;
@@ -160,7 +160,7 @@ function mount(login){
  player.addEventListener(Twitch.Player.OFFLINE,()=>{currentLogin='';window.spotlightSource.currentLogin=''});
 }
 button.addEventListener('click',()=>{activated=true;window.spotlightSource.activated=true;button.remove();playBootstrap();audio();[150,500,1000].forEach(ms=>setTimeout(audio,ms))});
-async function refresh(){try{const r=await fetch(endpoint,{cache:'no-store',headers:{Accept:'application/json'}});if(!r.ok)throw Error('spotlight '+r.status);const data=await r.json();mount(data?.spotlight?.twitchLogin||data?.spotlight?.user?.twitchLogin||'')}catch(error){window.spotlightSource.error=String(error?.message||error)}}
+async function refresh(){try{const r=await fetch(endpoint,{cache:'no-store',headers:{Accept:'application/json'}});if(!r.ok)throw Error('spotlight '+r.status);const data=await r.json(),login=data?.spotlight?.twitchLogin||data?.spotlight?.user?.twitchLogin||'';if(!login){window.spotlightSource.error='No live community Spotlight is available';return}window.spotlightSource.error='';mount(login)}catch(error){window.spotlightSource.error=String(error?.message||error)}}
 refresh();setInterval(refresh,15000);
 </script></body></html>`;
 }
