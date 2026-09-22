@@ -42,6 +42,11 @@ jobs:
         run: node --import tsx --test tests/spmt-shell-parity.test.ts
       - name: Test workspace theme contract
         run: npm run test:workspace-theme
+      - name: Test persistent Spotlight source
+        run: |
+          node --check worker/src/spotlight-broadcast.js
+          node --check worker/src/server.js
+          node --test tests/spotlight-source-contract.test.cjs
       - name: Typecheck
         run: npm run typecheck
       - name: Production build
