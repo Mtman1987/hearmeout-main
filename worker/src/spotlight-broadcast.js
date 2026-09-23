@@ -110,6 +110,31 @@ function createSpotlightBroadcast({ directory, chromiumPath, puppeteer, spotligh
     return status();
   }
 
+  async function consent() {
+    await ensureSource();
+    if (!page) throw Error('The Spotlight source is unavailable');
+    let clicked = false;
+    for (const frame of page.frames()) {
+      const direct = await frame.$('[data-a-target="content-classification-gate-overlay-start-watching-button"]').catch(() => null);
+      if (direct) {
+        await direct.click().catch(() => {});
+        clicked = true;
+        break;
+      }
+      const buttons = await frame.$('button').catch(() => []);
+      for (const button of buttons) {
+        const label = await button.evaluate(node => String(node.textContent || node.getAttribute('aria-label') || '').trim()).catch(() => '');
+        if (!/^(?:start watching|continue watching|watch anyway)$/i.test(label)) continue;
+        await button.click().catch(() => {});
+        clicked = true;
+        break;
+      }
+      if (clicked) break;
+    }
+    if (clicked) await delay(350);
+    return { ...(await status()), warningCleared: clicked };
+  }
+
   async function status() {
     if (page && active) {
       try {
@@ -136,7 +161,7 @@ function createSpotlightBroadcast({ directory, chromiumPath, puppeteer, spotligh
     root = undefined; display = undefined; pulse = undefined;
   }
 
-  return { start, status, file, close: () => cleanup(true) };
+  return { start, consent, status, file, close: () => cleanup(true) };
 }
 
 function sourcePage(endpoint) {
