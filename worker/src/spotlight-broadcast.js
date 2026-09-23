@@ -71,8 +71,8 @@ function createSpotlightBroadcast({ directory, chromiumPath, puppeteer, spotligh
       browser = await puppeteer.launch({
         executablePath: chromiumPath, headless: false, defaultViewport: null,
         userDataDir: join(root, 'chromium'), env: environment,
-        ignoreDefaultArgs: ['--mute-audio'],
-        args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu', '--kiosk', '--window-position=0,0', '--window-size=1280,720', '--force-device-scale-factor=1', '--disable-background-timer-throttling', '--disable-renderer-backgrounding'],
+        ignoreDefaultArgs: ['--mute-audio', '--enable-automation'],
+        args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu', '--disable-infobars', '--kiosk', '--window-position=0,0', '--window-size=1280,720', '--force-device-scale-factor=1', '--disable-background-timer-throttling', '--disable-renderer-backgrounding'],
       });
       browser.on('disconnected', () => { active = false; failure ||= 'The Spotlight browser disconnected'; });
       page = (await browser.pages())[0] || await browser.newPage();
