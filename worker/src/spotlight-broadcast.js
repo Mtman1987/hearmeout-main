@@ -121,14 +121,16 @@ function createSpotlightBroadcast({ directory, chromiumPath, puppeteer, spotligh
         clicked = true;
         break;
       }
-      const buttons = await frame.$('button').catch(() => []);
-      for (const button of buttons) {
-        const label = await button.evaluate(node => String(node.textContent || node.getAttribute('aria-label') || '').trim()).catch(() => '');
-        if (!/^(?:start watching|continue watching|watch anyway)$/i.test(label)) continue;
-        await button.click().catch(() => {});
-        clicked = true;
-        break;
-      }
+      const frameClicked = await frame.evaluate(() => {
+        for (const button of Array.from(document.querySelectorAll('button'))) {
+          const label = String(button.textContent || button.getAttribute('aria-label') || '').trim();
+          if (!/^(?:start watching|continue watching|watch anyway)$/i.test(label)) continue;
+          button.click();
+          return true;
+        }
+        return false;
+      }).catch(() => false);
+      if (frameClicked) clicked = true;
       if (clicked) break;
     }
     if (clicked) await delay(350);
