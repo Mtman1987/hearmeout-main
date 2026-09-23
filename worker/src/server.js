@@ -2883,6 +2883,11 @@ app.post('/spotlight/start', authorizeWorker, async (_req, res) => {
   catch (error) { res.status(502).json({ error: error.message || String(error) }); }
 });
 
+app.post('/spotlight/consent', authorizeWorker, async (_req, res) => {
+  try { res.json(await spotlightBroadcast.consent()); }
+  catch (error) { res.status(502).json({ error: error.message || String(error) }); }
+});
+
 app.get('/spotlight/hls/:file', authorizeWorker, async (req, res) => {
   const file = String(req.params.file || '');
   const path = spotlightBroadcast.file(file);
