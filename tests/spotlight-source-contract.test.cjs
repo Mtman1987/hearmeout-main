@@ -12,6 +12,8 @@ test('Spotlight owns one persistent Twitch player and rotates channels without r
  assert.match(source,/window\.spotlightSource\.activated=true/);
  assert.match(source,/page\.click\('#start'\)/);
  assert.match(source,/content-classification-gate-overlay-start-watching-button/);
+ assert.match(source,/Array\.from\(document\.querySelectorAll\('button'\)\)/);
+ assert.doesNotMatch(source,/frame\.\$\('button'\)/);
  assert.match(source,/warningCleared: clicked/);
  assert.equal((source.match(/new Twitch\.Player\(/g)||[]).length,1);
  assert.match(source,/x11grab/);
