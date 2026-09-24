@@ -1,8 +1,9 @@
 import { getDjWorkerRequestHeaders } from '@/lib/dj-worker-auth';
-import { getDjWorkerUrl } from '@/lib/dj-worker-config';
+
+const LOUNGE_WORKER_URL = (process.env.LOUNGE_WORKER_URL || 'http://hmo-lounge-worker.internal:3002').replace(/\/$/, '');
 
 export async function loungeWorker(path: string, method = 'GET', signal?: AbortSignal) {
-  return fetch(`${getDjWorkerUrl()}/lounge/${path}`, {
+  return fetch(`${LOUNGE_WORKER_URL}/lounge/${path}`, {
     method,
     headers: getDjWorkerRequestHeaders(),
     cache: 'no-store',
