@@ -12,6 +12,7 @@ import {
 import {
   SPACEMOUNTAIN_LOUNGE_MUSIC_SESSION_ID,
   SPACEMOUNTAIN_LOUNGE_MOVIE_SESSION_ID,
+  SPACEMOUNTAIN_LOUNGE_ROOM_ID,
   SPACEMOUNTAIN_LOUNGE_TWITCH_CHANNEL,
 } from '@/lib/spacemountain-lounge';
 import { db, ensureDb } from '@/lib/db';
@@ -357,8 +358,13 @@ function syncChannels(serverId: string, instance: BotInstance) {
 
     const primaryRoomId = rooms[0]?.id;
 
-    // Only attach global Twitch channels to an existing HearMeOut room.
+    // Keep the existing primary creator channel behavior unchanged.
     if (primaryRoomId) newChannels.set('mtman1987', primaryRoomId);
+
+    // SpaceMountainLive is the permanent 24/7 Lounge command channel. Route it
+    // directly to the system Lounge room so !sr/!wr cannot fall through to a
+    // normal tenant/global media session.
+    newChannels.set(SPACEMOUNTAIN_LOUNGE_TWITCH_CHANNEL, SPACEMOUNTAIN_LOUNGE_ROOM_ID);
 
     // Join the bot user's own channel if different
     if (primaryRoomId && tokens.username && tokens.username.toLowerCase() !== 'mtman1987') {
