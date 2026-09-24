@@ -87,9 +87,10 @@ function playbackPosition(playback?: WatchPlayback) {
 function musicModeOptions(item: any) {
   const metadata = item?.metadata || {};
   return {
-    // The browser embed is the proven public playback path. The HLS proxy is
-    // retained as metadata/fallback for clients that explicitly request it.
+    // Prefer the public YouTube embed, but always keep the prepared HMO proxy
+    // available as a recovery path when an embed is black, blocked, or stalled.
     video: metadata.embedPlaybackUrl || metadata.videoPlaybackUrl || item?.playbackUrl || '',
+    proxy: metadata.videoPlaybackUrl || item?.playbackUrl || '',
     audio: metadata.audioPlaybackUrl || '',
   };
 }
@@ -99,13 +100,10 @@ function hasMusicModeToggle(item: any) {
   return item?.type === 'music' && Boolean(options.video && options.audio);
 }
 
-function playbackUrlForItem(item: any, mode: 'video' | 'audio' = 'video') {
+function playbackUrlForItem(item: any, mode: 'video' | 'audio' = 'video', preferProxy = false) {
   if (item?.type === 'music') {
     const options = musicModeOptions(item);
-    // Video playback must not depend on an optional audio-only URL. YouTube
-    // requests normally have a browser embed plus the proxy HLS fallback, but
-    // no separate audio URL. Requiring both sent those requests back to the
-    // hanging proxy and left the Lounge black while it reported "playing".
+    if (mode === 'video' && preferProxy && options.proxy) return options.proxy;
     if (mode === 'video' && options.video) return options.video;
     if (mode === 'audio' && options.audio) return options.audio;
   }
@@ -199,6 +197,8 @@ export default function OverlayPage() {
   const currentRequestIdRef = useRef<string | null>(null);
   const applyingRemoteState = useRef(false);
   const embeddedCurrentTimeRef = useRef(0);
+  const embeddedProgressBaselineRef = useRef<number | null>(null);
+  const nativeProgressBaselineRef = useRef<number | null>(null);
   const lastEmbeddedPlaybackKeyRef = useRef('');
   const volumeRef = useRef(initialVolume);
   const mutedRef = useRef(requestedMuted ?? false);
@@ -210,6 +210,8 @@ export default function OverlayPage() {
   const [isMuted, setIsMuted] = useState(requestedMuted ?? false);
   const [audioReady, setAudioReady] = useState(false);
   const [mediaStatus, setMediaStatus] = useState('Waiting for media');
+  const [renderingHealthy, setRenderingHealthy] = useState(false);
+  const [forceProxyPlayback, setForceProxyPlayback] = useState(false);
   const [audioTracks, setAudioTracks] = useState<Array<{ index: number; name: string; language: string }>>([]);
   const [selectedAudioTrack, setSelectedAudioTrack] = useState(0);
   const [musicPlaybackMode, setMusicPlaybackMode] = useState<'video' | 'audio'>('video');
@@ -280,10 +282,26 @@ export default function OverlayPage() {
   const activeState = activeBundle.state;
   const currentItem = activeState?.current?.item || null;
   const currentPlaybackUrl = currentItem
-    ? hlsFallbackUrlFor(currentItem, currentItem?.type === 'music' ? musicPlaybackMode : 'video')
+    ? hlsFallbackUrlFor(
+        currentItem,
+        currentItem?.type === 'music' ? musicPlaybackMode : 'video',
+      )
     : '';
-  const embeddedMode = Boolean(currentPlaybackUrl && isEmbeddedVideoUrl(currentPlaybackUrl));
-  const cleanIdle = cleanMode && !currentPlaybackUrl;
+  const selectedPlaybackUrl = currentItem
+    ? playbackUrlForItem(
+        currentItem,
+        currentItem?.type === 'music' ? musicPlaybackMode : 'video',
+        forceProxyPlayback,
+      )
+    : '';
+  const effectivePlaybackUrl = currentItem
+    ? hlsFallbackUrlFor(
+        { ...currentItem, metadata: forceProxyPlayback ? { ...(currentItem.metadata || {}), embedPlaybackUrl: undefined } : currentItem.metadata, playbackUrl: selectedPlaybackUrl },
+        currentItem?.type === 'music' ? musicPlaybackMode : 'video',
+      )
+    : '';
+  const embeddedMode = Boolean(effectivePlaybackUrl && isEmbeddedVideoUrl(effectivePlaybackUrl));
+  const cleanIdle = cleanMode && !effectivePlaybackUrl;
 
   const youtubeCommand = useCallback((func: string, args: unknown[] = []) => {
     const frame = iframeRef.current;
@@ -372,6 +390,30 @@ export default function OverlayPage() {
     }, 100);
   }, [activeState, applyVolume, embeddedMode, youtubeCommand]);
 
+  useEffect(() => {
+    setForceProxyPlayback(false);
+    setRenderingHealthy(false);
+    embeddedCurrentTimeRef.current = 0;
+    embeddedProgressBaselineRef.current = null;
+    nativeProgressBaselineRef.current = null;
+  }, [activeBundle.sessionId, activeState?.current?.requestId]);
+
+  useEffect(() => {
+    if (!embeddedMode || forceProxyPlayback || activeState?.playback?.status !== 'playing' || renderingHealthy) return;
+    const timer = window.setTimeout(() => {
+      setMediaStatus('YouTube embed stalled; switching to HMO proxy');
+      setForceProxyPlayback(true);
+      setRenderingHealthy(false);
+    }, 12_000);
+    return () => window.clearTimeout(timer);
+  }, [
+    activeState?.current?.requestId,
+    activeState?.playback?.status,
+    embeddedMode,
+    forceProxyPlayback,
+    renderingHealthy,
+  ]);
+
   const startOverlayAudio = useCallback(async () => {
     mutedRef.current = false;
     setIsMuted(false);
@@ -434,6 +476,7 @@ export default function OverlayPage() {
     const item = activeState?.current?.item;
     if (!item || !requestId) {
       currentRequestIdRef.current = null;
+      setRenderingHealthy(false);
       setAudioTracks([]);
       setSelectedAudioTrack(0);
       videoRef.current?.pause();
@@ -446,13 +489,16 @@ export default function OverlayPage() {
       return;
     }
 
-    if (currentRequestIdRef.current === `${activeBundle.sessionId}:${requestId}:${currentPlaybackUrl}`) {
+    if (currentRequestIdRef.current === `${activeBundle.sessionId}:${requestId}:${effectivePlaybackUrl}`) {
       applyPlaybackState(activeState);
       return;
     }
 
-    currentRequestIdRef.current = `${activeBundle.sessionId}:${requestId}:${currentPlaybackUrl}`;
+    currentRequestIdRef.current = `${activeBundle.sessionId}:${requestId}:${effectivePlaybackUrl}`;
     embeddedCurrentTimeRef.current = 0;
+    embeddedProgressBaselineRef.current = null;
+    nativeProgressBaselineRef.current = null;
+    setRenderingHealthy(false);
     lastEmbeddedPlaybackKeyRef.current = '';
 
     if (hlsRef.current) {
@@ -472,7 +518,7 @@ export default function OverlayPage() {
     setMediaStatus(`Loading ${item.title || 'media'}`);
 
     if (embeddedMode) {
-      if (iframeRef.current) iframeRef.current.src = iframeUrlFor(currentPlaybackUrl);
+      if (iframeRef.current) iframeRef.current.src = iframeUrlFor(effectivePlaybackUrl);
       window.setTimeout(() => {
         registerYouTubeListeners();
         applyPlaybackState(activeState);
@@ -480,12 +526,12 @@ export default function OverlayPage() {
       return;
     }
 
-    if (!video || !currentPlaybackUrl) return;
+    if (!video || !effectivePlaybackUrl) return;
 
-    if (isHlsPlaybackUrl(currentPlaybackUrl)) {
+    if (isHlsPlaybackUrl(effectivePlaybackUrl)) {
       import('hls.js')
         .then(({ default: Hls }) => {
-          if (!videoRef.current || currentRequestIdRef.current !== `${activeBundle.sessionId}:${requestId}:${currentPlaybackUrl}`) return;
+          if (!videoRef.current || currentRequestIdRef.current !== `${activeBundle.sessionId}:${requestId}:${effectivePlaybackUrl}`) return;
           if (Hls.isSupported()) {
             hlsRef.current = new Hls({
               enableWorker: false,
@@ -520,13 +566,13 @@ export default function OverlayPage() {
               setMediaStatus(`Overlay HLS error: ${detail}`);
               console.error('[Overlay] HLS error', data);
             });
-            hlsRef.current.loadSource(currentPlaybackUrl);
+            hlsRef.current.loadSource(effectivePlaybackUrl);
             hlsRef.current.attachMedia(videoRef.current);
             return;
           }
 
           if (videoRef.current.canPlayType('application/vnd.apple.mpegurl')) {
-            videoRef.current.src = currentPlaybackUrl;
+            videoRef.current.src = effectivePlaybackUrl;
           } else {
             setMediaStatus('HLS is not supported in this browser');
           }
@@ -536,14 +582,14 @@ export default function OverlayPage() {
           console.error('[Overlay] Failed to load HLS player', error);
         });
     } else {
-      video.src = currentPlaybackUrl;
+      video.src = effectivePlaybackUrl;
       video.load();
       applyVolume();
     }
   }, [
     activeBundle.sessionId,
     activeState?.current?.requestId,
-    currentPlaybackUrl,
+    effectivePlaybackUrl,
     embeddedMode,
     registerYouTubeListeners,
     applyPlaybackState,
@@ -573,15 +619,30 @@ export default function OverlayPage() {
       }
       if (!payload || typeof payload !== 'object') return;
 
+      if (payload.event === 'onError') {
+        setRenderingHealthy(false);
+        setMediaStatus(`YouTube embed error ${String(payload.info || 'unknown')}; switching to HMO proxy`);
+        setForceProxyPlayback(true);
+        return;
+      }
+
       if (payload.event === 'infoDelivery' && typeof payload.info?.currentTime === 'number') {
-        embeddedCurrentTimeRef.current = payload.info.currentTime;
+        const nextTime = Number(payload.info.currentTime);
+        embeddedCurrentTimeRef.current = nextTime;
+        if (embeddedProgressBaselineRef.current === null) {
+          embeddedProgressBaselineRef.current = nextTime;
+        } else if (nextTime - embeddedProgressBaselineRef.current >= 0.75) {
+          setRenderingHealthy(true);
+          setAudioReady(true);
+          setMediaStatus('Overlay media playing');
+        }
       }
 
       if (payload.event !== 'onStateChange') return;
       const code = Number(payload.info);
       if (code === 1) {
         setAudioReady(true);
-        setMediaStatus('Overlay media playing');
+        setMediaStatus('Overlay media starting');
       } else if (code === 2) {
         setMediaStatus('Overlay media paused');
       } else if (code === 0) {
@@ -628,7 +689,14 @@ export default function OverlayPage() {
       <style jsx global>{`
         html, body, #__next { background: transparent !important; background-color: transparent !important; }
       `}</style>
-      <div className="relative min-h-screen overflow-hidden bg-transparent text-white">
+      <div
+        className="relative min-h-screen overflow-hidden bg-transparent text-white"
+        data-testid="overlay-root"
+        data-request-id={activeState?.current?.requestId || ''}
+        data-media-title={currentItem?.title || ''}
+        data-player-mode={embeddedMode ? 'youtube-embed' : isHlsPlaybackUrl(effectivePlaybackUrl) ? 'proxy-hls' : effectivePlaybackUrl ? 'direct-media' : 'idle'}
+        data-media-healthy={renderingHealthy ? 'true' : 'false'}
+      >
       <div className="absolute inset-0 bg-transparent">
         {embeddedMode && currentPlaybackUrl && (
           <iframe
@@ -636,7 +704,7 @@ export default function OverlayPage() {
             className="pointer-events-auto h-full w-full border-0 bg-black"
             style={{ pointerEvents: 'auto' }}
             title="Overlay media player"
-            src={iframeUrlFor(currentPlaybackUrl)}
+            src={iframeUrlFor(effectivePlaybackUrl)}
             allow="autoplay; fullscreen; encrypted-media; picture-in-picture"
             allowFullScreen
             onLoad={() => {
@@ -656,7 +724,18 @@ export default function OverlayPage() {
           }}
           onPlaying={() => {
             setAudioReady(true);
-            setMediaStatus('Overlay media playing');
+            setMediaStatus('Overlay media starting');
+          }}
+          onTimeUpdate={() => {
+            const video = videoRef.current;
+            if (!video) return;
+            const nextTime = Number(video.currentTime || 0);
+            if (nativeProgressBaselineRef.current === null) {
+              nativeProgressBaselineRef.current = nextTime;
+            } else if (nextTime - nativeProgressBaselineRef.current >= 0.75) {
+              setRenderingHealthy(true);
+              setMediaStatus('Overlay media playing');
+            }
           }}
           onPause={() => {
             if (!applyingRemoteState.current) setMediaStatus('Overlay media paused');
