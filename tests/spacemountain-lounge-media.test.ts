@@ -51,3 +51,19 @@ test('play skips an expired current item or restarts it when the queue is empty'
   assert.match(service, /if \(session\.queue\.length > 0\) action = 'next'/);
   assert.match(service, /else position = 0/);
 });
+
+
+test('SpaceMountain lounge is public and exempt from normal room expiry', () => {
+  const ensure = fs.readFileSync(path.join(process.cwd(), 'src/app/api/system/spacemountainlive-lounge/ensure/route.ts'), 'utf8');
+  const lifecycle = fs.readFileSync(path.join(process.cwd(), 'src/lib/room-lifecycle.ts'), 'utf8');
+  const dashboard = fs.readFileSync(path.join(process.cwd(), 'src/app/page.tsx'), 'utf8');
+  const roomPage = fs.readFileSync(path.join(process.cwd(), 'src/app/rooms/[roomId]/page.tsx'), 'utf8');
+  const expiry = fs.readFileSync(path.join(process.cwd(), 'src/app/api/room-expiry/route.ts'), 'utf8');
+  assert.match(ensure, /isPrivate: false/);
+  assert.match(ensure, /persistent: true/);
+  assert.match(lifecycle, /effectiveRoomExpiry\(expiresAt\?: string, createdAt\?: string, permanent = false\)/);
+  assert.match(lifecycle, /if \(permanent\) return null/);
+  assert.match(dashboard, /room\.persistent === true \|\| room\.systemRoom === true/);
+  assert.match(roomPage, /room\.persistent === true \|\| room\.systemRoom === true/);
+  assert.match(expiry, /data\.persistent === true \|\| data\.systemRoom === true/);
+});

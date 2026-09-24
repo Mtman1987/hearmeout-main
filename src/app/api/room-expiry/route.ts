@@ -26,7 +26,7 @@ export async function POST(request: Request) {
       const data = room.data;
       if (!data) continue;
 
-      const expiresAt = effectiveRoomExpiry(data.expiresAt, data.createdAt);
+      const expiresAt = effectiveRoomExpiry(data.expiresAt, data.createdAt, data.persistent === true || data.systemRoom === true);
       if (!expiresAt) continue;
       const timeLeft = expiresAt - now;
 
