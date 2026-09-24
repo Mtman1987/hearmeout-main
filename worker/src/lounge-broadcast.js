@@ -54,11 +54,20 @@ function createLoungeBroadcast({ chromiumPath, puppeteer, sourceUrl }) {
       const environment = { ...process.env, DISPLAY: ':' + displayNumber, PULSE_SERVER: 'unix:' + socket, PULSE_SINK: 'lounge', XDG_RUNTIME_DIR: root, PULSE_RUNTIME_PATH: root, PULSE_STATE_PATH: root };
       pulse = child('pulseaudio', ['--daemonize=no', '--use-pid-file=no', '--exit-idle-time=-1', '--log-target=stderr', '--high-priority=no', '--realtime=no', '-n', '--load=module-native-protocol-unix socket=' + socket + ' auth-anonymous=1', '--load=module-null-sink sink_name=lounge rate=48000 channels=2'], { env: environment });
       let audioReady = false;
-      for (let attempt = 0; attempt < 40; attempt++) {
-        if (pulse.exitCode !== null || failure) break;
-        try { await access(socket); audioReady = true; break; } catch { await delay(100); }
+      for (let attempt = 0; attempt < 100; attempt++) {
+        if (pulse.exitCode !== null) break;
+        try {
+          await access(socket);
+          audioReady = true;
+          break;
+        } catch {
+          await delay(100);
+        }
       }
-      if (!audioReady) throw Error('The Lounge audio device did not start');
+      if (!audioReady) {
+        const exitDetail = pulse.exitCode !== null ? ` (pulseaudio exited ${pulse.exitCode})` : '';
+        throw Error('The Lounge audio device did not start' + exitDetail);
+      }
 
       await mkdir(profileDir, { recursive: true });
       browser = await puppeteer.launch({
