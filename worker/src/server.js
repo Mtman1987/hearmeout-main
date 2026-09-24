@@ -2931,32 +2931,43 @@ app.listen(PORT, '0.0.0.0', () => {
   console.log(`[DJ Worker] Cache dir: ${CACHE_DIR}`);
   console.log('[DJ Worker] Legacy audio extraction: disabled');
   // Source ownership is the worker's. Browser viewers can come and go without
-  // starting, stopping, or advancing the Twitch player.
+  // starting, stopping, or advancing either persistent media source.
+  // "ready" means encoded fragments are already flowing; it is intentionally
+  // NOT a restart condition because a healthy Chromium/ffmpeg source can take
+  // several seconds to become ready. Restart only when the source is actually
+  // inactive, and stagger the two heavy media stacks so Xvfb/PulseAudio/
+  // Chromium do not all cold-start at the same instant.
   let checkingSpotlight = false;
+  let spotlightRetryAt = 0;
   const keepSpotlightRunning = async () => {
-    if (checkingSpotlight) return;
+    if (checkingSpotlight || Date.now() < spotlightRetryAt) return;
     checkingSpotlight = true;
     try {
       const state = await spotlightBroadcast.status();
-      if (!state.ready) await spotlightBroadcast.start();
+      if (!state.active || !state.activated) await spotlightBroadcast.start();
+      spotlightRetryAt = 0;
     } catch (error) {
-      console.warn('[Spotlight] Restarting source after failure:', error.message || String(error));
+      spotlightRetryAt = Date.now() + 30000;
+      console.warn('[Spotlight] Source start failed; retrying in 30s:', error.message || String(error));
     } finally { checkingSpotlight = false; }
   };
   void keepSpotlightRunning();
   setInterval(keepSpotlightRunning, 15000).unref();
 
   let checkingLounge = false;
+  let loungeRetryAt = 0;
   const keepLoungeRunning = async () => {
-    if (checkingLounge) return;
+    if (checkingLounge || Date.now() < loungeRetryAt) return;
     checkingLounge = true;
     try {
       const state = await loungeBroadcast.status();
-      if (!state.ready) await loungeBroadcast.start();
+      if (!state.active) await loungeBroadcast.start();
+      loungeRetryAt = 0;
     } catch (error) {
-      console.warn('[Lounge] Restarting source after failure:', error.message || String(error));
+      loungeRetryAt = Date.now() + 30000;
+      console.warn('[Lounge] Source start failed; retrying in 30s:', error.message || String(error));
     } finally { checkingLounge = false; }
   };
-  void keepLoungeRunning();
+  setTimeout(() => { void keepLoungeRunning(); }, 5000).unref();
   setInterval(keepLoungeRunning, 15000).unref();
 });
