@@ -144,7 +144,9 @@ function createSpotlightBroadcast({ directory, chromiumPath, puppeteer, spotligh
           activated: window.spotlightSource?.activated === true,
           currentLogin: window.spotlightSource?.currentLogin || '',
           error: window.spotlightSource?.error || '',
-          playbackPosition: Number(window.spotlightSource?.playbackPosition || 0),
+          fps: Number(window.spotlightSource?.fps || 0),
+          bufferSize: Number(window.spotlightSource?.bufferSize || 0),
+          playbackRate: Number(window.spotlightSource?.playbackRate || 0),
           stalledForMs: Number(window.spotlightSource?.stalledForMs || 0),
           recoveryCount: Number(window.spotlightSource?.recoveryCount || 0),
           lastRecoveryReason: window.spotlightSource?.lastRecoveryReason || '',
@@ -178,15 +180,15 @@ function createSpotlightBroadcast({ directory, chromiumPath, puppeteer, spotligh
 
 function sourcePage(endpoint) {
   return `<!doctype html><html><head><meta charset="utf-8"><style>html,body,#player{margin:0;width:100%;height:100%;overflow:hidden;background:#000}iframe{border:0}#start{position:fixed;z-index:5;left:50%;top:50%;transform:translate(-50%,-50%);padding:18px 28px;font:700 18px system-ui}</style></head><body><div id="player"></div><button id="start" type="button">Start Spotlight</button><script src="https://player.twitch.tv/js/embed/v1.js"></script><script>
-window.spotlightSource={ready:false,activated:false,currentLogin:'',error:'',playbackPosition:0,stalledForMs:0,recoveryCount:0,lastRecoveryReason:'',quality:''};
-let player=null,currentLogin='',activated=false,switching=false,lastPosition=-1,lastProgressAt=Date.now(),lastRecoveryAt=0;
+window.spotlightSource={ready:false,activated:false,currentLogin:'',error:'',fps:0,bufferSize:0,playbackRate:0,stalledForMs:0,recoveryCount:0,lastRecoveryReason:'',quality:''};
+let player=null,currentLogin='',activated=false,switching=false,lowFpsSince=0,lastRecoveryAt=0;
 const endpoint=${JSON.stringify(endpoint)},button=document.getElementById('start');
 function audio(){if(!player||!activated)return;try{player.setVolume(.58);player.setMuted(false);player.play()}catch{}}
 function stableQuality(){
  if(!player)return;
  try{
   const qualities=typeof player.getQualities==='function'?player.getQualities():[];
-  const groups=(qualities||[]).map(q=>String(q?.group||q?.name||'')).filter(Boolean);
+  const groups=(qualities||[]).map(q=>typeof q==='string'?q:String(q?.group||q?.name||'')).filter(Boolean);
   const preferred=groups.find(q=>/^720p30$/i.test(q))||groups.find(q=>/^720p$/i.test(q))||groups.find(q=>/^480p(?:30)?$/i.test(q))||'auto';
   if(typeof player.setQuality==='function')player.setQuality(preferred);
   window.spotlightSource.quality=preferred;
@@ -194,15 +196,16 @@ function stableQuality(){
 }
 function playBootstrap(){if(!player)return;try{stableQuality();player.setVolume(.58);player.setMuted(!activated);player.play()}catch{}}
 function resetProgressClock(){
- lastPosition=-1;
- lastProgressAt=Date.now();
- window.spotlightSource.playbackPosition=0;
+ lowFpsSince=0;
+ window.spotlightSource.fps=0;
+ window.spotlightSource.bufferSize=0;
+ window.spotlightSource.playbackRate=0;
  window.spotlightSource.stalledForMs=0;
 }
 function bindPlayerEvents(nextPlayer){
- nextPlayer.addEventListener(Twitch.Player.READY,()=>{window.spotlightSource.ready=true;resetProgressClock();stableQuality();playBootstrap()});
- nextPlayer.addEventListener(Twitch.Player.PLAY,()=>{switching=false;lastProgressAt=Date.now();audio()});
- nextPlayer.addEventListener(Twitch.Player.PLAYING,()=>{switching=false;lastProgressAt=Date.now();stableQuality();audio();setTimeout(audio,250);setTimeout(audio,1000)});
+ nextPlayer.addEventListener(Twitch.Player.READY,()=>{window.spotlightSource.ready=true;switching=false;resetProgressClock();stableQuality();playBootstrap()});
+ nextPlayer.addEventListener(Twitch.Player.PLAY,()=>{switching=false;lowFpsSince=0;audio()});
+ nextPlayer.addEventListener(Twitch.Player.PLAYING,()=>{switching=false;lowFpsSince=0;stableQuality();audio();setTimeout(audio,250);setTimeout(audio,1000)});
  nextPlayer.addEventListener(Twitch.Player.PAUSE,()=>{if(switching)setTimeout(playBootstrap,300)});
  nextPlayer.addEventListener(Twitch.Player.PLAYBACK_BLOCKED,()=>recover('playback-blocked'));
  nextPlayer.addEventListener(Twitch.Player.OFFLINE,()=>{currentLogin='';window.spotlightSource.currentLogin=''});
@@ -245,19 +248,38 @@ function mount(login){
 }
 function watchPlayback(){
  if(!player||!activated||!currentLogin)return;
- let position=0,paused=false;
- try{position=Number(player.getCurrentTime?.()||0);paused=Boolean(player.isPaused?.())}catch{return}
+ let paused=false,stats={};
+ try{
+  paused=Boolean(player.isPaused?.());
+  stats=typeof player.getPlaybackStats==='function'?(player.getPlaybackStats()||{}):{};
+ }catch{return}
  const now=Date.now();
- window.spotlightSource.playbackPosition=position;
- if(Number.isFinite(position)&&position>lastPosition+.20){
-  lastPosition=position;
-  lastProgressAt=now;
+ const fps=Number(stats.fps);
+ const playbackRate=Number(stats.playbackRate);
+ const bufferSize=Number(stats.bufferSize);
+ window.spotlightSource.fps=Number.isFinite(fps)?fps:0;
+ window.spotlightSource.playbackRate=Number.isFinite(playbackRate)?playbackRate:0;
+ window.spotlightSource.bufferSize=Number.isFinite(bufferSize)?bufferSize:0;
+
+ const hasFps=Number.isFinite(fps)&&fps>0;
+ const visiblyAdvancing=hasFps&&fps>=8;
+ if(paused||switching||visiblyAdvancing){
+  lowFpsSince=0;
   window.spotlightSource.stalledForMs=0;
   return;
  }
- const stalledFor=now-lastProgressAt;
- window.spotlightSource.stalledForMs=stalledFor;
- if(!paused&&!switching&&stalledFor>=12000)recover('playback-clock-stalled');
+
+ // Chromium exposes live-stream FPS through Twitch PlaybackStats. Treat a
+ // sustained sub-8fps player as frozen/degraded, not a healthy "PLAYING" state.
+ if(hasFps&&fps<8){
+  if(!lowFpsSince)lowFpsSince=now;
+  const stalledFor=now-lowFpsSince;
+  window.spotlightSource.stalledForMs=stalledFor;
+  if(stalledFor>=12000)recover('live-fps-stalled');
+ }else{
+  lowFpsSince=0;
+  window.spotlightSource.stalledForMs=0;
+ }
 }
 button.addEventListener('click',()=>{activated=true;window.spotlightSource.activated=true;button.remove();resetProgressClock();playBootstrap();audio();[150,500,1000].forEach(ms=>setTimeout(audio,ms))});
 async function refresh(){try{const r=await fetch(endpoint,{cache:'no-store',headers:{Accept:'application/json'}});if(!r.ok)throw Error('spotlight '+r.status);const data=await r.json(),login=data?.spotlight?.twitchLogin||data?.spotlight?.user?.twitchLogin||'';if(!login){window.spotlightSource.error='No live community Spotlight is available';return}window.spotlightSource.error='';mount(login)}catch(error){window.spotlightSource.error=String(error?.message||error)}}
