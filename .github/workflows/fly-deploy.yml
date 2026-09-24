@@ -117,6 +117,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+      - uses: superfly/flyctl-actions/setup-flyctl@master
       - name: Install browser smoke dependencies
         working-directory: worker
         run: npm ci
@@ -125,3 +126,4 @@ jobs:
         run: node scripts/smoke-lounge-browser.mjs
         env:
           HMO_BASE_URL: https://hearmeout-main.fly.dev
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN_MAIN || secrets.FLY_API_TOKEN }}
