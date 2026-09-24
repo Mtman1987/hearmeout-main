@@ -11,8 +11,6 @@ primary_region = "iad"
     NEXT_PUBLIC_TWITCH_CLIENT_ID = "rxmohc28tthq0nudfd6iwx0sgy88dp"
 
 [env]
-  APOLLO_LOUNGE_ORIGIN = "https://web-terminal-bvesa.sprites.app"
-  APOLLO_LOUNGE_TWITCH_CHANNEL = "mtman1987"
   DJ_WORKER_URL = "https://hmo-dj-worker.fly.dev"
   NEXT_PUBLIC_LIVEKIT_URL = "wss://streamweaver-7atx04ct.livekit.cloud"
   NODE_ENV = "production"
