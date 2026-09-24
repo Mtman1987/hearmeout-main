@@ -1,15 +1,15 @@
 const { createServer } = require('node:http');
 const { spawn } = require('node:child_process');
-const { mkdir, mkdtemp, rm, access } = require('node:fs/promises');
-const { existsSync } = require('node:fs');
+const { mkdtemp, rm, access } = require('node:fs/promises');
 const { join } = require('node:path');
 const { tmpdir } = require('node:os');
 
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
-const SAFE_FILE = /^(?:index\.m3u8|spotlight_\d{6}\.ts)$/;
 
-function createSpotlightBroadcast({ directory, chromiumPath, puppeteer, spotlightEndpoint = 'https://discord-stream-hub-new.fly.dev/api/community-spotlight' }) {
-  let root, display, pulse, browser, page, host, encoder, startTask, active = false, activated = false, failure = '', currentLogin = '';
+function createSpotlightBroadcast({ chromiumPath, puppeteer, spotlightEndpoint = 'https://discord-stream-hub-new.fly.dev/api/community-spotlight' }) {
+  let root, display, pulse, browser, page, host, encoder, startTask, activationTask, active = false, activated = false, failure = '', currentLogin = '';
+  let init = Buffer.alloc(0), pending = Buffer.alloc(0), fragment = [], fragmentsSent = 0, lastFragmentAt = 0;
+  const viewers = new Set();
   const children = [];
 
   function child(command, args, options = {}) {
@@ -30,15 +30,15 @@ function createSpotlightBroadcast({ directory, chromiumPath, puppeteer, spotligh
   }
 
   async function ensureSource() {
-    if (active && page && encoder && encoder.exitCode === null) return;
+    if (active && page && encoder && encoder.exitCode === null && Date.now() - lastFragmentAt < 15000) return;
     if (startTask) return startTask;
     startTask = (async () => {
       failure = '';
       activated = false;
       currentLogin = '';
       await cleanup(true);
+      init = Buffer.alloc(0); pending = Buffer.alloc(0); fragment = []; fragmentsSent = 0; lastFragmentAt = 0;
       root = await mkdtemp(join(tmpdir(), 'hmo-spotlight-source-'));
-      await mkdir(directory, { recursive: true });
 
       display = child('Xvfb', ['-displayfd', '3', '-screen', '0', '1280x720x24', '-nolisten', 'tcp', '-ac'], { stdio: ['ignore', 'ignore', 'pipe', 'pipe'] });
       const displayNumber = await new Promise((resolve, reject) => {
@@ -79,15 +79,17 @@ function createSpotlightBroadcast({ directory, chromiumPath, puppeteer, spotligh
       await page.goto('http://localhost:' + host.address().port + '/', { waitUntil: 'domcontentloaded', timeout: 30000 });
       await page.waitForFunction(() => window.spotlightSource?.ready || window.spotlightSource?.error, { timeout: 30000 });
       const state = await page.evaluate(() => window.spotlightSource);
-      if (state.error) throw Error(String(state.error));
+      // An empty rotation is still a running source. Its page keeps polling
+      // until a creator becomes live, without needing another viewer click.
 
-      encoder = child('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-y',
+      encoder = child('ffmpeg', ['-hide_banner', '-loglevel', 'error',
         '-thread_queue_size', '1024', '-f', 'x11grab', '-draw_mouse', '0', '-video_size', '1280x720', '-framerate', '30', '-i', ':' + displayNumber + '.0',
         '-thread_queue_size', '1024', '-f', 'pulse', '-sample_rate', '48000', '-channels', '2', '-i', 'spotlight.monitor',
-        '-map', '0:v:0', '-map', '1:a:0', '-c:v', 'libx264', '-threads', '4', '-preset', 'ultrafast', '-tune', 'zerolatency', '-crf', '26', '-pix_fmt', 'yuv420p', '-r', '30', '-g', '60', '-keyint_min', '60', '-sc_threshold', '0',
+        '-map', '0:v:0', '-map', '1:a:0', '-vf', 'scale=854:480', '-c:v', 'libx264', '-profile:v', 'baseline', '-level:v', '3.1', '-threads', '3', '-preset', 'ultrafast', '-tune', 'zerolatency', '-crf', '28', '-pix_fmt', 'yuv420p', '-r', '30', '-g', '60', '-keyint_min', '60', '-sc_threshold', '0',
         '-c:a', 'aac', '-b:a', '160k', '-ac', '2', '-af', 'aresample=async=1:first_pts=0',
-        '-f', 'hls', '-hls_time', '2', '-hls_list_size', '15', '-hls_delete_threshold', '5', '-hls_flags', 'delete_segments+omit_endlist+independent_segments+temp_file',
-        '-hls_segment_filename', join(directory, 'spotlight_%06d.ts'), join(directory, 'index.m3u8')], { env: environment });
+        '-f', 'mp4', '-movflags', 'frag_keyframe+empty_moov+default_base_moof', 'pipe:1'],
+      { env: environment, stdio: ['ignore', 'pipe', 'pipe'] });
+      encoder.stdout.on('data', acceptBytes);
       encoder.on('error', () => { active = false; failure ||= 'The Spotlight recorder could not start'; });
       encoder.once('close', code => { active = false; if (code !== 0) failure ||= 'The Spotlight recorder stopped'; });
       active = true;
@@ -102,8 +104,13 @@ function createSpotlightBroadcast({ directory, chromiumPath, puppeteer, spotligh
   async function start() {
     await ensureSource();
     if (!page) throw Error('The Spotlight source is unavailable');
-    await page.click('#start');
-    await page.waitForFunction(() => window.spotlightSource?.activated === true, { timeout: 10000 });
+    if (!activated) {
+      if (!activationTask) activationTask = (async () => {
+        await page.click('#start');
+        await page.waitForFunction(() => window.spotlightSource?.activated === true, { timeout: 10000 });
+      })().finally(() => { activationTask = undefined; });
+      await activationTask;
+    }
     const state = await page.evaluate(() => ({ activated: window.spotlightSource?.activated === true, currentLogin: window.spotlightSource?.currentLogin || '' }));
     activated = state.activated;
     currentLogin = state.currentLogin;
@@ -154,20 +161,16 @@ function createSpotlightBroadcast({ directory, chromiumPath, puppeteer, spotligh
           quality: window.spotlightSource?.quality || '',
         }));
         activated = state.activated; currentLogin = state.currentLogin; if (state.error) failure = String(state.error);
-        return { configured: true, active, activated, currentLogin, ready: active && activated && existsSync(join(directory, 'index.m3u8')), error: failure || null, ...state };
+        return { configured: true, active, activated, currentLogin, ready: active && activated && fragmentsSent > 0 && Date.now() - lastFragmentAt < 15000, fragmentsSent, error: failure || null, ...state };
       } catch {}
     }
-    return { configured: true, active, activated, currentLogin, ready: active && activated && existsSync(join(directory, 'index.m3u8')), error: failure || null };
-  }
-
-  function file(name) {
-    if (!SAFE_FILE.test(String(name || ''))) return null;
-    const path = join(directory, name);
-    return existsSync(path) ? path : null;
+    return { configured: true, active, activated, currentLogin, ready: active && activated && fragmentsSent > 0 && Date.now() - lastFragmentAt < 15000, fragmentsSent, error: failure || null };
   }
 
   async function cleanup(removeRoot = true) {
     active = false;
+    for (const response of viewers) response.end();
+    viewers.clear();
     await stopProcess(encoder); encoder = undefined;
     await browser?.close().catch(() => {}); browser = undefined; page = undefined;
     await Promise.all(children.splice(0).map(stopProcess));
@@ -176,7 +179,48 @@ function createSpotlightBroadcast({ directory, chromiumPath, puppeteer, spotligh
     root = undefined; display = undefined; pulse = undefined;
   }
 
-  return { start, consent, status, file, close: () => cleanup(true) };
+  // Fragmented MP4 has one init section, followed by independent fragments.
+  // Each new HTTP viewer gets the init section and only future fragments.
+  // A slow viewer is disconnected instead of holding the source behind it.
+  function acceptBytes(bytes) {
+    pending = pending.length ? Buffer.concat([pending, bytes]) : bytes;
+    while (pending.length >= 8) {
+      const size = pending.readUInt32BE(0);
+      if (size < 8 || size > 16 * 1024 * 1024) { failure = 'Invalid Spotlight fragment'; encoder?.kill(); return; }
+      if (pending.length < size) return;
+      const box = pending.subarray(0, size);
+      pending = pending.subarray(size);
+      const type = box.toString('ascii', 4, 8);
+      if (!fragmentsSent && !fragment.length && type !== 'moof') init = Buffer.concat([init, box]);
+      else {
+        fragment.push(box);
+        if (type === 'mdat') {
+          const payload = Buffer.concat(fragment); fragment = [];
+          fragmentsSent++; lastFragmentAt = Date.now();
+          for (const response of viewers) {
+            if (!response.write(framePacket(payload))) { viewers.delete(response); response.end(); }
+          }
+        }
+      }
+    }
+  }
+
+  function watch(response) {
+    if (!fragmentsSent || !init.length || !active) return false;
+    response.writeHead(200, { 'content-type': 'application/octet-stream', 'cache-control': 'no-store, no-transform', 'x-content-type-options': 'nosniff', 'x-accel-buffering': 'no' });
+    response.write(framePacket(init));
+    viewers.add(response);
+    response.on('close', () => viewers.delete(response));
+    return true;
+  }
+
+  return { start, consent, status, watch, close: () => cleanup(true) };
+}
+
+function framePacket(payload) {
+  const length = Buffer.allocUnsafe(4);
+  length.writeUInt32BE(payload.length);
+  return Buffer.concat([length, payload]);
 }
 
 function sourcePage(endpoint) {
@@ -300,9 +344,16 @@ function watchPlayback(){
  window.spotlightSource.playbackRate=Number.isFinite(playbackRate)?playbackRate:0;
  window.spotlightSource.skippedFrames=Number.isFinite(skippedFrames)?skippedFrames:0;
 
- if(paused||switching){
+ if(switching){
   unhealthySince=0;
   window.spotlightSource.stalledForMs=0;
+  return;
+ }
+
+ if(paused){
+  if(!unhealthySince)unhealthySince=now;
+  window.spotlightSource.stalledForMs=now-unhealthySince;
+  if(now-unhealthySince>=12000)recover('source-paused');
   return;
  }
 
