@@ -7,7 +7,7 @@ const source=readFileSync(resolve(__dirname,'../worker/src/spotlight-broadcast.j
 const server=readFileSync(resolve(__dirname,'../worker/src/server.js'),'utf8');
 
 test('Spotlight owns one persistent Twitch player and rotates channels without replacing it',()=>{
- assert.match(source,/new Twitch\.Player\('player'/);
+ assert.match(source,/new Twitch\.Player\('spotlight-twitch-player'/);
  assert.match(source,/player\.setChannel\(clean\)/);
  assert.match(source,/window\.spotlightSource\.activated=true/);
  assert.match(source,/page\.click\('#start'\)/);
