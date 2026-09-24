@@ -75,11 +75,13 @@ export async function POST(request: NextRequest) {
   const isPublicQueueRequest = !room && (
     action === 'hmo.media.request' || action === 'hmo.media.state.read'
   ) && (isGlobalSession || isSpaceMountainLoungeSession(tenantId, sessionId));
+  // SpaceMountain Lounge media is intentionally credential-free while the
+  // player is under active development. Public chat permissions live in
+  // StreamWeaver; this internal media route must not reject an already-approved
+  // broadcaster/mod command with a second, unrelated auth check.
   const isSpaceMountainLoungeControl = !room
     && action === 'hmo.media.control'
-    && isGlobalSession
-    && tenantId === 'spacemountainlive'
-    && (actorRole === 'owner' || actorRole === 'moderator');
+    && isSpaceMountainLoungeSession(tenantId, sessionId);
   if (!isPublicQueueRequest && !isSpaceMountainLoungeControl && !isBotActionServiceRequest(request)) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
