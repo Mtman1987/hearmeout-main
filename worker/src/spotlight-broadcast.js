@@ -187,7 +187,7 @@ function stableQuality(){
  try{
   const qualities=typeof player.getQualities==='function'?player.getQualities():[];
   const groups=(qualities||[]).map(q=>String(q?.group||q?.name||'')).filter(Boolean);
-  const preferred=groups.find(q=>/^720p$/i.test(q))||groups.find(q=>/^480p(?:30)?$/i.test(q))||groups.find(q=>/^720p/i.test(q))||'auto';
+  const preferred=groups.find(q=>/^720p30$/i.test(q))||groups.find(q=>/^720p$/i.test(q))||groups.find(q=>/^480p(?:30)?$/i.test(q))||'auto';
   if(typeof player.setQuality==='function')player.setQuality(preferred);
   window.spotlightSource.quality=preferred;
  }catch{}
@@ -199,17 +199,36 @@ function resetProgressClock(){
  window.spotlightSource.playbackPosition=0;
  window.spotlightSource.stalledForMs=0;
 }
+function bindPlayerEvents(nextPlayer){
+ nextPlayer.addEventListener(Twitch.Player.READY,()=>{window.spotlightSource.ready=true;resetProgressClock();stableQuality();playBootstrap()});
+ nextPlayer.addEventListener(Twitch.Player.PLAY,()=>{switching=false;lastProgressAt=Date.now();audio()});
+ nextPlayer.addEventListener(Twitch.Player.PLAYING,()=>{switching=false;lastProgressAt=Date.now();stableQuality();audio();setTimeout(audio,250);setTimeout(audio,1000)});
+ nextPlayer.addEventListener(Twitch.Player.PAUSE,()=>{if(switching)setTimeout(playBootstrap,300)});
+ nextPlayer.addEventListener(Twitch.Player.PLAYBACK_BLOCKED,()=>recover('playback-blocked'));
+ nextPlayer.addEventListener(Twitch.Player.OFFLINE,()=>{currentLogin='';window.spotlightSource.currentLogin=''});
+}
+function createPlayer(login){
+ const host=document.getElementById('player');
+ host.replaceChildren();
+ const target=document.createElement('div');
+ target.id='spotlight-twitch-player';
+ host.appendChild(target);
+ player=new Twitch.Player('spotlight-twitch-player',{channel:login,parent:[location.hostname],autoplay:true,muted:true,controls:false,width:'100%',height:'100%'});
+ bindPlayerEvents(player);
+ return player;
+}
 function recover(reason){
  if(!player||!currentLogin||!activated)return;
  const now=Date.now();
- if(now-lastRecoveryAt<8000)return;
+ if(now-lastRecoveryAt<10000)return;
  lastRecoveryAt=now;
  window.spotlightSource.recoveryCount++;
  window.spotlightSource.lastRecoveryReason=reason;
  switching=true;
  try{player.pause()}catch{}
+ const login=currentLogin;
  setTimeout(()=>{
-  try{player.setChannel(currentLogin)}catch{}
+  createPlayer(login);
   resetProgressClock();
   playBootstrap();
   audio();
@@ -221,14 +240,8 @@ function mount(login){
  if(!clean)return;
  if(clean===currentLogin&&player)return;
  currentLogin=clean;window.spotlightSource.currentLogin=clean;switching=true;resetProgressClock();
- if(player){try{player.setChannel(clean)}catch{};playBootstrap();[350,1200,2500,4000].forEach(ms=>setTimeout(()=>{playBootstrap();audio()},ms));return}
- player=new Twitch.Player('player',{channel:clean,parent:[location.hostname],autoplay:true,muted:true,controls:false,width:'100%',height:'100%'});
- player.addEventListener(Twitch.Player.READY,()=>{window.spotlightSource.ready=true;resetProgressClock();stableQuality();playBootstrap()});
- player.addEventListener(Twitch.Player.PLAY,()=>{switching=false;lastProgressAt=Date.now();audio()});
- player.addEventListener(Twitch.Player.PLAYING,()=>{switching=false;lastProgressAt=Date.now();stableQuality();audio();setTimeout(audio,250);setTimeout(audio,1000)});
- player.addEventListener(Twitch.Player.PAUSE,()=>{if(switching)setTimeout(playBootstrap,300)});
- player.addEventListener(Twitch.Player.PLAYBACK_BLOCKED,()=>recover('playback-blocked'));
- player.addEventListener(Twitch.Player.OFFLINE,()=>{currentLogin='';window.spotlightSource.currentLogin=''});
+ if(player){try{player.setChannel(clean)}catch{createPlayer(clean)};playBootstrap();[350,1200,2500,4000].forEach(ms=>setTimeout(()=>{playBootstrap();audio()},ms));return}
+ createPlayer(clean);
 }
 function watchPlayback(){
  if(!player||!activated||!currentLogin)return;
@@ -236,7 +249,7 @@ function watchPlayback(){
  try{position=Number(player.getCurrentTime?.()||0);paused=Boolean(player.isPaused?.())}catch{return}
  const now=Date.now();
  window.spotlightSource.playbackPosition=position;
- if(position>lastPosition+.20){
+ if(Number.isFinite(position)&&position>lastPosition+.20){
   lastPosition=position;
   lastProgressAt=now;
   window.spotlightSource.stalledForMs=0;
