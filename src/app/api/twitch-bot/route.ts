@@ -1,8 +1,18 @@
 import { NextRequest, NextResponse } from 'next/server';
 import tmi from 'tmi.js';
 import { handleMusicCommand } from '@/lib/music-command-service';
-import { handleWatchRequestCommand, parseWatchCommand } from '@/lib/watch-request-service';
-import { getDjWorkerRequestHeaders } from '@/lib/dj-worker-auth';
+import {
+  controlWatchSession,
+  getResolvedWatchSession,
+  handleWatchRequestCommand,
+  parseWatchCommand,
+  requestWatchItem,
+  requestWatchMusicItem,
+} from '@/lib/watch-request-service';
+import {
+  SPACEMOUNTAIN_LOUNGE_SESSION_ID,
+  SPACEMOUNTAIN_LOUNGE_TWITCH_CHANNEL,
+} from '@/lib/spacemountain-lounge';
 import { db, ensureDb } from '@/lib/db';
 import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
@@ -48,27 +58,6 @@ function getPublicBaseUrl() {
   ).replace(/\/$/, '');
 }
 
-function getApolloLoungeOrigin() {
-  return String(process.env.APOLLO_LOUNGE_ORIGIN || 'https://web-terminal-bvesa.sprites.app').replace(/\/$/, '');
-}
-
-function getApolloLoungeChannel() {
-  return String(process.env.APOLLO_LOUNGE_TWITCH_CHANNEL || 'mtman1987').trim().replace(/^#/, '').toLowerCase();
-}
-
-async function relayApolloLoungeCommand(input: { channel: string; command: string; messageId: string; userId: string; displayName: string; canManage: boolean }) {
-  const headers = getDjWorkerRequestHeaders({ 'Content-Type': 'application/json', Accept: 'application/json' });
-  const response = await fetch(`${getApolloLoungeOrigin()}/api/watch/broadcast/lounge-twitch-request`, {
-    method: 'POST',
-    headers,
-    body: JSON.stringify(input),
-    signal: AbortSignal.timeout(30_000),
-  });
-  const result = await response.json().catch(() => ({})) as { text?: string; error?: string };
-  if (!response.ok) throw new Error(result.error || `Apollo Lounge rejected the request (${response.status})`);
-  return result.text || 'Added to the 24-Hour Lounge queue.';
-}
-
 function getIgnoredCommandBotNames() {
   const configured = String(process.env.TWITCH_COMMAND_BOT_IGNORE_LIST || '')
     .split(',')
@@ -87,6 +76,119 @@ function isIgnoredCommandBot(context: tmi.ChatUserstate, botUsername?: string) {
     (username && ignored.has(username)) ||
     (displayName && ignored.has(displayName))
   );
+}
+
+function twitchActor(context: tmi.ChatUserstate, channelName: string) {
+  return {
+    userId: String(context['user-id'] || context.username || 'twitch'),
+    username: String(context['display-name'] || context.username || 'Someone from Twitch'),
+    isHost: context.badges?.broadcaster === '1' || String(context.username || '').toLowerCase() === channelName,
+    isAdmin: Boolean(context.mod) || context.badges?.moderator === '1',
+  };
+}
+
+function isSpaceMountainLoungeCommand(message: string) {
+  return /^!(?:sr|song|wr|watch)(?:\s+|$)/i.test(message)
+    || /^!(?:np|nowplaying|status|skip|next|play|pause|stop|mute|unmute)(?:\s*)$/i.test(message)
+    || /^!volume\s+\d{1,3}\s*$/i.test(message)
+    || /^!radio(?:\s+(?:on|off|status))?\s*$/i.test(message);
+}
+
+async function handleSpaceMountainLoungeCommand(params: {
+  message: string;
+  context: tmi.ChatUserstate;
+  channelName: string;
+  guildId: string;
+  channelId: string;
+}) {
+  const command = params.message.trim();
+  const lower = command.toLowerCase();
+  const actor = twitchActor(params.context, params.channelName);
+  const identity = {
+    sessionId: SPACEMOUNTAIN_LOUNGE_SESSION_ID,
+    guildId: params.guildId,
+    channelId: params.channelId,
+    userId: actor.userId,
+    username: actor.username,
+  };
+
+  const song = command.match(/^!(?:sr|song)(?:\s+(.+))?$/i);
+  if (song) {
+    const query = String(song[1] || '').trim();
+    if (!query) return 'Usage: !sr <song name or YouTube URL>';
+    const result = await requestWatchMusicItem({ ...identity, query, platform: 'twitch' });
+    if ('error' in result) return result.result?.message || 'Song request failed.';
+    const position = result.session.current?.requestId === result.request.requestId
+      ? 'now playing'
+      : `queue position ${result.session.queue.length}`;
+    return `Queued in the 24-Hour Lounge: ${result.request.item.title} (${position}).`;
+  }
+
+  const watch = command.match(/^!(?:wr|watch)(?:\s+(.+))?$/i);
+  if (watch) {
+    const query = String(watch[1] || '').trim();
+    if (!query) return 'Usage: !wr <movie, show, or video>';
+    const result = await requestWatchItem({ ...identity, query });
+    if ('error' in result) return 'No playable match found for that watch request.';
+    const position = result.session.current?.requestId === result.request.requestId
+      ? 'now playing'
+      : `queue position ${result.session.queue.length}`;
+    return `Queued in the 24-Hour Lounge: ${result.request.item.title} (${position}).`;
+  }
+
+  const session = getResolvedWatchSession(SPACEMOUNTAIN_LOUNGE_SESSION_ID);
+  if (lower === '!np' || lower === '!nowplaying') {
+    return session.current
+      ? `${session.playback.status === 'playing' ? 'Playing' : 'Ready'}: "${session.current.item.title}"`
+      : 'Nothing is playing in the 24-Hour Lounge.';
+  }
+  if (lower === '!status') {
+    const status = session.playback.status === 'playing' ? 'Playing' : session.playback.status === 'paused' ? 'Paused' : 'Idle';
+    return `24-Hour Lounge: ${status} | Current: ${session.current?.item.title || 'None'} | Queue: ${session.queue.length}`;
+  }
+
+  const radio = command.match(/^!radio(?:\s+(on|off|status))?\s*$/i);
+  if (radio) {
+    const action = String(radio[1] || 'status').toLowerCase();
+    if (action === 'status') return `24-Hour Lounge auto-radio is ${session.autoRadio ? 'on' : 'off'}.`;
+    if (!actor.isHost && !actor.isAdmin) return 'Only the broadcaster or a moderator can change auto-radio.';
+    const next = await controlWatchSession(
+      SPACEMOUNTAIN_LOUNGE_SESSION_ID,
+      'auto-radio',
+      action === 'on' ? 1 : 0,
+      undefined,
+      { actorUserId: actor.userId, isHost: actor.isHost, isAdmin: actor.isAdmin, platform: 'twitch' },
+    );
+    return `24-Hour Lounge auto-radio is ${next.autoRadio ? 'on' : 'off'}.`;
+  }
+
+  let action = '';
+  let value: number | undefined;
+  if (lower === '!skip' || lower === '!next') action = 'next';
+  else if (lower === '!play') action = 'play';
+  else if (lower === '!pause' || lower === '!stop') action = 'pause';
+  else if (lower === '!mute') action = 'mute';
+  else if (lower === '!unmute') action = 'unmute';
+  else {
+    const volume = command.match(/^!volume\s+(\d{1,3})\s*$/i);
+    if (volume) {
+      action = 'volume';
+      value = Math.max(0, Math.min(100, Number(volume[1])));
+    }
+  }
+
+  if (!action) return null;
+  if (!actor.isHost && !actor.isAdmin) return 'Only the broadcaster or a moderator can control the 24-Hour Lounge player.';
+  const next = await controlWatchSession(
+    SPACEMOUNTAIN_LOUNGE_SESSION_ID,
+    action,
+    value,
+    undefined,
+    { actorUserId: actor.userId, isHost: actor.isHost, isAdmin: actor.isAdmin, platform: 'twitch' },
+  );
+  if (action === 'volume') return `24-Hour Lounge volume set to ${value}%.`;
+  if (action === 'next') return next.current ? `Skipped to: ${next.current.item.title}` : 'Skipped. The Lounge queue is empty.';
+  return `${action === 'play' ? 'Playing' : action === 'pause' ? 'Paused' : action === 'mute' ? 'Muted' : 'Unmuted'}: ${next.current?.item.title || 'the Lounge player'}`;
 }
 
 // --- Token management (per-server) ---
@@ -316,19 +418,18 @@ function createMessageHandler(instance: BotInstance) {
       return;
     }
 
-    if (channelName === getApolloLoungeChannel() && (/^!(sr|wr)\s+\S/i.test(msg.trim()) || /^!radio(?:\s+(?:on|off|status))?\s*$/i.test(msg.trim()))) {
+    if (channelName === SPACEMOUNTAIN_LOUNGE_TWITCH_CHANNEL && isSpaceMountainLoungeCommand(msg.trim())) {
       try {
-        const text = await relayApolloLoungeCommand({
-          channel: channelName,
-          command: msg.trim(),
-          messageId: String(context.id || Date.now()),
-          userId: String(context['user-id'] || context.username || 'twitch'),
-          displayName: String(requester),
-          canManage: context.badges?.broadcaster === '1' || Boolean(context.mod) || context.badges?.moderator === '1' || String(context.username || '').toLowerCase() === channelName,
+        const text = await handleSpaceMountainLoungeCommand({
+          message: msg,
+          context,
+          channelName,
+          guildId: instance.tokens.serverId || 'local',
+          channelId: process.env.DISCORD_CHANNEL_ID || `twitch-${channelName}`,
         });
-        await client.say(target, `@${requester} ${text}`);
+        if (text) await client.say(target, `@${requester} ${text}`);
       } catch (error) {
-        console.error('[Twitch Bot] Apollo Lounge request failed:', error);
+        console.error('[Twitch Bot] Live HMO Lounge request failed:', error);
         await client.say(target, `@${requester} The 24-Hour Lounge could not accept that request yet.`);
       }
       return;

@@ -16,6 +16,7 @@ import {
 } from '@/lib/bot-room-action-service';
 import { getDjWorkerUrl } from '@/lib/dj-worker-config';
 import { getDjWorkerRequestHeaders } from '@/lib/dj-worker-auth';
+import { SPACEMOUNTAIN_LOUNGE_SESSION_ID } from '@/lib/spacemountain-lounge';
 
 export const dynamic = 'force-dynamic';
 
@@ -39,10 +40,7 @@ const ACTIONS = new Set<HearMeOutAction>([
   'hmo.tts.speak',
 ]);
 const CONTROLS = new Set(['play', 'pause', 'next', 'clear', 'mute', 'unmute', 'volume']);
-const APOLLO_LOUNGE_ROOM_ID = 'system-spacemountainlive-lounge';
-// Keep the existing !sr destination as the one permanent mixed SpaceMountain player.
-// Movies, music, state reads, and controls all use this exact durable session.
-const SPACEMOUNTAIN_LOUNGE_SESSION_ID = getRoomWatchSessionId(APOLLO_LOUNGE_ROOM_ID, 'music');
+// SpaceMountain production media has one Live HMO queue. Apollo is never a fallback.
 
 function isSpaceMountainLoungeSession(tenantId: string, sessionId: string) {
   return tenantId === 'spacemountainlive'
