@@ -13,7 +13,7 @@ import { autoRadioNext, getRoomState, rememberAutoRadioTrack, resolveSongRequest
 import { DISCORD_CLIENT_ID } from '@/lib/public-config';
 import { ensureDiscordActivityRoomForSession } from '@/lib/activity-room';
 import { ACTIVITY_ROOM_ID, getGlobalWatchSessionId, getMusicWatchSessionId, getScopedWatchSessionId, normalizeWatchSessionAlias, type WatchMediaKind } from '@/lib/watch-session';
-import { SPACEMOUNTAIN_LOUNGE_SESSION_ID } from '@/lib/spacemountain-lounge';
+import { SPACEMOUNTAIN_LOUNGE_MOVIE_SESSION_ID, SPACEMOUNTAIN_LOUNGE_SESSION_ID } from '@/lib/spacemountain-lounge';
 import { publishSpmtEvent } from '@/lib/spmt-client';
 import {
   sendHearMeOutDiscordMessage,
@@ -1007,6 +1007,7 @@ function assertCanControlWatchSession(session: WatchSession, action: string, act
   const metadata = session.metadata || inferSessionMetadata(session.id, session.guildId, session.channelId);
   session.metadata = metadata;
   const scopeType = metadata.scopeType;
+  if (session.id === SPACEMOUNTAIN_LOUNGE_SESSION_ID || session.id === SPACEMOUNTAIN_LOUNGE_MOVIE_SESSION_ID) return;
   if (scopeType === 'legacy' && (!actor || actor.platform === 'discord' || actor.platform === 'activity')) return;
   if (actor?.isHost || actor?.isAdmin || actor?.platform === 'admin') return;
   if (actor?.platform === 'discord') {
