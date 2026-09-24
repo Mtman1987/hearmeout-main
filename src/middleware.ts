@@ -45,6 +45,13 @@ function isStatic(pathname: string) {
   return pathname.includes('.') && !pathname.endsWith('.html');
 }
 
+function isPublicDevelopmentMediaRead(pathname: string, method: string) {
+  if (method !== 'GET' && method !== 'OPTIONS') return false;
+  if (/^\/api\/watch\/sessions\/[^/]+\/state$/.test(pathname)) return true;
+  if (/^\/api\/watch\/youtube\/hls\/[^/]+\/[^/]+$/.test(pathname)) return true;
+  return false;
+}
+
 function isAdmin(identity: any): boolean {
   if (identity?.isAdmin === true || identity?.is_admin === true || identity?.is_admin === 1) return true;
   const role = String(identity?.role || '').toLowerCase();
@@ -103,7 +110,11 @@ export async function middleware(request: NextRequest) {
   }
   // The .js entry can contain a private session id; do not let the generic
   // static-file exception turn that into a public entry point.
-  if (PUBLIC_PREFIXES.some((prefix) => pathname === prefix || pathname.startsWith(prefix)) || (isStatic(pathname) && !isActivityEntry(request.nextUrl))) {
+  if (
+    isPublicDevelopmentMediaRead(pathname, request.method)
+    || PUBLIC_PREFIXES.some((prefix) => pathname === prefix || pathname.startsWith(prefix))
+    || (isStatic(pathname) && !isActivityEntry(request.nextUrl))
+  ) {
     return NextResponse.next();
   }
 
