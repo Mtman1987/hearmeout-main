@@ -1,7 +1,7 @@
 import puppeteer from 'puppeteer';
 
 const base = String(process.env.HMO_BASE_URL || 'https://hearmeout-main.fly.dev').replace(/\/$/, '');
-const roomId = `smoke-lounge-${Date.now()}`;
+const roomId = 'system-spacemountainlive-lounge';
 const sessionId = `watch-room-${roomId}-music`;
 const firstUrl = process.env.HMO_SMOKE_VIDEO_A || 'https://www.youtube.com/watch?v=jNQXAC9IVRw';
 const secondUrl = process.env.HMO_SMOKE_VIDEO_B || 'https://www.youtube.com/watch?v=aqz-KE-bpKQ';
@@ -15,31 +15,41 @@ async function json(url, options = {}) {
   return payload;
 }
 
-async function queue(query) {
-  return json(`${base}/api/watch/sessions/${encodeURIComponent(sessionId)}/request`, {
+async function loungeAction(payload) {
+  return json(`${base}/api/internal/bot/actions`, {
     method: 'POST',
     headers: { 'content-type': 'application/json', accept: 'application/json' },
     body: JSON.stringify({
-      mediaType: 'music',
-      query,
-      userId: 'production-smoke',
-      username: 'Production Smoke',
-      platform: 'web',
+      tenantId: 'spacemountainlive',
+      sessionId,
+      actorUserId: 'production-smoke',
+      actorName: 'Production Smoke',
+      actorRole: 'owner',
+      ...payload,
     }),
   });
 }
 
-async function control(action) {
-  const url = new URL(`${base}/api/watch/sessions/${encodeURIComponent(sessionId)}/quick-control`);
-  url.searchParams.set('action', action);
-  url.searchParams.set('isAdmin', 'true');
-  url.searchParams.set('platform', 'admin');
-  url.searchParams.set('format', 'json');
-  return json(url.toString());
+async function queue(query) {
+  return loungeAction({
+    action: 'hmo.media.request',
+    lane: 'music',
+    query,
+  });
 }
 
+async function control(control) {
+  return loungeAction({
+    action: 'hmo.media.control',
+    lane: 'music',
+    control,
+  });
+}
+
+await control('clear').catch(() => {});
 const first = await queue(firstUrl);
 const second = await queue(secondUrl);
+await control('play');
 const firstId = first?.request?.requestId;
 const secondId = second?.request?.requestId;
 if (!firstId || !secondId) throw new Error('Smoke requests did not return request IDs');
