@@ -19,6 +19,10 @@ test('production deploy proves request A plays, skip advances, and request B pla
   assert.match(workflow, /needs: \[deploy-main, deploy-worker\]/);
   assert.match(workflow, /smoke-lounge-browser\.mjs/);
   assert.match(smoke, /data-media-healthy/);
+  assert.match(smoke, /system-spacemountainlive-lounge/);
+  assert.match(smoke, /\/api\/internal\/bot\/actions/);
+  assert.match(smoke, /tenantId: 'spacemountainlive'/);
+  assert.match(smoke, /control\('play'\)/);
   assert.match(smoke, /control\('next'\)/);
   assert.match(smoke, /PASS: Lounge visibly played request A, advanced, and visibly played request B/);
 });
