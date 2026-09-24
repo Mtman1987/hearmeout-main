@@ -35,6 +35,8 @@ const PUBLIC_PREFIXES = [
   '/embed',
   '/room-overlay',
   '/now-playing',
+  '/spotlight-media',
+  '/api/spotlight-media/',
   '/_next/',
   '/favicon.ico',
 ];
