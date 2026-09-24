@@ -1,4 +1,4 @@
-name: Deploy to Fly.io
+name: Build HearMeOut image
 
 on:
   push:
@@ -6,133 +6,20 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
-  group: fly-deploy-${{ github.ref }}
+  group: hmo-image-build-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  branch-housekeeping:
-    name: Retain newest merged branch backup
-    if: github.event_name != 'pull_request'
-    runs-on: ubuntu-latest
-    steps:
-      - name: Delete older branches already contained in main
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const { owner, repo } = context.repo;
-            const defaultBranch = context.payload.repository?.default_branch || 'main';
-            const branches = await github.paginate(github.rest.repos.listBranches, {
-              owner, repo, per_page: 100,
-            });
-            const merged = [];
-            for (const branch of branches) {
-              if (!branch?.name || branch.name === defaultBranch) continue;
-              const comparison = await github.rest.repos.compareCommits({
-                owner, repo, base: branch.name, head: defaultBranch,
-              });
-              if (!['ahead', 'identical'].includes(comparison.data.status)) {
-                core.notice(`Retaining unmerged branch ${branch.name}.`);
-                continue;
-              }
-              const commit = await github.rest.repos.getCommit({ owner, repo, ref: branch.commit.sha });
-              const date = commit.data.commit.committer?.date || commit.data.commit.author?.date || '1970-01-01T00:00:00Z';
-              merged.push({ name: branch.name, sha: branch.commit.sha, date });
-            }
-            merged.sort((a, b) => Date.parse(b.date) - Date.parse(a.date));
-            const newest = merged[0];
-            if (newest) core.notice(`Keeping newest merged branch backup ${newest.name} (${newest.sha}).`);
-            for (const branch of merged.slice(1)) {
-              try {
-                await github.rest.git.deleteRef({ owner, repo, ref: `heads/${branch.name}` });
-                core.notice(`Deleted older merged branch ${branch.name}.`);
-              } catch (error) {
-                if (error.status === 404 || error.status === 422) {
-                  core.warning(`Could not delete ${branch.name}; it may be protected or already absent.`);
-                  continue;
-                }
-                throw error;
-              }
-            }
-
-  validate:
-    needs: branch-housekeeping
-    name: Validate voice and persona contracts
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-      - name: Apply the worker Docker build audio-state patch
-        run: node worker/scripts/patch-voice-bridge-audio-state.cjs
-      - name: Check worker JavaScript syntax
-        run: |
-          node --check worker/src/discord-pcm-jitter.js
-          node --check worker/src/discord-voice-bridge.js
-          node --check worker/src/server.js
-          node --check worker/src/persona-runtime-adapter.js
-          node --check worker/src/persona-bootstrap.js
-      - name: Test Discord bridge, media, and HearMeOut persona runtime
-        run: node --test tests/discord-speaker-presence.test.cjs tests/voice-bridge-privacy-gate.test.cjs tests/discord-voice-jitter-buffer.test.cjs tests/discord-voice-gain-contract.test.cjs tests/youtube-two-input-hls-contract.test.cjs tests/persona-runtime.test.cjs
-
-  deploy-renderers:
-    needs: [branch-housekeeping, validate]
-    name: Deploy dedicated Lounge and Spotlight workers
+  build-main-image:
+    name: Build main image for direct Fly release
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
       - uses: superfly/flyctl-actions/setup-flyctl@master
-      - name: Ensure renderer apps exist
-        run: |
-          set -euo pipefail
-          for app in hmo-spotlight-worker hmo-lounge-worker; do
-            if ! flyctl status -a "$app" >/dev/null 2>&1; then
-              flyctl apps create "$app" --org mtman-new
-            fi
-          done
-        env:
-          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN_WORKER || secrets.FLY_API_TOKEN }}
-      - name: Deploy hmo-spotlight-worker
-        run: flyctl deploy . --remote-only --config worker/fly-spotlight.toml --strategy immediate --yes
-        env:
-          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN_WORKER || secrets.FLY_API_TOKEN }}
-      - name: Deploy hmo-lounge-worker
-        run: flyctl deploy . --remote-only --config worker/fly-lounge.toml --strategy immediate --yes
-        env:
-          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN_WORKER || secrets.FLY_API_TOKEN }}
-
-  deploy-main:
-    needs: [branch-housekeeping, validate, deploy-renderers]
-    name: Deploy main app
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-      - uses: superfly/flyctl-actions/setup-flyctl@master
-      - name: Deploy hearmeout-main
-        run: flyctl deploy . --remote-only --config fly.toml --yes
+      - name: Build image only
+        run: flyctl deploy . --build-only --remote-only --config fly.toml --yes
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN_MAIN || secrets.FLY_API_TOKEN }}
-
-  deploy-worker:
-    needs: [branch-housekeeping, validate, deploy-main, deploy-renderers]
-    name: Deploy DJ worker
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-      - uses: superfly/flyctl-actions/setup-flyctl@master
-      - name: Verify existing hmo-dj-worker data volume
-        run: |
-          set -euo pipefail
-          # Ordinary code releases reuse the mounted disk and machine count.
-          # Provisioning or scaling is a separate operation, not a deploy prerequisite.
-          existing="$(flyctl volumes list -a hmo-dj-worker --json | jq '[.[] | select(.name == "data" and .region == "iad")] | length')"
-          if [ "$existing" -lt 1 ]; then
-            echo "No existing data volume in iad; restore/provision storage before deploying." >&2
-            exit 1
-          fi
-        env:
-          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN_WORKER || secrets.FLY_API_TOKEN }}
-      - name: Deploy hmo-dj-worker
-        run: flyctl deploy . --remote-only --config worker/fly.toml --strategy immediate --yes
-        env:
-          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN_WORKER || secrets.FLY_API_TOKEN }}
