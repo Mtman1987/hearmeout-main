@@ -1,4 +1,5 @@
 import puppeteer from 'puppeteer';
+import { spawnSync } from 'node:child_process';
 
 const base = String(process.env.HMO_BASE_URL || 'https://hearmeout-main.fly.dev').replace(/\/$/, '');
 const roomId = `smoke-lounge-${Date.now()}`;
@@ -6,36 +7,29 @@ const sessionId = `watch-room-${roomId}-music`;
 const firstUrl = process.env.HMO_SMOKE_VIDEO_A || 'https://www.youtube.com/watch?v=jNQXAC9IVRw';
 const secondUrl = process.env.HMO_SMOKE_VIDEO_B || 'https://www.youtube.com/watch?v=aqz-KE-bpKQ';
 
-async function json(url, options = {}) {
-  const response = await fetch(url, options);
-  const body = await response.text();
-  let payload = {};
-  try { payload = body ? JSON.parse(body) : {}; } catch { payload = { raw: body }; }
-  if (!response.ok) throw new Error(`${response.status} ${url}: ${body.slice(0, 500)}`);
-  return payload;
+function remoteAction(mode, value) {
+  const encoded = Buffer.from(String(value || ''), 'utf8').toString('base64url');
+  const command = `node --import tsx scripts/smoke-lounge-action.ts ${mode} ${sessionId} ${encoded}`;
+  const result = spawnSync('flyctl', ['ssh', 'console', '-q', '-a', 'hearmeout-main', '-C', command], {
+    cwd: '..',
+    encoding: 'utf8',
+    env: process.env,
+    timeout: 60_000,
+  });
+  const output = `${result.stdout || ''}\n${result.stderr || ''}`;
+  const marker = output.match(/SMOKE_RESULT\s+([A-Za-z0-9_-]+)/);
+  if (result.status !== 0 || !marker) {
+    throw new Error(`Fly smoke action failed (exit ${result.status}): ${output.slice(-1200)}`);
+  }
+  return JSON.parse(Buffer.from(marker[1], 'base64url').toString('utf8'));
 }
 
 async function queue(query) {
-  return json(`${base}/api/watch/sessions/${encodeURIComponent(sessionId)}/request`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json', accept: 'application/json' },
-    body: JSON.stringify({
-      mediaType: 'music',
-      query,
-      userId: 'production-smoke',
-      username: 'Production Smoke',
-      platform: 'web',
-    }),
-  });
+  return remoteAction('request', query);
 }
 
 async function control(action) {
-  const url = new URL(`${base}/api/watch/sessions/${encodeURIComponent(sessionId)}/quick-control`);
-  url.searchParams.set('action', action);
-  url.searchParams.set('isAdmin', 'true');
-  url.searchParams.set('platform', 'admin');
-  url.searchParams.set('format', 'json');
-  return json(url.toString());
+  return remoteAction('control', action);
 }
 
 const first = await queue(firstUrl);
