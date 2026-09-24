@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 function source(relativePath: string) {
@@ -92,13 +92,9 @@ test('room persona worker no longer forwards speech commands or owns STT', () =>
   assert.match(bootstrap, /app\.post\('\/persona\/speak'/);
 });
 
-test('Apollo Lounge bridge is worker-authenticated and targets the permanent live queue', () => {
-  const bridge = source('src/app/api/internal/lounge/media/route.ts');
-  assert.match(bridge, /isDjWorkerRequest/);
-  assert.match(bridge, /system-spacemountainlive-lounge/);
-  assert.match(bridge, /getRoomWatchSessionId\(LOUNGE_ROOM_ID, 'music'\)/);
-  assert.match(bridge, /expectedRequestId/);
-  assert.match(bridge, /requestedAction === 'skip' \? 'next'/);
+test('the retired Apollo Lounge bridge cannot return', () => {
+  const bridgeUrl = new URL('../src/app/api/internal/lounge/media/route.ts', import.meta.url);
+  assert.equal(existsSync(fileURLToPath(bridgeUrl)), false);
   const middleware = source('src/middleware.ts');
-  assert.match(middleware, /\/api\/internal\/lounge\/media/);
+  assert.doesNotMatch(middleware, /\/api\/internal\/lounge\/media/);
 });
