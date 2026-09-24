@@ -37,6 +37,8 @@ const PUBLIC_PREFIXES = [
   '/now-playing',
   '/spotlight-media',
   '/api/spotlight-media/',
+  '/lounge-media',
+  '/api/lounge-media/',
   '/_next/',
   '/favicon.ico',
 ];

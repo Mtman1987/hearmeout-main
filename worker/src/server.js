@@ -92,6 +92,12 @@ const spotlightBroadcast = createSpotlightBroadcast({
   puppeteer,
   spotlightEndpoint: process.env.SPOTLIGHT_ENDPOINT || 'https://discord-stream-hub-new.fly.dev/api/community-spotlight',
 });
+const loungeMediaBroadcast = createSpotlightBroadcast({
+  chromiumPath: CHROMIUM_PATH,
+  puppeteer,
+  sourceUrl: `${APP_URL}/lounge-media/source`,
+  label: 'Lounge media',
+});
 
 const VIDEO_ID_RE = /^[A-Za-z0-9_-]{11}$/;
 const OFFLINE_AUDIO_EXTENSIONS = new Set(['.mp3', '.m4a', '.aac', '.ogg', '.opus', '.wav', '.flac']);
@@ -2890,6 +2896,14 @@ app.get('/spotlight/live.mp4', authorizeWorker, (_req, res) => {
   if (!spotlightBroadcast.watch(res)) res.status(503).json({ error: 'Spotlight source is starting' });
 });
 
+app.get('/lounge-media/status', authorizeWorker, async (_req, res) => {
+  try { res.json(await loungeMediaBroadcast.status()); }
+  catch (error) { res.status(500).json({ error: error.message || String(error) }); }
+});
+app.get('/lounge-media/live.mp4', authorizeWorker, (_req, res) => {
+  if (!loungeMediaBroadcast.watch(res)) res.status(503).json({ error: 'Lounge media source is starting' });
+});
+
 // ── Health ──────────────────────────────────────────────────────────────
 app.get('/health', (req, res) => {
   res.json({ status: 'ok', uptime: process.uptime(), activeDJs: djInstances.size + browserDjInstances.size });
@@ -2924,4 +2938,17 @@ app.listen(PORT, '0.0.0.0', () => {
   };
   void keepSpotlightRunning();
   setInterval(keepSpotlightRunning, 15000).unref();
+  let checkingLounge = false;
+  const keepLoungeRunning = async () => {
+    if (checkingLounge) return;
+    checkingLounge = true;
+    try {
+      const state = await loungeMediaBroadcast.status();
+      if (!state.ready) await loungeMediaBroadcast.start();
+    } catch (error) {
+      console.warn('[Lounge media] Restarting source after failure:', error.message || String(error));
+    } finally { checkingLounge = false; }
+  };
+  void keepLoungeRunning();
+  setInterval(keepLoungeRunning, 15000).unref();
 });
