@@ -8,7 +8,7 @@ const commands = fs.readFileSync(path.join(process.cwd(), 'src/lib/music-command
 const twitch = fs.readFileSync(path.join(process.cwd(), 'src/app/api/twitch-bot/route.ts'), 'utf8');
 const botActions = fs.readFileSync(path.join(process.cwd(), 'src/app/api/internal/bot/actions/route.ts'), 'utf8');
 
-test('legacy overlay does not clone or synchronize the Apollo Lounge player', () => {
+test('legacy overlay does not clone or synchronize another Lounge player', () => {
   assert.doesNotMatch(source, /APOLLO_LOUNGE_PROXY|system-spacemountainlive-lounge|setLoungeState|advancingEndedRequestRef/);
   assert.equal(fs.existsSync(path.join(process.cwd(), 'src/app/api/system/spacemountainlive-lounge/apollo/[...path]/route.ts')), false);
   assert.match(source, /getRoomWatchSessionId\(roomId, 'movie'\)/);
@@ -30,19 +30,22 @@ test('YouTube music uses the browser embed before the proxy fallback', () => {
   assert.match(source, /searchParams\.set\('autoplay', '1'\)/);
 });
 
-test('SpaceMountain StreamWeaver actions share one permanent lounge queue', () => {
-  assert.match(botActions, /SPACEMOUNTAIN_LOUNGE_SESSION_ID = getRoomWatchSessionId\(APOLLO_LOUNGE_ROOM_ID, 'music'\)/);
+test('SpaceMountain actions share one permanent Live HMO lounge queue', () => {
+  assert.match(botActions, /SPACEMOUNTAIN_LOUNGE_SESSION_ID/);
   assert.match(botActions, /getWatchSession\(SPACEMOUNTAIN_LOUNGE_SESSION_ID/);
   assert.match(botActions, /sessionId: SPACEMOUNTAIN_LOUNGE_SESSION_ID/);
   assert.match(botActions, /controlSessionId = isSpaceMountainLoungeSession\(tenantId, sessionId\) \? SPACEMOUNTAIN_LOUNGE_SESSION_ID : sessionId/);
-  assert.doesNotMatch(botActions, /requestApolloLounge|readApolloLoungeState|api\/watch\/broadcast\/lounge-twitch-request/);
+  assert.doesNotMatch(botActions, /Apollo|requestApolloLounge|readApolloLoungeState|api\/watch\/broadcast\/lounge-twitch-request/);
 });
 
-test('Twitch moderators can control Lounge media from chat', () => {
-  for (const command of ['!play', '!pause', '!mute', '!unmute', '!volume']) assert.match(commands, new RegExp(command.replace('!', '\\!')));
-  assert.match(commands, /controlWatchSession\(sessionId, parsed\.action/);
-  assert.match(twitch, /message === '!play'/);
-  assert.match(twitch, /isAdmin: Boolean\(context\.mod\)/);
+test('SpaceMountain Twitch media commands stay inside Live HMO', () => {
+  assert.match(twitch, /SPACEMOUNTAIN_LOUNGE_TWITCH_CHANNEL/);
+  assert.match(twitch, /SPACEMOUNTAIN_LOUNGE_SESSION_ID/);
+  assert.match(twitch, /requestWatchMusicItem/);
+  assert.match(twitch, /requestWatchItem/);
+  assert.match(twitch, /controlWatchSession/);
+  assert.match(twitch, /auto-radio/);
+  assert.doesNotMatch(twitch, /APOLLO_LOUNGE|web-terminal-bvesa|relayApolloLoungeCommand|lounge-twitch-request/);
 });
 
 test('play skips an expired current item or restarts it when the queue is empty', () => {
