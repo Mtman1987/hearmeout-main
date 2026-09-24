@@ -6,7 +6,7 @@ const { tmpdir } = require('node:os');
 
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 
-function createSpotlightBroadcast({ chromiumPath, puppeteer, spotlightEndpoint = 'https://discord-stream-hub-new.fly.dev/api/community-spotlight' }) {
+function createSpotlightBroadcast({ chromiumPath, puppeteer, spotlightEndpoint = 'https://discord-stream-hub-new.fly.dev/api/community-spotlight', sourceUrl = '', label = 'Spotlight' }) {
   let root, display, pulse, browser, page, host, encoder, startTask, activationTask, active = false, activated = false, failure = '', currentLogin = '';
   let init = Buffer.alloc(0), pending = Buffer.alloc(0), fragment = [], fragmentsSent = 0, lastFragmentAt = 0;
   const viewers = new Set();
@@ -76,7 +76,7 @@ function createSpotlightBroadcast({ chromiumPath, puppeteer, spotlightEndpoint =
       });
       browser.on('disconnected', () => { active = false; failure ||= 'The Spotlight browser disconnected'; });
       page = (await browser.pages())[0] || await browser.newPage();
-      await page.goto('http://localhost:' + host.address().port + '/', { waitUntil: 'domcontentloaded', timeout: 30000 });
+      await page.goto(sourceUrl || 'http://localhost:' + host.address().port + '/', { waitUntil: 'domcontentloaded', timeout: 30000 });
       await page.waitForFunction(() => window.spotlightSource?.ready || window.spotlightSource?.error, { timeout: 30000 });
       const state = await page.evaluate(() => window.spotlightSource);
       // An empty rotation is still a running source. Its page keeps polling
@@ -186,7 +186,7 @@ function createSpotlightBroadcast({ chromiumPath, puppeteer, spotlightEndpoint =
     pending = pending.length ? Buffer.concat([pending, bytes]) : bytes;
     while (pending.length >= 8) {
       const size = pending.readUInt32BE(0);
-      if (size < 8 || size > 16 * 1024 * 1024) { failure = 'Invalid Spotlight fragment'; encoder?.kill(); return; }
+      if (size < 8 || size > 16 * 1024 * 1024) { failure = 'Invalid ' + label + ' fragment'; encoder?.kill(); return; }
       if (pending.length < size) return;
       const box = pending.subarray(0, size);
       pending = pending.subarray(size);
