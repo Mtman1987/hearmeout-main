@@ -20,7 +20,9 @@ test('Spotlight owns one persistent Twitch player and rotates channels without r
  assert.match(source,/ignoreDefaultArgs: \['--mute-audio', '--enable-automation'\]/);
  assert.match(source,/--disable-infobars/);
  assert.match(source,/spotlight\.monitor/);
- assert.match(source,/delete_segments\+omit_endlist/);
+ assert.match(source,/frag_keyframe\+empty_moov\+default_base_moof/);
+ assert.match(source,/function watch\(response\)/);
+ assert.match(source,/function framePacket\(payload\)/);
  assert.match(source,/getPlaybackStats/);
  assert.doesNotMatch(source,/getCurrentTime/);
  assert.match(source,/live-playback-stalled/);
@@ -32,11 +34,12 @@ test('Spotlight owns one persistent Twitch player and rotates channels without r
  assert.match(source,/'-preset', 'ultrafast'/);
 });
 
-test('Spotlight worker routes are authenticated and expose only status start and HLS',()=>{
+test('Spotlight worker routes expose one authenticated live feed',()=>{
  assert.match(server,/app\.get\('\/spotlight\/status', authorizeWorker/);
  assert.match(server,/app\.post\('\/spotlight\/start', authorizeWorker/);
  assert.match(server,/app\.post\('\/spotlight\/consent', authorizeWorker/);
- assert.match(server,/app\.get\('\/spotlight\/hls\/:file', authorizeWorker/);
+ assert.match(server,/app\.get\('\/spotlight\/live\.mp4', authorizeWorker/);
+ assert.match(server,/setInterval\(keepSpotlightRunning, 15000\)/);
 });
 
 test('Spotlight status exposes render health and recovery telemetry',()=>{

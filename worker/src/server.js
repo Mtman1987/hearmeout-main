@@ -87,9 +87,7 @@ const WATCH_HLS_DELETE_THRESHOLD = Number(process.env.WATCH_HLS_DELETE_THRESHOLD
 const WATCH_HLS_BUDGET_BYTES = Number(process.env.WATCH_HLS_BUDGET_BYTES || 1536 * 1024 * 1024);
 const FLY_MACHINE_ID = process.env.FLY_MACHINE_ID || '';
 const FLY_APP_NAME = process.env.FLY_APP_NAME || 'hmo-dj-worker';
-const SPOTLIGHT_HLS_DIR = join(WATCH_HLS_DIR, 'spotlight');
 const spotlightBroadcast = createSpotlightBroadcast({
-  directory: SPOTLIGHT_HLS_DIR,
   chromiumPath: CHROMIUM_PATH,
   puppeteer,
   spotlightEndpoint: process.env.SPOTLIGHT_ENDPOINT || 'https://discord-stream-hub-new.fly.dev/api/community-spotlight',
@@ -2888,13 +2886,8 @@ app.post('/spotlight/consent', authorizeWorker, async (_req, res) => {
   catch (error) { res.status(502).json({ error: error.message || String(error) }); }
 });
 
-app.get('/spotlight/hls/:file', authorizeWorker, async (req, res) => {
-  const file = String(req.params.file || '');
-  const path = spotlightBroadcast.file(file);
-  if (!path) return res.status(404).json({ error: 'Spotlight broadcast is not ready' });
-  res.setHeader('cache-control', 'no-store');
-  res.type(file.endsWith('.m3u8') ? 'application/vnd.apple.mpegurl' : 'video/mp2t');
-  return res.sendFile(path);
+app.get('/spotlight/live.mp4', authorizeWorker, (_req, res) => {
+  if (!spotlightBroadcast.watch(res)) res.status(503).json({ error: 'Spotlight source is starting' });
 });
 
 // ── Health ──────────────────────────────────────────────────────────────
@@ -2916,4 +2909,19 @@ app.listen(PORT, '0.0.0.0', () => {
   console.log(`[DJ Worker] App URL: ${APP_URL}`);
   console.log(`[DJ Worker] Cache dir: ${CACHE_DIR}`);
   console.log('[DJ Worker] Legacy audio extraction: disabled');
+  // Source ownership is the worker's. Browser viewers can come and go without
+  // starting, stopping, or advancing the Twitch player.
+  let checkingSpotlight = false;
+  const keepSpotlightRunning = async () => {
+    if (checkingSpotlight) return;
+    checkingSpotlight = true;
+    try {
+      const state = await spotlightBroadcast.status();
+      if (!state.ready) await spotlightBroadcast.start();
+    } catch (error) {
+      console.warn('[Spotlight] Restarting source after failure:', error.message || String(error));
+    } finally { checkingSpotlight = false; }
+  };
+  void keepSpotlightRunning();
+  setInterval(keepSpotlightRunning, 15000).unref();
 });
