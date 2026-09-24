@@ -82,11 +82,11 @@ function createSpotlightBroadcast({ directory, chromiumPath, puppeteer, spotligh
       if (state.error) throw Error(String(state.error));
 
       encoder = child('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-y',
-        '-thread_queue_size', '512', '-f', 'x11grab', '-draw_mouse', '0', '-video_size', '1280x720', '-framerate', '24', '-i', ':' + displayNumber + '.0',
-        '-thread_queue_size', '512', '-f', 'pulse', '-sample_rate', '48000', '-channels', '2', '-i', 'spotlight.monitor',
-        '-map', '0:v:0', '-map', '1:a:0', '-c:v', 'libx264', '-threads', '2', '-preset', 'veryfast', '-crf', '23', '-pix_fmt', 'yuv420p', '-g', '48',
+        '-thread_queue_size', '1024', '-f', 'x11grab', '-draw_mouse', '0', '-video_size', '1280x720', '-framerate', '30', '-i', ':' + displayNumber + '.0',
+        '-thread_queue_size', '1024', '-f', 'pulse', '-sample_rate', '48000', '-channels', '2', '-i', 'spotlight.monitor',
+        '-map', '0:v:0', '-map', '1:a:0', '-c:v', 'libx264', '-threads', '4', '-preset', 'superfast', '-tune', 'zerolatency', '-crf', '24', '-pix_fmt', 'yuv420p', '-r', '30', '-g', '60', '-keyint_min', '60', '-sc_threshold', '0',
         '-c:a', 'aac', '-b:a', '160k', '-ac', '2', '-af', 'aresample=async=1:first_pts=0',
-        '-f', 'hls', '-hls_time', '2', '-hls_list_size', '15', '-hls_delete_threshold', '5', '-hls_flags', 'delete_segments+omit_endlist+independent_segments+temp_file',
+        '-f', 'hls', '-hls_time', '1', '-hls_list_size', '20', '-hls_delete_threshold', '8', '-hls_flags', 'delete_segments+omit_endlist+independent_segments+temp_file',
         '-hls_segment_filename', join(directory, 'spotlight_%06d.ts'), join(directory, 'index.m3u8')], { env: environment });
       encoder.on('error', () => { active = false; failure ||= 'The Spotlight recorder could not start'; });
       encoder.once('close', code => { active = false; if (code !== 0) failure ||= 'The Spotlight recorder stopped'; });
@@ -140,8 +140,18 @@ function createSpotlightBroadcast({ directory, chromiumPath, puppeteer, spotligh
   async function status() {
     if (page && active) {
       try {
-        const state = await page.evaluate(() => ({ activated: window.spotlightSource?.activated === true, currentLogin: window.spotlightSource?.currentLogin || '', error: window.spotlightSource?.error || '' }));
+        const state = await page.evaluate(() => ({
+          activated: window.spotlightSource?.activated === true,
+          currentLogin: window.spotlightSource?.currentLogin || '',
+          error: window.spotlightSource?.error || '',
+          playbackPosition: Number(window.spotlightSource?.playbackPosition || 0),
+          stalledForMs: Number(window.spotlightSource?.stalledForMs || 0),
+          recoveryCount: Number(window.spotlightSource?.recoveryCount || 0),
+          lastRecoveryReason: window.spotlightSource?.lastRecoveryReason || '',
+          quality: window.spotlightSource?.quality || '',
+        }));
         activated = state.activated; currentLogin = state.currentLogin; if (state.error) failure = String(state.error);
+        return { configured: true, active, activated, currentLogin, ready: active && activated && existsSync(join(directory, 'index.m3u8')), error: failure || null, ...state };
       } catch {}
     }
     return { configured: true, active, activated, currentLogin, ready: active && activated && existsSync(join(directory, 'index.m3u8')), error: failure || null };
@@ -168,27 +178,77 @@ function createSpotlightBroadcast({ directory, chromiumPath, puppeteer, spotligh
 
 function sourcePage(endpoint) {
   return `<!doctype html><html><head><meta charset="utf-8"><style>html,body,#player{margin:0;width:100%;height:100%;overflow:hidden;background:#000}iframe{border:0}#start{position:fixed;z-index:5;left:50%;top:50%;transform:translate(-50%,-50%);padding:18px 28px;font:700 18px system-ui}</style></head><body><div id="player"></div><button id="start" type="button">Start Spotlight</button><script src="https://player.twitch.tv/js/embed/v1.js"></script><script>
-window.spotlightSource={ready:false,activated:false,currentLogin:'',error:''};
-let player=null,currentLogin='',activated=false,switching=false;
+window.spotlightSource={ready:false,activated:false,currentLogin:'',error:'',playbackPosition:0,stalledForMs:0,recoveryCount:0,lastRecoveryReason:'',quality:''};
+let player=null,currentLogin='',activated=false,switching=false,lastPosition=-1,lastProgressAt=Date.now(),lastRecoveryAt=0;
 const endpoint=${JSON.stringify(endpoint)},button=document.getElementById('start');
 function audio(){if(!player||!activated)return;try{player.setVolume(.58);player.setMuted(false);player.play()}catch{}}
-function playBootstrap(){if(!player)return;try{player.setVolume(.58);player.setMuted(!activated);player.play()}catch{}}
+function stableQuality(){
+ if(!player)return;
+ try{
+  const qualities=typeof player.getQualities==='function'?player.getQualities():[];
+  const groups=(qualities||[]).map(q=>String(q?.group||q?.name||'')).filter(Boolean);
+  const preferred=groups.find(q=>/^720p$/i.test(q))||groups.find(q=>/^480p(?:30)?$/i.test(q))||groups.find(q=>/^720p/i.test(q))||'auto';
+  if(typeof player.setQuality==='function')player.setQuality(preferred);
+  window.spotlightSource.quality=preferred;
+ }catch{}
+}
+function playBootstrap(){if(!player)return;try{stableQuality();player.setVolume(.58);player.setMuted(!activated);player.play()}catch{}}
+function resetProgressClock(){
+ lastPosition=-1;
+ lastProgressAt=Date.now();
+ window.spotlightSource.playbackPosition=0;
+ window.spotlightSource.stalledForMs=0;
+}
+function recover(reason){
+ if(!player||!currentLogin||!activated)return;
+ const now=Date.now();
+ if(now-lastRecoveryAt<8000)return;
+ lastRecoveryAt=now;
+ window.spotlightSource.recoveryCount++;
+ window.spotlightSource.lastRecoveryReason=reason;
+ switching=true;
+ try{player.pause()}catch{}
+ setTimeout(()=>{
+  try{player.setChannel(currentLogin)}catch{}
+  resetProgressClock();
+  playBootstrap();
+  audio();
+  [500,1500,3000].forEach(ms=>setTimeout(()=>{playBootstrap();audio()},ms));
+ },150);
+}
 function mount(login){
  const clean=String(login||'').replace(/^@/,'').trim().toLowerCase();
  if(!clean)return;
  if(clean===currentLogin&&player)return;
- if(player){currentLogin=clean;window.spotlightSource.currentLogin=clean;switching=true;try{player.setChannel(clean)}catch{};playBootstrap();[350,1200,2500,4000].forEach(ms=>setTimeout(()=>{playBootstrap();audio()},ms));return}
- currentLogin=clean;window.spotlightSource.currentLogin=clean;
+ currentLogin=clean;window.spotlightSource.currentLogin=clean;switching=true;resetProgressClock();
+ if(player){try{player.setChannel(clean)}catch{};playBootstrap();[350,1200,2500,4000].forEach(ms=>setTimeout(()=>{playBootstrap();audio()},ms));return}
  player=new Twitch.Player('player',{channel:clean,parent:[location.hostname],autoplay:true,muted:true,controls:false,width:'100%',height:'100%'});
- player.addEventListener(Twitch.Player.READY,()=>{window.spotlightSource.ready=true;playBootstrap()});
- player.addEventListener(Twitch.Player.PLAY,()=>{switching=false;audio()});
- player.addEventListener(Twitch.Player.PLAYING,()=>{switching=false;audio();setTimeout(audio,250);setTimeout(audio,1000)});
+ player.addEventListener(Twitch.Player.READY,()=>{window.spotlightSource.ready=true;resetProgressClock();stableQuality();playBootstrap()});
+ player.addEventListener(Twitch.Player.PLAY,()=>{switching=false;lastProgressAt=Date.now();audio()});
+ player.addEventListener(Twitch.Player.PLAYING,()=>{switching=false;lastProgressAt=Date.now();stableQuality();audio();setTimeout(audio,250);setTimeout(audio,1000)});
  player.addEventListener(Twitch.Player.PAUSE,()=>{if(switching)setTimeout(playBootstrap,300)});
+ player.addEventListener(Twitch.Player.PLAYBACK_BLOCKED,()=>recover('playback-blocked'));
  player.addEventListener(Twitch.Player.OFFLINE,()=>{currentLogin='';window.spotlightSource.currentLogin=''});
 }
-button.addEventListener('click',()=>{activated=true;window.spotlightSource.activated=true;button.remove();playBootstrap();audio();[150,500,1000].forEach(ms=>setTimeout(audio,ms))});
+function watchPlayback(){
+ if(!player||!activated||!currentLogin)return;
+ let position=0,paused=false;
+ try{position=Number(player.getCurrentTime?.()||0);paused=Boolean(player.isPaused?.())}catch{return}
+ const now=Date.now();
+ window.spotlightSource.playbackPosition=position;
+ if(position>lastPosition+.20){
+  lastPosition=position;
+  lastProgressAt=now;
+  window.spotlightSource.stalledForMs=0;
+  return;
+ }
+ const stalledFor=now-lastProgressAt;
+ window.spotlightSource.stalledForMs=stalledFor;
+ if(!paused&&!switching&&stalledFor>=12000)recover('playback-clock-stalled');
+}
+button.addEventListener('click',()=>{activated=true;window.spotlightSource.activated=true;button.remove();resetProgressClock();playBootstrap();audio();[150,500,1000].forEach(ms=>setTimeout(audio,ms))});
 async function refresh(){try{const r=await fetch(endpoint,{cache:'no-store',headers:{Accept:'application/json'}});if(!r.ok)throw Error('spotlight '+r.status);const data=await r.json(),login=data?.spotlight?.twitchLogin||data?.spotlight?.user?.twitchLogin||'';if(!login){window.spotlightSource.error='No live community Spotlight is available';return}window.spotlightSource.error='';mount(login)}catch(error){window.spotlightSource.error=String(error?.message||error)}}
-refresh();setInterval(refresh,15000);
+refresh();setInterval(refresh,5000);setInterval(watchPlayback,2000);
 </script></body></html>`;
 }
 
