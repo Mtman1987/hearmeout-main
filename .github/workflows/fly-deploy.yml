@@ -75,8 +75,34 @@ jobs:
       - name: Test Discord bridge, media, and HearMeOut persona runtime
         run: node --test tests/discord-speaker-presence.test.cjs tests/voice-bridge-privacy-gate.test.cjs tests/discord-voice-jitter-buffer.test.cjs tests/discord-voice-gain-contract.test.cjs tests/youtube-two-input-hls-contract.test.cjs tests/persona-runtime.test.cjs
 
-  deploy-main:
+  deploy-renderers:
     needs: [branch-housekeeping, validate]
+    name: Deploy dedicated Lounge and Spotlight workers
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+      - name: Ensure renderer apps exist
+        run: |
+          set -euo pipefail
+          for app in hmo-spotlight-worker hmo-lounge-worker; do
+            if ! flyctl status -a "$app" >/dev/null 2>&1; then
+              flyctl apps create "$app" --org mtman-new
+            fi
+          done
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN_WORKER || secrets.FLY_API_TOKEN }}
+      - name: Deploy hmo-spotlight-worker
+        run: flyctl deploy . --remote-only --config worker/fly-spotlight.toml --strategy immediate --yes
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN_WORKER || secrets.FLY_API_TOKEN }}
+      - name: Deploy hmo-lounge-worker
+        run: flyctl deploy . --remote-only --config worker/fly-lounge.toml --strategy immediate --yes
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN_WORKER || secrets.FLY_API_TOKEN }}
+
+  deploy-main:
+    needs: [branch-housekeeping, validate, deploy-renderers]
     name: Deploy main app
     runs-on: ubuntu-latest
     steps:
@@ -88,7 +114,7 @@ jobs:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN_MAIN || secrets.FLY_API_TOKEN }}
 
   deploy-worker:
-    needs: [branch-housekeeping, validate]
+    needs: [branch-housekeeping, validate, deploy-main, deploy-renderers]
     name: Deploy DJ worker
     runs-on: ubuntu-latest
     steps:
