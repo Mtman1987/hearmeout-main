@@ -13,6 +13,7 @@ import { autoRadioNext, getRoomState, rememberAutoRadioTrack, resolveSongRequest
 import { DISCORD_CLIENT_ID } from '@/lib/public-config';
 import { ensureDiscordActivityRoomForSession } from '@/lib/activity-room';
 import { ACTIVITY_ROOM_ID, getGlobalWatchSessionId, getMusicWatchSessionId, getScopedWatchSessionId, normalizeWatchSessionAlias, type WatchMediaKind } from '@/lib/watch-session';
+import { SPACEMOUNTAIN_LOUNGE_SESSION_ID } from '@/lib/spacemountain-lounge';
 import { publishSpmtEvent } from '@/lib/spmt-client';
 import {
   sendHearMeOutDiscordMessage,
@@ -1037,7 +1038,7 @@ export async function requestWatchMusicItem(params: {
 
   const item = musicTrackToWatchItem(resolved.track);
   const session = getWatchSession(params.sessionId, params.guildId, params.channelId, 'music');
-  if (params.sessionId === getMusicWatchSessionId()) {
+  if (params.sessionId === getMusicWatchSessionId() || params.sessionId === SPACEMOUNTAIN_LOUNGE_SESSION_ID) {
     const roomState = await getRoomState(ACTIVITY_ROOM_ID);
     session.autoRadio = roomState?.autoRadio === true;
     await rememberAutoRadioTrack(ACTIVITY_ROOM_ID, resolved.track, params.userId);
@@ -1174,7 +1175,7 @@ async function getAutoNextEpisodeRequest(session: WatchSession) {
 }
 
 async function getAutoRadioRequest(sessionId: string): Promise<WatchRequest | null> {
-  if (sessionId !== getMusicWatchSessionId()) return null;
+  if (sessionId !== getMusicWatchSessionId() && sessionId !== SPACEMOUNTAIN_LOUNGE_SESSION_ID) return null;
   const generated = await autoRadioNext(ACTIVITY_ROOM_ID);
   const roomState = generated.success ? await getRoomState(ACTIVITY_ROOM_ID) : null;
   if (!roomState?.currentTrack) return null;
@@ -1210,7 +1211,7 @@ export async function controlWatchSession(sessionId: string, action: string, pos
     }
     const enabled = Number(position || 0) > 0;
     session.autoRadio = enabled;
-    if (sessionId === getMusicWatchSessionId()) await setAutoRadioEnabled(ACTIVITY_ROOM_ID, enabled);
+    if (sessionId === getMusicWatchSessionId() || sessionId === SPACEMOUNTAIN_LOUNGE_SESSION_ID) await setAutoRadioEnabled(ACTIVITY_ROOM_ID, enabled);
     if (enabled && !session.current && session.queue.length === 0) {
       session.current = await getAutoRadioRequest(sessionId);
       if (session.current) {
@@ -1295,7 +1296,7 @@ export async function controlWatchSession(sessionId: string, action: string, pos
   if (action === 'next') {
     if (actor?.expectedRequestId && session.current?.requestId !== actor.expectedRequestId) return session;
     session.current = session.queue.shift() || await getAutoNextEpisodeRequest(session);
-    if (!session.current && session.autoRadio && sessionId === getMusicWatchSessionId()) {
+    if (!session.current && session.autoRadio && (sessionId === getMusicWatchSessionId() || sessionId === SPACEMOUNTAIN_LOUNGE_SESSION_ID)) {
       session.current = await getAutoRadioRequest(sessionId);
     }
     if (session.current) maybePrepareSharedHls(session.current.item);
