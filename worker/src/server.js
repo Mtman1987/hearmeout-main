@@ -25,6 +25,7 @@ const wrtc = require('@roamhq/wrtc');
 const puppeteer = require('puppeteer');
 const { captureYoutubeBroadcast } = require('./youtube-broadcast-capture');
 const { createSpotlightBroadcast } = require('./spotlight-broadcast');
+const { createLoungeBroadcast } = require('./lounge-broadcast');
 
 Object.assign(globalThis, {
   RTCPeerConnection: wrtc.RTCPeerConnection,
@@ -91,6 +92,11 @@ const spotlightBroadcast = createSpotlightBroadcast({
   chromiumPath: CHROMIUM_PATH,
   puppeteer,
   spotlightEndpoint: process.env.SPOTLIGHT_ENDPOINT || 'https://discord-stream-hub-new.fly.dev/api/community-spotlight',
+});
+const loungeBroadcast = createLoungeBroadcast({
+  chromiumPath: CHROMIUM_PATH,
+  puppeteer,
+  sourceUrl: process.env.LOUNGE_SOURCE_URL || 'https://hearmeout-main.fly.dev/overlay/system-spacemountainlive-lounge?clean=1',
 });
 
 const VIDEO_ID_RE = /^[A-Za-z0-9_-]{11}$/;
@@ -2890,6 +2896,21 @@ app.get('/spotlight/live.mp4', authorizeWorker, (_req, res) => {
   if (!spotlightBroadcast.watch(res)) res.status(503).json({ error: 'Spotlight source is starting' });
 });
 
+// ── Persistent SpaceMountain Lounge media source ───────────────────────
+app.get('/lounge/status', authorizeWorker, async (_req, res) => {
+  try { res.json(await loungeBroadcast.status()); }
+  catch (error) { res.status(500).json({ error: error.message || String(error) }); }
+});
+
+app.post('/lounge/start', authorizeWorker, async (_req, res) => {
+  try { res.json(await loungeBroadcast.start()); }
+  catch (error) { res.status(502).json({ error: error.message || String(error) }); }
+});
+
+app.get('/lounge/live.mp4', authorizeWorker, (_req, res) => {
+  if (!loungeBroadcast.watch(res)) res.status(503).json({ error: 'Lounge source is starting' });
+});
+
 // ── Health ──────────────────────────────────────────────────────────────
 app.get('/health', (req, res) => {
   res.json({ status: 'ok', uptime: process.uptime(), activeDJs: djInstances.size + browserDjInstances.size });
@@ -2924,4 +2945,18 @@ app.listen(PORT, '0.0.0.0', () => {
   };
   void keepSpotlightRunning();
   setInterval(keepSpotlightRunning, 15000).unref();
+
+  let checkingLounge = false;
+  const keepLoungeRunning = async () => {
+    if (checkingLounge) return;
+    checkingLounge = true;
+    try {
+      const state = await loungeBroadcast.status();
+      if (!state.ready) await loungeBroadcast.start();
+    } catch (error) {
+      console.warn('[Lounge] Restarting source after failure:', error.message || String(error));
+    } finally { checkingLounge = false; }
+  };
+  void keepLoungeRunning();
+  setInterval(keepLoungeRunning, 15000).unref();
 });
