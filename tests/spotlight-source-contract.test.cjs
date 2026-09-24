@@ -19,6 +19,10 @@ test('Spotlight owns one persistent Twitch player and rotates channels without r
  assert.match(source,/x11grab/);
  assert.match(source,/ignoreDefaultArgs: \['--mute-audio', '--enable-automation'\]/);
  assert.match(source,/--disable-infobars/);
+ assert.match(source,/SPOTLIGHT_PROFILE_DIR/);
+ assert.match(source,/\/data\/spotlight-chromium/);
+ assert.match(source,/#spotlight-twitch-player/);
+ assert.match(source,/clearContentWarning/);
  assert.match(source,/spotlight\.monitor/);
  assert.match(source,/frag_keyframe\+empty_moov\+default_base_moof/);
  assert.match(source,/function watch\(response\)/);
