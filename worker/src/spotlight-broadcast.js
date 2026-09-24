@@ -1,16 +1,17 @@
 const { createServer } = require('node:http');
 const { spawn } = require('node:child_process');
-const { mkdtemp, rm, access } = require('node:fs/promises');
+const { mkdtemp, rm, access, mkdir } = require('node:fs/promises');
 const { join } = require('node:path');
 const { tmpdir } = require('node:os');
 
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 function createSpotlightBroadcast({ chromiumPath, puppeteer, spotlightEndpoint = 'https://discord-stream-hub-new.fly.dev/api/community-spotlight' }) {
-  let root, display, pulse, browser, page, host, encoder, startTask, activationTask, active = false, activated = false, failure = '', currentLogin = '';
+  let root, display, pulse, browser, page, host, encoder, startTask, activationTask, warningTimer, active = false, activated = false, failure = '', currentLogin = '';
   let init = Buffer.alloc(0), pending = Buffer.alloc(0), fragment = [], fragmentsSent = 0, lastFragmentAt = 0;
   const viewers = new Set();
   const children = [];
+  const profileDir = process.env.SPOTLIGHT_PROFILE_DIR || (process.env.FLY_APP_NAME ? '/data/spotlight-chromium' : join(tmpdir(), 'hmo-spotlight-chromium'));
 
   function child(command, args, options = {}) {
     const proc = spawn(command, args, { stdio: ['ignore', 'ignore', 'pipe'], ...options });
@@ -68,9 +69,10 @@ function createSpotlightBroadcast({ chromiumPath, puppeteer, spotlightEndpoint =
       });
       await new Promise(resolve => host.listen(0, '127.0.0.1', resolve));
 
+      await mkdir(profileDir, { recursive: true });
       browser = await puppeteer.launch({
         executablePath: chromiumPath, headless: false, defaultViewport: null,
-        userDataDir: join(root, 'chromium'), env: environment,
+        userDataDir: profileDir, env: environment,
         ignoreDefaultArgs: ['--mute-audio', '--enable-automation'],
         args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu', '--disable-infobars', '--kiosk', '--window-position=0,0', '--window-size=1280,720', '--force-device-scale-factor=1', '--disable-background-timer-throttling', '--disable-renderer-backgrounding'],
       });
@@ -79,6 +81,10 @@ function createSpotlightBroadcast({ chromiumPath, puppeteer, spotlightEndpoint =
       await page.goto('http://localhost:' + host.address().port + '/', { waitUntil: 'domcontentloaded', timeout: 30000 });
       await page.waitForFunction(() => window.spotlightSource?.ready || window.spotlightSource?.error, { timeout: 30000 });
       const state = await page.evaluate(() => window.spotlightSource);
+      if (!warningTimer) {
+        warningTimer = setInterval(() => { if (activated) void clearContentWarning().catch(() => {}); }, 3000);
+        warningTimer.unref?.();
+      }
       // An empty rotation is still a running source. Its page keeps polling
       // until a creator becomes live, without needing another viewer click.
 
@@ -114,12 +120,12 @@ function createSpotlightBroadcast({ chromiumPath, puppeteer, spotlightEndpoint =
     const state = await page.evaluate(() => ({ activated: window.spotlightSource?.activated === true, currentLogin: window.spotlightSource?.currentLogin || '' }));
     activated = state.activated;
     currentLogin = state.currentLogin;
+    await clearContentWarning().catch(() => false);
     return status();
   }
 
-  async function consent() {
-    await ensureSource();
-    if (!page) throw Error('The Spotlight source is unavailable');
+  async function clearContentWarning() {
+    if (!page) return false;
     let clicked = false;
     for (const frame of page.frames()) {
       const direct = await frame.$('[data-a-target="content-classification-gate-overlay-start-watching-button"]').catch(() => null);
@@ -141,6 +147,13 @@ function createSpotlightBroadcast({ chromiumPath, puppeteer, spotlightEndpoint =
       if (clicked) break;
     }
     if (clicked) await delay(350);
+    return clicked;
+  }
+
+  async function consent() {
+    await ensureSource();
+    if (!page) throw Error('The Spotlight source is unavailable');
+    const clicked = await clearContentWarning();
     return { ...(await status()), warningCleared: clicked };
   }
 
@@ -169,6 +182,7 @@ function createSpotlightBroadcast({ chromiumPath, puppeteer, spotlightEndpoint =
 
   async function cleanup(removeRoot = true) {
     active = false;
+    if (warningTimer) { clearInterval(warningTimer); warningTimer = undefined; }
     for (const response of viewers) response.end();
     viewers.clear();
     await stopProcess(encoder); encoder = undefined;
@@ -224,7 +238,7 @@ function framePacket(payload) {
 }
 
 function sourcePage(endpoint) {
-  return `<!doctype html><html><head><meta charset="utf-8"><style>html,body,#player{margin:0;width:100%;height:100%;overflow:hidden;background:#000}iframe{border:0}#start{position:fixed;z-index:5;left:50%;top:50%;transform:translate(-50%,-50%);padding:18px 28px;font:700 18px system-ui}</style></head><body><div id="player"></div><button id="start" type="button">Start Spotlight</button><script src="https://player.twitch.tv/js/embed/v1.js"></script><script>
+  return `<!doctype html><html><head><meta charset="utf-8"><style>html,body,#player,#spotlight-twitch-player,#player>div,#player iframe{margin:0;width:100%;height:100%;min-width:100%;min-height:100%;overflow:hidden;background:#000;box-sizing:border-box}iframe{display:block;border:0}#start{position:fixed;z-index:5;left:50%;top:50%;transform:translate(-50%,-50%);padding:18px 28px;font:700 18px system-ui}</style></head><body><div id="player"></div><button id="start" type="button">Start Spotlight</button><script src="https://player.twitch.tv/js/embed/v1.js"></script><script>
 window.spotlightSource={ready:false,activated:false,currentLogin:'',error:'',fps:0,bufferSize:0,playbackRate:0,skippedFrames:0,stalledForMs:0,recoveryCount:0,lastRecoveryReason:'',quality:''};
 let player=null,currentLogin='',activated=false,switching=false,unhealthySince=0,lastRecoveryAt=0;
 const endpoint=${JSON.stringify(endpoint)},button=document.getElementById('start');
@@ -284,6 +298,7 @@ function createPlayer(login){
  host.replaceChildren();
  const target=document.createElement('div');
  target.id='spotlight-twitch-player';
+ target.style.cssText='width:100%;height:100%;min-width:100%;min-height:100%';
  host.appendChild(target);
  player=new Twitch.Player('spotlight-twitch-player',{channel:login,parent:[location.hostname],autoplay:true,muted:true,controls:false,width:'100%',height:'100%'});
  bindPlayerEvents(player);
