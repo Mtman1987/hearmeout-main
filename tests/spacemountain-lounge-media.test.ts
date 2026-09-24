@@ -53,3 +53,12 @@ test('play skips an expired current item or restarts it when the queue is empty'
   assert.match(service, /if \(session\.queue\.length > 0\) action = 'next'/);
   assert.match(service, /else position = 0/);
 });
+
+
+test('SpaceMountain Lounge queue/read requests do not require a service credential', () => {
+  assert.match(botActions, /sessionId === SPACEMOUNTAIN_LOUNGE_SESSION_ID/);
+  assert.match(botActions, /isGlobalSession \|\| isSpaceMountainLoungeSession\(tenantId, sessionId\)/);
+  assert.match(botActions, /requestedLane = text\(body\?\.lane, 20\)\.toLowerCase\(\)/);
+  assert.match(botActions, /requestedLane === 'movie'/);
+  assert.match(botActions, /!isPublicQueueRequest && !isSpaceMountainLoungeControl && !isBotActionServiceRequest\(request\)/);
+});
