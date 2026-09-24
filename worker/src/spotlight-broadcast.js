@@ -79,7 +79,10 @@ function createSpotlightBroadcast({ chromiumPath, puppeteer, spotlightEndpoint =
       browser.on('disconnected', () => { active = false; failure ||= 'The Spotlight browser disconnected'; });
       page = (await browser.pages())[0] || await browser.newPage();
       await page.goto('http://localhost:' + host.address().port + '/', { waitUntil: 'domcontentloaded', timeout: 30000 });
-      await page.waitForFunction(() => window.spotlightSource?.ready || window.spotlightSource?.error, { timeout: 30000 });
+      // The persistent source can be healthy before Twitch's embed reports READY.
+      // Do not tear down Xvfb/PulseAudio/Chromium just because the Twitch script,
+      // API poll, or player bootstrap takes longer than 30 seconds.
+      await page.waitForFunction(() => Boolean(window.spotlightSource), { timeout: 5000 });
       const state = await page.evaluate(() => window.spotlightSource);
       if (!warningTimer) {
         warningTimer = setInterval(() => { if (activated) void clearContentWarning().catch(() => {}); }, 3000);
