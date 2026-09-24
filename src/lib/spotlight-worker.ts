@@ -7,11 +7,7 @@ export async function spotlightWorker(path: string, method = 'GET', signal?: Abo
   });
 }
 
-export async function spotlightAction(request: Request, action: 'start' | 'consent') {
-  const origin = request.headers.get('origin');
-  if (origin && new URL(origin).origin !== new URL(request.url).origin) {
-    return Response.json({ error: 'Invalid request origin' }, { status: 403 });
-  }
+export async function spotlightAction(action: 'start' | 'consent') {
   try {
     const upstream = await spotlightWorker(action, 'POST', AbortSignal.timeout(30000));
     return new Response(upstream.body, {
