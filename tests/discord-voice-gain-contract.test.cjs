@@ -23,7 +23,10 @@ function loadBridge() {
 
 function loadRoutes(bridge) {
   const source = fs.readFileSync(path.resolve(__dirname, '../worker/src/server.js'), 'utf8');
-  const region = source.slice(source.indexOf("app.post('/voice-bridge',"), source.indexOf('// ── Health ─'));
+  const region = source.slice(
+    source.indexOf("app.post('/voice-bridge',"),
+    source.indexOf('// ── Persistent community Spotlight source'),
+  );
   const routes = new Map();
   const authorizeWorker = (_req, _res, next) => next();
   const context = {
