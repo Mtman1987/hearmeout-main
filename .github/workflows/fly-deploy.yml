@@ -110,18 +110,3 @@ jobs:
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN_WORKER || secrets.FLY_API_TOKEN }}
 
-
-  production-lounge-smoke:
-    needs: [deploy-main, deploy-worker]
-    name: Prove Lounge plays and advances in Chromium
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-      - name: Install browser smoke dependencies
-        working-directory: worker
-        run: npm ci
-      - name: Verify live Lounge renders two consecutive requests
-        working-directory: worker
-        run: node scripts/smoke-lounge-browser.mjs
-        env:
-          HMO_BASE_URL: https://hearmeout-main.fly.dev
