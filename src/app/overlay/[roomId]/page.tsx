@@ -287,11 +287,16 @@ export default function OverlayPage() {
         currentItem?.type === 'music' ? musicPlaybackMode : 'video',
       )
     : '';
+  const selectedPlaybackUrl = currentItem
+    ? playbackUrlForItem(
+        currentItem,
+        currentItem?.type === 'music' ? musicPlaybackMode : 'video',
+        forceProxyPlayback,
+      )
+    : '';
   const effectivePlaybackUrl = currentItem
     ? hlsFallbackUrlFor(
-        currentItem?.type === 'music'
-          ? { ...currentItem, playbackUrl: playbackUrlForItem(currentItem, musicPlaybackMode, forceProxyPlayback) }
-          : currentItem,
+        { ...currentItem, metadata: forceProxyPlayback ? { ...(currentItem.metadata || {}), embedPlaybackUrl: undefined } : currentItem.metadata, playbackUrl: selectedPlaybackUrl },
         currentItem?.type === 'music' ? musicPlaybackMode : 'video',
       )
     : '';
