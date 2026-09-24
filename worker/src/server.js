@@ -88,6 +88,10 @@ const WATCH_HLS_DELETE_THRESHOLD = Number(process.env.WATCH_HLS_DELETE_THRESHOLD
 const WATCH_HLS_BUDGET_BYTES = Number(process.env.WATCH_HLS_BUDGET_BYTES || 1536 * 1024 * 1024);
 const FLY_MACHINE_ID = process.env.FLY_MACHINE_ID || '';
 const FLY_APP_NAME = process.env.FLY_APP_NAME || 'hmo-dj-worker';
+const WORKER_ROLE = String(process.env.HMO_WORKER_ROLE || 'all').trim().toLowerCase();
+const PRIVATE_RENDERER = process.env.HMO_PRIVATE_RENDERER === 'true';
+const RUN_SPOTLIGHT = WORKER_ROLE === 'all' || WORKER_ROLE === 'spotlight';
+const RUN_LOUNGE = WORKER_ROLE === 'all' || WORKER_ROLE === 'lounge';
 const spotlightBroadcast = createSpotlightBroadcast({
   chromiumPath: CHROMIUM_PATH,
   puppeteer,
@@ -216,7 +220,13 @@ function secretsMatch(actual, expected) {
 }
 
 const authorizeWorker = (req, res, next) => {
+  // Dedicated renderer apps are private Fly 6PN-only services. They do not
+  // expose an http_service, so the public internet cannot reach this listener.
+  // Keep the existing shared-secret contract unchanged for the DJ worker.
   if (!WORKER_SHARED_SECRET) {
+    if (PRIVATE_RENDERER && (WORKER_ROLE === 'spotlight' || WORKER_ROLE === 'lounge')) {
+      return next();
+    }
     console.error('[DJ Worker Auth] HMO_WORKER_SHARED_SECRET is required in production');
     return res.status(503).json({ error: 'Worker authentication is not configured' });
   }
@@ -2913,7 +2923,12 @@ app.get('/lounge/live.mp4', authorizeWorker, (_req, res) => {
 
 // ── Health ──────────────────────────────────────────────────────────────
 app.get('/health', (req, res) => {
-  res.json({ status: 'ok', uptime: process.uptime(), activeDJs: djInstances.size + browserDjInstances.size });
+  res.json({
+    status: 'ok',
+    role: WORKER_ROLE,
+    uptime: process.uptime(),
+    activeDJs: djInstances.size + browserDjInstances.size,
+  });
 });
 
 // ── Prevent uncaught errors from crashing the process ───────────────────
@@ -2930,44 +2945,48 @@ app.listen(PORT, '0.0.0.0', () => {
   console.log(`[DJ Worker] App URL: ${APP_URL}`);
   console.log(`[DJ Worker] Cache dir: ${CACHE_DIR}`);
   console.log('[DJ Worker] Legacy audio extraction: disabled');
-  // Source ownership is the worker's. Browser viewers can come and go without
-  // starting, stopping, or advancing either persistent media source.
-  // "ready" means encoded fragments are already flowing; it is intentionally
-  // NOT a restart condition because a healthy Chromium/ffmpeg source can take
-  // several seconds to become ready. Restart only when the source is actually
-  // inactive, and stagger the two heavy media stacks so Xvfb/PulseAudio/
-  // Chromium do not all cold-start at the same instant.
-  let checkingSpotlight = false;
-  let spotlightRetryAt = 0;
-  const keepSpotlightRunning = async () => {
-    if (checkingSpotlight || Date.now() < spotlightRetryAt) return;
-    checkingSpotlight = true;
-    try {
-      const state = await spotlightBroadcast.status();
-      if (!state.active || !state.activated) await spotlightBroadcast.start();
-      spotlightRetryAt = 0;
-    } catch (error) {
-      spotlightRetryAt = Date.now() + 30000;
-      console.warn('[Spotlight] Source start failed; retrying in 30s:', error.message || String(error));
-    } finally { checkingSpotlight = false; }
-  };
-  void keepSpotlightRunning();
-  setInterval(keepSpotlightRunning, 15000).unref();
+  // Source ownership is role-specific in production. The DJ worker owns cache/
+  // extraction only; each persistent renderer gets its own Fly Machine and
+  // memory budget. Local development defaults to "all" for convenience.
+  if (RUN_SPOTLIGHT) {
+    let checkingSpotlight = false;
+    let spotlightRetryAt = 0;
+    const keepSpotlightRunning = async () => {
+      if (checkingSpotlight || Date.now() < spotlightRetryAt) return;
+      checkingSpotlight = true;
+      try {
+        const state = await spotlightBroadcast.status();
+        if (!state.active || !state.activated) await spotlightBroadcast.start();
+        spotlightRetryAt = 0;
+      } catch (error) {
+        spotlightRetryAt = Date.now() + 30000;
+        console.warn('[Spotlight] Source start failed; retrying in 30s:', error.message || String(error));
+      } finally { checkingSpotlight = false; }
+    };
+    void keepSpotlightRunning();
+    setInterval(keepSpotlightRunning, 15000).unref();
+  } else {
+    console.log(`[Worker] Spotlight renderer disabled for role ${WORKER_ROLE}`);
+  }
 
-  let checkingLounge = false;
-  let loungeRetryAt = 0;
-  const keepLoungeRunning = async () => {
-    if (checkingLounge || Date.now() < loungeRetryAt) return;
-    checkingLounge = true;
-    try {
-      const state = await loungeBroadcast.status();
-      if (!state.active) await loungeBroadcast.start();
-      loungeRetryAt = 0;
-    } catch (error) {
-      loungeRetryAt = Date.now() + 30000;
-      console.warn('[Lounge] Source start failed; retrying in 30s:', error.message || String(error));
-    } finally { checkingLounge = false; }
-  };
-  setTimeout(() => { void keepLoungeRunning(); }, 5000).unref();
-  setInterval(keepLoungeRunning, 15000).unref();
+  if (RUN_LOUNGE) {
+    let checkingLounge = false;
+    let loungeRetryAt = 0;
+    const keepLoungeRunning = async () => {
+      if (checkingLounge || Date.now() < loungeRetryAt) return;
+      checkingLounge = true;
+      try {
+        const state = await loungeBroadcast.status();
+        if (!state.active) await loungeBroadcast.start();
+        loungeRetryAt = 0;
+      } catch (error) {
+        loungeRetryAt = Date.now() + 30000;
+        console.warn('[Lounge] Source start failed; retrying in 30s:', error.message || String(error));
+      } finally { checkingLounge = false; }
+    };
+    void keepLoungeRunning();
+    setInterval(keepLoungeRunning, 15000).unref();
+  } else {
+    console.log(`[Worker] Lounge renderer disabled for role ${WORKER_ROLE}`);
+  }
 });
