@@ -16,7 +16,7 @@ import {
 } from '@/lib/bot-room-action-service';
 import { getDjWorkerUrl } from '@/lib/dj-worker-config';
 import { getDjWorkerRequestHeaders } from '@/lib/dj-worker-auth';
-import { SPACEMOUNTAIN_LOUNGE_SESSION_ID } from '@/lib/spacemountain-lounge';
+import { SPACEMOUNTAIN_LOUNGE_MUSIC_SESSION_ID, SPACEMOUNTAIN_LOUNGE_MOVIE_SESSION_ID } from '@/lib/spacemountain-lounge';
 
 export const dynamic = 'force-dynamic';
 
@@ -40,15 +40,28 @@ const ACTIONS = new Set<HearMeOutAction>([
   'hmo.tts.speak',
 ]);
 const CONTROLS = new Set(['play', 'pause', 'next', 'clear', 'mute', 'unmute', 'volume']);
-// SpaceMountain production media has one Live HMO queue. Apollo is never a fallback.
+// SpaceMountain Lounge has separate permanent music and movie queues. Apollo is never a fallback.
 
 function isSpaceMountainLoungeSession(tenantId: string, sessionId: string) {
   return tenantId === 'spacemountainlive'
     && (
-      sessionId === SPACEMOUNTAIN_LOUNGE_SESSION_ID
+      sessionId === SPACEMOUNTAIN_LOUNGE_MUSIC_SESSION_ID
+      || sessionId === SPACEMOUNTAIN_LOUNGE_MOVIE_SESSION_ID
       || sessionId === getMusicWatchSessionId()
       || sessionId === getGlobalWatchSessionId()
     );
+}
+
+function getSpaceMountainLoungeLane(sessionId: string, requestedLane: string): 'music' | 'movie' {
+  if (requestedLane === 'movie' || requestedLane === 'music') return requestedLane;
+  if (sessionId === SPACEMOUNTAIN_LOUNGE_MOVIE_SESSION_ID || sessionId === getGlobalWatchSessionId()) return 'movie';
+  return 'music';
+}
+
+function getSpaceMountainLoungeSessionId(sessionId: string, requestedLane: string) {
+  return getSpaceMountainLoungeLane(sessionId, requestedLane) === 'movie'
+    ? SPACEMOUNTAIN_LOUNGE_MOVIE_SESSION_ID
+    : SPACEMOUNTAIN_LOUNGE_MUSIC_SESSION_ID;
 }
 
 function text(value: unknown, max = 500) {
@@ -152,7 +165,10 @@ export async function POST(request: NextRequest) {
 
     if (action === 'hmo.media.state.read') {
       if (isSpaceMountainLoungeSession(tenantId, sessionId)) {
-        const session = getPublicWatchSession(getWatchSession(SPACEMOUNTAIN_LOUNGE_SESSION_ID, undefined, undefined, 'music'), publicBaseUrl(request));
+        const requestedLane = text(body?.lane, 20).toLowerCase();
+        const kind = getSpaceMountainLoungeLane(sessionId, requestedLane);
+        const targetSessionId = getSpaceMountainLoungeSessionId(sessionId, requestedLane);
+        const session = getPublicWatchSession(getWatchSession(targetSessionId, undefined, undefined, kind), publicBaseUrl(request));
         return NextResponse.json({ success: true, action, session });
       }
       const mediaKind = sessionId === getGlobalWatchSessionId() ? 'movie' : 'music';
@@ -165,9 +181,9 @@ export async function POST(request: NextRequest) {
       if (!query) return NextResponse.json({ error: 'A song, story, or audio request is required' }, { status: 400 });
       if (isSpaceMountainLoungeSession(tenantId, sessionId)) {
         const requestedLane = text(body?.lane, 20).toLowerCase();
-        const kind = requestedLane === 'movie' || sessionId === getGlobalWatchSessionId() ? 'movie' : 'music';
+        const kind = getSpaceMountainLoungeLane(sessionId, requestedLane);
         const requestIdentity = {
-          sessionId: SPACEMOUNTAIN_LOUNGE_SESSION_ID,
+          sessionId: getSpaceMountainLoungeSessionId(sessionId, requestedLane),
           query,
           username: text(body?.actorName, 100) || 'SpaceMountainLive',
           userId: text(body?.actorUserId, 160) || 'spacemountainlive',
@@ -213,7 +229,10 @@ export async function POST(request: NextRequest) {
     if (!CONTROLS.has(control)) return NextResponse.json({ error: 'Unsupported media control' }, { status: 400 });
     const rawValue = body?.value;
     const value = rawValue === undefined || rawValue === null || rawValue === '' ? undefined : Number(rawValue);
-    const controlSessionId = isSpaceMountainLoungeSession(tenantId, sessionId) ? SPACEMOUNTAIN_LOUNGE_SESSION_ID : sessionId;
+    const requestedLane = text(body?.lane, 20).toLowerCase();
+    const controlSessionId = isSpaceMountainLoungeSession(tenantId, sessionId)
+      ? getSpaceMountainLoungeSessionId(sessionId, requestedLane)
+      : sessionId;
     const session = await controlWatchSession(controlSessionId, control, Number.isFinite(value) ? value : undefined, undefined, {
       actorUserId: text(body?.actorUserId, 160),
       isAdmin: true,

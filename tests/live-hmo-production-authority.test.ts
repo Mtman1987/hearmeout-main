@@ -15,7 +15,9 @@ test('Live HMO is the only production HearMeOut authority', () => {
   assert.doesNotMatch(twitch, /APOLLO_LOUNGE|web-terminal-bvesa\.sprites\.app|relayApolloLoungeCommand|lounge-twitch-request/);
   assert.doesNotMatch(middleware, /\/api\/internal\/lounge\/media/);
   assert.equal(fs.existsSync(path.join(process.cwd(), 'src/app/api/internal/lounge/media/route.ts')), false);
-  assert.match(twitch, /SPACEMOUNTAIN_LOUNGE_SESSION_ID/);
+  assert.match(twitch, /SPACEMOUNTAIN_LOUNGE_MUSIC_SESSION_ID/);
+  assert.match(twitch, /SPACEMOUNTAIN_LOUNGE_MOVIE_SESSION_ID/);
   assert.match(rules, /only production HearMeOut authority/);
+  assert.match(rules, /queues must never be merged/);
   assert.match(rules, /running both as competing authorities is forbidden/);
 });

@@ -10,7 +10,8 @@ import {
   requestWatchMusicItem,
 } from '@/lib/watch-request-service';
 import {
-  SPACEMOUNTAIN_LOUNGE_SESSION_ID,
+  SPACEMOUNTAIN_LOUNGE_MUSIC_SESSION_ID,
+  SPACEMOUNTAIN_LOUNGE_MOVIE_SESSION_ID,
   SPACEMOUNTAIN_LOUNGE_TWITCH_CHANNEL,
 } from '@/lib/spacemountain-lounge';
 import { db, ensureDb } from '@/lib/db';
@@ -104,19 +105,20 @@ async function handleSpaceMountainLoungeCommand(params: {
   const command = params.message.trim();
   const lower = command.toLowerCase();
   const actor = twitchActor(params.context, params.channelName);
-  const identity = {
-    sessionId: SPACEMOUNTAIN_LOUNGE_SESSION_ID,
+  const baseIdentity = {
     guildId: params.guildId,
     channelId: params.channelId,
     userId: actor.userId,
     username: actor.username,
   };
+  const musicIdentity = { ...baseIdentity, sessionId: SPACEMOUNTAIN_LOUNGE_MUSIC_SESSION_ID };
+  const movieIdentity = { ...baseIdentity, sessionId: SPACEMOUNTAIN_LOUNGE_MOVIE_SESSION_ID };
 
   const song = command.match(/^!(?:sr|song)(?:\s+(.+))?$/i);
   if (song) {
     const query = String(song[1] || '').trim();
     if (!query) return 'Usage: !sr <song name or YouTube URL>';
-    const result = await requestWatchMusicItem({ ...identity, query, platform: 'twitch' });
+    const result = await requestWatchMusicItem({ ...musicIdentity, query, platform: 'twitch' });
     if ('error' in result) return result.result?.message || 'Song request failed.';
     const position = result.session.current?.requestId === result.request.requestId
       ? 'now playing'
@@ -128,7 +130,7 @@ async function handleSpaceMountainLoungeCommand(params: {
   if (watch) {
     const query = String(watch[1] || '').trim();
     if (!query) return 'Usage: !wr <movie, show, or video>';
-    const result = await requestWatchItem({ ...identity, query });
+    const result = await requestWatchItem({ ...movieIdentity, query });
     if ('error' in result) return 'No playable match found for that watch request.';
     const position = result.session.current?.requestId === result.request.requestId
       ? 'now playing'
@@ -136,7 +138,7 @@ async function handleSpaceMountainLoungeCommand(params: {
     return `Queued in the 24-Hour Lounge: ${result.request.item.title} (${position}).`;
   }
 
-  const session = getResolvedWatchSession(SPACEMOUNTAIN_LOUNGE_SESSION_ID);
+  const session = getResolvedWatchSession(SPACEMOUNTAIN_LOUNGE_MUSIC_SESSION_ID);
   if (lower === '!np' || lower === '!nowplaying') {
     return session.current
       ? `${session.playback.status === 'playing' ? 'Playing' : 'Ready'}: "${session.current.item.title}"`
@@ -151,9 +153,8 @@ async function handleSpaceMountainLoungeCommand(params: {
   if (radio) {
     const action = String(radio[1] || 'status').toLowerCase();
     if (action === 'status') return `24-Hour Lounge auto-radio is ${session.autoRadio ? 'on' : 'off'}.`;
-    if (!actor.isHost && !actor.isAdmin) return 'Only the broadcaster or a moderator can change auto-radio.';
     const next = await controlWatchSession(
-      SPACEMOUNTAIN_LOUNGE_SESSION_ID,
+      SPACEMOUNTAIN_LOUNGE_MUSIC_SESSION_ID,
       'auto-radio',
       action === 'on' ? 1 : 0,
       undefined,
@@ -178,9 +179,8 @@ async function handleSpaceMountainLoungeCommand(params: {
   }
 
   if (!action) return null;
-  if (!actor.isHost && !actor.isAdmin) return 'Only the broadcaster or a moderator can control the 24-Hour Lounge player.';
   const next = await controlWatchSession(
-    SPACEMOUNTAIN_LOUNGE_SESSION_ID,
+    SPACEMOUNTAIN_LOUNGE_MUSIC_SESSION_ID,
     action,
     value,
     undefined,
