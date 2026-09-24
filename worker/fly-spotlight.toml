@@ -1,0 +1,18 @@
+app = "hmo-spotlight-worker"
+primary_region = "iad"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  NODE_ENV = "production"
+  PORT = "3002"
+  APP_URL = "https://hearmeout-main.fly.dev"
+  HMO_WORKER_ROLE = "spotlight"
+  HMO_PRIVATE_RENDERER = "true"
+  SPOTLIGHT_PROFILE_DIR = "/tmp/spotlight-chromium"
+
+[[vm]]
+  memory = "4gb"
+  cpu_kind = "shared"
+  cpus = 2
