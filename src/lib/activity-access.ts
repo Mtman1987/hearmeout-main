@@ -1,10 +1,14 @@
 import { GLOBAL_WATCH_SESSION_ID, MUSIC_WATCH_SESSION_ID, normalizeWatchSessionAlias } from './watch-session';
+import { SPACEMOUNTAIN_LOUNGE_MUSIC_SESSION_ID, SPACEMOUNTAIN_LOUNGE_MOVIE_SESSION_ID, SPACEMOUNTAIN_LOUNGE_ROOM_ID } from './spacemountain-lounge';
 
 // These two rooms are deliberately shared by Discord commands, Activities,
 // and HearMeOut. Discord's proxy cannot carry the website's SPMT cookie.
 function isSharedSession(value: string | null) {
   const id = normalizeWatchSessionAlias(value, GLOBAL_WATCH_SESSION_ID);
-  return id === GLOBAL_WATCH_SESSION_ID || id === MUSIC_WATCH_SESSION_ID;
+  return id === GLOBAL_WATCH_SESSION_ID
+    || id === MUSIC_WATCH_SESSION_ID
+    || id === SPACEMOUNTAIN_LOUNGE_MUSIC_SESSION_ID
+    || id === SPACEMOUNTAIN_LOUNGE_MOVIE_SESSION_ID;
 }
 
 export function isActivityEntry(url: URL) {
@@ -15,6 +19,18 @@ export function isActivityEntry(url: URL) {
 export function isPublicActivityRequest(url: URL, method: string) {
   const path = url.pathname;
   const read = method === 'GET' || method === 'HEAD' || method === 'OPTIONS';
+
+  // The permanent SpaceMountain Lounge is intentionally auth-free while its
+  // shared player is under development. Its overlay must be able to poll the
+  // visible room roster and both media queues without an SPMT browser session.
+  if (
+    read
+    && path === '/api/db'
+    && url.searchParams.get('collection') === `rooms/${SPACEMOUNTAIN_LOUNGE_ROOM_ID}/users`
+  ) {
+    return true;
+  }
+
   if (isActivityEntry(url) || path === '/api/watch/activity-default') {
     return read && isSharedSession(url.searchParams.get('sessionId') || url.searchParams.get('session_id'));
   }
