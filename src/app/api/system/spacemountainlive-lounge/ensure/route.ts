@@ -2,10 +2,11 @@ import { NextResponse } from 'next/server';
 import { db, ensureDb } from '@/lib/db';
 import { getDjWorkerUrl } from '@/lib/dj-worker-config';
 import { getDjWorkerRequestHeaders } from '@/lib/dj-worker-auth';
+import { SPACEMOUNTAIN_LOUNGE_ROOM_ID } from '@/lib/spacemountain-lounge';
 
 export const dynamic = 'force-dynamic';
 
-const ROOM_ID = 'system-spacemountainlive-lounge';
+const ROOM_ID = SPACEMOUNTAIN_LOUNGE_ROOM_ID;
 const STREAMWEAVER_BASE_URL = String(
   process.env.STREAMWEAVER_BASE_URL || 'https://streamweaver-new.fly.dev',
 ).replace(/\/$/, '');
