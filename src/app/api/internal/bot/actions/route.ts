@@ -44,7 +44,11 @@ const CONTROLS = new Set(['play', 'pause', 'next', 'clear', 'mute', 'unmute', 'v
 
 function isSpaceMountainLoungeSession(tenantId: string, sessionId: string) {
   return tenantId === 'spacemountainlive'
-    && (sessionId === getMusicWatchSessionId() || sessionId === getGlobalWatchSessionId());
+    && (
+      sessionId === SPACEMOUNTAIN_LOUNGE_SESSION_ID
+      || sessionId === getMusicWatchSessionId()
+      || sessionId === getGlobalWatchSessionId()
+    );
 }
 
 function text(value: unknown, max = 500) {
@@ -70,7 +74,7 @@ export async function POST(request: NextRequest) {
   const isGlobalSession = sessionId === getMusicWatchSessionId() || sessionId === getGlobalWatchSessionId();
   const isPublicQueueRequest = !room && (
     action === 'hmo.media.request' || action === 'hmo.media.state.read'
-  ) && isGlobalSession;
+  ) && (isGlobalSession || isSpaceMountainLoungeSession(tenantId, sessionId));
   const isSpaceMountainLoungeControl = !room
     && action === 'hmo.media.control'
     && isGlobalSession
@@ -158,7 +162,8 @@ export async function POST(request: NextRequest) {
       const query = text(body?.query, 500);
       if (!query) return NextResponse.json({ error: 'A song, story, or audio request is required' }, { status: 400 });
       if (isSpaceMountainLoungeSession(tenantId, sessionId)) {
-        const kind = sessionId === getGlobalWatchSessionId() ? 'movie' : 'music';
+        const requestedLane = text(body?.lane, 20).toLowerCase();
+        const kind = requestedLane === 'movie' || sessionId === getGlobalWatchSessionId() ? 'movie' : 'music';
         const requestIdentity = {
           sessionId: SPACEMOUNTAIN_LOUNGE_SESSION_ID,
           query,
