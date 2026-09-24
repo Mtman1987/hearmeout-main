@@ -220,13 +220,7 @@ function secretsMatch(actual, expected) {
 }
 
 const authorizeWorker = (req, res, next) => {
-  // Dedicated renderer apps are private Fly 6PN-only services. They do not
-  // expose an http_service, so the public internet cannot reach this listener.
-  // Keep the existing shared-secret contract unchanged for the DJ worker.
   if (!WORKER_SHARED_SECRET) {
-    if (PRIVATE_RENDERER && (WORKER_ROLE === 'spotlight' || WORKER_ROLE === 'lounge')) {
-      return next();
-    }
     console.error('[DJ Worker Auth] HMO_WORKER_SHARED_SECRET is required in production');
     return res.status(503).json({ error: 'Worker authentication is not configured' });
   }
@@ -239,6 +233,19 @@ const authorizeWorker = (req, res, next) => {
 
   next();
 };
+
+function authorizeRenderer(kind) {
+  return (req, res, next) => {
+    // Dedicated renderer apps have no public Fly service. Only the one media
+    // surface assigned to that private machine bypasses the shared worker
+    // secret; every other worker endpoint keeps authorizeWorker unchanged.
+    if (PRIVATE_RENDERER && WORKER_ROLE === kind) return next();
+    return authorizeWorker(req, res, next);
+  };
+}
+
+const authorizeSpotlight = authorizeRenderer('spotlight');
+const authorizeLounge = authorizeRenderer('lounge');
 
 // ── Music Ripper ───────────────────────────────────────────────────────
 function isCached(videoId) {
@@ -2887,37 +2894,37 @@ app.post('/voice-bridge/receive-gain', authorizeWorker, (req, res) => {
 });
 
 // ── Persistent community Spotlight source ──────────────────────────────
-app.get('/spotlight/status', authorizeWorker, async (_req, res) => {
+app.get('/spotlight/status', authorizeSpotlight, async (_req, res) => {
   try { res.json(await spotlightBroadcast.status()); }
   catch (error) { res.status(500).json({ error: error.message || String(error) }); }
 });
 
-app.post('/spotlight/start', authorizeWorker, async (_req, res) => {
+app.post('/spotlight/start', authorizeSpotlight, async (_req, res) => {
   try { res.json(await spotlightBroadcast.start()); }
   catch (error) { res.status(502).json({ error: error.message || String(error) }); }
 });
 
-app.post('/spotlight/consent', authorizeWorker, async (_req, res) => {
+app.post('/spotlight/consent', authorizeSpotlight, async (_req, res) => {
   try { res.json(await spotlightBroadcast.consent()); }
   catch (error) { res.status(502).json({ error: error.message || String(error) }); }
 });
 
-app.get('/spotlight/live.mp4', authorizeWorker, (_req, res) => {
+app.get('/spotlight/live.mp4', authorizeSpotlight, (_req, res) => {
   if (!spotlightBroadcast.watch(res)) res.status(503).json({ error: 'Spotlight source is starting' });
 });
 
 // ── Persistent SpaceMountain Lounge media source ───────────────────────
-app.get('/lounge/status', authorizeWorker, async (_req, res) => {
+app.get('/lounge/status', authorizeLounge, async (_req, res) => {
   try { res.json(await loungeBroadcast.status()); }
   catch (error) { res.status(500).json({ error: error.message || String(error) }); }
 });
 
-app.post('/lounge/start', authorizeWorker, async (_req, res) => {
+app.post('/lounge/start', authorizeLounge, async (_req, res) => {
   try { res.json(await loungeBroadcast.start()); }
   catch (error) { res.status(502).json({ error: error.message || String(error) }); }
 });
 
-app.get('/lounge/live.mp4', authorizeWorker, (_req, res) => {
+app.get('/lounge/live.mp4', authorizeLounge, (_req, res) => {
   if (!loungeBroadcast.watch(res)) res.status(503).json({ error: 'Lounge source is starting' });
 });
 
