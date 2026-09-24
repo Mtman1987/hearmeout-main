@@ -1,0 +1,19 @@
+app = "hmo-lounge-worker"
+primary_region = "iad"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  NODE_ENV = "production"
+  PORT = "3002"
+  APP_URL = "https://hearmeout-main.fly.dev"
+  HMO_WORKER_ROLE = "lounge"
+  HMO_PRIVATE_RENDERER = "true"
+  LOUNGE_PROFILE_DIR = "/tmp/lounge-chromium"
+  LOUNGE_SOURCE_URL = "https://hearmeout-main.fly.dev/overlay/system-spacemountainlive-lounge?clean=1"
+
+[[vm]]
+  memory = "4gb"
+  cpu_kind = "shared"
+  cpus = 2
