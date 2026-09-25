@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
-import { getPublicWatchSession, getResolvedWatchSession } from '@/lib/watch-request-service';
+import { controlWatchSession, getPublicWatchSession, getResolvedWatchSession } from '@/lib/watch-request-service';
+import { SPACEMOUNTAIN_LOUNGE_MUSIC_SESSION_ID } from '@/lib/spacemountain-lounge';
 import { getDjWorkerUrl } from '@/lib/dj-worker-config';
 import { getDjWorkerRequestHeaders } from '@/lib/dj-worker-auth';
 import { isValidVideoId } from '@/lib/validate-video-id';
@@ -141,7 +142,25 @@ export async function GET(request: Request, context: { params: Promise<{ session
     return mediaResponse;
   }
 
-  return NextResponse.json(getPublicWatchSession(getResolvedWatchSession(sessionId), getRequestBaseUrl(request)), {
+  let session = getResolvedWatchSession(sessionId);
+  if (sessionId === SPACEMOUNTAIN_LOUNGE_MUSIC_SESSION_ID && session.current && session.playback.status === 'playing') {
+    const runtime = String(session.current.item.runtime || '');
+    const hours = Number(runtime.match(/(\d+(?:\.\d+)?)\s*h/)?.[1] || 0);
+    const minutes = Number(runtime.match(/(\d+(?:\.\d+)?)\s*m/)?.[1] || 0);
+    const seconds = Number(runtime.match(/(\d+(?:\.\d+)?)\s*s/)?.[1] || 0);
+    const duration = hours * 3600 + minutes * 60 + seconds;
+    const elapsed = Number(session.playback.position || 0) +
+      (Date.now() - Number(session.playback.updatedAt || Date.now())) / 1000;
+    if (duration > 0 && elapsed > duration + 30) {
+      // A renderer can restart or miss its ended event. Advance the shared Lounge
+      // queue once, using the current request ID to guard concurrent state polls.
+      session = await controlWatchSession(sessionId, 'next', undefined, undefined, {
+        platform: 'room',
+        expectedRequestId: session.current.requestId,
+      });
+    }
+  }
+  return NextResponse.json(getPublicWatchSession(session, getRequestBaseUrl(request)), {
     headers: CORS_HEADERS,
   });
 }
