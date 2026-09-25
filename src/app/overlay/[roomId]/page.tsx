@@ -214,7 +214,7 @@ export default function OverlayPage() {
   const [forceProxyPlayback, setForceProxyPlayback] = useState(false);
   const [audioTracks, setAudioTracks] = useState<Array<{ index: number; name: string; language: string }>>([]);
   const [selectedAudioTrack, setSelectedAudioTrack] = useState(0);
-  const [musicPlaybackMode, setMusicPlaybackMode] = useState<'video' | 'audio'>('video');
+  const [musicPlaybackMode, setMusicPlaybackMode] = useState<'video' | 'audio'>('audio');
   const [showNowPlaying, setShowNowPlaying] = useState(true);
   const [showMusicQueue, setShowMusicQueue] = useState(true);
   const [showProfiles, setShowProfiles] = useState(true);
