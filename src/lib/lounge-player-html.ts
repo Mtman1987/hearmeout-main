@@ -21,7 +21,7 @@ async function connect(){
    if(video.currentTime>30&&buffer.buffered.length&&buffer.buffered.start(0)<video.currentTime-20){buffer.remove(0,video.currentTime-15);return}
    if(!queue.length)return;
    const segment=queue.shift();queuedBytes-=segment.byteLength;buffer.appendBuffer(segment);
-   video.play().catch(()=>{});
+   video.play().catch(()=>{video.muted=true;video.play().catch(()=>{})});
   }
   buffer.addEventListener('updateend',pump);buffer.addEventListener('error',retry);
   const response=await fetch('/api/lounge-media/live.mp4?viewer='+Date.now(),{cache:'no-store',signal:controller.signal});
@@ -44,9 +44,9 @@ async function connect(){
  }catch(error){if(id===generation&&!controller.signal.aborted)retry()}
 }
 video.addEventListener('error',retry);video.addEventListener('ended',retry);
-video.addEventListener('canplay',()=>video.play().catch(()=>{}));
-document.addEventListener('pointerdown',()=>video.play().catch(()=>{}));
-document.addEventListener('visibilitychange',()=>{if(!document.hidden)video.play().catch(()=>{})});
+video.addEventListener('canplay',()=>video.play().catch(()=>{video.muted=true;video.play().catch(()=>{})}));
+document.addEventListener('pointerdown',()=>{video.muted=false;video.play().catch(()=>{video.muted=true;video.play().catch(()=>{})})});
+document.addEventListener('visibilitychange',()=>{if(!document.hidden)video.play().catch(()=>{video.muted=true;video.play().catch(()=>{})})});
 setInterval(()=>{if(Date.now()-lastFrame>15000)retry()},5000);
 connect();
 </script></body></html>`;
