@@ -39,10 +39,10 @@ test('Spotlight owns one persistent Twitch player and rotates channels without r
 });
 
 test('Spotlight worker routes expose one authenticated live feed',()=>{
- assert.match(server,/app\.get\('\/spotlight\/status', authorizeWorker/);
- assert.match(server,/app\.post\('\/spotlight\/start', authorizeWorker/);
- assert.match(server,/app\.post\('\/spotlight\/consent', authorizeWorker/);
- assert.match(server,/app\.get\('\/spotlight\/live\.mp4', authorizeWorker/);
+ assert.match(server,/app\.get\('\/spotlight\/status', authorizeSpotlight/);
+ assert.match(server,/app\.post\('\/spotlight\/start', authorizeSpotlight/);
+ assert.match(server,/app\.post\('\/spotlight\/consent', authorizeSpotlight/);
+ assert.match(server,/app\.get\('\/spotlight\/live\.mp4', authorizeSpotlight/);
  assert.match(server,/setInterval\(keepSpotlightRunning, 15000\)/);
 });
 
