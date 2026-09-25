@@ -114,6 +114,18 @@ export async function middleware(request: NextRequest) {
     return NextResponse.next();
   }
 
+  // The server's own boot probe may initialize the chat listeners after an
+  // unattended restart. Only the two read-only boot requests accept this
+  // machine credential; user and administrator routes keep SPMT session auth.
+  if (
+    request.method === 'GET'
+    && (pathname === '/api/twitch-bot' || pathname === '/api/discord-bot')
+  ) {
+    const expected = String(process.env.HMO_WORKER_SHARED_SECRET || '').trim();
+    const supplied = String(request.headers.get('x-hmo-bot-boot-key') || '').trim();
+    if (expected && supplied && expected === supplied) return NextResponse.next();
+  }
+
   const { identity, refreshed } = await resolveIdentity(request);
   if (!identity) {
     if (pathname.startsWith('/api/')) return withRefresh(NextResponse.json({ error: 'SPMT session required' }, { status: 401 }), refreshed);
