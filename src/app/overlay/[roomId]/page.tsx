@@ -202,6 +202,7 @@ export default function OverlayPage() {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
   const hlsRef = useRef<any>(null);
+  const hlsRecoveryCountRef = useRef(0);
   const offlineBlobUrlRef = useRef<string | null>(null);
   const currentRequestIdRef = useRef<string | null>(null);
   const applyingRemoteState = useRef(false);
@@ -531,6 +532,7 @@ export default function OverlayPage() {
     setRenderingHealthy(false);
     lastEmbeddedPlaybackKeyRef.current = '';
     lastNativePlaybackKeyRef.current = '';
+    hlsRecoveryCountRef.current = 0;
 
     if (offlineBlobUrlRef.current) {
       URL.revokeObjectURL(offlineBlobUrlRef.current);
@@ -598,6 +600,24 @@ export default function OverlayPage() {
             });
             hlsRef.current.on(Hls.Events.ERROR, (_event: unknown, data: any) => {
               const detail = data?.details || data?.type || 'HLS playback error';
+              if (data?.fatal && hlsRecoveryCountRef.current < 2) {
+                hlsRecoveryCountRef.current += 1;
+                setMediaStatus(`Recovering video stream (${hlsRecoveryCountRef.current}/2)`);
+                if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
+                  hlsRef.current?.startLoad(videoRef.current?.currentTime || 0);
+                  return;
+                }
+                if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
+                  hlsRef.current?.recoverMediaError();
+                  return;
+                }
+              }
+              if (data?.fatal && item?.type === 'music' && musicPlaybackMode === 'video'
+                && musicModeOptions(item).audio) {
+                setMediaStatus('Video stream failed; trying the saved song');
+                setMusicPlaybackMode('audio');
+                return;
+              }
               setMediaStatus(`Overlay HLS error: ${detail}`);
               console.error('[Overlay] HLS error', data);
             });
