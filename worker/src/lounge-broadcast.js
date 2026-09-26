@@ -187,7 +187,15 @@ function createLoungeBroadcast({ chromiumPath, puppeteer, sourceUrl }) {
           const payload = Buffer.concat(fragment); fragment = [];
           fragmentsSent++; lastFragmentAt = Date.now();
           for (const response of viewers) {
-            if (!response.write(framePacket(payload))) { viewers.delete(response); response.end(); }
+            // A false write result means Node has queued data, not that the viewer
+            // disconnected. Only drop a viewer whose actual backlog exceeds
+            // the cap; normal MP4 fragments often exceed the socket high water mark.
+            if (response.destroyed || response.writableLength > 8 * 1024 * 1024) {
+              viewers.delete(response);
+              response.end();
+            } else {
+              response.write(framePacket(payload));
+            }
           }
         }
       }
