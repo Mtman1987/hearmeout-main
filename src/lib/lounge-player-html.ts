@@ -2,10 +2,18 @@ export function renderLoungePlayer() {
   return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>SpaceMountain Lounge live view</title><style>html,body,video{margin:0;width:100%;height:100%;overflow:hidden;background:#000}video{display:block;object-fit:contain}</style></head><body><video id="player" autoplay playsinline></video><script>
 const video=document.getElementById('player');
 video.volume=.85;video.muted=false;
+let groupLevel=.85,sourceVolume=1,sourceMuted=false,brbActive=false;
+function applyBroadcastVolume(){video.volume=groupLevel*sourceVolume;video.muted=sourceMuted||brbActive}
+window.addEventListener('message',(event)=>{
+ if(event.source!==window.parent||event.origin!=='https://spmt.live'||event.data?.type!=='spmt.obspmt.audio')return;
+ const level=Number(event.data.volume);
+ if(!Number.isFinite(level)||level<0||level>1||typeof event.data.muted!=='boolean')return;
+ sourceVolume=level;sourceMuted=event.data.muted;applyBroadcastVolume();
+});
 window.addEventListener('message',(event)=>{
  if(event.source!==window.parent||event.origin!=='https://spmt.live'
   ||event.data?.type!=='spmt-lounge-brb-audio'||typeof event.data.active!=='boolean')return;
- video.muted=event.data.active;
+ brbActive=event.data.active;applyBroadcastVolume();
 });
 // This is the OBS browser source. Twitch viewers adjust their own local
 // volume; the one broadcast mix is applied here before OBS sends it out.
@@ -15,7 +23,7 @@ async function refreshBroadcastMix(){
   const response=await fetch('https://streamweaver-new.fly.dev/api/lounge/audio-mix',{cache:'no-store'});
   if(!response.ok)return;
   const mix=await response.json(),level=Number(mix?.levels?.[mixOutput]);
-  if(Number.isInteger(level)&&level>=1&&level<=100)video.volume=level/100;
+  if(Number.isInteger(level)&&level>=1&&level<=100){groupLevel=level/100;applyBroadcastVolume()}
  }catch{}
 }
 refreshBroadcastMix();setInterval(refreshBroadcastMix,3000);
