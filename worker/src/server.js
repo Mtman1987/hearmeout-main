@@ -1098,10 +1098,10 @@ function cleanWatchStreamId(streamId) {
   if (youtubeMatch) return youtubeWatchHlsId(youtubeMatch[1]);
   const typedMatch = raw.toLowerCase().match(/^(vod|series|live)-(\d+)$/)
     || raw.toLowerCase().match(/^(episode)-(\d+)-([a-z0-9]+)$/);
-  if (typedMatch) return `${typedMatch[1]}-${typedMatch[2]}${typedMatch[3] ? `-${typedMatch[3]}` : ''}-multiaudio-v2`;
+  if (typedMatch) return `${typedMatch[1]}-${typedMatch[2]}${typedMatch[3] ? `-${typedMatch[3]}` : ''}-multiaudio-v3`;
   const clean = raw.replace(/[^0-9]/g, '');
   if (!clean) throw new Error('Invalid stream id');
-  return `vod-${clean}-multiaudio-v2`;
+  return `vod-${clean}-multiaudio-v3`;
 }
 
 function cleanXtreamNumericId(streamId) {
@@ -1492,6 +1492,7 @@ function isEnglishAudioTrack(track) {
 async function runWatchHlsFfmpeg(streamId, sourceUrl, dir, indexPath) {
   const media = await probeWatchMediaStreams(sourceUrl);
   const audioTracks = media.audio;
+  const isFiniteVideo = media.hasVideo && !String(streamId).startsWith('live-');
   const segmentPattern = join(dir, 'stream_%v_seg_%05d.ts');
   console.log(`[WatchHLS] Starting HLS conversion for VOD ${streamId}`);
 
@@ -1523,7 +1524,14 @@ async function runWatchHlsFfmpeg(streamId, sourceUrl, dir, indexPath) {
       '-reconnect_delay_max', '5',
       '-i', sourceUrl,
       ...mapArgs,
-      '-c:v', 'copy',
+      // Full-size source movies can overwhelm Chromium's software decoder in
+      // the Lounge. Prepare one reusable 480p rendition on the worker.
+      ...(isFiniteVideo ? [
+        '-vf', 'scale=854:480:force_original_aspect_ratio=decrease:flags=fast_bilinear,pad=854:480:(ow-iw)/2:(oh-ih)/2,fps=30',
+        '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '27',
+        '-pix_fmt', 'yuv420p', '-profile:v', 'baseline', '-level:v', '3.1',
+        '-g', '60', '-keyint_min', '60', '-sc_threshold', '0',
+      ] : ['-c:v', 'copy']),
       '-c:a', 'aac',
       '-ac', '2',
       '-f', 'hls',
