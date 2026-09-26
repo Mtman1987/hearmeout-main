@@ -606,6 +606,7 @@ function musicTrackToWatchItem(track: PlaylistItem): WatchCatalogItem {
   }
 
   const videoPlaybackUrl = getYoutubeHlsUrl(track.id);
+  const audioPlaybackUrl = `/api/watch/youtube/hls/${encodeURIComponent(track.id)}/source.webm`;
   return {
     id: `youtube-${track.id}`,
     type: 'music',
@@ -623,6 +624,7 @@ function musicTrackToWatchItem(track: PlaylistItem): WatchCatalogItem {
       artist: track.artist,
       originalUrl: track.url,
       videoPlaybackUrl,
+      audioPlaybackUrl,
       playbackMode: 'video',
       playbackStrategy: 'proxy',
     },
