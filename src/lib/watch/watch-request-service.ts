@@ -960,6 +960,7 @@ export async function requestWatchItem(params: {
         return null;
       })
     : null;
+  if (params.itemId && !selectedProviderItem && !getWatchCatalogItem(params.itemId)) return { error: 'Selected provider item is no longer available' as const };
   let item = getWatchCatalogItem(params.itemId) || selectedProviderItem || explicitEpisode || (await searchWatchProviders(params.query))[0];
   if (item?.id.startsWith('xtream-series-') && !item.metadata) {
     const seriesTitle = item.title.replace(/\s+-\s+first episode$/i, '');
