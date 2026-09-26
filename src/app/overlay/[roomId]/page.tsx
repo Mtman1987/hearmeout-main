@@ -727,12 +727,15 @@ export default function OverlayPage() {
             applyPlaybackState(activeState);
           }}
           onPlaying={() => {
+            nativeProgressBaselineRef.current = null;
             setAudioReady(true);
             setMediaStatus('Overlay media starting');
           }}
           onTimeUpdate={() => {
             const video = videoRef.current;
-            if (!video) return;
+            // A remote seek emits timeupdate even when autoplay was blocked.
+            // Count only actual playback progress as renderer health.
+            if (!video || video.paused || applyingRemoteState.current) return;
             const nextTime = Number(video.currentTime || 0);
             if (nativeProgressBaselineRef.current === null) {
               nativeProgressBaselineRef.current = nextTime;
@@ -742,9 +745,15 @@ export default function OverlayPage() {
             }
           }}
           onPause={() => {
+            nativeProgressBaselineRef.current = null;
+            setRenderingHealthy(false);
             if (!applyingRemoteState.current) setMediaStatus('Overlay media paused');
           }}
-          onEnded={() => setMediaStatus('Overlay media ended')}
+          onEnded={() => {
+            nativeProgressBaselineRef.current = null;
+            setRenderingHealthy(false);
+            setMediaStatus('Overlay media ended');
+          }}
           onError={() => {
             const error = videoRef.current?.error;
             setMediaStatus(error ? `Overlay media error ${error.code}` : 'Overlay media error');
