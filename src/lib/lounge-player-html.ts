@@ -2,6 +2,11 @@ export function renderLoungePlayer() {
   return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>SpaceMountain Lounge live view</title><style>html,body,video{margin:0;width:100%;height:100%;overflow:hidden;background:#000}video{display:block;object-fit:contain}</style></head><body><video id="player" autoplay playsinline></video><script>
 const video=document.getElementById('player');
 video.volume=.85;video.muted=false;
+window.addEventListener('message',(event)=>{
+ if(event.source!==window.parent||event.origin!=='https://spmt.live'
+  ||event.data?.type!=='spmt-lounge-brb-audio'||typeof event.data.active!=='boolean')return;
+ video.muted=event.data.active;
+});
 // This is the OBS browser source. Twitch viewers adjust their own local
 // volume; the one broadcast mix is applied here before OBS sends it out.
 const mixOutput='media';
