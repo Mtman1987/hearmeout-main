@@ -265,7 +265,7 @@ const endpoint=${JSON.stringify(endpoint)},button=document.getElementById('start
 
 function audio(){
  if(!player||!activated)return;
- try{player.setVolume(.58);player.setMuted(false);player.play()}catch{}
+ try{player.setVolume(1);player.setMuted(false);player.play()}catch{}
 }
 
 function chooseStableQuality(){
@@ -289,7 +289,7 @@ function playBootstrap(){
  if(!player)return;
  try{
   chooseStableQuality();
-  player.setVolume(.58);
+  player.setVolume(1);
   player.setMuted(!activated);
   player.play();
  }catch{}

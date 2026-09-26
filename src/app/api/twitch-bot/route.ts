@@ -424,6 +424,10 @@ function createMessageHandler(instance: BotInstance) {
       return;
     }
 
+    // StreamWeaver owns the single OBS mix command. Do not also adjust an
+    // unrelated HearMeOut room volume or send a second Twitch reply.
+    if (channelName === SPACEMOUNTAIN_LOUNGE_TWITCH_CHANNEL && /^!(?:vol|volume)(?:\s|$)/i.test(msg.trim())) return;
+
     if (channelName === SPACEMOUNTAIN_LOUNGE_TWITCH_CHANNEL && isSpaceMountainLoungeCommand(msg.trim())) {
       try {
         const text = await handleSpaceMountainLoungeCommand({

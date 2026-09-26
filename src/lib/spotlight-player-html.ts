@@ -5,7 +5,8 @@ export function renderSpotlightPlayer() {
     .replace('SpaceMountain Lounge live view', 'SpaceMountain community Spotlight')
     .replaceAll('/api/lounge-media/live.mp4', '/api/spotlight-media/live.mp4')
     .replaceAll('Lounge', 'Spotlight')
-    .replace('video.volume=.85;video.muted=false;', 'video.volume=.58;video.muted=false;');
+    .replace('video.volume=.85;video.muted=false;', 'video.volume=.58;video.muted=false;')
+    .replace("const mixOutput='media'", "const mixOutput='spotlight'");
 }
 
 export function renderSpotlightControl() {

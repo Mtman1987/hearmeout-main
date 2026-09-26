@@ -2,30 +2,23 @@ export function renderLoungePlayer() {
   return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>SpaceMountain Lounge live view</title><style>html,body,video{margin:0;width:100%;height:100%;overflow:hidden;background:#000}video{display:block;object-fit:contain}</style></head><body><video id="player" autoplay playsinline></video><script>
 const video=document.getElementById('player');
 video.volume=.85;video.muted=false;
-// The owner Lounge keeps this viewer alive under its BRB layer. Preserve
-// the viewer's prior mute choice so returning from BRB needs no new click.
-let brbAudioActive=false,mutedBeforeBRB=true,soundRetried=false;
-function retrySoundWhenPlaying(){
- if(brbAudioActive||!video.muted||soundRetried)return;
- soundRetried=true;
- video.muted=false;
- video.play().catch(()=>{video.muted=true;video.play().catch(()=>{})});
+// This is the OBS browser source. Twitch viewers adjust their own local
+// volume; the one broadcast mix is applied here before OBS sends it out.
+const mixOutput='media';
+async function refreshBroadcastMix(){
+ try{
+  const response=await fetch('https://streamweaver-new.fly.dev/api/lounge/audio-mix',{cache:'no-store'});
+  if(!response.ok)return;
+  const mix=await response.json(),level=Number(mix?.levels?.[mixOutput]);
+  if(Number.isInteger(level)&&level>=1&&level<=100)video.volume=level/100;
+ }catch{}
 }
-window.addEventListener('message',(event)=>{
- if(event.origin!=='https://spmt.live'||event.source!==window.parent||event.data?.type!=='spmt-lounge-brb-audio'||typeof event.data.active!=='boolean')return;
- if(event.data.active){
-  if(!brbAudioActive)mutedBeforeBRB=video.muted;
-  brbAudioActive=true;video.muted=true;
- }else if(brbAudioActive){
-  brbAudioActive=false;video.muted=mutedBeforeBRB;soundRetried=false;
-  video.play().catch(()=>{video.muted=true;video.play().catch(()=>{})});
- }
-});
+refreshBroadcastMix();setInterval(refreshBroadcastMix,3000);
 const codec='video/mp4; codecs="avc1.42E01F, mp4a.40.2"';
 let controller,objectUrl='',retryTimer=0,generation=0,lastFrame=Date.now();
 function retry(){if(!retryTimer)retryTimer=setTimeout(()=>{retryTimer=0;connect()},2000)}
 async function connect(){
- clearTimeout(retryTimer);retryTimer=0;const id=++generation;soundRetried=false;
+ clearTimeout(retryTimer);retryTimer=0;const id=++generation;
  controller?.abort();if(objectUrl)URL.revokeObjectURL(objectUrl);
  video.removeAttribute('src');video.load();
  if(!window.MediaSource||!MediaSource.isTypeSupported(codec))return;
@@ -40,7 +33,7 @@ async function connect(){
    if(video.currentTime>30&&buffer.buffered.length&&buffer.buffered.start(0)<video.currentTime-20){buffer.remove(0,video.currentTime-15);return}
    if(!queue.length)return;
    const segment=queue.shift();queuedBytes-=segment.byteLength;buffer.appendBuffer(segment);
-   video.play().catch(()=>{video.muted=true;video.play().catch(()=>{})});
+   video.play().catch(()=>{});
   }
   buffer.addEventListener('updateend',pump);buffer.addEventListener('error',retry);
   const response=await fetch('/api/lounge-media/live.mp4?viewer='+Date.now(),{cache:'no-store',signal:controller.signal});
@@ -63,11 +56,9 @@ async function connect(){
  }catch(error){if(id===generation&&!controller.signal.aborted)retry()}
 }
 video.addEventListener('error',retry);video.addEventListener('ended',retry);
-video.addEventListener('canplay',()=>video.play().catch(()=>{video.muted=true;video.play().catch(()=>{})}));
-video.addEventListener('playing',retrySoundWhenPlaying);
-video.addEventListener('pause',()=>{if(!brbAudioActive&&soundRetried&&!video.muted){video.muted=true;video.play().catch(()=>{})}});
-document.addEventListener('pointerdown',()=>{if(brbAudioActive)return;video.muted=false;video.play().catch(()=>{video.muted=true;video.play().catch(()=>{})})});
-document.addEventListener('visibilitychange',()=>{if(!document.hidden)video.play().catch(()=>{video.muted=true;video.play().catch(()=>{})})});
+video.addEventListener('canplay',()=>video.play().catch(()=>{}));
+document.addEventListener('pointerdown',()=>video.play().catch(()=>{}));
+document.addEventListener('visibilitychange',()=>{if(!document.hidden)video.play().catch(()=>{})});
 setInterval(()=>{if(Date.now()-lastFrame>15000)retry()},5000);
 connect();
 </script></body></html>`;
