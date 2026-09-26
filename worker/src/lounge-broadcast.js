@@ -39,7 +39,7 @@ function createLoungeBroadcast({ chromiumPath, puppeteer, sourceUrl }) {
       init = Buffer.alloc(0); pending = Buffer.alloc(0); fragment = []; fragmentsSent = 0; lastFragmentAt = 0;
       root = await mkdtemp(join(tmpdir(), 'hmo-lounge-source-'));
 
-      display = child('Xvfb', ['-displayfd', '3', '-screen', '0', '1280x720x24', '-nolisten', 'tcp', '-ac'], { stdio: ['ignore', 'ignore', 'pipe', 'pipe'] });
+      display = child('Xvfb', ['-displayfd', '3', '-screen', '0', '854x480x24', '-nolisten', 'tcp', '-ac'], { stdio: ['ignore', 'ignore', 'pipe', 'pipe'] });
       const displayNumber = await new Promise((resolve, reject) => {
         let output = '';
         const timer = setTimeout(() => reject(Error('The Lounge display did not start')), 8000);
@@ -85,7 +85,7 @@ function createLoungeBroadcast({ chromiumPath, puppeteer, sourceUrl }) {
           '--disable-infobars',
           '--kiosk',
           '--window-position=0,0',
-          '--window-size=1280,720',
+          '--window-size=854,480',
           '--force-device-scale-factor=1',
           '--autoplay-policy=no-user-gesture-required',
           '--disable-background-timer-throttling',
@@ -96,19 +96,18 @@ function createLoungeBroadcast({ chromiumPath, puppeteer, sourceUrl }) {
       page = (await browser.pages())[0] || await browser.newPage();
       await page.goto(sourceUrl, { waitUntil: 'domcontentloaded', timeout: 45000 });
       await delay(1200);
-      await page.mouse.click(640, 360).catch(() => {});
+      await page.mouse.click(427, 240).catch(() => {});
 
       encoder = child('ffmpeg', [
         '-hide_banner', '-loglevel', 'error',
         '-thread_queue_size', '1024',
-        '-f', 'x11grab', '-draw_mouse', '0', '-video_size', '1280x720', '-framerate', '30', '-i', ':' + displayNumber + '.0',
+        '-f', 'x11grab', '-draw_mouse', '0', '-video_size', '854x480', '-framerate', '30', '-i', ':' + displayNumber + '.0',
         // The lounge VM's legacy startup replaces the quoted literal '1024'
         // with '64' in this file. Keep the audio input queue large enough to
         // survive brief X11 or encoder stalls without dropping Pulse samples.
         '-thread_queue_size', String(1024),
         '-f', 'pulse', '-sample_rate', '48000', '-channels', '2', '-i', 'lounge.monitor',
         '-map', '0:v:0', '-map', '1:a:0',
-        '-vf', 'scale=854:480',
         '-c:v', 'libx264', '-profile:v', 'baseline', '-level:v', '3.1',
         '-threads', '3', '-preset', 'ultrafast', '-tune', 'zerolatency', '-crf', '27',
         '-pix_fmt', 'yuv420p', '-r', '30', '-g', '60', '-keyint_min', '60', '-sc_threshold', '0',
