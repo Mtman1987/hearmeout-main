@@ -1342,11 +1342,25 @@ function ensureWatchHls(streamId, sourceUrl) {
   if (watchHlsJobs.has(clean)) return watchHlsJobs.get(clean);
   if (!sourceUrl) return Promise.reject(new Error('Missing source URL for HLS conversion'));
 
+  // Reuse a completed legacy movie cache when preparing the 480p version.
+  // Reading local segments avoids fetching the same full movie a second time.
+  let preparationUrl = sourceUrl;
+  if (clean.endsWith('-multiaudio-v3')) {
+    const oldDir = join(WATCH_HLS_DIR, clean.replace(/-multiaudio-v3$/, '-multiaudio-v2'));
+    const oldIndex = join(oldDir, 'index.m3u8');
+    const oldVideo = join(oldDir, 'stream_video.m3u8');
+    if (existsSync(oldVideo) && readFileSync(oldVideo, 'utf8').includes('#EXT-X-ENDLIST')
+      && hasUsableWatchHlsIndex(oldDir, oldIndex)) {
+      preparationUrl = oldIndex;
+      try { utimesSync(oldIndex, new Date(), new Date()); } catch {}
+      console.log(`[WatchHLS] Preparing ${clean} from completed local movie cache`);
+    }
+  }
   mkdirSync(dir, { recursive: true });
   pruneWatchHlsRoot();
   try { if (existsSync(indexPath)) unlinkSync(indexPath); } catch {}
 
-  const promise = runWatchHlsFfmpeg(clean, sourceUrl, dir, indexPath)
+  const promise = runWatchHlsFfmpeg(clean, preparationUrl, dir, indexPath)
     .catch((error) => {
       console.error(`[WatchHLS] Conversion failed for VOD ${clean}:`, error.message || error);
       try { rmSync(dir, { recursive: true, force: true }); } catch {}
@@ -1517,11 +1531,13 @@ async function runWatchHlsFfmpeg(streamId, sourceUrl, dir, indexPath) {
       '-loglevel', 'warning',
       '-threads', '2',
       '-y',
-      '-user_agent', 'DiscordStreamHub/1.0',
-      '-reconnect', '1',
-      '-reconnect_streamed', '1',
-      ...(String(streamId).startsWith('live-') ? ['-reconnect_at_eof', '1'] : []),
-      '-reconnect_delay_max', '5',
+      ...(/^https?:\/\//i.test(sourceUrl) ? [
+        '-user_agent', 'DiscordStreamHub/1.0',
+        '-reconnect', '1',
+        '-reconnect_streamed', '1',
+        ...(String(streamId).startsWith('live-') ? ['-reconnect_at_eof', '1'] : []),
+        '-reconnect_delay_max', '5',
+      ] : []),
       '-i', sourceUrl,
       ...mapArgs,
       // Full-size source movies can overwhelm Chromium's software decoder in
