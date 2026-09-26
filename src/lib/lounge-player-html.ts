@@ -4,14 +4,20 @@ const video=document.getElementById('player');
 video.volume=.85;video.muted=false;
 // The owner Lounge keeps this viewer alive under its BRB layer. Preserve
 // the viewer's prior mute choice so returning from BRB needs no new click.
-let brbAudioActive=false,mutedBeforeBRB=true;
+let brbAudioActive=false,mutedBeforeBRB=true,soundRetried=false;
+function retrySoundWhenPlaying(){
+ if(brbAudioActive||!video.muted||soundRetried)return;
+ soundRetried=true;
+ video.muted=false;
+ video.play().catch(()=>{video.muted=true;video.play().catch(()=>{})});
+}
 window.addEventListener('message',(event)=>{
  if(event.origin!=='https://spmt.live'||event.source!==window.parent||event.data?.type!=='spmt-lounge-brb-audio'||typeof event.data.active!=='boolean')return;
  if(event.data.active){
   if(!brbAudioActive)mutedBeforeBRB=video.muted;
   brbAudioActive=true;video.muted=true;
  }else if(brbAudioActive){
-  brbAudioActive=false;video.muted=mutedBeforeBRB;
+  brbAudioActive=false;video.muted=mutedBeforeBRB;soundRetried=false;
   video.play().catch(()=>{video.muted=true;video.play().catch(()=>{})});
  }
 });
@@ -19,7 +25,7 @@ const codec='video/mp4; codecs="avc1.42E01F, mp4a.40.2"';
 let controller,objectUrl='',retryTimer=0,generation=0,lastFrame=Date.now();
 function retry(){if(!retryTimer)retryTimer=setTimeout(()=>{retryTimer=0;connect()},2000)}
 async function connect(){
- clearTimeout(retryTimer);retryTimer=0;const id=++generation;
+ clearTimeout(retryTimer);retryTimer=0;const id=++generation;soundRetried=false;
  controller?.abort();if(objectUrl)URL.revokeObjectURL(objectUrl);
  video.removeAttribute('src');video.load();
  if(!window.MediaSource||!MediaSource.isTypeSupported(codec))return;
@@ -58,6 +64,8 @@ async function connect(){
 }
 video.addEventListener('error',retry);video.addEventListener('ended',retry);
 video.addEventListener('canplay',()=>video.play().catch(()=>{video.muted=true;video.play().catch(()=>{})}));
+video.addEventListener('playing',retrySoundWhenPlaying);
+video.addEventListener('pause',()=>{if(!brbAudioActive&&soundRetried&&!video.muted){video.muted=true;video.play().catch(()=>{})}});
 document.addEventListener('pointerdown',()=>{if(brbAudioActive)return;video.muted=false;video.play().catch(()=>{video.muted=true;video.play().catch(()=>{})})});
 document.addEventListener('visibilitychange',()=>{if(!document.hidden)video.play().catch(()=>{video.muted=true;video.play().catch(()=>{})})});
 setInterval(()=>{if(Date.now()-lastFrame>15000)retry()},5000);
