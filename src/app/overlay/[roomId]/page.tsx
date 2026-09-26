@@ -214,7 +214,7 @@ export default function OverlayPage() {
   const [forceProxyPlayback, setForceProxyPlayback] = useState(false);
   const [audioTracks, setAudioTracks] = useState<Array<{ index: number; name: string; language: string }>>([]);
   const [selectedAudioTrack, setSelectedAudioTrack] = useState(0);
-  const [musicPlaybackMode, setMusicPlaybackMode] = useState<'video' | 'audio'>('audio');
+  const [musicPlaybackMode, setMusicPlaybackMode] = useState<'video' | 'audio'>(cleanMode ? 'video' : 'audio');
   const [showNowPlaying, setShowNowPlaying] = useState(true);
   const [showMusicQueue, setShowMusicQueue] = useState(true);
   const [showProfiles, setShowProfiles] = useState(true);
@@ -242,13 +242,14 @@ export default function OverlayPage() {
         mutedRef.current = requestedMuted;
         setIsMuted(requestedMuted);
       }
-      if (saved.musicPlaybackMode === 'audio' || saved.musicPlaybackMode === 'video') setMusicPlaybackMode(saved.musicPlaybackMode);
+      // The unattended broadcast must show the song video regardless of an old browser preference.
+      if (!cleanMode && (saved.musicPlaybackMode === 'audio' || saved.musicPlaybackMode === 'video')) setMusicPlaybackMode(saved.musicPlaybackMode);
       if (typeof saved.showNowPlaying === 'boolean') setShowNowPlaying(saved.showNowPlaying);
       if (typeof saved.showMusicQueue === 'boolean') setShowMusicQueue(saved.showMusicQueue);
       if (typeof saved.showProfiles === 'boolean') setShowProfiles(saved.showProfiles);
     } catch {}
     setViewStateHydrated(true);
-  }, [hasRequestedVolume, requestedMuted, roomId]);
+  }, [cleanMode, hasRequestedVolume, requestedMuted, roomId]);
 
   useEffect(() => {
     if (!viewStateHydrated) return;
@@ -275,9 +276,12 @@ export default function OverlayPage() {
     ];
     const playing = bundles.filter((bundle) => sessionHasActiveMedia(bundle.state)).sort(newerPlaybackFirst);
     if (playing[0]) return playing[0];
+    // A paused movie is not the Lounge program. In the clean broadcast view,
+    // show the idle music lane until a lane is actually playing.
+    if (cleanMode) return bundles[0];
     const loaded = bundles.filter((bundle) => bundle.state?.current).sort(newerPlaybackFirst);
     return loaded[0] || bundles[0];
-  }, [lane, movieSessionId, movieState, musicSessionId, musicState]);
+  }, [cleanMode, lane, movieSessionId, movieState, musicSessionId, musicState]);
 
   const activeState = activeBundle.state;
   const currentItem = activeState?.current?.item || null;
