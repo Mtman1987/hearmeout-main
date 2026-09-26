@@ -63,10 +63,10 @@ async function refreshBroadcastMix(){
 }
 refreshBroadcastMix();setInterval(refreshBroadcastMix,3000);
 const codec='video/mp4; codecs="avc1.42E01F, mp4a.40.2"';
-let controller,objectUrl='',retryTimer=0,generation=0,lastFrame=Date.now();
+let controller,objectUrl='',retryTimer=0,generation=0,lastFrame=Date.now(),lastProgress=Date.now(),lastTime=0;
 function retry(){if(!retryTimer)retryTimer=setTimeout(()=>{retryTimer=0;connect()},2000)}
 async function connect(){
- clearTimeout(retryTimer);retryTimer=0;const id=++generation;
+ clearTimeout(retryTimer);retryTimer=0;const id=++generation;lastProgress=Date.now();lastTime=0;
  controller?.abort();if(objectUrl)URL.revokeObjectURL(objectUrl);
  video.removeAttribute('src');video.load();
  if(!window.MediaSource||!MediaSource.isTypeSupported(codec))return;
@@ -105,9 +105,16 @@ async function connect(){
 }
 video.addEventListener('error',retry);video.addEventListener('ended',retry);
 video.addEventListener('canplay',()=>video.play().catch(()=>{}));
+video.addEventListener('timeupdate',()=>{if(video.currentTime>lastTime+.1){lastTime=video.currentTime;lastProgress=Date.now()}});
 document.addEventListener('pointerdown',()=>video.play().catch(()=>{}));
 document.addEventListener('visibilitychange',()=>{if(!document.hidden)video.play().catch(()=>{})});
-setInterval(()=>{if(Date.now()-lastFrame>15000)retry()},5000);
+setInterval(()=>{
+ const now=Date.now();
+ if(now-lastFrame>15000){retry();return}
+ // The transport may keep receiving fragments while the decoder is stuck
+ // on one frame. Rejoin the live source when playback itself stops moving.
+ if(!video.paused&&now-lastProgress>20000)retry();
+},5000);
 connect();
 </script></body></html>`;
 }
