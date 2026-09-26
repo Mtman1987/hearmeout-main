@@ -40,5 +40,6 @@ jobs:
       - name: Verify Lounge passive player route
         run: |
           set -euo pipefail
-          curl --fail --show-error --silent --max-time 10             https://hearmeout-main.fly.dev/lounge-media/player?v=deployment-smoke             | grep -q '<video id="player"'
+          curl --fail --show-error --silent --max-time 10 --output /tmp/hearmeout-lounge-player.html https://hearmeout-main.fly.dev/lounge-media/player?v=deployment-smoke
+          grep -q '<video id="player"' /tmp/hearmeout-lounge-player.html
           echo "Lounge passive player route is serving the video-only surface."
