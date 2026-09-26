@@ -678,6 +678,22 @@ export async function searchXtreamCatalog(query: string | null | undefined) {
 export async function findXtreamCatalogItemById(itemId: string | null | undefined) {
   const id = String(itemId || '').trim();
   if (!id || !/^(?:xtream-(?:vod|live|series)-\d+|xtream-mock-[a-z0-9-]+|m3u-(?:movie|live|series)-\d+)$/.test(id)) return null;
+  // A selected VOD has an exact provider ID. Fetching the entire VOD, live,
+  // and series catalogs again can time out even when this item is playable.
+  if (id.startsWith('xtream-vod-') && getConfig()) {
+    const vodId = id.slice('xtream-vod-'.length);
+    try {
+      const url = playerApiUrl('get_vod_info');
+      url.searchParams.set('vod_id', vodId);
+      const detail = await fetchXtreamJson<{ movie_data?: XtreamStream }>(url);
+      if (String(detail.movie_data?.stream_id || '') === vodId) {
+        const item = toCatalogItem(detail.movie_data, 'vod');
+        if (item) return item;
+      }
+    } catch (error) {
+      console.warn('[Xtream] Exact VOD lookup failed; checking cached catalog:', error instanceof Error ? error.message : String(error));
+    }
+  }
   const items = await getXtreamCatalog();
   return items.find((item) => item.id === id) || null;
 }

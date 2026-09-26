@@ -952,18 +952,23 @@ export async function requestWatchItem(params: {
 }) {
   loadWatchStateFromDisk();
   await ensureDiscordActivityRoomForSession(params.sessionId);
-  const explicitEpisode = await findXtreamSeriesEpisode(params.query, (seriesId) => getProgressForUser(params.userId, seriesId)).catch((error) => {
-    console.error('[WatchRequest] Xtream episode lookup failed:', error);
-    return null;
-  });
-  const selectedProviderItem = params.itemId
+  const selectedCatalogItem = getWatchCatalogItem(params.itemId);
+  const selectedProviderItem = params.itemId && !selectedCatalogItem
     ? await findXtreamCatalogItemById(params.itemId).catch((error) => {
         console.error('[WatchRequest] Exact provider item lookup failed:', error);
         return null;
       })
     : null;
-  if (params.itemId && !selectedProviderItem && !getWatchCatalogItem(params.itemId)) return { error: 'Selected provider item is no longer available' as const };
-  let item = getWatchCatalogItem(params.itemId) || selectedProviderItem || explicitEpisode || (await searchWatchProviders(params.query))[0];
+  if (params.itemId && !selectedProviderItem && !selectedCatalogItem) return { error: 'Selected provider item is no longer available' as const };
+  // Only search for an episode or title if no exact choice was submitted.
+  // The full provider catalog must not hold up an already-selected VOD.
+  const explicitEpisode = selectedCatalogItem || selectedProviderItem
+    ? null
+    : await findXtreamSeriesEpisode(params.query, (seriesId) => getProgressForUser(params.userId, seriesId)).catch((error) => {
+        console.error('[WatchRequest] Xtream episode lookup failed:', error);
+        return null;
+      });
+  let item = selectedCatalogItem || selectedProviderItem || explicitEpisode || (await searchWatchProviders(params.query))[0];
   if (item?.id.startsWith('xtream-series-') && !item.metadata) {
     const seriesTitle = item.title.replace(/\s+-\s+first episode$/i, '');
     item = await findXtreamSeriesEpisode(`${seriesTitle} episode 1`).catch(() => null) || item;
