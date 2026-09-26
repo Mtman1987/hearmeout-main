@@ -109,7 +109,7 @@ function createLoungeBroadcast({ chromiumPath, puppeteer, sourceUrl }) {
         '-c:v', 'libx264', '-profile:v', 'baseline', '-level:v', '3.1',
         '-threads', '3', '-preset', 'ultrafast', '-tune', 'zerolatency', '-crf', '27',
         '-pix_fmt', 'yuv420p', '-r', '30', '-g', '60', '-keyint_min', '60', '-sc_threshold', '0',
-        '-c:a', 'aac', '-b:a', '160k', '-ac', '2', '-af', 'aresample=async=1:first_pts=0',
+        '-c:a', 'aac', '-b:a', '160k', '-ac', '2', '-af', 'aresample=async=0:first_pts=0',
         '-f', 'mp4', '-movflags', 'frag_keyframe+empty_moov+default_base_moof', 'pipe:1',
       ], { env: environment, stdio: ['ignore', 'pipe', 'pipe'] });
 
