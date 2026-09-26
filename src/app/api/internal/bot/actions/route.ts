@@ -6,6 +6,7 @@ import {
   getWatchSession,
   requestWatchItem,
   requestWatchMusicItem,
+  searchWatchProviderOptions,
 } from '@/lib/watch-request-service';
 import { ACTIVITY_ROOM_ID, getGlobalWatchSessionId, getMusicWatchSessionId, getRoomWatchSessionId } from '@/lib/watch-session';
 import {
@@ -23,6 +24,7 @@ export const dynamic = 'force-dynamic';
 type HearMeOutAction =
   | 'hmo.media.state.read'
   | 'hmo.media.request'
+  | 'hmo.media.search'
   | 'hmo.media.control'
   | 'hmo.rooms.read'
   | 'hmo.bot.control'
@@ -32,6 +34,7 @@ type HearMeOutAction =
 const ACTIONS = new Set<HearMeOutAction>([
   'hmo.media.state.read',
   'hmo.media.request',
+  'hmo.media.search',
   'hmo.media.control',
   'hmo.rooms.read',
   'hmo.bot.control',
@@ -86,7 +89,7 @@ export async function POST(request: NextRequest) {
   const tenantId = text(body?.tenantId, 160).toLowerCase();
   const isGlobalSession = sessionId === getMusicWatchSessionId() || sessionId === getGlobalWatchSessionId();
   const isPublicQueueRequest = !room && (
-    action === 'hmo.media.request' || action === 'hmo.media.state.read'
+    action === 'hmo.media.request' || action === 'hmo.media.search' || action === 'hmo.media.state.read'
   ) && (isGlobalSession || isSpaceMountainLoungeSession(tenantId, sessionId));
   // SpaceMountain Lounge media is intentionally credential-free while the
   // player is under active development. Public chat permissions live in
@@ -176,6 +179,20 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ success: true, action, session });
     }
 
+    if (action === 'hmo.media.search') {
+      if (!isSpaceMountainLoungeSession(tenantId, sessionId) || getSpaceMountainLoungeLane(sessionId, text(body?.lane, 20)) !== 'movie') {
+        return NextResponse.json({ error: 'Movie search is only available for the SpaceMountain Lounge' }, { status: 403 });
+      }
+      const query = text(body?.query, 160);
+      if (!query) return NextResponse.json({ error: 'A movie title is required' }, { status: 400 });
+      const options = (await searchWatchProviderOptions(query)).slice(0, 3).map((item) => ({
+        id: item.id,
+        title: item.title,
+        year: item.year || null,
+      }));
+      return NextResponse.json({ success: true, action, query, options });
+    }
+
     if (action === 'hmo.media.request') {
       const query = text(body?.query, 500);
       if (!query) return NextResponse.json({ error: 'A song, story, or audio request is required' }, { status: 400 });
@@ -185,6 +202,7 @@ export async function POST(request: NextRequest) {
         const requestIdentity = {
           sessionId: getSpaceMountainLoungeSessionId(sessionId, requestedLane),
           query,
+          itemId: kind === 'movie' ? text(body?.itemId, 100) || undefined : undefined,
           username: text(body?.actorName, 100) || 'SpaceMountainLive',
           userId: text(body?.actorUserId, 160) || 'spacemountainlive',
         };
