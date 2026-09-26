@@ -12,6 +12,7 @@ primary_region = "iad"
 
 [env]
   DJ_WORKER_URL = "https://hmo-dj-worker.fly.dev"
+  SPOTLIGHT_WORKER_URL = "http://spotlight.process.hmo-dj-worker.internal:3002"
   NEXT_PUBLIC_LIVEKIT_URL = "wss://streamweaver-7atx04ct.livekit.cloud"
   NODE_ENV = "production"
 

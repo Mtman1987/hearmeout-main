@@ -1,6 +1,6 @@
 import { getDjWorkerRequestHeaders } from '@/lib/dj-worker-auth';
 
-const SPOTLIGHT_WORKER_URL = (process.env.SPOTLIGHT_WORKER_URL || 'http://hmo-spotlight-worker.internal:3002').replace(/\/$/, '');
+const SPOTLIGHT_WORKER_URL = (process.env.SPOTLIGHT_WORKER_URL || 'http://spotlight.process.hmo-dj-worker.internal:3002').replace(/\/$/, '');
 
 export async function spotlightWorker(path: string, method = 'GET', signal?: AbortSignal) {
   return fetch(`${SPOTLIGHT_WORKER_URL}/spotlight/${path}`, {

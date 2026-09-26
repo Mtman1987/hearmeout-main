@@ -2,6 +2,19 @@ export function renderLoungePlayer() {
   return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>SpaceMountain Lounge live view</title><style>html,body,video{margin:0;width:100%;height:100%;overflow:hidden;background:#000}video{display:block;object-fit:contain}</style></head><body><video id="player" autoplay playsinline></video><script>
 const video=document.getElementById('player');
 video.volume=.85;video.muted=false;
+// The owner Lounge keeps this viewer alive under its BRB layer. Preserve
+// the viewer's prior mute choice so returning from BRB needs no new click.
+let brbAudioActive=false,mutedBeforeBRB=true;
+window.addEventListener('message',(event)=>{
+ if(event.origin!=='https://spmt.live'||event.source!==window.parent||event.data?.type!=='spmt-lounge-brb-audio'||typeof event.data.active!=='boolean')return;
+ if(event.data.active){
+  if(!brbAudioActive)mutedBeforeBRB=video.muted;
+  brbAudioActive=true;video.muted=true;
+ }else if(brbAudioActive){
+  brbAudioActive=false;video.muted=mutedBeforeBRB;
+  video.play().catch(()=>{video.muted=true;video.play().catch(()=>{})});
+ }
+});
 const codec='video/mp4; codecs="avc1.42E01F, mp4a.40.2"';
 let controller,objectUrl='',retryTimer=0,generation=0,lastFrame=Date.now();
 function retry(){if(!retryTimer)retryTimer=setTimeout(()=>{retryTimer=0;connect()},2000)}
@@ -45,7 +58,7 @@ async function connect(){
 }
 video.addEventListener('error',retry);video.addEventListener('ended',retry);
 video.addEventListener('canplay',()=>video.play().catch(()=>{video.muted=true;video.play().catch(()=>{})}));
-document.addEventListener('pointerdown',()=>{video.muted=false;video.play().catch(()=>{video.muted=true;video.play().catch(()=>{})})});
+document.addEventListener('pointerdown',()=>{if(brbAudioActive)return;video.muted=false;video.play().catch(()=>{video.muted=true;video.play().catch(()=>{})})});
 document.addEventListener('visibilitychange',()=>{if(!document.hidden)video.play().catch(()=>{video.muted=true;video.play().catch(()=>{})})});
 setInterval(()=>{if(Date.now()-lastFrame>15000)retry()},5000);
 connect();
