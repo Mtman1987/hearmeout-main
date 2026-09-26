@@ -185,11 +185,20 @@ export async function POST(request: NextRequest) {
       }
       const query = text(body?.query, 160);
       if (!query) return NextResponse.json({ error: 'A movie title is required' }, { status: 400 });
-      const options = (await searchWatchProviderOptions(query)).slice(0, 3).map((item) => ({
-        id: item.id,
-        title: item.title,
-        year: item.year || null,
-      }));
+      const seen = new Set<string>();
+      const options = (await searchWatchProviderOptions(query))
+        .filter((item) => {
+          const key = `${item.title.trim().toLowerCase()}:${item.year || ''}`;
+          if (seen.has(key)) return false;
+          seen.add(key);
+          return true;
+        })
+        .slice(0, 3)
+        .map((item) => ({
+          id: item.id,
+          title: item.title,
+          year: item.year || null,
+        }));
       return NextResponse.json({ success: true, action, query, options });
     }
 
