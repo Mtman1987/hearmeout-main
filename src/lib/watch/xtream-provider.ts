@@ -509,7 +509,7 @@ async function getM3uCatalog() {
 }
 
 async function fetchXtreamJson<T>(url: URL): Promise<T> {
-  const response = await fetch(url, { cache: 'no-store' });
+  const response = await fetch(url, { cache: 'no-store', signal: AbortSignal.timeout(20_000) });
   if (!response.ok) throw new Error(`Xtream API returned ${response.status}`);
   return response.json() as Promise<T>;
 }
@@ -544,15 +544,30 @@ async function getXtreamCatalog() {
   if (!hasXtreamConfig && !hasPlaylistConfig) return [];
   if (cachedStreams && cachedStreams.expiresAt > Date.now()) return cachedStreams.items;
 
+  let vodFailed = false;
   const [vod, live, series, playlist] = await Promise.all([
-    hasXtreamConfig ? fetchXtreamJson<XtreamStream[]>(playerApiUrl('get_vod_streams')).catch(() => []) : Promise.resolve([]),
-    hasXtreamConfig ? fetchXtreamJson<XtreamStream[]>(playerApiUrl('get_live_streams')).catch(() => []) : Promise.resolve([]),
-    hasXtreamConfig && isSeriesSearchEnabled() ? fetchXtreamJson<XtreamStream[]>(playerApiUrl('get_series')).catch(() => []) : Promise.resolve([]),
+    hasXtreamConfig ? fetchXtreamJson<XtreamStream[]>(playerApiUrl('get_vod_streams')).catch((error) => {
+      vodFailed = true;
+      console.error('[Xtream] VOD catalog lookup failed:', error instanceof Error ? error.message : 'unknown error');
+      return [];
+    }) : Promise.resolve([]),
+    hasXtreamConfig ? fetchXtreamJson<XtreamStream[]>(playerApiUrl('get_live_streams')).catch((error) => {
+      console.warn('[Xtream] Live catalog lookup failed:', error instanceof Error ? error.message : 'unknown error');
+      return [];
+    }) : Promise.resolve([]),
+    hasXtreamConfig && isSeriesSearchEnabled() ? fetchXtreamJson<XtreamStream[]>(playerApiUrl('get_series')).catch((error) => {
+      console.warn('[Xtream] Series catalog lookup failed:', error instanceof Error ? error.message : 'unknown error');
+      return [];
+    }) : Promise.resolve([]),
     getM3uCatalog().catch((error) => {
       console.error('[Xtream] M3U playlist search failed:', error);
       return [];
     }),
   ]);
+  if (vodFailed && !series.length && !playlist.length && !live.length) {
+    if (cachedStreams?.items.length) return cachedStreams.items;
+    throw new Error('Watch provider temporarily unavailable');
+  }
 
   const items = [
     ...series.map((stream) => toCatalogItem(stream, 'series')),
