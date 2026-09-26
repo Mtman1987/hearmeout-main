@@ -542,7 +542,7 @@ async function getXtreamCatalog() {
   const hasXtreamConfig = Boolean(getConfig());
   const hasPlaylistConfig = Boolean(getPlaylistUrl());
   if (!hasXtreamConfig && !hasPlaylistConfig) return [];
-  if (cachedStreams && cachedStreams.expiresAt > Date.now()) return cachedStreams.items;
+  if (cachedStreams?.items.length && cachedStreams.expiresAt > Date.now()) return cachedStreams.items;
 
   let vodFailed = false;
   const [vod, live, series, playlist] = await Promise.all([
@@ -576,7 +576,8 @@ async function getXtreamCatalog() {
     ...live.slice(0, 500).map((stream) => toCatalogItem(stream, 'live')),
   ].filter((item): item is XtreamCatalogItem => Boolean(item));
 
-  cachedStreams = { expiresAt: Date.now() + 5 * 60 * 1000, items };
+  if (items.length) cachedStreams = { expiresAt: Date.now() + 5 * 60 * 1000, items };
+  else if (cachedStreams?.items.length) return cachedStreams.items;
   return items;
 }
 
