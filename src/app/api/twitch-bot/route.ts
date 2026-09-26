@@ -361,10 +361,9 @@ function syncChannels(serverId: string, instance: BotInstance) {
     // Keep the existing primary creator channel behavior unchanged.
     if (primaryRoomId) newChannels.set('mtman1987', primaryRoomId);
 
-    // SpaceMountainLive is the permanent 24/7 Lounge command channel. Route it
-    // directly to the system Lounge room so !sr/!wr cannot fall through to a
-    // normal tenant/global media session.
-    newChannels.set(SPACEMOUNTAIN_LOUNGE_TWITCH_CHANNEL, SPACEMOUNTAIN_LOUNGE_ROOM_ID);
+    // StreamWeaver owns the Lounge's Twitch commands. HearMeOut must never
+    // join that channel under this server's token (which may be the owner).
+    newChannels.delete(SPACEMOUNTAIN_LOUNGE_TWITCH_CHANNEL);
 
     // Join the bot user's own channel if different
     if (primaryRoomId && tokens.username && tokens.username.toLowerCase() !== 'mtman1987') {
@@ -378,6 +377,14 @@ function syncChannels(serverId: string, instance: BotInstance) {
         if (user.data.twitchChannel) {
           newChannels.set(user.data.twitchChannel.toLowerCase(), room.id);
         }
+      }
+    }
+
+    // The owner's OAuth is for the owner's own chat only. A configured room
+    // must never turn it into a bot identity in somebody else's channel.
+    if (tokens.username.toLowerCase() === 'mtman1987') {
+      for (const channel of newChannels.keys()) {
+        if (channel !== 'mtman1987') newChannels.delete(channel);
       }
     }
 
@@ -410,6 +417,9 @@ function createMessageHandler(instance: BotInstance) {
     if (self || !instance.client) return;
 
     const channelName = target.replace('#', '').toLowerCase();
+    // Fail closed even if a stale subscription still receives a message.
+    if (channelName === SPACEMOUNTAIN_LOUNGE_TWITCH_CHANNEL
+      || (instance.tokens.username.toLowerCase() === 'mtman1987' && channelName !== 'mtman1987')) return;
     const targetRoomId = instance.channels.get(channelName);
     if (!targetRoomId) return;
 
@@ -638,7 +648,11 @@ export async function POST(req: NextRequest) {
     if (!inst) return NextResponse.json({ error: `No bot for server ${serverId}` }, { status: 500 });
     if (inst.client.readyState() !== 'OPEN') return NextResponse.json({ error: 'Not connected' }, { status: 500 });
 
-    const channel = searchParams.get('channel') || inst.tokens.username;
+    const channel = (searchParams.get('channel') || inst.tokens.username).replace(/^#/, '').toLowerCase();
+    if (channel === SPACEMOUNTAIN_LOUNGE_TWITCH_CHANNEL
+      || (inst.tokens.username.toLowerCase() === 'mtman1987' && channel !== 'mtman1987')) {
+      return NextResponse.json({ error: 'This bot identity cannot send to that channel' }, { status: 403 });
+    }
     try {
       if (!inst.channels.has(channel.toLowerCase())) await inst.client.join(channel);
       await inst.client.say(channel, `🤖 HearMeOut bot check — alive! (${new Date().toLocaleTimeString()})`);
