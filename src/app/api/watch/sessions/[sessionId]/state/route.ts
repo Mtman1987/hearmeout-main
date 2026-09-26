@@ -1,6 +1,5 @@
 import { NextResponse } from 'next/server';
-import { controlWatchSession, getPublicWatchSession, getResolvedWatchSession } from '@/lib/watch-request-service';
-import { SPACEMOUNTAIN_LOUNGE_MUSIC_SESSION_ID } from '@/lib/spacemountain-lounge';
+import { getPublicWatchSession, getResolvedWatchSession } from '@/lib/watch-request-service';
 import { getDjWorkerUrl } from '@/lib/dj-worker-config';
 import { getDjWorkerRequestHeaders } from '@/lib/dj-worker-auth';
 import { isValidVideoId } from '@/lib/validate-video-id';
