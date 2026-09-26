@@ -39,6 +39,8 @@ const PUBLIC_PREFIXES = [
   '/api/spotlight-media/',
   '/lounge-media',
   '/api/lounge-media/',
+  // Exactly four channel theme tracks are public for the unattended BRB overlay.
+  '/api/lounge/theme-music',
   '/_next/',
   '/favicon.ico',
 ];
