@@ -201,6 +201,7 @@ export default function OverlayPage() {
   const embeddedProgressBaselineRef = useRef<number | null>(null);
   const nativeProgressBaselineRef = useRef<number | null>(null);
   const lastEmbeddedPlaybackKeyRef = useRef('');
+  const lastNativePlaybackKeyRef = useRef('');
   const volumeRef = useRef(initialVolume);
   const mutedRef = useRef(requestedMuted ?? false);
 
@@ -372,10 +373,20 @@ export default function OverlayPage() {
     const drift = Math.abs((video.currentTime || 0) - remotePosition);
     applyingRemoteState.current = true;
 
-    // The canonical broadcast player should play saved songs continuously.
-    // Repeated wall-clock seeks make a buffered MP3 audibly jump or stutter.
-    if (nextState.current.item?.metadata?.provider !== 'offline' && drift > 2.5 && Number.isFinite(remotePosition)) {
-      video.currentTime = remotePosition;
+    // Apply a seek only when the authoritative playback position changes
+    // (new request, resume, or explicit seek). While an HLS source buffers,
+    // chasing the wall clock every poll prevents its first frame from loading.
+    const playbackKey = [
+      nextState.current.requestId,
+      nextState.playback.position,
+      nextState.playback.updatedAt,
+    ].join(':');
+    if (nextState.current.item?.metadata?.provider !== 'offline'
+      && video.readyState >= 1
+      && playbackKey !== lastNativePlaybackKeyRef.current
+      && Number.isFinite(remotePosition)) {
+      lastNativePlaybackKeyRef.current = playbackKey;
+      if (drift > 2.5) video.currentTime = remotePosition;
     }
 
     if (nextState.playback.status === 'playing' && video.paused) {
@@ -511,6 +522,7 @@ export default function OverlayPage() {
     nativeProgressBaselineRef.current = null;
     setRenderingHealthy(false);
     lastEmbeddedPlaybackKeyRef.current = '';
+    lastNativePlaybackKeyRef.current = '';
 
     if (offlineBlobUrlRef.current) {
       URL.revokeObjectURL(offlineBlobUrlRef.current);
