@@ -1,9 +1,39 @@
 export function renderLoungePlayer() {
-  return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>SpaceMountain Lounge live view</title><style>html,body,video{margin:0;width:100%;height:100%;overflow:hidden;background:#000}video{display:block;object-fit:contain}</style></head><body><video id="player" autoplay playsinline></video><script>
+  return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>SpaceMountain Lounge live view</title><style>html,body,video{margin:0;width:100%;height:100%;overflow:hidden;background:#000}video{display:block;object-fit:contain}</style></head><body><video id="player" autoplay playsinline></video><audio id="theme" preload="auto"></audio><script>
 const video=document.getElementById('player');
+const theme=document.getElementById('theme');
+const themeTracks=[
+ '/api/offline-music?id=c3BhY2Vtb3VudGFpbmxpdmUvc3BtdC5tcDM',
+ '/api/offline-music?id=c3BhY2Vtb3VudGFpbmxpdmUvc3BtdDIubXAz',
+ '/api/offline-music?id=c3BhY2Vtb3VudGFpbmxpdmUvc3BtdDMubXAz',
+ '/api/offline-music?id=c3BhY2Vtb3VudGFpbmxpdmUvc3BtdDQubXAz'
+];
+let themeIndex=0,themeFailures=0,themeActive=false;
+theme.src=themeTracks[0];
+function playTheme(){if(themeActive)theme.play().catch(error=>console.warn('[Lounge] Theme autoplay unavailable:',error))}
+function advanceTheme(failed){
+ if(!themeActive)return;
+ themeFailures=failed?themeFailures+1:0;
+ if(themeFailures>=themeTracks.length){themeActive=false;theme.pause();return}
+ themeIndex=(themeIndex+1)%themeTracks.length;
+ theme.src=themeTracks[themeIndex];
+ playTheme();
+}
+theme.addEventListener('ended',()=>advanceTheme(false));
+theme.addEventListener('error',()=>advanceTheme(true));
+theme.addEventListener('playing',()=>{themeFailures=0});
+function setThemeActive(active){
+ if(themeActive===active)return;
+ themeActive=active;
+ if(active){themeFailures=0;playTheme()}else theme.pause();
+}
 video.volume=.85;video.muted=false;
 let groupLevel=.85,sourceVolume=1,sourceMuted=false,brbActive=false;
-function applyBroadcastVolume(){video.volume=groupLevel*sourceVolume;video.muted=sourceMuted||brbActive}
+function applyBroadcastVolume(){
+ const volume=groupLevel*sourceVolume;
+ video.volume=volume;video.muted=sourceMuted||brbActive;
+ theme.volume=volume;theme.muted=sourceMuted;
+}
 window.addEventListener('message',(event)=>{
  if(event.source!==window.parent||event.origin!=='https://spmt.live'||event.data?.type!=='spmt.obspmt.audio')return;
  const level=Number(event.data.volume);
@@ -13,7 +43,9 @@ window.addEventListener('message',(event)=>{
 window.addEventListener('message',(event)=>{
  if(event.source!==window.parent||event.origin!=='https://spmt.live'
   ||event.data?.type!=='spmt-lounge-brb-audio'||typeof event.data.active!=='boolean')return;
- brbActive=event.data.active;applyBroadcastVolume();
+ brbActive=event.data.active;
+ setThemeActive(brbActive&&event.data.mode==='gif');
+ applyBroadcastVolume();
 });
 // This is the OBS browser source. Twitch viewers adjust their own local
 // volume; the one broadcast mix is applied here before OBS sends it out.
