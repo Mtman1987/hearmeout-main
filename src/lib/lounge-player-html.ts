@@ -28,9 +28,9 @@ function setThemeActive(active){
  if(active){themeFailures=0;playTheme()}else theme.pause();
 }
 video.volume=.85;video.muted=false;
-let groupLevel=.85,sourceVolume=1,sourceMuted=false,brbActive=false;
+let groupLevel=.85,masterLevel=1,sourceVolume=1,sourceMuted=false,brbActive=false;
 function applyBroadcastVolume(){
- const volume=groupLevel*sourceVolume;
+ const volume=groupLevel*masterLevel*sourceVolume;
  video.volume=volume;video.muted=sourceMuted||brbActive;
  theme.volume=volume;theme.muted=sourceMuted;
 }
@@ -55,7 +55,10 @@ async function refreshBroadcastMix(){
   const response=await fetch('https://streamweaver-new.fly.dev/api/lounge/audio-mix',{cache:'no-store'});
   if(!response.ok)return;
   const mix=await response.json(),level=Number(mix?.levels?.[mixOutput]);
-  if(Number.isInteger(level)&&level>=1&&level<=100){groupLevel=level/100;applyBroadcastVolume()}
+  const all=mix?.levels?.all===undefined?100:Number(mix.levels.all);
+  if(Number.isInteger(level)&&level>=0&&level<=100&&Number.isInteger(all)&&all>=0&&all<=100){
+   groupLevel=level/100;masterLevel=all/100;applyBroadcastVolume();
+  }
  }catch{}
 }
 refreshBroadcastMix();setInterval(refreshBroadcastMix,3000);
