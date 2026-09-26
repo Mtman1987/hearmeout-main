@@ -77,6 +77,14 @@ async function api(path: string) {
   return response.json();
 }
 
+function mediaRuntimeSeconds(value: unknown) {
+  const text = String(value || '').toLowerCase();
+  const hours = Number(text.match(/(\d+(?:\.\d+)?)\s*h/)?.[1] || 0);
+  const minutes = Number(text.match(/(\d+(?:\.\d+)?)\s*m/)?.[1] || 0);
+  const seconds = Number(text.match(/(\d+(?:\.\d+)?)\s*s/)?.[1] || 0);
+  return hours * 3600 + minutes * 60 + seconds;
+}
+
 function playbackPosition(playback?: WatchPlayback) {
   if (!playback) return 0;
   if (playback.status !== 'playing') return playback.position || 0;
@@ -608,9 +616,9 @@ export default function OverlayPage() {
           setMediaStatus('Failed to load HLS player');
           console.error('[Overlay] Failed to load HLS player', error);
         });
-    } else if (item?.metadata?.provider === 'offline') {
-      // Fetch the entire saved MP3 before it starts. Once decoded, playback
-      // cannot be interrupted by network requests for later byte ranges.
+    } else if (item?.metadata?.provider === 'offline' || (item?.type === 'music' && musicPlaybackMode === 'audio')) {
+      // Fetch the complete saved song before starting playback. Once loaded,
+      // later byte-range requests cannot interrupt the audio fallback.
       const playbackKey = `${activeBundle.sessionId}:${requestId}:${effectivePlaybackUrl}`;
       void fetch(effectivePlaybackUrl, { cache: 'force-cache' })
         .then((response) => {
@@ -804,9 +812,26 @@ export default function OverlayPage() {
             if (!applyingRemoteState.current) setMediaStatus('Overlay media paused');
           }}
           onEnded={() => {
+            const video = videoRef.current;
+            const requestId = activeState?.current?.requestId;
             nativeProgressBaselineRef.current = null;
             setRenderingHealthy(false);
+            const expectedDuration = mediaRuntimeSeconds(currentItem?.runtime);
+            if (currentItem?.type === 'music' && expectedDuration > 0
+              && Number(video?.currentTime || 0) < expectedDuration - 3) {
+              setMediaStatus('Song video ended early; trying the saved audio');
+              if (musicPlaybackMode === 'video' && musicModeOptions(currentItem).audio) setMusicPlaybackMode('audio');
+              return;
+            }
             setMediaStatus('Overlay media ended');
+            // The dedicated clean Lounge source reports an actual end. Other
+            // room windows remain passive, and the request ID guards races.
+            if (cleanMode && roomId === 'system-spacemountainlive-lounge'
+              && activeBundle.lane === 'music' && requestId
+              && activeState?.playback.status === 'playing') {
+              const url = `/api/watch/sessions/${encodeURIComponent(activeBundle.sessionId)}/quick-control?action=next&expectedRequestId=${encodeURIComponent(requestId)}&platform=room&format=json`;
+              void fetch(url, { cache: 'no-store' }).catch((error) => console.warn('[Overlay] song end advance failed', error));
+            }
           }}
           onError={() => {
             const error = videoRef.current?.error;
