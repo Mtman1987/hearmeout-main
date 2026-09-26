@@ -1338,6 +1338,25 @@ function waitForWatchHlsFile(streamId, fileName, timeoutMs = 10000) {
 
 function ensureWatchHls(streamId, sourceUrl) {
   const { clean, dir, indexPath } = watchHlsPaths(streamId);
+  // An upstream connection can end cleanly after only part of a movie.
+  // Compare the prepared rendition with a completed original before reusing it.
+  if (clean.endsWith('-multiaudio-v3') && !watchHlsJobs.has(clean)) {
+    const previousDir = join(WATCH_HLS_DIR, clean.replace(/-multiaudio-v3$/, '-multiaudio-v2'));
+    const previousVideo = join(previousDir, 'stream_video.m3u8');
+    const preparedVideo = join(dir, 'stream_video.m3u8');
+    if (existsSync(previousVideo) && existsSync(preparedVideo)) {
+      const oldPlaylist = readFileSync(previousVideo, 'utf8');
+      const newPlaylist = readFileSync(preparedVideo, 'utf8');
+      if (oldPlaylist.includes('#EXT-X-ENDLIST') && newPlaylist.includes('#EXT-X-ENDLIST')) {
+        const length = (playlist) => Array.from(playlist.matchAll(/#EXTINF:([0-9.]+)/g))
+          .reduce((seconds, match) => seconds + Number(match[1]), 0);
+        if (length(newPlaylist) + 12 < length(oldPlaylist)) {
+          console.warn(`[WatchHLS] Discarding incomplete movie rendition ${clean}`);
+          rmSync(dir, { recursive: true, force: true });
+        }
+      }
+    }
+  }
   if (hasUsableWatchHlsIndex(dir, indexPath)) return Promise.resolve();
   if (watchHlsJobs.has(clean)) return watchHlsJobs.get(clean);
   if (!sourceUrl) return Promise.reject(new Error('Missing source URL for HLS conversion'));
