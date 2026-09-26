@@ -19,3 +19,20 @@ export async function spotlightAction(action: 'start' | 'consent') {
     return Response.json({ error: error instanceof Error ? error.message : String(error) }, { status: 502 });
   }
 }
+
+
+export async function spotlightStatus() {
+  try {
+    const upstream = await spotlightWorker('status', 'GET', AbortSignal.timeout(10000));
+    const data = await upstream.json().catch(() => ({}));
+    return Response.json(data, {
+      status: upstream.status,
+      headers: { 'cache-control': 'no-store, max-age=0' },
+    });
+  } catch (error) {
+    return Response.json(
+      { ready: false, sourceHealthy: false, error: error instanceof Error ? error.message : String(error) },
+      { status: 502, headers: { 'cache-control': 'no-store, max-age=0' } },
+    );
+  }
+}
