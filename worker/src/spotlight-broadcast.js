@@ -184,12 +184,15 @@ function createSpotlightBroadcast({ chromiumPath, puppeteer, spotlightEndpoint =
           recoveryCount: Number(window.spotlightSource?.recoveryCount || 0),
           lastRecoveryReason: window.spotlightSource?.lastRecoveryReason || '',
           quality: window.spotlightSource?.quality || '',
+          playing: window.spotlightSource?.playing === true,
+          lastPlayingAt: Number(window.spotlightSource?.lastPlayingAt || 0),
         }));
         activated = state.activated; currentLogin = state.currentLogin; if (state.error) failure = String(state.error);
-        return { configured: true, active, activated, currentLogin, ready: active && activated && fragmentsSent > 0 && Date.now() - lastFragmentAt < 15000, fragmentsSent, error: failure || null, ...state };
+        const sourceHealthy = state.playing && state.lastPlayingAt > 0 && Date.now() - state.lastPlayingAt < 15000 && state.stalledForMs < 12000;
+        return { configured: true, active, activated, currentLogin, ready: active && activated && sourceHealthy && fragmentsSent > 0 && Date.now() - lastFragmentAt < 15000, sourceHealthy, fragmentsSent, error: failure || null, ...state };
       } catch {}
     }
-    return { configured: true, active, activated, currentLogin, ready: active && activated && fragmentsSent > 0 && Date.now() - lastFragmentAt < 15000, fragmentsSent, error: failure || null };
+    return { configured: true, active, activated, currentLogin, ready: false, sourceHealthy: false, fragmentsSent, error: failure || null };
   }
 
   async function cleanup(removeRoot = true) {
@@ -251,7 +254,7 @@ function framePacket(payload) {
 
 function sourcePage(endpoint) {
   return `<!doctype html><html><head><meta charset="utf-8"><style>html,body,#player,#spotlight-twitch-player,#player>div,#player iframe{margin:0;width:100%;height:100%;min-width:100%;min-height:100%;overflow:hidden;background:#000;box-sizing:border-box}iframe{display:block;border:0}#start{position:fixed;z-index:5;left:50%;top:50%;transform:translate(-50%,-50%);padding:18px 28px;font:700 18px system-ui}</style></head><body><div id="player"></div><button id="start" type="button">Start Spotlight</button><script src="https://player.twitch.tv/js/embed/v1.js"></script><script>
-window.spotlightSource={ready:false,activated:false,currentLogin:'',error:'',fps:0,bufferSize:0,playbackRate:0,skippedFrames:0,stalledForMs:0,recoveryCount:0,lastRecoveryReason:'',quality:''};
+window.spotlightSource={ready:false,playing:false,activated:false,currentLogin:'',error:'',fps:0,bufferSize:0,playbackRate:0,skippedFrames:0,stalledForMs:0,recoveryCount:0,lastRecoveryReason:'',quality:'',lastPlayingAt:0};
 let player=null,currentLogin='',activated=false,switching=false,unhealthySince=0,lastRecoveryAt=0;
 const endpoint=${JSON.stringify(endpoint)},button=document.getElementById('start');
 
@@ -299,10 +302,10 @@ function resetHealth(){
 function bindPlayerEvents(nextPlayer){
  nextPlayer.addEventListener(Twitch.Player.READY,()=>{window.spotlightSource.ready=true;switching=false;resetHealth();chooseStableQuality();playBootstrap()});
  nextPlayer.addEventListener(Twitch.Player.PLAY,()=>{switching=false;unhealthySince=0;audio()});
- nextPlayer.addEventListener(Twitch.Player.PLAYING,()=>{switching=false;unhealthySince=0;chooseStableQuality();audio();setTimeout(audio,250);setTimeout(audio,1000)});
- nextPlayer.addEventListener(Twitch.Player.PAUSE,()=>{if(switching)setTimeout(playBootstrap,300)});
- nextPlayer.addEventListener(Twitch.Player.PLAYBACK_BLOCKED,()=>recover('playback-blocked'));
- nextPlayer.addEventListener(Twitch.Player.OFFLINE,()=>{currentLogin='';window.spotlightSource.currentLogin=''});
+ nextPlayer.addEventListener(Twitch.Player.PLAYING,()=>{switching=false;unhealthySince=0;window.spotlightSource.playing=true;window.spotlightSource.lastPlayingAt=Date.now();chooseStableQuality();audio();setTimeout(audio,250);setTimeout(audio,1000)});
+ nextPlayer.addEventListener(Twitch.Player.PAUSE,()=>{window.spotlightSource.playing=false;if(switching)setTimeout(playBootstrap,300)});
+ nextPlayer.addEventListener(Twitch.Player.PLAYBACK_BLOCKED,()=>{window.spotlightSource.playing=false;recover('playback-blocked')});
+ nextPlayer.addEventListener(Twitch.Player.OFFLINE,()=>{window.spotlightSource.playing=false;currentLogin='';window.spotlightSource.currentLogin=''});
 }
 
 function createPlayer(login){
@@ -389,10 +392,13 @@ function watchPlayback(){
  const healthy=(fpsAvailable&&fps>=12)||(bitrateAvailable&&playbackRate>=100);
  if(healthy){
   unhealthySince=0;
+  window.spotlightSource.playing=true;
+  window.spotlightSource.lastPlayingAt=now;
   window.spotlightSource.stalledForMs=0;
   return;
  }
 
+ window.spotlightSource.playing=false;
  if(!unhealthySince)unhealthySince=now;
  const stalledFor=now-unhealthySince;
  window.spotlightSource.stalledForMs=stalledFor;
