@@ -686,8 +686,9 @@ export async function findXtreamCatalogItemById(itemId: string | null | undefine
       const url = playerApiUrl('get_vod_info');
       url.searchParams.set('vod_id', vodId);
       const detail = await fetchXtreamJson<{ movie_data?: XtreamStream }>(url);
-      if (String(detail.movie_data?.stream_id || '') === vodId) {
-        const item = toCatalogItem(detail.movie_data, 'vod');
+      const movieData = detail.movie_data;
+      if (movieData && String(movieData.stream_id || '') === vodId) {
+        const item = toCatalogItem(movieData, 'vod');
         if (item) return item;
       }
     } catch (error) {
