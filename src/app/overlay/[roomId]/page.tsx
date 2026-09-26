@@ -194,6 +194,7 @@ export default function OverlayPage() {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
   const hlsRef = useRef<any>(null);
+  const offlineBlobUrlRef = useRef<string | null>(null);
   const currentRequestIdRef = useRef<string | null>(null);
   const applyingRemoteState = useRef(false);
   const embeddedCurrentTimeRef = useRef(0);
@@ -371,7 +372,9 @@ export default function OverlayPage() {
     const drift = Math.abs((video.currentTime || 0) - remotePosition);
     applyingRemoteState.current = true;
 
-    if (drift > 2.5 && Number.isFinite(remotePosition)) {
+    // The canonical broadcast player should play saved songs continuously.
+    // Repeated wall-clock seeks make a buffered MP3 audibly jump or stutter.
+    if (nextState.current.item?.metadata?.provider !== 'offline' && drift > 2.5 && Number.isFinite(remotePosition)) {
       video.currentTime = remotePosition;
     }
 
@@ -480,6 +483,10 @@ export default function OverlayPage() {
     const item = activeState?.current?.item;
     if (!item || !requestId) {
       currentRequestIdRef.current = null;
+      if (offlineBlobUrlRef.current) {
+        URL.revokeObjectURL(offlineBlobUrlRef.current);
+        offlineBlobUrlRef.current = null;
+      }
       setRenderingHealthy(false);
       setAudioTracks([]);
       setSelectedAudioTrack(0);
@@ -505,6 +512,10 @@ export default function OverlayPage() {
     setRenderingHealthy(false);
     lastEmbeddedPlaybackKeyRef.current = '';
 
+    if (offlineBlobUrlRef.current) {
+      URL.revokeObjectURL(offlineBlobUrlRef.current);
+      offlineBlobUrlRef.current = null;
+    }
     if (hlsRef.current) {
       hlsRef.current.destroy();
       hlsRef.current = null;
@@ -585,6 +596,33 @@ export default function OverlayPage() {
           setMediaStatus('Failed to load HLS player');
           console.error('[Overlay] Failed to load HLS player', error);
         });
+    } else if (item?.metadata?.provider === 'offline') {
+      // Fetch the entire saved MP3 before it starts. Once decoded, playback
+      // cannot be interrupted by network requests for later byte ranges.
+      const playbackKey = `${activeBundle.sessionId}:${requestId}:${effectivePlaybackUrl}`;
+      void fetch(effectivePlaybackUrl, { cache: 'force-cache' })
+        .then((response) => {
+          if (!response.ok) throw new Error(`Saved song unavailable: ${response.status}`);
+          return response.blob();
+        })
+        .then((blob) => {
+          const blobUrl = URL.createObjectURL(blob);
+          if (currentRequestIdRef.current !== playbackKey || !videoRef.current) {
+            URL.revokeObjectURL(blobUrl);
+            return;
+          }
+          offlineBlobUrlRef.current = blobUrl;
+          videoRef.current.src = blobUrl;
+          videoRef.current.load();
+          applyVolume();
+        })
+        .catch((error) => {
+          if (currentRequestIdRef.current !== playbackKey || !videoRef.current) return;
+          console.warn('[Overlay] Saved song prefetch failed; using original file URL', error);
+          videoRef.current.src = effectivePlaybackUrl;
+          videoRef.current.load();
+          applyVolume();
+        });
     } else {
       video.src = effectivePlaybackUrl;
       video.load();
@@ -600,6 +638,10 @@ export default function OverlayPage() {
     applyVolume,
     activeState,
   ]);
+
+  useEffect(() => () => {
+    if (offlineBlobUrlRef.current) URL.revokeObjectURL(offlineBlobUrlRef.current);
+  }, []);
 
   useEffect(() => {
     applyPlaybackState(activeState);
