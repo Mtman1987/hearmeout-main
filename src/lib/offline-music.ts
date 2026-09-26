@@ -19,6 +19,13 @@ export type SavedMusicTrack = {
   thumbnail?: string;
 };
 
+const CHANNEL_THEME_DURATIONS_MS: Record<string, number> = {
+  'spmt.mp3': 168144,
+  'spmt2.mp3': 186840,
+  'spmt3.mp3': 176520,
+  'spmt4.mp3': 169104,
+};
+
 export async function findOfflineMusicTrack(query: string): Promise<OfflineMusicTrack | null> {
   const workerUrl = getDjWorkerUrl();
   const needle = String(query || '').trim();
@@ -38,7 +45,8 @@ export async function findOfflineMusicTrack(query: string): Promise<OfflineMusic
       id: String(item.id),
       title: String(item.title || item.fileName || 'Offline song'),
       artist: String(item.artist || 'Offline Library'),
-      duration: Number(item.duration || 180000),
+      duration: CHANNEL_THEME_DURATIONS_MS[String(item.fileName || '').toLowerCase()]
+        ?? Number(item.duration || 180000),
       playbackUrl: String(item.playbackUrl),
       fileName: String(item.fileName || item.title || item.id),
     };
