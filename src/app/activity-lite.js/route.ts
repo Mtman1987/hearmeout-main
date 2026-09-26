@@ -931,6 +931,7 @@ async function loadMedia(item) {
   } else if (isHlsPlaybackUrl(playbackUrl) && window.Hls && window.Hls.isSupported()) {
     hls = new window.Hls({
       enableWorker: false,
+      startPosition: item.type === 'movie' ? 0 : -1,
       lowLatencyMode: false,
       backBufferLength: 30,
       manifestLoadingTimeOut: 60000,

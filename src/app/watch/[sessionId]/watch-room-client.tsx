@@ -785,7 +785,7 @@ export default function WatchRoomClient({ sessionId, activityMode = false, canPa
           .then(({ default: Hls }) => {
             if (cancelled) return;
             if (state?.current?.requestId === loadingRequestId && Hls.isSupported()) {
-              hlsRef.current = new Hls();
+              hlsRef.current = new Hls({ startPosition: item.type === 'movie' ? 0 : -1 });
               const updateAudioTracks = () => {
                 const tracks = (hlsRef.current?.audioTracks || []).map((track: any, index: number) => ({
                   index,

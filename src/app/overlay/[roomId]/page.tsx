@@ -572,6 +572,7 @@ export default function OverlayPage() {
           if (Hls.isSupported()) {
             hlsRef.current = new Hls({
               enableWorker: false,
+              startPosition: item.type === 'movie' ? 0 : -1,
               lowLatencyMode: false,
               backBufferLength: 30,
               manifestLoadingTimeOut: 60000,
