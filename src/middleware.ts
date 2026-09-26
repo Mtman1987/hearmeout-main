@@ -4,6 +4,7 @@ import { isActivityEntry, isPublicActivityRequest } from '@/lib/activity-access'
 
 const SPMT_BASE_URL = String(process.env.SPMT_BASE_URL || 'https://spmt.live').replace(/\/$/, '');
 const SPMT_COOKIE = 'hmo_spmt_session';
+const PUBLIC_THEME_IDS = new Set(['c3BhY2Vtb3VudGFpbmxpdmUvc3BtdC5tcDM', 'c3BhY2Vtb3VudGFpbmxpdmUvc3BtdDIubXAz', 'c3BhY2Vtb3VudGFpbmxpdmUvc3BtdDMubXAz', 'c3BhY2Vtb3VudGFpbmxpdmUvc3BtdDQubXAz']);
 
 const PUBLIC_PREFIXES = [
   '/login',
@@ -105,6 +106,11 @@ export async function middleware(request: NextRequest) {
       activity.pathname = '/activity';
       return NextResponse.rewrite(activity);
     }
+    return NextResponse.next();
+  }
+  // The public Lounge and chat audio player may load only these four channel themes.
+  if (pathname === '/api/offline-music' && request.method === 'GET'
+      && PUBLIC_THEME_IDS.has(request.nextUrl.searchParams.get('id') || '')) {
     return NextResponse.next();
   }
   // The .js entry can contain a private session id; do not let the generic
