@@ -102,7 +102,10 @@ function createLoungeBroadcast({ chromiumPath, puppeteer, sourceUrl }) {
         '-hide_banner', '-loglevel', 'error',
         '-thread_queue_size', '1024',
         '-f', 'x11grab', '-draw_mouse', '0', '-video_size', '1280x720', '-framerate', '30', '-i', ':' + displayNumber + '.0',
-        '-thread_queue_size', '1024',
+        // The lounge VM's legacy startup replaces the quoted literal '1024'
+        // with '64' in this file. Keep the audio input queue large enough to
+        // survive brief X11 or encoder stalls without dropping Pulse samples.
+        '-thread_queue_size', String(1024),
         '-f', 'pulse', '-sample_rate', '48000', '-channels', '2', '-i', 'lounge.monitor',
         '-map', '0:v:0', '-map', '1:a:0',
         '-vf', 'scale=854:480',
