@@ -8,23 +8,14 @@ export default function DirectLoungePlayer() {
   const videoRef = useRef<HTMLVideoElement>(null);
   const hlsRef = useRef<Hls | null>(null);
   const requestRef = useRef('');
-  const enableSoundRef = useRef<() => void>(() => {});
   const [movie, setMovie] = useState<Movie>({ active: false });
   const [playing, setPlaying] = useState(false);
-  const [soundBlocked, setSoundBlocked] = useState(false);
   useEffect(() => {
     let cancelled = false;
     let mix = .85, master = 1, source = 1, muted = false, brb = false, autoplayMuted = false;
     const video = videoRef.current!;
     const applyVolume = () => { video.volume = Math.min(1, mix * master * source); video.muted = muted || brb || autoplayMuted; };
     applyVolume();
-    enableSoundRef.current = () => {
-      autoplayMuted = false; applyVolume();
-      video.play().then(() => setSoundBlocked(false)).catch(() => {
-        autoplayMuted = true; applyVolume();
-        setSoundBlocked(true);
-      });
-    };
     const onMessage = (event: MessageEvent) => {
       if (event.source !== window.parent || event.origin !== 'https://spmt.live') return;
       if (event.data?.type === 'spmt.obspmt.audio') {
@@ -61,7 +52,7 @@ export default function DirectLoungePlayer() {
         // video moving silently there; the Restream browser may play with sound.
         if (reason?.name === 'NotAllowedError' && !cancelled) {
           autoplayMuted = true; applyVolume();
-          video.play().then(() => setSoundBlocked(true)).catch(() => {});
+          video.play().catch(() => {});
         }
       });
     };
@@ -126,8 +117,6 @@ export default function DirectLoungePlayer() {
   }, []);
   return <main style={{ position: 'fixed', inset: 0, background: '#000', overflow: 'hidden' }}>
     <video ref={videoRef} playsInline style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
-    {playing && soundBlocked && <button type="button" onClick={() => enableSoundRef.current()}
-      style={{ position: 'absolute', right: 14, top: 14, zIndex: 4, padding: '11px 18px', border: '2px solid #fff', borderRadius: 999, background: '#eb6b15', color: '#fff', font: '700 16px system-ui', cursor: 'pointer' }}>Enable movie sound</button>}
     {!playing && <div role="status" style={{ position: 'absolute', inset: 0, display: 'grid', placeItems: 'center', padding: '5%', color: '#fff', background: 'radial-gradient(circle,#20153d,#090919 65%,#000)', font: '600 clamp(18px,3vw,32px) system-ui', textAlign: 'center' }}>
       <div style={{ width: 'min(84%,650px)', padding: '5%', border: '2px solid #55d7ed', borderRadius: 24, boxShadow: '0 0 32px #339fd080', background: '#0d1739' }}>
         <div style={{ color: '#77ddf0', fontSize: '65%', letterSpacing: '.12em', textTransform: 'uppercase' }}>Preparing your movie</div>
