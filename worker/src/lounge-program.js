@@ -155,9 +155,14 @@ async function request(body) {
 
 function control(body) {
   const stored = readState();
-  const laneName = body.lane === 'movie' ? 'movie' : 'music';
+  const requestedLane = body.lane === 'movie' ? 'movie' : 'music';
+  const laneName = body.control === 'next-active' && !body.targetLane
+    ? (stored.movie.current && stored.movie.playback.status === 'playing' ? 'movie'
+      : stored.music.current && stored.music.playback.status === 'playing' ? 'music'
+        : stored[requestedLane].current ? requestedLane : stored.movie.current ? 'movie' : requestedLane)
+    : body.targetLane === 'movie' ? 'movie' : requestedLane;
   const lane = stored[laneName];
-  const action = String(body.control || '');
+  const action = body.control === 'next-active' ? 'next' : String(body.control || '');
   if (action === 'next') lane.current = lane.queue.shift() || null;
   else if (action === 'clear') { lane.current = null; lane.queue = []; }
   else if (action === 'play' || action === 'pause') lane.playback.status = lane.current ? (action === 'play' ? 'playing' : 'paused') : 'idle';
@@ -172,7 +177,7 @@ function control(body) {
   lane.playback.position = 0;
   lane.playback.updatedAt = Date.now();
   save();
-  return { success: true, action: 'hmo.media.control', session: publicLane(lane) };
+  return { success: true, action: 'hmo.media.control', lane: laneName, session: publicLane(lane), program: program() };
 }
 
 function source(movie) {
