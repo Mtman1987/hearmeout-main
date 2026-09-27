@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>SpaceMountain Lounge media</title>
+<style>html,body,video{margin:0;width:100%;height:100%;overflow:hidden;background:#000}video{display:block;object-fit:contain}#status{position:absolute;inset:0;display:grid;place-items:center;padding:6%;box-sizing:border-box;background:radial-gradient(circle,#20153d,#090919 65%,#000);color:#fff;text-align:center;font:600 clamp(16px,2.5vw,30px) system-ui}#status[hidden]{display:none}</style></head>
+<body><video id="player" autoplay playsinline></video><div id="status" role="status">Connecting to Lounge worker</div>
+<script src="https://hmo-dj-worker.fly.dev:4444/lounge/hls.js"></script>
+<script>
+(() => {
+  const worker = 'https://hmo-dj-worker.fly.dev:4444';
+  const video = document.getElementById('player');
+  const status = document.getElementById('status');
+  let hls, selection = '', mix = .85, master = 1, source = 1, programLevel = 1, muted = false, programMuted = false, brb = false, epoch = 0;
+  function volume(){video.volume = Math.min(1, mix * master * source * programLevel);video.muted = muted || programMuted || brb;}
+  volume();
+  window.addEventListener('message', event => {
+    if (event.source !== window.parent || event.origin !== 'https://spmt.live') return;
+    if (event.data?.type === 'spmt.obspmt.audio') {
+      const level = Number(event.data.volume);
+      if (Number.isFinite(level) && level >= 0 && level <= 1 && typeof event.data.muted === 'boolean') {
+        source = level; muted = event.data.muted; volume();
+      }
+    }
+    if (event.data?.type === 'spmt-lounge-brb-audio' && typeof event.data.active === 'boolean') {
+      brb = event.data.active; volume();
+    }
+  });
+  async function refreshVolume(){
+    try {
+      const response = await fetch('https://streamweaver-new.fly.dev/api/lounge/audio-mix', {cache:'no-store'});
+      if (!response.ok) return;
+      const levels = (await response.json()).levels;
+      const media = Number(levels?.media), all = Number(levels?.all ?? 100);
+      if (media >= 0 && media <= 100 && all >= 0 && all <= 100) {mix = media/100;master = all/100;volume();}
+    } catch {}
+  }
+  function ahead(){
+    for (let i=0;i<video.buffered.length;i++) if (video.buffered.start(i)<=video.currentTime+.2 && video.buffered.end(i)>video.currentTime)
+      return video.buffered.end(i)-video.currentTime;
+    return 0;
+  }
+  function resume(){if(video.paused && ahead()>=8)video.play().catch(()=>{});}
+  video.addEventListener('canplay',resume);
+  video.addEventListener('progress',resume);
+  video.addEventListener('timeupdate',resume);
+  video.addEventListener('playing',()=>{status.hidden=true;});
+  video.addEventListener('waiting',()=>{if(ahead()<2)video.pause();});
+  async function poll(){
+    try {
+      const response = await fetch(worker+'/lounge/media/program',{cache:'no-store'});
+      if (!response.ok) throw Error('Worker returned '+response.status);
+      const program = await response.json();
+      const lane = program.movie?.current && program.movie.playback?.status === 'playing' ? 'movie'
+        : program.music?.current && program.music.playback?.status === 'playing' ? 'music' : '';
+      programLevel = lane ? Math.max(0, Math.min(1, Number(program[lane].playback?.volume ?? 100) / 100)) : 1;
+      programMuted = lane ? !!program[lane].playback?.muted : false;
+      volume();
+      const item = lane && program[lane].current;
+      const next = item ? lane+':'+item.requestId : '';
+      if (!next) { if (selection) { selection='';hls?.destroy();video.pause();video.removeAttribute('src');video.load();} status.hidden=false;status.textContent='Waiting for a Lounge request';return; }
+      if (next === selection) return;
+      if (lane === 'movie') {
+        const info = await(await fetch(worker+'/lounge/direct/status',{cache:'no-store'})).json();
+        if (!info.ready || info.requestId !== item.requestId) {status.hidden=false;status.textContent=info.error || 'Preparing '+item.item.title;return;}
+      }
+      selection=next;const myEpoch=++epoch;status.hidden=false;status.textContent='Buffering '+item.item.title;
+      hls?.destroy();video.pause();video.removeAttribute('src');video.load();
+      const url=worker+(lane==='movie'?'/lounge/direct/hls/index.m3u8':'/lounge/music/hls/index.m3u8');
+      if (window.Hls?.isSupported()) {
+        hls=new Hls({startPosition:-1,maxBufferLength:45,maxMaxBufferLength:90,lowLatencyMode:false});
+        hls.on(Hls.Events.ERROR,(_event,detail)=>{if(detail.fatal && epoch===myEpoch){hls.destroy();hls=null;selection='';status.hidden=false;status.textContent='Retrying '+item.item.title;}});
+        hls.attachMedia(video);hls.on(Hls.Events.MEDIA_ATTACHED,()=>hls.loadSource(url));
+      } else if (video.canPlayType('application/vnd.apple.mpegurl')) video.src=url;
+      else {selection='';status.textContent='Media player unavailable';}
+      volume();resume();
+    } catch {status.hidden=false;status.textContent='Connecting to Lounge worker';}
+  }
+  void poll();void refreshVolume();setInterval(poll,2500);setInterval(refreshVolume,3000);
+})();
+</script></body></html>
