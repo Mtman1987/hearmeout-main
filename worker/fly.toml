@@ -1,6 +1,12 @@
 app = "hmo-dj-worker"
 primary_region = "iad"
 
+# Each role has its own Machine and CPU allocation in this one Fly app.
+[processes]
+  dj = "/bin/sh /app/scripts/run-role.sh dj"
+  lounge = "/bin/sh /app/scripts/run-role.sh lounge"
+  spotlight = "/bin/sh /app/scripts/run-role.sh spotlight"
+
 [build]
   dockerfile = "Dockerfile"
 
@@ -14,20 +20,27 @@ primary_region = "iad"
   WATCH_HLS_LIST_SIZE = "50"
   WATCH_HLS_SEGMENT_SECONDS = "6"
   APP_URL = "https://hearmeout-main.fly.dev"
-  HMO_WORKER_ROLE = "dj"
   NEXT_PUBLIC_LIVEKIT_URL = "wss://streamweaver-7atx04ct.livekit.cloud"
 
-[mounts]
+[[mounts]]
   source = "data"
   destination = "/data"
   initial_size = "10gb"
+  processes = ["dj"]
+
+[[mounts]]
+  source = "lounge_data"
+  destination = "/data"
+  initial_size = "8gb"
+  processes = ["lounge"]
 
 [http_service]
+  processes = ["dj"]
   internal_port = 3002
   force_https = true
-  auto_stop_machines = false
+  auto_stop_machines = "stop"
   auto_start_machines = true
-  min_machines_running = 1
+  min_machines_running = 0
 
   [[http_service.checks]]
     interval = "30s"
@@ -36,7 +49,50 @@ primary_region = "iad"
     method = "GET"
     path = "/health"
 
+# Fly routes each process group on a different external port. Reusing 443
+# would mix the three Machines and wake the DJ for lounge viewers.
+[[services]]
+  processes = ["lounge"]
+  internal_port = 3002
+  protocol = "tcp"
+  auto_stop_machines = "off"
+  auto_start_machines = true
+  min_machines_running = 1
+  [[services.ports]]
+    port = 4444
+    handlers = ["tls", "http"]
+  [[services.http_checks]]
+    interval = "15s"
+    timeout = "5s"
+    grace_period = "30s"
+    method = "GET"
+    path = "/health"
+
+[[services]]
+  processes = ["spotlight"]
+  internal_port = 3002
+  protocol = "tcp"
+  auto_stop_machines = "off"
+  auto_start_machines = true
+  min_machines_running = 1
+  [[services.ports]]
+    port = 4445
+    handlers = ["tls", "http"]
+  [[services.http_checks]]
+    interval = "15s"
+    timeout = "5s"
+    grace_period = "30s"
+    method = "GET"
+    path = "/health"
+
 [[vm]]
+  processes = ["dj"]
   memory = "4gb"
   cpu_kind = "shared"
-  cpus = 4
+  cpus = 1
+
+[[vm]]
+  processes = ["lounge", "spotlight"]
+  memory = "4gb"
+  cpu_kind = "shared"
+  cpus = 1

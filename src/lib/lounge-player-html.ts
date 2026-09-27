@@ -107,7 +107,7 @@ async function connect(){
    const segment=queue.shift();queuedBytes-=segment.byteLength;buffer.appendBuffer(segment);
   }
   buffer.addEventListener('updateend',()=>{pump();resumePlayback()});buffer.addEventListener('error',retry);
-  const response=await fetch('/api/lounge-media/live.mp4?viewer='+Date.now(),{cache:'no-store',signal:controller.signal});
+  const response=await fetch('https://hmo-dj-worker.fly.dev:4444/lounge/live.mp4?viewer='+Date.now(),{cache:'no-store',signal:controller.signal});
   if(!response.ok||!response.body)throw Error('Lounge source unavailable');
   const reader=response.body.getReader();lastFrame=Date.now();
   while(id===generation){

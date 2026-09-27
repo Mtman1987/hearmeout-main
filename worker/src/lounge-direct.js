@@ -4,7 +4,7 @@ const { mkdirSync, existsSync, readFileSync, statSync, createReadStream } = requ
 const { join } = require('node:path');
 const probe = promisify(execFile);
 
-function createDirectLounge({ appUrl, workerSecret, root }) {
+function createDirectLounge({ program, sourceForMovie, root }) {
   let current = null;
   let process = null;
   let error = '';
@@ -15,13 +15,11 @@ function createDirectLounge({ appUrl, workerSecret, root }) {
   mkdirSync(folder, { recursive: true });
 
   async function selectedMovie() {
-    const response = await fetch(appUrl + '/api/lounge-media/program', { cache: 'no-store', signal: AbortSignal.timeout(10000) });
-    if (!response.ok) throw Error('Could not read the Lounge movie selection');
-    const movie = (await response.json()).movie;
+    const movie = program().movie;
     if (!movie?.current || movie.playback?.status !== 'playing') return null;
     const match = String(movie.current.item?.playbackUrl || '').match(/^\/api\/watch\/xtream\/hls\/(vod|series)-(\d+)\/index\.m3u8$/);
     if (!match) return null;
-    return { requestId: movie.current.requestId, title: movie.current.item.title, requester: movie.current.requestedBy?.username || '', kind: match[1], id: match[2] };
+    return { requestId: movie.current.requestId, title: movie.current.item.title, requester: movie.current.requestedBy?.username || '', kind: match[1], id: match[2], selection: movie };
   }
 
   async function start(movie) {
@@ -29,11 +27,7 @@ function createDirectLounge({ appUrl, workerSecret, root }) {
     process = null; error = '';
     const dir = join(folder, movie.requestId.replace(/[^a-zA-Z0-9_-]/g, ''));
     mkdirSync(dir, { recursive: true });
-    const sourceResponse = await fetch(appUrl + '/api/watch/xtream/source/' + movie.kind + '/' + movie.id, {
-      headers: { Authorization: 'Bearer ' + workerSecret }, signal: AbortSignal.timeout(15000),
-    });
-    const source = await sourceResponse.json().catch(() => null);
-    if (!sourceResponse.ok || !/^https?:\/\//.test(source?.url || '')) throw Error('Movie source is unavailable');
+    const source = { url: sourceForMovie(movie.selection) };
 
     let audioIndex = '0:a:0?';
     let videoCodec = 'h264';

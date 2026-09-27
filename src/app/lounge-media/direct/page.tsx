@@ -2,7 +2,7 @@
 import { useEffect, useRef, useState } from 'react';
 import Hls from 'hls.js';
 
-const worker = 'https://hmo-lounge-worker.fly.dev';
+const worker = 'https://hmo-dj-worker.fly.dev:4444';
 type Movie = { active: boolean; requestId?: string; title?: string; requester?: string; ready?: boolean; bufferedSeconds?: number; error?: string | null };
 export default function DirectLoungePlayer() {
   const videoRef = useRef<HTMLVideoElement>(null);

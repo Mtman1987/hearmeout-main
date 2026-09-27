@@ -27,6 +27,7 @@ const { captureYoutubeBroadcast } = require('./youtube-broadcast-capture');
 const { createSpotlightBroadcast } = require('./spotlight-broadcast');
 const { createLoungeBroadcast } = require('./lounge-broadcast');
 const { createDirectLounge } = require('./lounge-direct');
+const loungeProgram = require('./lounge-program');
 
 Object.assign(globalThis, {
   RTCPeerConnection: wrtc.RTCPeerConnection,
@@ -98,14 +99,14 @@ const spotlightBroadcast = createSpotlightBroadcast({
   puppeteer,
   spotlightEndpoint: process.env.SPOTLIGHT_ENDPOINT || 'https://discord-stream-hub-new.fly.dev/api/community-spotlight',
 });
-const loungeBroadcast = createLoungeBroadcast({
+const directLounge = RUN_LOUNGE && process.env.HMO_LOUNGE_DIRECT_ONLY === 'true'
+  ? createDirectLounge({ program: loungeProgram.program, sourceForMovie: loungeProgram.source, root: '/data' })
+  : null;
+const loungeBroadcast = RUN_LOUNGE && !directLounge ? createLoungeBroadcast({
   chromiumPath: CHROMIUM_PATH,
   puppeteer,
   sourceUrl: process.env.LOUNGE_SOURCE_URL || 'https://hearmeout-main.fly.dev/overlay/system-spacemountainlive-lounge?clean=1',
-});
-const directLounge = RUN_LOUNGE && process.env.HMO_LOUNGE_DIRECT_ONLY === 'true'
-  ? createDirectLounge({ appUrl: APP_URL, workerSecret: WORKER_SHARED_SECRET, root: '/data' })
-  : null;
+}) : null;
 
 const VIDEO_ID_RE = /^[A-Za-z0-9_-]{11}$/;
 const OFFLINE_AUDIO_EXTENSIONS = new Set(['.mp3', '.m4a', '.aac', '.ogg', '.opus', '.wav', '.flac']);
@@ -240,6 +241,7 @@ const authorizeWorker = (req, res, next) => {
 
 function authorizeRenderer(kind) {
   return (req, res, next) => {
+    if (WORKER_ROLE !== kind && WORKER_ROLE !== 'all') return res.status(404).end();
     // Dedicated renderer apps have no public Fly service. Only the one media
     // surface assigned to that private machine bypasses the shared worker
     // secret; every other worker endpoint keeps authorizeWorker unchanged.
@@ -250,6 +252,16 @@ function authorizeRenderer(kind) {
 
 const authorizeSpotlight = authorizeRenderer('spotlight');
 const authorizeLounge = authorizeRenderer('lounge');
+
+// A public viewer may read only the feed produced by this Machine's role.
+// Control, queue, DJ and source-resolution endpoints still require their
+// existing authentication. The viewer never receives the worker secret.
+function authorizeViewer(kind) {
+  return (req, res, next) => {
+    if (WORKER_ROLE !== kind) return res.status(404).end();
+    return next();
+  };
+}
 
 // ── Music Ripper ───────────────────────────────────────────────────────
 function isCached(videoId) {
@@ -2956,22 +2968,72 @@ app.post('/spotlight/consent', authorizeSpotlight, async (_req, res) => {
   catch (error) { res.status(502).json({ error: error.message || String(error) }); }
 });
 
-app.get('/spotlight/live.mp4', authorizeSpotlight, (_req, res) => {
+app.get('/spotlight/live.mp4', authorizeViewer('spotlight'), (_req, res) => {
   if (!spotlightBroadcast.watch(res)) res.status(503).json({ error: 'Spotlight source is starting' });
 });
 
 // ── Persistent SpaceMountain Lounge media source ───────────────────────
+app.get('/lounge/media/program', authorizeViewer('lounge'), (_req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  res.json(loungeProgram.program());
+});
+
+app.post('/lounge/media/actions', authorizeWorker, async (req, res) => {
+  if (WORKER_ROLE !== 'lounge' || String(req.body?.tenantId || '').toLowerCase() !== 'spacemountainlive') return res.status(403).json({ error: 'Lounge only' });
+  try {
+    const action = String(req.body?.action || '');
+    if (action === 'hmo.media.search' && req.body?.lane === 'movie')
+      return res.json({ success: true, action, options: await loungeProgram.search(req.body.query) });
+    if (action === 'hmo.media.request') return res.json(await loungeProgram.request(req.body));
+    if (action === 'hmo.media.control') return res.json(loungeProgram.control(req.body));
+    if (action === 'hmo.media.state.read') return res.json({ success: true, action, session: loungeProgram.program()[req.body?.lane === 'movie' ? 'movie' : 'music'] });
+    return res.status(400).json({ error: 'Unsupported Lounge action' });
+  } catch (error) {
+    console.warn('[Lounge] Action failed:', error?.message || String(error));
+    return res.status(502).json({ error: error?.message || 'Lounge action failed' });
+  }
+});
+
+app.get('/lounge/music/hls/:file', authorizeViewer('lounge'), async (req, res) => {
+  try {
+    const current = loungeProgram.program().music.current;
+    if (!current || loungeProgram.program().music.playback.status !== 'playing') return res.status(404).end();
+    const videoId = String(current.item?.metadata?.videoId || '');
+    if (!isValidVideoId(videoId)) return res.status(404).end();
+    const file = cleanHlsFileName(req.params.file);
+    const streamId = youtubeWatchHlsId(videoId);
+    const { dir, indexPath } = watchHlsPaths(streamId);
+    if (file === 'index.m3u8') {
+      ensureYoutubeWatchHls(videoId).catch(error => console.warn('[Lounge] Music preparation:', error.message));
+      if (!await waitForWatchHlsIndex(streamId, 3000)) return res.status(202).json({ error: 'Preparing song' });
+    }
+    const path = existsSync(join(dir, file)) ? join(dir, file) : await waitForWatchHlsFile(streamId, file);
+    if (!path) return res.status(404).end();
+    res.setHeader('Cache-Control', file.endsWith('.m3u8') ? 'no-store' : 'public, max-age=3600');
+    res.setHeader('Content-Type', file.endsWith('.m3u8') ? 'application/vnd.apple.mpegurl' : 'video/mp2t');
+    if (file.endsWith('.m3u8')) return res.send(readFileSync(path, 'utf8'));
+    return createReadStream(path).pipe(res);
+  } catch (error) { return res.status(502).json({ error: error.message || 'Music source failed' }); }
+});
+
+app.get('/lounge/hls.js', authorizeViewer('lounge'), (_req, res) => {
+  res.type('application/javascript').sendFile(require.resolve('hls.js/dist/hls.min.js'));
+});
+
 app.get('/lounge/status', authorizeLounge, async (_req, res) => {
+  if (!loungeBroadcast) return res.status(410).json({ error: 'Use /lounge/media/program' });
   try { res.json(await loungeBroadcast.status()); }
   catch (error) { res.status(500).json({ error: error.message || String(error) }); }
 });
 
 app.post('/lounge/start', authorizeLounge, async (_req, res) => {
+  if (!loungeBroadcast) return res.status(410).json({ error: 'Direct Lounge playback is active' });
   try { res.json(await loungeBroadcast.start()); }
   catch (error) { res.status(502).json({ error: error.message || String(error) }); }
 });
 
-app.get('/lounge/live.mp4', authorizeLounge, (_req, res) => {
+app.get('/lounge/live.mp4', authorizeViewer('lounge'), (_req, res) => {
+  if (!loungeBroadcast) return res.status(410).end();
   if (!loungeBroadcast.watch(res)) res.status(503).json({ error: 'Lounge source is starting' });
 });
 
@@ -2979,13 +3041,13 @@ app.get('/lounge/live.mp4', authorizeLounge, (_req, res) => {
 // conversion control remain private to this dedicated Lounge machine.
 app.get('/lounge/direct/status', async (_req, res) => {
   if (!directLounge) return res.status(404).end();
-  res.setHeader('Access-Control-Allow-Origin', 'https://hearmeout-main.fly.dev');
+  // The global CORS middleware permits the current HearMeOut viewer and the
+  // new spmt.live viewer during cutover.
   try { return res.json(await directLounge.status()); }
   catch (err) { return res.status(502).json({ error: err.message || String(err) }); }
 });
 app.get('/lounge/direct/hls/:file', async (req, res) => {
   if (!directLounge) return res.status(404).end();
-  res.setHeader('Access-Control-Allow-Origin', 'https://hearmeout-main.fly.dev');
   try { return await directLounge.file(String(req.params.file || ''), res); }
   catch (err) { return res.status(502).json({ error: err.message || String(err) }); }
 });
@@ -3055,6 +3117,13 @@ app.listen(PORT, '0.0.0.0', () => {
     };
     void keepLoungeRunning();
     setInterval(keepLoungeRunning, 15000).unref();
+  } else if (RUN_LOUNGE && directLounge) {
+    // Music and movies are prepared as HLS on this Machine and viewed directly;
+    // an extra Chromium capture would encode the same frames twice.
+    console.log('[Lounge] Direct movie and music feeds ready');
+    setInterval(() => directLounge.status().catch(error => {
+      console.warn('[Lounge] Movie selection check failed:', error.message || String(error));
+    }), 5000).unref();
   } else {
     console.log(`[Worker] Lounge renderer disabled for role ${WORKER_ROLE}`);
   }
