@@ -1,0 +1,52 @@
+name: Deploy HearMeOut worker processes
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'worker/**'
+      - '.github/workflows/fly-deploy-worker.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: hearmeout-worker-deploy-main
+  cancel-in-progress: false
+
+jobs:
+  deploy-worker:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN_WORKER || secrets.FLY_API_TOKEN || secrets.FLY_API_TOKEN_MAIN }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Check Lounge state and routing
+        run: |
+          node --check worker/src/server.js
+          node --test worker/tests/lounge-program.test.cjs
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+      - name: Deploy the three isolated process groups
+        run: flyctl deploy . --config worker/fly.toml --dockerfile worker/Dockerfile --remote-only --ha=false --yes
+      - name: Check Lounge and Spotlight feeds
+        run: |
+          set -euo pipefail
+          for port in 4444 4445; do
+            ready=false
+            for attempt in {1..18}; do
+              if curl --fail --silent --show-error --max-time 10 "https://hmo-dj-worker.fly.dev:${port}/health"; then
+                ready=true
+                break
+              fi
+              sleep 5
+            done
+            if [ "$ready" != true ]; then
+              echo "Process port ${port} did not become healthy" >&2
+              exit 1
+            fi
+          done
