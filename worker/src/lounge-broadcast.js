@@ -94,6 +94,10 @@ function createLoungeBroadcast({ chromiumPath, puppeteer, sourceUrl }) {
       });
       browser.on('disconnected', () => { active = false; failure ||= 'The Lounge browser disconnected'; });
       page = (await browser.pages())[0] || await browser.newPage();
+      // Match the page viewport to the Xvfb frame. Chromium otherwise keeps an
+      // 800x600 content viewport inside this 854x480 capture, exposing white
+      // desktop on the right and cropping the centered video vertically.
+      await page.setViewport({ width: 854, height: 480, deviceScaleFactor: 1 });
       await page.goto(sourceUrl, { waitUntil: 'domcontentloaded', timeout: 45000 });
       await delay(1200);
       await page.mouse.click(427, 240).catch(() => {});
