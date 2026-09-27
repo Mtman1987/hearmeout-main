@@ -68,9 +68,22 @@ async function refreshBroadcastMix(){
 refreshBroadcastMix();setInterval(refreshBroadcastMix,3000);
 const codec='video/mp4; codecs="avc1.42E01F, mp4a.40.2"';
 let controller,objectUrl='',retryTimer=0,generation=0,lastFrame=Date.now(),lastProgress=Date.now(),lastTime=0;
+// MP4 fragments arrive every ~2 seconds. Leave enough decoded media ahead of
+// playback to absorb a slow fragment without pausing the broadcast.
+const playbackCushion=8;
+let rebuffering=true,resumePlayback=()=>{};
+function bufferedAhead(){
+ const ranges=video.buffered;
+ for(let i=0;i<ranges.length;i++){
+  if(ranges.start(i)<=video.currentTime+.1&&ranges.end(i)>video.currentTime)
+   return ranges.end(i)-video.currentTime;
+ }
+ return 0;
+}
 function retry(){if(directMode)return;if(!retryTimer)retryTimer=setTimeout(()=>{retryTimer=0;connect()},2000)}
 async function connect(){
  clearTimeout(retryTimer);retryTimer=0;const id=++generation;lastProgress=Date.now();lastTime=0;
+ rebuffering=true;resumePlayback=()=>{};
  controller?.abort();if(objectUrl)URL.revokeObjectURL(objectUrl);
  video.removeAttribute('src');video.load();
  if(!window.MediaSource||!MediaSource.isTypeSupported(codec))return;
@@ -80,14 +93,20 @@ async function connect(){
   if(id!==generation)return;
   const buffer=source.addSourceBuffer(codec);buffer.mode='sequence';
   const queue=[];let queuedBytes=0,pending=new Uint8Array(0);
+  resumePlayback=()=>{
+   if(id!==generation||bufferedAhead()<playbackCushion)return;
+   if(rebuffering||video.paused){
+    rebuffering=false;
+    video.play().catch(()=>{rebuffering=true});
+   }
+  };
   function pump(){
    if(id!==generation||buffer.updating||source.readyState!=='open')return;
    if(video.currentTime>30&&buffer.buffered.length&&buffer.buffered.start(0)<video.currentTime-20){buffer.remove(0,video.currentTime-15);return}
    if(!queue.length)return;
    const segment=queue.shift();queuedBytes-=segment.byteLength;buffer.appendBuffer(segment);
-   video.play().catch(()=>{});
   }
-  buffer.addEventListener('updateend',pump);buffer.addEventListener('error',retry);
+  buffer.addEventListener('updateend',()=>{pump();resumePlayback()});buffer.addEventListener('error',retry);
   const response=await fetch('/api/lounge-media/live.mp4?viewer='+Date.now(),{cache:'no-store',signal:controller.signal});
   if(!response.ok||!response.body)throw Error('Lounge source unavailable');
   const reader=response.body.getReader();lastFrame=Date.now();
@@ -108,17 +127,21 @@ async function connect(){
  }catch(error){if(id===generation&&!controller.signal.aborted)retry()}
 }
 video.addEventListener('error',retry);video.addEventListener('ended',retry);
-video.addEventListener('canplay',()=>video.play().catch(()=>{}));
+video.addEventListener('canplay',()=>resumePlayback());
+video.addEventListener('waiting',()=>{
+ if(directMode||video.paused||bufferedAhead()>=2)return;
+ rebuffering=true;video.pause();
+});
 video.addEventListener('timeupdate',()=>{if(video.currentTime>lastTime+.1){lastTime=video.currentTime;lastProgress=Date.now()}});
-document.addEventListener('pointerdown',()=>video.play().catch(()=>{}));
-document.addEventListener('visibilitychange',()=>{if(!document.hidden)video.play().catch(()=>{})});
+document.addEventListener('pointerdown',()=>resumePlayback());
+document.addEventListener('visibilitychange',()=>{if(!document.hidden)resumePlayback()});
 setInterval(()=>{
  if(directMode)return;
  const now=Date.now();
  if(now-lastFrame>15000){retry();return}
  // The transport may keep receiving fragments while the decoder is stuck
  // on one frame. Rejoin the live source when playback itself stops moving.
- if(!video.paused&&now-lastProgress>20000)retry();
+ if(lastTime>0&&now-lastProgress>20000)retry();
 },5000);
 let selectedProgram=null,selectedLane='',selectedAt=0,programRefreshBusy=false;
 const preparing=document.getElementById('preparing');
