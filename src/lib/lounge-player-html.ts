@@ -172,6 +172,7 @@ async function refreshProgram(){
    preparingKind.textContent='Preparing your '+(lane||'media');
    preparingTitle.textContent=next?.item?.title||'';
    preparingRequester.textContent=next?.requestedBy?.username?'Selected by '+next.requestedBy.username:'';
+   if(next&&lane==='movie'){window.location.replace('/lounge-media/direct');return}
    if(next&&!directMode)connect();
   }
   if(!next){setPreparing(false);return}
