@@ -8,8 +8,8 @@
   const worker = 'https://hmo-dj-worker.fly.dev:4444';
   const video = document.getElementById('player');
   const status = document.getElementById('status');
-  let hls, selection = '', mix = .85, master = 1, source = 1, programLevel = 1, muted = false, programMuted = false, brb = false, epoch = 0;
-  function volume(){video.volume = Math.min(1, mix * master * source * programLevel);video.muted = muted || programMuted || brb;}
+  let hls, selection = '', mix = .85, master = 1, source = 1, programLevel = 1, focus = 1, muted = false, programMuted = false, brb = false, epoch = 0;
+  function volume(){video.volume = Math.min(1, mix * master * source * programLevel * focus);video.muted = muted || programMuted || brb;}
   volume();
   window.addEventListener('message', event => {
     if (event.source !== window.parent || event.origin !== 'https://spmt.live') return;
@@ -21,6 +21,9 @@
     }
     if (event.data?.type === 'spmt-lounge-brb-audio' && typeof event.data.active === 'boolean') {
       brb = event.data.active; volume();
+    }
+    if (event.data?.type === 'spmt-lounge-program-focus' && typeof event.data.focused === 'boolean') {
+      focus = event.data.focused ? 1 : .2; volume();
     }
   });
   async function refreshVolume(){
