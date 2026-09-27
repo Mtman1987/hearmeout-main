@@ -11,8 +11,7 @@
   let hls, generation = '', groupLevel = .58, masterLevel = 1, sourceVolume = 1, sourceMuted = false, brb = false;
   function volume(){video.volume=Math.min(1,groupLevel*masterLevel*sourceVolume);video.muted=sourceMuted||brb;}
   function health(healthy){if(window.parent!==window)window.parent.postMessage({type:'spmt-lounge-spotlight-health',healthy},'https://spmt.live');}
-  function ahead(){for(let i=0;i<video.buffered.length;i++)if(video.buffered.start(i)<=video.currentTime+.2&&video.buffered.end(i)>video.currentTime)return video.buffered.end(i)-video.currentTime;return 0;}
-  function resume(){if(video.paused&&ahead()>=8)video.play().catch(()=>{status.hidden=false;status.textContent='Spotlight autoplay is blocked by this browser';health(false);});}
+  function resume(){if(video.paused&&video.readyState>=3)video.play().catch(error=>{status.hidden=false;status.textContent=error?.name==='NotAllowedError'?'Spotlight autoplay is blocked by this browser':'Reconnecting Spotlight';health(false);});}
   window.addEventListener('message',event=>{
     if(event.source!==window.parent||event.origin!=='https://spmt.live')return;
     if(event.data?.type==='spmt.obspmt.audio'){
@@ -50,7 +49,7 @@
   }catch{status.hidden=false;status.textContent='Connecting to Spotlight worker';health(false);}}
   video.addEventListener('playing',()=>{status.hidden=true;health(true);});
   video.addEventListener('canplay',resume);video.addEventListener('progress',resume);video.addEventListener('timeupdate',resume);
-  video.addEventListener('waiting',()=>{if(ahead()<2){video.pause();health(false);}});
+  video.addEventListener('waiting',()=>health(false));
   volume();void poll();void mix();setInterval(poll,2500);setInterval(mix,3000);
 })();
 </script></body></html>
