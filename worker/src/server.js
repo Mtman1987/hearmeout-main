@@ -26,6 +26,7 @@ const puppeteer = require('puppeteer');
 const { captureYoutubeBroadcast } = require('./youtube-broadcast-capture');
 const { createSpotlightBroadcast } = require('./spotlight-broadcast');
 const { createLoungeBroadcast } = require('./lounge-broadcast');
+const { createDirectLounge } = require('./lounge-direct');
 
 Object.assign(globalThis, {
   RTCPeerConnection: wrtc.RTCPeerConnection,
@@ -102,6 +103,9 @@ const loungeBroadcast = createLoungeBroadcast({
   puppeteer,
   sourceUrl: process.env.LOUNGE_SOURCE_URL || 'https://hearmeout-main.fly.dev/overlay/system-spacemountainlive-lounge?clean=1',
 });
+const directLounge = RUN_LOUNGE && process.env.HMO_LOUNGE_DIRECT_ONLY === 'true'
+  ? createDirectLounge({ appUrl: APP_URL, workerSecret: WORKER_SHARED_SECRET, root: '/data' })
+  : null;
 
 const VIDEO_ID_RE = /^[A-Za-z0-9_-]{11}$/;
 const OFFLINE_AUDIO_EXTENSIONS = new Set(['.mp3', '.m4a', '.aac', '.ogg', '.opus', '.wav', '.flac']);
@@ -2971,6 +2975,21 @@ app.get('/lounge/live.mp4', authorizeLounge, (_req, res) => {
   if (!loungeBroadcast.watch(res)) res.status(503).json({ error: 'Lounge source is starting' });
 });
 
+// Public read-only segments for the selected movie. The source URL and
+// conversion control remain private to this dedicated Lounge machine.
+app.get('/lounge/direct/status', async (_req, res) => {
+  if (!directLounge) return res.status(404).end();
+  res.setHeader('Access-Control-Allow-Origin', 'https://hearmeout-main.fly.dev');
+  try { return res.json(await directLounge.status()); }
+  catch (err) { return res.status(502).json({ error: err.message || String(err) }); }
+});
+app.get('/lounge/direct/hls/:file', async (req, res) => {
+  if (!directLounge) return res.status(404).end();
+  res.setHeader('Access-Control-Allow-Origin', 'https://hearmeout-main.fly.dev');
+  try { return await directLounge.file(String(req.params.file || ''), res); }
+  catch (err) { return res.status(502).json({ error: err.message || String(err) }); }
+});
+
 // ── Health ──────────────────────────────────────────────────────────────
 app.get('/health', (req, res) => {
   res.json({
@@ -3019,7 +3038,7 @@ app.listen(PORT, '0.0.0.0', () => {
     console.log(`[Worker] Spotlight renderer disabled for role ${WORKER_ROLE}`);
   }
 
-  if (RUN_LOUNGE) {
+  if (RUN_LOUNGE && !directLounge) {
     let checkingLounge = false;
     let loungeRetryAt = 0;
     const keepLoungeRunning = async () => {
