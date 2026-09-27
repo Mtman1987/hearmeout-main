@@ -180,6 +180,7 @@ export default function OverlayPage() {
   const requestedLane = (searchParams.get('media') || searchParams.get('lane') || 'auto').toLowerCase();
   const lane: MediaLane = requestedLane === 'music' || requestedLane === 'movie' ? requestedLane : 'auto';
   const cleanMode = ['1', 'true', 'yes', 'on'].includes(String(searchParams.get('clean') || '').toLowerCase());
+  const directLoungeMode = cleanMode && roomId === 'system-spacemountainlive-lounge' && searchParams.get('direct') === '1';
   const volumeParam = searchParams.get('volume');
   const requestedVolume = Number(volumeParam);
   const hasRequestedVolume = volumeParam !== null && Number.isFinite(requestedVolume);
@@ -222,7 +223,7 @@ export default function OverlayPage() {
   const [audioReady, setAudioReady] = useState(false);
   const [mediaStatus, setMediaStatus] = useState('Waiting for media');
   const [renderingHealthy, setRenderingHealthy] = useState(false);
-  const [forceProxyPlayback, setForceProxyPlayback] = useState(false);
+  const [forceProxyPlayback, setForceProxyPlayback] = useState(directLoungeMode);
   const [audioTracks, setAudioTracks] = useState<Array<{ index: number; name: string; language: string }>>([]);
   const [selectedAudioTrack, setSelectedAudioTrack] = useState(0);
   const [musicPlaybackMode, setMusicPlaybackMode] = useState<'video' | 'audio'>(cleanMode ? 'video' : 'audio');
@@ -273,6 +274,29 @@ export default function OverlayPage() {
       showProfiles,
     } satisfies OverlayViewState));
   }, [isMuted, musicPlaybackMode, roomId, showMusicQueue, showNowPlaying, showProfiles, viewStateHydrated, volume]);
+
+  // The Restream Lounge can render this page directly inside its existing widget.
+  // Its parent owns the broadcast mix; keep the watch page as a passive player.
+  useEffect(() => {
+    if (!cleanMode || roomId !== 'system-spacemountainlive-lounge') return;
+    const onBroadcastVolume = (event: MessageEvent) => {
+      if (event.origin !== window.location.origin || event.source !== window.parent
+        || event.data?.type !== 'hmo.lounge.broadcast-volume') return;
+      const nextVolume = Number(event.data.volume);
+      if (!Number.isFinite(nextVolume) || nextVolume < 0 || nextVolume > 1
+        || typeof event.data.muted !== 'boolean') return;
+      volumeRef.current = nextVolume;
+      mutedRef.current = event.data.muted;
+      setVolume(nextVolume);
+      setIsMuted(event.data.muted);
+      if (videoRef.current) {
+        videoRef.current.volume = nextVolume;
+        videoRef.current.muted = event.data.muted;
+      }
+    };
+    window.addEventListener('message', onBroadcastVolume);
+    return () => window.removeEventListener('message', onBroadcastVolume);
+  }, [cleanMode, roomId]);
 
   useEffect(() => { volumeRef.current = volume; }, [volume]);
   useEffect(() => { mutedRef.current = isMuted; }, [isMuted]);
@@ -466,10 +490,13 @@ export default function OverlayPage() {
   useEffect(() => {
     const refresh = async () => {
       try {
-        const [movie, music] = await Promise.all([
-          api(`/api/watch/sessions/${movieSessionId}/state`),
-          api(`/api/watch/sessions/${musicSessionId}/state`),
-        ]);
+        const directLounge = directLoungeMode;
+        const [movie, music] = directLounge
+          ? await api('/api/lounge-media/program').then((program) => [program.movie, program.music])
+          : await Promise.all([
+              api(`/api/watch/sessions/${movieSessionId}/state`),
+              api(`/api/watch/sessions/${musicSessionId}/state`),
+            ]);
         setMovieState(movie);
         setMusicState(music);
         setConnected(true);
@@ -482,7 +509,7 @@ export default function OverlayPage() {
     refresh();
     const interval = window.setInterval(refresh, 1000);
     return () => window.clearInterval(interval);
-  }, [movieSessionId, musicSessionId]);
+  }, [directLoungeMode, movieSessionId, musicSessionId]);
 
   useEffect(() => {
     const unlockOverlayAudio = () => {
