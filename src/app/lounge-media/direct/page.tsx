@@ -109,7 +109,7 @@ export default function DirectLoungePlayer() {
     };
   }, []);
   return <main style={{ position: 'fixed', inset: 0, background: '#000', overflow: 'hidden' }}>
-    <video ref={videoRef} autoPlay playsInline style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
+    <video ref={videoRef} playsInline style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
     {!playing && <div role="status" style={{ position: 'absolute', inset: 0, display: 'grid', placeItems: 'center', padding: '5%', color: '#fff', background: 'radial-gradient(circle,#20153d,#090919 65%,#000)', font: '600 clamp(18px,3vw,32px) system-ui', textAlign: 'center' }}>
       <div style={{ width: 'min(84%,650px)', padding: '5%', border: '2px solid #55d7ed', borderRadius: 24, boxShadow: '0 0 32px #339fd080', background: '#0d1739' }}>
         <div style={{ color: '#77ddf0', fontSize: '65%', letterSpacing: '.12em', textTransform: 'uppercase' }}>Preparing your movie</div>
