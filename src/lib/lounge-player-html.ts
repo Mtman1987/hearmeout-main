@@ -1,7 +1,10 @@
 export function renderLoungePlayer() {
-  return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>SpaceMountain Lounge live view</title><style>html,body,video{margin:0;width:100%;height:100%;overflow:hidden;background:#000}video{display:block;object-fit:contain}</style></head><body><video id="player" autoplay playsinline></video><audio id="theme" preload="auto"></audio><script>
+  return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>SpaceMountain Lounge live view</title><style>html,body,video{margin:0;width:100%;height:100%;overflow:hidden;background:#000}video{display:block;object-fit:contain}</style></head><body><video id="player" autoplay playsinline></video><iframe id="direct-player" title="Lounge media" allow="autoplay" style="display:none;border:0;width:100%;height:100%"></iframe><audio id="theme" preload="auto"></audio><script>
 const video=document.getElementById('player');
 const theme=document.getElementById('theme');
+const directPlayer=document.getElementById('direct-player');
+const directMode=new URLSearchParams(location.search).get('direct')==='1';
+if(directMode){video.style.display='none';directPlayer.style.display='block';directPlayer.src='/overlay/system-spacemountainlive-lounge?clean=1&direct=1&volume=0.85&muted=0';directPlayer.addEventListener('load',()=>applyBroadcastVolume())}
 const themeTracks=[
  '/api/offline-music?id=c3BhY2Vtb3VudGFpbmxpdmUvc3BtdC5tcDM',
  '/api/offline-music?id=c3BhY2Vtb3VudGFpbmxpdmUvc3BtdDIubXAz',
@@ -32,6 +35,7 @@ let groupLevel=.85,masterLevel=1,sourceVolume=1,sourceMuted=false,brbActive=fals
 function applyBroadcastVolume(){
  const volume=groupLevel*masterLevel*sourceVolume;
  video.volume=volume;video.muted=sourceMuted||brbActive;
+ if(directMode)directPlayer.contentWindow?.postMessage({type:'hmo.lounge.broadcast-volume',volume,muted:sourceMuted||brbActive},location.origin);
  theme.volume=volume;theme.muted=sourceMuted;
 }
 window.addEventListener('message',(event)=>{
@@ -64,7 +68,7 @@ async function refreshBroadcastMix(){
 refreshBroadcastMix();setInterval(refreshBroadcastMix,3000);
 const codec='video/mp4; codecs="avc1.42E01F, mp4a.40.2"';
 let controller,objectUrl='',retryTimer=0,generation=0,lastFrame=Date.now(),lastProgress=Date.now(),lastTime=0;
-function retry(){if(!retryTimer)retryTimer=setTimeout(()=>{retryTimer=0;connect()},2000)}
+function retry(){if(directMode)return;if(!retryTimer)retryTimer=setTimeout(()=>{retryTimer=0;connect()},2000)}
 async function connect(){
  clearTimeout(retryTimer);retryTimer=0;const id=++generation;lastProgress=Date.now();lastTime=0;
  controller?.abort();if(objectUrl)URL.revokeObjectURL(objectUrl);
@@ -109,12 +113,13 @@ video.addEventListener('timeupdate',()=>{if(video.currentTime>lastTime+.1){lastT
 document.addEventListener('pointerdown',()=>video.play().catch(()=>{}));
 document.addEventListener('visibilitychange',()=>{if(!document.hidden)video.play().catch(()=>{})});
 setInterval(()=>{
+ if(directMode)return;
  const now=Date.now();
  if(now-lastFrame>15000){retry();return}
  // The transport may keep receiving fragments while the decoder is stuck
  // on one frame. Rejoin the live source when playback itself stops moving.
  if(!video.paused&&now-lastProgress>20000)retry();
 },5000);
-connect();
+if(!directMode)connect();
 </script></body></html>`;
 }
