@@ -24,7 +24,7 @@ try {
 const wrtc = require('@roamhq/wrtc');
 const puppeteer = require('puppeteer');
 const { captureYoutubeBroadcast } = require('./youtube-broadcast-capture');
-const { createSpotlightBroadcast } = require('./spotlight-broadcast');
+const { createSpotlightHls } = require('./spotlight-hls');
 const { createLoungeBroadcast } = require('./lounge-broadcast');
 const { createDirectLounge } = require('./lounge-direct');
 const loungeProgram = require('./lounge-program');
@@ -94,9 +94,7 @@ const WORKER_ROLE = String(process.env.HMO_WORKER_ROLE || 'all').trim().toLowerC
 const PRIVATE_RENDERER = process.env.HMO_PRIVATE_RENDERER === 'true';
 const RUN_SPOTLIGHT = WORKER_ROLE === 'all' || WORKER_ROLE === 'spotlight';
 const RUN_LOUNGE = WORKER_ROLE === 'all' || WORKER_ROLE === 'lounge';
-const spotlightBroadcast = createSpotlightBroadcast({
-  chromiumPath: CHROMIUM_PATH,
-  puppeteer,
+const spotlightBroadcast = createSpotlightHls({
   spotlightEndpoint: process.env.SPOTLIGHT_ENDPOINT || 'https://discord-stream-hub-new.fly.dev/api/community-spotlight',
 });
 const directLounge = RUN_LOUNGE && process.env.HMO_LOUNGE_DIRECT_ONLY === 'true'
@@ -2968,8 +2966,19 @@ app.post('/spotlight/consent', authorizeSpotlight, async (_req, res) => {
   catch (error) { res.status(502).json({ error: error.message || String(error) }); }
 });
 
+app.get('/spotlight/program', authorizeViewer('spotlight'), (_req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  res.json(spotlightBroadcast.status());
+});
+app.get('/spotlight/hls.js', authorizeViewer('spotlight'), (_req, res) => {
+  res.type('application/javascript').sendFile(require.resolve('hls.js/dist/hls.min.js'));
+});
+app.get('/spotlight/hls/:generation/:file', authorizeViewer('spotlight'), async (req, res) => {
+  try { await spotlightBroadcast.file(req.params.generation, req.params.file, res); }
+  catch { res.status(502).json({ error: 'Spotlight segment unavailable' }); }
+});
 app.get('/spotlight/live.mp4', authorizeViewer('spotlight'), (_req, res) => {
-  if (!spotlightBroadcast.watch(res)) res.status(503).json({ error: 'Spotlight source is starting' });
+  res.status(410).json({ error: 'Use /spotlight/program and /spotlight/hls instead' });
 });
 
 // ── Persistent SpaceMountain Lounge media source ───────────────────────
