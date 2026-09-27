@@ -5,7 +5,10 @@ export const dynamic = 'force-dynamic';
 
 export function GET(request: Request) {
   if (new URL(request.url).searchParams.get('legacy') !== '1')
-    return Response.redirect(new URL('/lounge-media/direct', request.url), 307);
+    return new Response(null, {
+      status: 307,
+      headers: { location: '/lounge-media/direct', 'cache-control': 'no-store' },
+    });
   return new Response(renderLoungePlayer(), {
     headers: {
       'content-type': 'text/html; charset=utf-8',
