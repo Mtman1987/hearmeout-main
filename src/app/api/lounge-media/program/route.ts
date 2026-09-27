@@ -9,13 +9,14 @@ export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 // Expose only the current broadcast item to the public browser source.
-// Other watch sessions, requesters, queue entries and control routes stay private.
+// Other watch sessions, queue entries and control routes stay private.
 function currentProgram(sessionId: string) {
   const session = getPublicWatchSession(getResolvedWatchSession(sessionId));
   const item = session.current?.item;
   return {
     current: item ? {
       requestId: session.current!.requestId,
+      requestedBy: { username: session.current!.requestedBy.username },
       item: {
         type: item.type,
         title: item.title,

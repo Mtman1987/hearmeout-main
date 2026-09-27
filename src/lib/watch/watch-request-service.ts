@@ -526,7 +526,7 @@ function createSession(id: string, guildId = 'local', channelId = 'watch', media
   return session;
 }
 
-function enqueue(session: WatchSession, item: WatchCatalogItem, requestedBy: WatchRequest['requestedBy']) {
+function enqueue(session: WatchSession, item: WatchCatalogItem, requestedBy: WatchRequest['requestedBy'], replaceCurrent = false) {
   touchSession(session);
   const request: WatchRequest = {
     requestId: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
@@ -535,7 +535,7 @@ function enqueue(session: WatchSession, item: WatchCatalogItem, requestedBy: Wat
     item,
   };
 
-  if (!session.current) {
+  if (!session.current || replaceCurrent) {
     session.current = request;
     session.playback = { status: 'playing', position: 0, updatedAt: Date.now(), muted: session.playback.muted ?? true, volume: session.playback.volume ?? 85 };
     addEvent(session, `${requestedBy.username} loaded ${item.title}`);
@@ -1002,7 +1002,7 @@ export async function requestWatchItem(params: {
   const request = enqueue(session, item, {
     userId: params.userId,
     username: params.username,
-  });
+  }, params.sessionId === SPACEMOUNTAIN_LOUNGE_MOVIE_SESSION_ID);
   if (session.current?.requestId === request.requestId) maybePrepareSharedHls(item);
   await updateSeriesProgress(params.userId, item);
   saveWatchStateToDisk();

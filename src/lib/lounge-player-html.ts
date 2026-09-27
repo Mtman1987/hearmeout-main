@@ -1,5 +1,5 @@
 export function renderLoungePlayer() {
-  return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>SpaceMountain Lounge live view</title><style>html,body,video{margin:0;width:100%;height:100%;overflow:hidden;background:#000}video{display:block;object-fit:contain}</style></head><body><video id="player" autoplay playsinline></video><iframe id="direct-player" title="Lounge media" allow="autoplay" style="display:none;border:0;width:100%;height:100%"></iframe><audio id="theme" preload="auto"></audio><script>
+  return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>SpaceMountain Lounge live view</title><style>html,body,video{margin:0;width:100%;height:100%;overflow:hidden;background:#000}video{display:block;object-fit:contain}#preparing{position:absolute;inset:0;z-index:2;display:none;box-sizing:border-box;align-items:center;justify-content:center;padding:5%;color:#fff;background:radial-gradient(circle at center,#20153d 0%,#090919 65%,#000 100%);font:600 clamp(18px,3vw,32px)/1.35 system-ui,sans-serif;text-align:center}#preparing .card{width:min(84%,650px);padding:clamp(24px,5vw,52px);border:2px solid #55d7ed;border-radius:24px;box-shadow:0 0 32px #339fd080;background:#0d1739}#preparing .eyebrow{color:#77ddf0;font-size:clamp(14px,1.6vw,20px);letter-spacing:.12em;text-transform:uppercase}#preparing .title{margin:18px 0 10px;overflow-wrap:anywhere}#preparing .requester{color:#d7c5ff;font-size:clamp(15px,2vw,22px);font-weight:400}#preparing .detail{margin-top:20px;color:#c1c8d4;font-size:clamp(14px,1.5vw,18px);font-weight:400}</style></head><body><video id="player" autoplay playsinline></video><div id="preparing" role="status" aria-live="polite"><div class="card"><div id="preparing-kind" class="eyebrow">Preparing your media</div><div id="preparing-title" class="title"></div><div id="preparing-requester" class="requester"></div><div id="preparing-detail" class="detail">Your selection is loading</div></div></div><iframe id="direct-player" title="Lounge media" allow="autoplay" style="display:none;border:0;width:100%;height:100%"></iframe><audio id="theme" preload="auto"></audio><script>
 const video=document.getElementById('player');
 const theme=document.getElementById('theme');
 const directPlayer=document.getElementById('direct-player');
@@ -120,6 +120,61 @@ setInterval(()=>{
  // on one frame. Rejoin the live source when playback itself stops moving.
  if(!video.paused&&now-lastProgress>20000)retry();
 },5000);
+let selectedProgram=null,selectedLane='',selectedAt=0,programRefreshBusy=false;
+const preparing=document.getElementById('preparing');
+const preparingKind=document.getElementById('preparing-kind');
+const preparingTitle=document.getElementById('preparing-title');
+const preparingRequester=document.getElementById('preparing-requester');
+const preparingDetail=document.getElementById('preparing-detail');
+function setPreparing(visible){
+ preparing.style.display=visible?'flex':'none';
+}
+function currentProgram(data){
+ const lanes=['movie','music'].map(lane=>({lane,state:data?.[lane]}))
+  .filter(entry=>entry.state?.current&&entry.state.playback?.status==='playing')
+  .sort((a,b)=>Number(b.state.playback.updatedAt||0)-Number(a.state.playback.updatedAt||0));
+ return lanes[0]||null;
+}
+async function refreshProgram(){
+ if(programRefreshBusy)return;
+ programRefreshBusy=true;
+ try{
+  const response=await fetch('/api/lounge-media/program',{cache:'no-store'});
+  if(!response.ok)throw Error('Program unavailable');
+  const active=currentProgram(await response.json());
+  const next=active?.state.current||null;
+  const lane=active?.lane||'';
+  if(next?.requestId!==selectedProgram?.requestId||lane!==selectedLane){
+   selectedProgram=next;selectedLane=lane;selectedAt=Date.now();lastProgress=0;
+   preparingKind.textContent='Preparing your '+(lane||'media');
+   preparingTitle.textContent=next?.item?.title||'';
+   preparingRequester.textContent=next?.requestedBy?.username?'Selected by '+next.requestedBy.username:'';
+   if(next&&!directMode)connect();
+  }
+  if(!next){setPreparing(false);return}
+  let ready=false;
+  if(directMode){
+   try{
+    const root=directPlayer.contentDocument?.querySelector('[data-request-id]');
+    ready=root?.dataset.requestId===next.requestId&&root?.dataset.mediaHealthy==='true';
+   }catch{}
+  }else{
+   const statusResponse=await fetch('/api/lounge-media/status',{cache:'no-store'});
+   if(statusResponse.ok){
+    const status=await statusResponse.json();
+    ready=status.mediaHealthy===true&&status.mediaTitle===next.item.title
+      &&video.readyState>=2&&!video.paused&&Date.now()-lastProgress<5000
+      &&lastProgress>=selectedAt+500;
+   }
+  }
+  preparingDetail.textContent=Date.now()-selectedAt>30000
+   ?'Still preparing. The player is reconnecting.':'Your selection is loading';
+  setPreparing(!ready);
+ }catch{
+  if(selectedProgram){preparingDetail.textContent='Still preparing. The player is reconnecting.';setPreparing(true)}
+ }finally{programRefreshBusy=false}
+}
+refreshProgram();setInterval(refreshProgram,2500);
 if(!directMode)connect();
 </script></body></html>`;
 }
