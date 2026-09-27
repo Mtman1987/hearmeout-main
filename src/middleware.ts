@@ -32,6 +32,9 @@ const PUBLIC_PREFIXES = [
   '/api/internal/bot/actions',
   // Authenticated with the existing DJ worker credential inside the route.
   '/api/internal/watch/search',
+  // The source resolver verifies HMO_WORKER_SHARED_SECRET inside its handler.
+  // The Lounge worker has no user browser session when it prepares a movie.
+  '/api/watch/xtream/source/',
   '/overlay',
   '/embed',
   '/room-overlay',
