@@ -12,9 +12,9 @@ export default function DirectLoungePlayer() {
   const [playing, setPlaying] = useState(false);
   useEffect(() => {
     let cancelled = false;
-    let mix = .85, master = 1, source = 1, muted = false, brb = false;
+    let mix = .85, master = 1, source = 1, muted = false, brb = false, autoplayMuted = false;
     const video = videoRef.current!;
-    const applyVolume = () => { video.volume = Math.min(1, mix * master * source); video.muted = muted || brb; };
+    const applyVolume = () => { video.volume = Math.min(1, mix * master * source); video.muted = muted || brb || autoplayMuted; };
     applyVolume();
     const onMessage = (event: MessageEvent) => {
       if (event.source !== window.parent || event.origin !== 'https://spmt.live') return;
@@ -47,7 +47,14 @@ export default function DirectLoungePlayer() {
       return 0;
     };
     const resume = () => {
-      if (ahead() >= 16 && video.paused && !cancelled) video.play().catch(() => {});
+      if (ahead() >= 16 && video.paused && !cancelled) video.play().catch((reason) => {
+        // Embedded browsers can deny sound before a user gesture. Keep the
+        // video moving silently there; the Restream browser may play with sound.
+        if (reason?.name === 'NotAllowedError' && !cancelled) {
+          autoplayMuted = true; applyVolume();
+          video.play().catch(() => {});
+        }
+      });
     };
     const onWaiting = () => { if (ahead() < 2) video.pause(); setPlaying(false); };
     const onPlaying = () => setPlaying(true);
