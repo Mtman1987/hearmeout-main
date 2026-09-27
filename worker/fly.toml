@@ -87,12 +87,12 @@ primary_region = "iad"
 
 [[vm]]
   processes = ["dj"]
-  memory = "4gb"
+  memory = "2gb"
   cpu_kind = "shared"
   cpus = 1
 
 [[vm]]
   processes = ["lounge", "spotlight"]
-  memory = "4gb"
+  memory = "2gb"
   cpu_kind = "shared"
   cpus = 1
