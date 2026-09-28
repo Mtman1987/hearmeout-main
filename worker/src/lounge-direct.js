@@ -12,6 +12,7 @@ function createDirectLounge({ program, sourceForMovie, root }) {
   let lastChecked = 0;
   let lastFailed = 0;
   const folder = join(root, 'lounge-direct');
+  rmSync(folder, { recursive: true, force: true });
   mkdirSync(folder, { recursive: true });
 
   async function selectedMovie() {
@@ -34,8 +35,9 @@ function createDirectLounge({ program, sourceForMovie, root }) {
   async function start(movie) {
     if (process && process.exitCode === null) process.kill('SIGTERM');
     process = null; error = '';
+    rmSync(folder, { recursive: true, force: true });
+    mkdirSync(folder, { recursive: true });
     const dir = join(folder, movie.requestId.replace(/[^a-zA-Z0-9_-]/g, ''));
-    rmSync(dir, { recursive: true, force: true });
     mkdirSync(dir, { recursive: true });
     const source = { url: sourceForMovie(movie.selection) };
     const startPosition = Math.max(0, Number(movie.playbackPosition || 0));
