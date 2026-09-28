@@ -193,14 +193,18 @@ function radioEntry(song) {
 function playlistStarter() {
   const radio = radioState();
   if (!radio.seeds.length) return null;
-  // A playlist is a reference library: sample a handful spread across it,
-  // rather than making a 480-song playlist the next 480 on-air selections.
-  const count = Math.min(6, radio.seeds.length);
-  const samples = Array.from({ length: count }, (_, index) => radio.seeds[Math.floor(index * radio.seeds.length / count)]);
-  const recentlyHeard = new Set((radio.playedIds || []).slice(-Math.min(count - 1, 12)));
+  // Visit the whole reference library in a spread-out order. Sampling only
+  // six positions caused a 480-song playlist to loop those same six songs.
+  const count = radio.seeds.length;
+  const gcd = (a, b) => b ? gcd(b, a % b) : a;
+  let step = count > 6 ? Math.floor(count / 6) : 1;
+  while (gcd(step, count) !== 1) step++;
+  const recentlyHeard = new Set((radio.playedIds || []).slice(-Math.min(count - 1, 30)));
   const cursor = Number(radio.cursor) || 0;
-  const selected = samples.slice(cursor % count).concat(samples.slice(0, cursor % count)).find(song => !recentlyHeard.has(song.id)) || samples[cursor % count];
-  radio.cursor = (samples.indexOf(selected) + 1) % count;
+  let index = cursor % count;
+  for (let attempt = 0; attempt < count - 1 && recentlyHeard.has(radio.seeds[index * step % count].id); attempt++) index = (index + 1) % count;
+  const selected = radio.seeds[index * step % count];
+  radio.cursor = (index + 1) % count;
   return radioEntry(selected);
 }
 

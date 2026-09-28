@@ -76,6 +76,13 @@ test('Lounge radio imports an entire 480-song playlist without turning itself on
     assert.equal(added.added, 480);
     assert.equal(program.program().radio.seedCount, 480);
     assert.equal(program.program().radio.enabled, false);
+    await program.radio({ control: 'on' });
+    const selected = new Set([program.program().music.current.item.metadata.videoId]);
+    for (let index = 0; index < 12; index++) {
+      await program.control({ lane: 'music', control: 'next' });
+      selected.add(program.program().music.current.item.metadata.videoId);
+    }
+    assert.equal(selected.size, 13);
   } finally {
     Object.keys(process.env).forEach(key => { if (!(key in previous)) delete process.env[key]; });
     Object.assign(process.env, previous);
