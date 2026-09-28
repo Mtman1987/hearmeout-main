@@ -11,31 +11,34 @@ const themeTracks=[
  '/api/offline-music?id=c3BhY2Vtb3VudGFpbmxpdmUvc3BtdDMubXAz',
  '/api/offline-music?id=c3BhY2Vtb3VudGFpbmxpdmUvc3BtdDQubXAz'
 ];
-let themeIndex=0,themeFailures=0,themeActive=false;
+let themeIndex=0,themeFailures=0,themeActive=false,commercialActive=false;
 theme.src=themeTracks[0];
 function playTheme(){if(themeActive)theme.play().catch(error=>console.warn('[Lounge] Theme autoplay unavailable:',error))}
 function advanceTheme(failed){
  if(!themeActive)return;
  themeFailures=failed?themeFailures+1:0;
  if(themeFailures>=themeTracks.length){themeActive=false;theme.pause();return}
+ if(!commercialActive&&!failed){themeActive=false;theme.pause();return}
  themeIndex=(themeIndex+1)%themeTracks.length;
  theme.src=themeTracks[themeIndex];
+ theme.currentTime=0;
  playTheme();
 }
 theme.addEventListener('ended',()=>advanceTheme(false));
 theme.addEventListener('error',()=>advanceTheme(true));
 theme.addEventListener('playing',()=>{themeFailures=0});
 function setThemeActive(active){
- if(themeActive===active)return;
- themeActive=active;
- if(active){themeFailures=0;playTheme()}else theme.pause();
+ commercialActive=active;
+ if(active&&!themeActive){
+  themeActive=true;themeFailures=0;theme.currentTime=0;playTheme();
+ }
 }
 video.volume=.85;video.muted=false;
 let groupLevel=.85,masterLevel=1,sourceVolume=1,sourceMuted=false,brbActive=false;
 function applyBroadcastVolume(){
  const volume=groupLevel*masterLevel*sourceVolume;
- video.volume=volume;video.muted=sourceMuted||brbActive;
- if(directMode)directPlayer.contentWindow?.postMessage({type:'hmo.lounge.broadcast-volume',volume,muted:sourceMuted||brbActive},location.origin);
+ video.volume=volume;video.muted=sourceMuted;
+ if(directMode)directPlayer.contentWindow?.postMessage({type:'hmo.lounge.broadcast-volume',volume,muted:sourceMuted},location.origin);
  theme.volume=volume;theme.muted=sourceMuted;
 }
 window.addEventListener('message',(event)=>{
@@ -48,7 +51,7 @@ window.addEventListener('message',(event)=>{
  if(event.source!==window.parent||event.origin!=='https://spmt.live'
   ||event.data?.type!=='spmt-lounge-brb-audio'||typeof event.data.active!=='boolean')return;
  brbActive=event.data.active;
- setThemeActive(brbActive&&event.data.mode==='gif');
+ setThemeActive(brbActive);
  applyBroadcastVolume();
 });
 // This is the OBS browser source. Twitch viewers adjust their own local

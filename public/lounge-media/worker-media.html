@@ -1,15 +1,45 @@
 <!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>SpaceMountain Lounge media</title>
 <style>html,body,video{margin:0;width:100%;height:100%;overflow:hidden;background:#000}video{display:block;object-fit:contain}#channel-bug{position:absolute;right:2%;bottom:2%;width:clamp(34px,8%,78px);height:auto;pointer-events:none;z-index:1}#status{position:absolute;inset:0;display:grid;place-items:center;padding:6%;box-sizing:border-box;background:radial-gradient(circle,#20153d,#090919 65%,#000);color:#fff;text-align:center;font:600 clamp(16px,2.5vw,30px) system-ui;z-index:2}#status[hidden]{display:none}</style></head>
-<body><video id="player" autoplay playsinline></video><img id="channel-bug" src="/lounge-media/munch-tv-bug.gif" alt="Munch TV"><div id="status" role="status">Connecting to Lounge worker</div>
+<body><video id="player" autoplay playsinline></video><audio id="theme" preload="auto"></audio><img id="channel-bug" src="/lounge-media/munch-tv-bug.gif" alt="Munch TV"><div id="status" role="status">Connecting to Lounge worker</div>
 <script src="https://hmo-dj-worker.fly.dev:4444/lounge/hls.js"></script>
 <script>
 (() => {
   const worker = 'https://hmo-dj-worker.fly.dev:4444';
   const video = document.getElementById('player');
   const status = document.getElementById('status');
-  let hls, selection = '', mix = .85, master = 1, source = 1, programLevel = 1, focus = 1, muted = false, programMuted = false, brb = false, epoch = 0, policyMuted = false, lastUnmutePulseAt = 0;
-  function volume(){video.volume = Math.min(1, mix * master * source * programLevel * focus);video.muted = muted || programMuted || brb || policyMuted;}
+  const theme = document.getElementById('theme');
+  const themeTracks = [
+    '/api/offline-music?id=c3BhY2Vtb3VudGFpbmxpdmUvc3BtdC5tcDM',
+    '/api/offline-music?id=c3BhY2Vtb3VudGFpbmxpdmUvc3BtdDIubXAz',
+    '/api/offline-music?id=c3BhY2Vtb3VudGFpbmxpdmUvc3BtdDMubXAz',
+    '/api/offline-music?id=c3BhY2Vtb3VudGFpbmxpdmUvc3BtdDQubXAz',
+  ];
+  let hls, selection = '', mix = .85, master = 1, source = 1, programLevel = 1, focus = 1, muted = false, programMuted = false, commercialActive = false, epoch = 0, policyMuted = false, lastUnmutePulseAt = 0;
+  let themeIndex = 0, themeFailures = 0, themeLatched = false;
+  theme.src = themeTracks[themeIndex];
+  function volume(){
+    video.volume = Math.min(1, mix * master * source * programLevel * focus);
+    video.muted = muted || programMuted || policyMuted;
+    theme.volume = Math.min(1, mix * master * source);
+    theme.muted = muted;
+  }
+  function playTheme(){ if (themeLatched) theme.play().catch(()=>{}); }
+  function beginCommercialMusic(){
+    if (themeLatched) return;
+    themeLatched = true; themeFailures = 0; theme.currentTime = 0; playTheme();
+  }
+  function advanceTheme(failed){
+    if (!themeLatched) return;
+    themeFailures = failed ? themeFailures + 1 : 0;
+    if (themeFailures >= themeTracks.length) { themeLatched = false; theme.pause(); return; }
+    if (!commercialActive && !failed) { themeLatched = false; theme.pause(); return; }
+    themeIndex = (themeIndex + 1) % themeTracks.length;
+    theme.src = themeTracks[themeIndex]; theme.currentTime = 0; playTheme();
+  }
+  theme.addEventListener('ended',()=>advanceTheme(false));
+  theme.addEventListener('error',()=>advanceTheme(true));
+  theme.addEventListener('playing',()=>{ themeFailures = 0; });
   volume();
   window.addEventListener('message', event => {
     if (event.source !== window.parent || event.origin !== 'https://spmt.live') return;
@@ -20,7 +50,9 @@
       }
     }
     if (event.data?.type === 'spmt-lounge-brb-audio' && typeof event.data.active === 'boolean') {
-      brb = event.data.active; volume();
+      commercialActive = event.data.active;
+      if (commercialActive) beginCommercialMusic();
+      volume();
     }
     if (event.data?.type === 'spmt-lounge-program-focus' && typeof event.data.focused === 'boolean') {
       focus = event.data.focused ? 1 : .2; volume();
@@ -83,16 +115,18 @@
       const next = item ? lane+':'+item.requestId : '';
       if (!next) { if (selection) { selection='';hls?.destroy();video.pause();video.removeAttribute('src');video.load();} status.hidden=false;status.textContent='Waiting for a Lounge request';return; }
       if (next === selection) return;
+      hls?.destroy(); hls = null; video.pause(); video.removeAttribute('src'); video.load();
+      let startAt = -1;
       if (lane === 'movie') {
         const info = await(await fetch(worker+'/lounge/direct/status',{cache:'no-store'})).json();
-        if (!info.ready || info.requestId !== item.requestId) {status.hidden=false;status.textContent=info.error || 'Preparing '+item.item.title;return;}
+        if (!info.ready || info.requestId !== item.requestId) {selection='';status.hidden=false;status.textContent=info.error || 'Preparing '+item.item.title;return;}
+        startAt = Math.max(0, Number(info.viewerPosition || 0));
       }
       selection=next;const myEpoch=++epoch;status.hidden=false;status.textContent='Buffering '+item.item.title;
-      hls?.destroy();video.pause();video.removeAttribute('src');video.load();
       const videoId=String(item.item?.metadata?.videoId||'');
       const url=worker+(lane==='movie'?'/lounge/direct/hls/index.m3u8':'/lounge/music/hls/'+encodeURIComponent(videoId)+'/index.m3u8');
       if (window.Hls?.isSupported()) {
-        hls=new Hls({startPosition:-1,maxBufferLength:45,maxMaxBufferLength:90,lowLatencyMode:false});
+        hls=new Hls({startPosition:startAt,maxBufferLength:45,maxMaxBufferLength:90,lowLatencyMode:false});
         hls.on(Hls.Events.ERROR,(_event,detail)=>{if(detail.fatal && epoch===myEpoch){hls.destroy();hls=null;selection='';status.hidden=false;status.textContent='Retrying '+item.item.title;}});
         hls.attachMedia(video);hls.on(Hls.Events.MEDIA_ATTACHED,()=>hls.loadSource(url));
       } else if (video.canPlayType('application/vnd.apple.mpegurl')) video.src=url;

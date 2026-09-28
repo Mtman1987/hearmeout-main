@@ -16,7 +16,7 @@ function inspectSpotlightPlaylist(playlist, ageMs) {
 
 function createSpotlightHls({ spotlightEndpoint, root = '/tmp/spotlight-hls' }) {
   let login = '', generation = '', encoder = null, failure = '', inflight = null, timer = null, lastPoll = 0;
-  let recoveries = 0, startedAt = 0;
+  let recoveries = 0, startedAt = 0, failedLogin = '', failedLoginUntil = 0;
 
   function stop() {
     if (encoder && encoder.exitCode === null) encoder.kill('SIGTERM');
@@ -66,7 +66,21 @@ function createSpotlightHls({ spotlightEndpoint, root = '/tmp/spotlight-hls' }) 
       }
       if (selected === login && encoder && encoder.exitCode === null && !encoder.killed && !status().stalled) return status();
       if (selected === login && status().stalled) recoveries++;
-      const source = await resolve(selected);
+      if (selected === failedLogin && Date.now() < failedLoginUntil) {
+        stop(); login = ''; generation = '';
+        failure = 'Selected Spotlight source is offline; waiting for the live rotation to change';
+        return status();
+      }
+      let source;
+      try {
+        source = await resolve(selected);
+        failedLogin = ''; failedLoginUntil = 0;
+      } catch {
+        stop(); login = ''; generation = '';
+        failedLogin = selected; failedLoginUntil = Date.now() + 60_000;
+        failure = 'Selected Spotlight source is offline; waiting for the live rotation to change';
+        return status();
+      }
       stop();
       const previous = generation;
       login = selected;
