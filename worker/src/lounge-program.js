@@ -39,7 +39,12 @@ function readState() {
   if (state) return state;
   try {
     const saved = JSON.parse(readFileSync(stateFile, 'utf8'));
-    if (saved?.movie?.queue && saved?.music?.queue) return (state = saved);
+    if (saved?.movie?.queue && saved?.music?.queue) {
+      if (saved.radio?.enabled === false && saved.radio?.explicitlyDisabled !== true && saved.radio?.seeds?.length) {
+        saved.radio.enabled = true;
+      }
+      return (state = saved);
+    }
   } catch (error) {
     if (existsSync(stateFile)) throw error;
   }
