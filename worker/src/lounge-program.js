@@ -8,6 +8,7 @@ const { dirname, join } = require('node:path');
 
 const run = promisify(execFile);
 const stateFile = process.env.LOUNGE_STATE_FILE || '/data/lounge-program.json';
+const MAX_RADIO_SEEDS = 1000;
 let catalog = { at: 0, items: [] };
 let state;
 let durationLookup = null;
@@ -152,7 +153,7 @@ function rememberSong(item) {
   if (!/^[\w-]{11}$/.test(id)) return;
   if (radio.seeds.some(seed => seed.id === id)) return;
   radio.seeds.push({ id, title: item.title, artist: item.metadata.artist || '', duration: item.metadata.duration || 0 });
-  if (radio.seeds.length > 200) { radio.seeds.shift(); radio.cursor = Math.max(0, radio.cursor - 1); }
+  if (radio.seeds.length > MAX_RADIO_SEEDS) { radio.seeds.shift(); radio.cursor = Math.max(0, radio.cursor - 1); }
 }
 
 function nextRadioEntry() {
@@ -183,20 +184,20 @@ function advanceMusic() {
 async function radio(body) {
   const stored = readState();
   const settings = radioState();
+  const beforeCount = settings.seeds.length;
   const control = String(body.control || 'status');
   if (control === 'add') {
     const value = String(body.query || '').trim();
     const url = new URL(value);
     if (!['youtube.com', 'www.youtube.com', 'm.youtube.com', 'music.youtube.com'].includes(url.hostname) || !url.searchParams.get('list')) throw Error('Provide a public YouTube playlist URL');
-    const { stdout } = await run('yt-dlp', ['--flat-playlist', '--playlist-end', '100', '--skip-download', '--dump-single-json', '--no-warnings', value], { timeout: 90000, maxBuffer: 12 * 1024 * 1024 });
+    const { stdout } = await run('yt-dlp', ['--flat-playlist', '--playlist-end', String(MAX_RADIO_SEEDS), '--skip-download', '--dump-single-json', '--no-warnings', value], { timeout: 90000, maxBuffer: 24 * 1024 * 1024 });
     const playlist = JSON.parse(stdout);
     const entries = Array.isArray(playlist.entries) ? playlist.entries : [];
-    const before = settings.seeds.length;
     for (const video of entries) {
       if (!/^[\w-]{11}$/.test(String(video?.id || ''))) continue;
       rememberSong({ title: String(video.title || video.id).slice(0, 180), metadata: { videoId: video.id, artist: video.uploader || video.channel || '', duration: Number(video.duration) || 0 } });
     }
-    if (settings.seeds.length === before) throw Error('No new playable videos found in that playlist');
+    if (settings.seeds.length === beforeCount) throw Error('No new playable videos found in that playlist');
   } else if (control === 'on' || control === 'off') {
     settings.enabled = control === 'on';
     if (settings.enabled) {
@@ -206,7 +207,7 @@ async function radio(body) {
     if (settings.enabled && !stored.music.current && !stored.music.queue.length) advanceMusic();
   } else if (control !== 'status') throw Error('Unsupported radio control');
   save();
-  return { success: true, action: 'hmo.media.radio', radio: program().radio, added: control === 'add' ? settings.seeds.length : undefined, program: program() };
+  return { success: true, action: 'hmo.media.radio', radio: program().radio, added: control === 'add' ? settings.seeds.length - beforeCount : undefined, program: program() };
 }
 
 function tick(now = Date.now()) {

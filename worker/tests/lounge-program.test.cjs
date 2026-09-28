@@ -57,3 +57,26 @@ test('Lounge worker owns movie and music state, including queue handoff', async 
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test('Lounge radio imports an entire 480-song playlist without turning itself on', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'hmo-large-playlist-'));
+  const previous = { ...process.env };
+  try {
+    process.env.LOUNGE_STATE_FILE = join(root, 'program.json');
+    const bin = join(root, 'bin');
+    mkdirSync(bin);
+    const entries = Array.from({ length: 480 }, (_, index) => ({ id: String(index).padStart(11, '0'), title: `Song ${index + 1}`, duration: 180 }));
+    writeFileSync(join(bin, 'yt-dlp'), `#!/bin/sh\necho '${JSON.stringify({ entries })}'\n`, { mode: 0o755 });
+    process.env.PATH = `${bin}:${previous.PATH}`;
+    delete require.cache[require.resolve('../src/lounge-program')];
+    const program = require('../src/lounge-program');
+    const added = await program.radio({ control: 'add', query: 'https://youtube.com/playlist?list=PLYS-jRgAqcA7jEvh6YC-obbUUBxOJsfDS' });
+    assert.equal(added.added, 480);
+    assert.equal(program.program().radio.seedCount, 480);
+    assert.equal(program.program().radio.enabled, false);
+  } finally {
+    Object.keys(process.env).forEach(key => { if (!(key in previous)) delete process.env[key]; });
+    Object.assign(process.env, previous);
+    rmSync(root, { recursive: true, force: true });
+  }
+});
