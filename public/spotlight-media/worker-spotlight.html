@@ -11,9 +11,15 @@
   let hls, generation = '', groupLevel = .58, masterLevel = 1, sourceVolume = 1, focus = 1, sourceMuted = false, brb = false, policyMuted = false, lastUnmutePulseAt = 0;
   function volume(){video.volume=Math.min(1,groupLevel*masterLevel*sourceVolume*focus);video.muted=sourceMuted||brb||policyMuted;}
   function health(healthy){if(window.parent!==window)window.parent.postMessage({type:'spmt-lounge-spotlight-health',healthy},'https://spmt.live');}
-  function tryUnmute(){
+  async function tryUnmute(){
     policyMuted=false;volume();
-    if(video.paused) void resume();
+    if(video.readyState<3)return;
+    try {
+      await video.play();
+    } catch {
+      policyMuted=true;volume();
+      try { await video.play(); health(true); } catch {}
+    }
   }
   async function resume(){
     if(!video.paused||video.readyState<3)return;
@@ -26,7 +32,7 @@
       policyMuted=true;volume();
       try {
         await video.play();
-        status.hidden=false;status.textContent='Spotlight playing muted — !unmute can retry audio';
+        status.hidden=true;
         health(true);
       } catch {
         status.hidden=false;status.textContent='Reconnecting Spotlight';
@@ -76,10 +82,7 @@
     else{generation='';status.textContent='Spotlight player unavailable';}
     volume();resume();
   }catch{status.hidden=false;status.textContent='Connecting to Spotlight worker';health(false);}}
-  video.addEventListener('playing',()=>{
-    status.hidden=true;health(true);
-    if(policyMuted)[250,1000].forEach(delay=>setTimeout(()=>{if(policyMuted)tryUnmute();},delay));
-  });
+  video.addEventListener('playing',()=>{status.hidden=true;health(true);});
   video.addEventListener('canplay',()=>void resume());video.addEventListener('progress',()=>void resume());video.addEventListener('timeupdate',()=>void resume());
   video.addEventListener('waiting',()=>health(false));
   volume();void poll();void mix();setInterval(poll,2500);setInterval(mix,3000);
