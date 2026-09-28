@@ -10,6 +10,8 @@ const run = promisify(execFile);
 const stateFile = process.env.LOUNGE_STATE_FILE || '/data/lounge-program.json';
 let catalog = { at: 0, items: [] };
 let state;
+let durationLookup = null;
+let durationRetryAt = 0;
 
 function emptyLane() {
   return { current: null, queue: [], playback: { status: 'idle', position: 0, updatedAt: Date.now(), muted: false, volume: 85 } };
@@ -23,7 +25,7 @@ function readState() {
   } catch (error) {
     if (existsSync(stateFile)) throw error;
   }
-  return (state = { movie: emptyLane(), music: emptyLane() });
+  return (state = { movie: emptyLane(), music: emptyLane(), radio: { enabled: false, seeds: [], cursor: 0 } });
 }
 
 function save() {
@@ -42,12 +44,13 @@ function publicLane(lane) {
     },
     playback: lane.playback,
     queue: [],
+    queueCount: lane.queue.length,
   };
 }
 
 function program() {
   const stored = readState();
-  return { movie: publicLane(stored.movie), music: publicLane(stored.music) };
+  return { movie: publicLane(stored.movie), music: publicLane(stored.music), radio: { enabled: stored.radio?.enabled === true, seedCount: stored.radio?.seeds?.length || 0 } };
 }
 
 function provider() {
@@ -134,13 +137,110 @@ async function musicItem(query) {
   const video = Array.isArray(found.entries) ? found.entries[0] : found;
   if (!/^[\w-]{11}$/.test(String(video?.id || ''))) throw Error('No playable song found');
   return { type: 'music', title: String(video.title || value), playbackUrl: `/lounge/music/hls/index.m3u8`,
-    metadata: { provider: 'youtube', videoId: video.id, artist: video.uploader || video.channel || '' } };
+    metadata: { provider: 'youtube', videoId: video.id, artist: video.uploader || video.channel || '', duration: Number(video.duration) || 0 } };
+}
+
+function radioState() {
+  const stored = readState();
+  if (!stored.radio) stored.radio = { enabled: false, seeds: [], cursor: 0 };
+  return stored.radio;
+}
+
+function rememberSong(item) {
+  const radio = radioState();
+  const id = String(item?.metadata?.videoId || '');
+  if (!/^[\w-]{11}$/.test(id)) return;
+  if (radio.seeds.some(seed => seed.id === id)) return;
+  radio.seeds.push({ id, title: item.title, artist: item.metadata.artist || '', duration: item.metadata.duration || 0 });
+  if (radio.seeds.length > 200) { radio.seeds.shift(); radio.cursor = Math.max(0, radio.cursor - 1); }
+}
+
+function nextRadioEntry() {
+  const stored = readState();
+  const radio = radioState();
+  if (!radio.enabled || !radio.seeds.length) return null;
+  const currentId = stored.music.current?.item?.metadata?.videoId;
+  const index = radio.cursor % radio.seeds.length;
+  let offset = 0;
+  if (radio.seeds.length > 1 && radio.seeds[index].id === currentId) offset = 1;
+  const seed = radio.seeds[(index + offset) % radio.seeds.length];
+  radio.cursor = (index + offset + 1) % radio.seeds.length;
+  return { requestId: randomUUID(), requestedBy: { userId: 'auto-radio', username: 'Auto-Radio' }, addedAt: new Date().toISOString(),
+    item: { type: 'music', title: seed.title, playbackUrl: '/lounge/music/hls/index.m3u8',
+      metadata: { provider: 'youtube', videoId: seed.id, artist: seed.artist, duration: seed.duration } } };
+}
+
+function advanceMusic() {
+  const stored = readState();
+  const lane = stored.music;
+  lane.current = lane.queue.shift() || nextRadioEntry();
+  lane.playback.position = 0;
+  lane.playback.updatedAt = Date.now();
+  lane.playback.status = lane.current ? 'playing' : 'idle';
+  if (!lane.current && stored.movie.current && stored.movie.playback.status === 'paused') stored.movie.playback.status = 'playing';
+}
+
+async function radio(body) {
+  const stored = readState();
+  const settings = radioState();
+  const control = String(body.control || 'status');
+  if (control === 'add') {
+    const value = String(body.query || '').trim();
+    const url = new URL(value);
+    if (!['youtube.com', 'www.youtube.com', 'm.youtube.com', 'music.youtube.com'].includes(url.hostname) || !url.searchParams.get('list')) throw Error('Provide a public YouTube playlist URL');
+    const { stdout } = await run('yt-dlp', ['--flat-playlist', '--playlist-end', '100', '--skip-download', '--dump-single-json', '--no-warnings', value], { timeout: 90000, maxBuffer: 12 * 1024 * 1024 });
+    const playlist = JSON.parse(stdout);
+    const entries = Array.isArray(playlist.entries) ? playlist.entries : [];
+    const before = settings.seeds.length;
+    for (const video of entries) {
+      if (!/^[\w-]{11}$/.test(String(video?.id || ''))) continue;
+      rememberSong({ title: String(video.title || video.id).slice(0, 180), metadata: { videoId: video.id, artist: video.uploader || video.channel || '', duration: Number(video.duration) || 0 } });
+    }
+    if (settings.seeds.length === before) throw Error('No new playable videos found in that playlist');
+  } else if (control === 'on' || control === 'off') {
+    settings.enabled = control === 'on';
+    if (settings.enabled) {
+      if (stored.music.current) rememberSong(stored.music.current.item);
+      for (const queued of stored.music.queue) rememberSong(queued.item);
+    }
+    if (settings.enabled && !stored.music.current && !stored.music.queue.length) advanceMusic();
+  } else if (control !== 'status') throw Error('Unsupported radio control');
+  save();
+  return { success: true, action: 'hmo.media.radio', radio: program().radio, added: control === 'add' ? settings.seeds.length : undefined, program: program() };
+}
+
+function tick(now = Date.now()) {
+  const stored = readState();
+  const lane = stored.music;
+  if (lane.current && lane.playback.status === 'playing') {
+    const duration = Number(lane.current.item?.metadata?.duration);
+    if (!duration && !durationLookup && now >= durationRetryAt) {
+      const id = lane.current.item?.metadata?.videoId;
+      durationRetryAt = now + 60_000;
+      durationLookup = musicItem(`https://www.youtube.com/watch?v=${id}`).then(item => {
+        if (lane.current?.item?.metadata?.videoId === id && item.metadata.duration > 0) {
+          lane.current.item.metadata.duration = item.metadata.duration;
+          for (const seed of radioState().seeds) if (seed.id === id) seed.duration = item.metadata.duration;
+          save();
+        }
+      }).catch(error => console.warn('[Lounge] Radio duration lookup:', error.message))
+        .finally(() => { durationLookup = null; });
+    }
+    if (duration > 0 && lane.playback.position + (now - lane.playback.updatedAt) / 1000 >= duration) {
+      advanceMusic();
+      save();
+    }
+  } else if (!lane.current && stored.radio?.enabled && stored.radio.seeds?.length) {
+    advanceMusic();
+    save();
+  }
 }
 
 async function request(body) {
   const laneName = body.lane === 'movie' ? 'movie' : 'music';
   const item = laneName === 'movie' ? await movieItem(body.query, body.itemId) : await musicItem(body.query);
   const stored = readState();
+  if (laneName === 'music') rememberSong(item);
   const lane = stored[laneName];
   const entry = { requestId: randomUUID(), requestedBy: { userId: String(body.actorUserId || ''), username: String(body.actorName || 'Viewer') }, addedAt: new Date().toISOString(), item };
   if (!lane.current) {
@@ -163,9 +263,13 @@ function control(body) {
     : body.targetLane === 'movie' ? 'movie' : requestedLane;
   const lane = stored[laneName];
   const action = body.control === 'next-active' ? 'next' : String(body.control || '');
-  if (action === 'next') lane.current = lane.queue.shift() || null;
-  else if (action === 'clear') { lane.current = null; lane.queue = []; }
-  else if (action === 'play' || action === 'pause') lane.playback.status = lane.current ? (action === 'play' ? 'playing' : 'paused') : 'idle';
+  if (action === 'next' && laneName === 'music') advanceMusic();
+  else if (action === 'next') lane.current = lane.queue.shift() || null;
+  else if (action === 'clear') { lane.current = null; lane.queue = []; if (laneName === 'music') radioState().enabled = false; }
+  else if (action === 'play' || action === 'pause') {
+    if (lane.playback.status === 'playing') lane.playback.position += (Date.now() - lane.playback.updatedAt) / 1000;
+    lane.playback.status = lane.current ? (action === 'play' ? 'playing' : 'paused') : 'idle';
+  }
   else if (action === 'volume') lane.playback.volume = Math.max(0, Math.min(100, Number(body.value) || 0));
   else if (action === 'mute' || action === 'unmute') lane.playback.muted = action === 'mute';
   else throw Error('Unsupported Lounge control');
@@ -174,7 +278,7 @@ function control(body) {
     const other = stored[laneName === 'movie' ? 'music' : 'movie'];
     if (other.current && other.playback.status === 'paused') other.playback.status = 'playing';
   }
-  lane.playback.position = 0;
+  if (action === 'next' || action === 'clear') lane.playback.position = 0;
   lane.playback.updatedAt = Date.now();
   save();
   return { success: true, action: 'hmo.media.control', lane: laneName, session: publicLane(lane), program: program() };
@@ -187,4 +291,4 @@ function source(movie) {
   return new URL(`/${metadata.pathKind}/${encodeURIComponent(username)}/${encodeURIComponent(password)}/${metadata.streamId}.${metadata.extension}`, base).toString();
 }
 
-module.exports = { program, search, request, control, source };
+module.exports = { program, search, request, control, radio, tick, source };

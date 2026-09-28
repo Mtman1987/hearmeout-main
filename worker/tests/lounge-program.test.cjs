@@ -16,7 +16,7 @@ test('Lounge worker owns movie and music state, including queue handoff', async 
     process.env.XTREAM_ENABLE_SERIES = 'false';
     const bin = join(root, 'bin');
     mkdirSync(bin);
-    writeFileSync(join(bin, 'yt-dlp'), '#!/bin/sh\necho \'{"id":"dQw4w9WgXcQ","title":"Test Song","uploader":"Test Artist"}\'\n', { mode: 0o755 });
+    writeFileSync(join(bin, 'yt-dlp'), '#!/bin/sh\ncase "$*" in *--flat-playlist*) echo \'{"entries":[{"id":"M7lc1UVf-VE","title":"Playlist Song","duration":120}]}\';; *) echo \'{"id":"dQw4w9WgXcQ","title":"Test Song","uploader":"Test Artist","duration":180}\';; esac\n', { mode: 0o755 });
     process.env.PATH = `${bin}:${previous.PATH}`;
     global.fetch = async url => {
       assert.equal(new URL(url).searchParams.get('action'), 'get_vod_streams');
@@ -39,6 +39,17 @@ test('Lounge worker owns movie and music state, including queue handoff', async 
     assert.equal(program.program().music.current.requestId, queued.request.requestId);
     program.control({ lane: 'music', control: 'clear' });
     assert.equal(program.program().movie.playback.status, 'playing');
+    const radio = await program.radio({ control: 'add', query: 'https://www.youtube.com/playlist?list=PLtest' });
+    assert.equal(radio.radio.seedCount, 2);
+    await program.radio({ control: 'on' });
+    assert.equal(program.program().music.current.item.metadata.videoId, 'dQw4w9WgXcQ');
+    program.control({ lane: 'music', control: 'next' });
+    assert.equal(program.program().music.current.item.metadata.videoId, 'M7lc1UVf-VE');
+    program.tick(Date.now() + 121000);
+    assert.equal(program.program().music.current.item.metadata.videoId, 'dQw4w9WgXcQ');
+    await program.radio({ control: 'off' });
+    program.control({ lane: 'music', control: 'next' });
+    assert.equal(program.program().music.current, null);
   } finally {
     global.fetch = originalFetch;
     Object.keys(process.env).forEach(key => { if (!(key in previous)) delete process.env[key]; });

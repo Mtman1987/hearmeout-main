@@ -2995,6 +2995,7 @@ app.post('/lounge/media/actions', authorizeWorker, async (req, res) => {
       return res.json({ success: true, action, options: await loungeProgram.search(req.body.query) });
     if (action === 'hmo.media.request') return res.json(await loungeProgram.request(req.body));
     if (action === 'hmo.media.control') return res.json(loungeProgram.control(req.body));
+    if (action === 'hmo.media.radio') return res.json(await loungeProgram.radio(req.body));
     if (action === 'hmo.media.state.read') return res.json({ success: true, action, session: loungeProgram.program()[req.body?.lane === 'movie' ? 'movie' : 'music'] });
     return res.status(400).json({ error: 'Unsupported Lounge action' });
   } catch (error) {
@@ -3002,6 +3003,8 @@ app.post('/lounge/media/actions', authorizeWorker, async (req, res) => {
     return res.status(502).json({ error: error?.message || 'Lounge action failed' });
   }
 });
+
+if (RUN_LOUNGE) setInterval(() => loungeProgram.tick(), 5000).unref();
 
 app.get('/lounge/music/hls/:file', authorizeViewer('lounge'), async (req, res) => {
   try {
