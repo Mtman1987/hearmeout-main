@@ -4,6 +4,39 @@ const { mkdtempSync, writeFileSync, mkdirSync, readFileSync, rmSync } = require(
 const { tmpdir } = require('node:os');
 const { join } = require('node:path');
 
+test('an unplayable song searches five matching uploads before replying to chat', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'hmo-song-alternates-'));
+  const previous = { ...process.env };
+  try {
+    process.env.LOUNGE_STATE_FILE = join(root, 'program.json');
+    const bin = join(root, 'bin');
+    mkdirSync(bin);
+    writeFileSync(join(bin, 'yt-dlp'), `#!/bin/sh
+case "$*" in
+  *ytsearch5*) echo '{"entries":[{"id":"AAAAAAAAAAA","title":"Artist - Song"},{"id":"BBBBBBBBBBB","title":"Artist - Song"},{"id":"CCCCCCCCCCC","title":"Artist - Song"},{"id":"DDDDDDDDDDD","title":"Artist - Song"},{"id":"EEEEEEEEEEE","title":"Artist - Song"}]}' ;;
+  *) echo '{"id":"ORIGINAL000","title":"Artist - Song","uploader":"Artist","duration":180}' ;;
+esac
+`, { mode: 0o755 });
+    process.env.PATH = `${bin}:${previous.PATH}`;
+    delete require.cache[require.resolve('../src/lounge-program')];
+    const program = require('../src/lounge-program');
+    const tried = [];
+    program.configureMusicSource({ prepare: async id => { tried.push(id); return id === 'CCCCCCCCCCC'; }, failure: () => 'No compatible tracks', stop: () => {} });
+    const found = await program.request({ lane: 'music', query: 'Artist - Song', actorName: 'listener' });
+    assert.equal(found.request.item.metadata.videoId, 'CCCCCCCCCCC');
+    assert.deepEqual(tried, ['ORIGINAL000', 'AAAAAAAAAAA', 'BBBBBBBBBBB', 'CCCCCCCCCCC']);
+    program.configureMusicSource({ prepare: async id => { tried.push(id); return false; }, failure: () => 'No compatible tracks', stop: () => {} });
+    await assert.rejects(program.request({ lane: 'music', query: 'Artist - Song', actorName: 'listener' }), /after checking the top five results/);
+    assert.deepEqual(tried.slice(4), ['ORIGINAL000', 'AAAAAAAAAAA', 'BBBBBBBBBBB', 'CCCCCCCCCCC', 'DDDDDDDDDDD', 'EEEEEEEEEEE']);
+    assert.equal(program.program().music.queueCount, 0);
+  } finally {
+    delete require.cache[require.resolve('../src/lounge-program')];
+    Object.keys(process.env).forEach(key => { if (!(key in previous)) delete process.env[key]; });
+    Object.assign(process.env, previous);
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('Lounge worker owns movie and music state, including queue handoff', async () => {
   const root = mkdtempSync(join(tmpdir(), 'hmo-lounge-program-'));
   const previous = { ...process.env };

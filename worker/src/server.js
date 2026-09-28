@@ -1434,7 +1434,7 @@ function ensureYoutubeWatchHls(videoId, clientResolved = null) {
       await runYoutubeHlsFfmpeg(clean, cachedVideo, cachedAudio, dir, indexPath);
       return;
     }
-    if (cachedAudio) {
+    if (cachedAudio && !RUN_LOUNGE) {
       console.log(`[WatchHLS] Using cached audio file for ${clean}`);
       await runYoutubeAudioHlsFromFile(clean, cachedAudio, dir, indexPath);
       return;
@@ -1459,6 +1459,7 @@ function ensureYoutubeWatchHls(videoId, clientResolved = null) {
       await runYoutubeHlsFromYtDlp(clean, videoId, dir, indexPath, true);
     } catch (error) {
       if (error?.message === 'Lounge song was superseded') throw error;
+      if (/Requested format is not available/i.test(String(error?.message || ''))) throw error;
       if (!ytDlpCookieArgs().length) throw error;
       console.warn(`[WatchHLS] Retrying ${clean} without stale YouTube cookies`);
       try { rmSync(dir, { recursive: true, force: true }); } catch {}
@@ -1502,8 +1503,23 @@ function loungeMusicReady(videoId) {
   return manifest.includes('#EXT-X-ENDLIST') || (manifest.match(/#EXTINF:/g) || []).length >= 2;
 }
 
+let lastSongFailureNoticeAt = 0;
 if (RUN_LOUNGE) loungeProgram.configureMusicSource({
   isReady: loungeMusicReady,
+  failure: (videoId) => getRecentWatchHlsFailure(youtubeWatchHlsId(videoId))?.message,
+  notifyFailure: async (title) => {
+    if (Date.now() - lastSongFailureNoticeAt < 10 * 60_000) return;
+    lastSongFailureNoticeAt = Date.now();
+    try {
+      const response = await fetch('https://streamweaver-new.fly.dev/api/internal/hearmeout/lounge-song-unavailable', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${WORKER_SHARED_SECRET}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title: String(title || '').slice(0, 120) }),
+        signal: AbortSignal.timeout(8000),
+      });
+      if (!response.ok) console.warn(`[Lounge] Chat notification returned ${response.status}`);
+    } catch (error) { console.warn('[Lounge] Chat notification failed:', error.message); }
+  },
   prepare: async (videoId) => {
     if (!isValidVideoId(videoId)) return false;
     if (loungeMusicReady(videoId)) return true;
@@ -1644,8 +1660,8 @@ async function runWatchHlsFfmpeg(streamId, sourceUrl, dir, indexPath) {
 
 function youtubeYtDlpStreamArgs(videoId, mode, useCookies) {
   const format = mode === 'video'
-    ? 'bestvideo[ext=mp4][height<=720][vcodec^=avc1]/bestvideo[ext=mp4][height<=720]/bestvideo[height<=720]/bestvideo'
-    : 'bestaudio[ext=m4a]/bestaudio[ext=mp4]/bestaudio';
+    ? 'bestvideo[ext=mp4][height<=720][vcodec^=avc1]'
+    : 'bestaudio[ext=m4a][acodec^=mp4a]';
   return [
     '--no-playlist',
     '--no-warnings',
@@ -1667,7 +1683,7 @@ function youtubeYtDlpStreamArgs(videoId, mode, useCookies) {
 
 function runYoutubeHlsFromYtDlp(streamId, videoId, dir, indexPath, useCookies = true) {
   const segmentPattern = join(dir, 'seg_%05d.ts');
-  console.log(`[WatchHLS] Starting two-input yt-dlp/FFmpeg conversion for ${streamId}`);
+  console.log(`[WatchHLS] Packaging ${streamId} with stream copy`);
 
   return new Promise((resolve, reject) => {
     const video = spawn('yt-dlp', youtubeYtDlpStreamArgs(videoId, 'video', useCookies), { stdio: ['ignore', 'pipe', 'pipe'] });
@@ -1681,12 +1697,7 @@ function runYoutubeHlsFromYtDlp(streamId, videoId, dir, indexPath, useCookies = 
       '-i', 'pipe:4',
       '-map', '0:v:0',
       '-map', '1:a:0',
-      '-c:v', 'libx264',
-      '-preset', 'veryfast',
-      '-pix_fmt', 'yuv420p',
-      '-c:a', 'aac',
-      '-b:a', '160k',
-      '-ac', '2',
+      '-c:v', 'copy', '-c:a', 'copy',
       '-shortest',
       '-f', 'hls',
       '-hls_time', String(WATCH_HLS_SEGMENT_SECONDS),
@@ -1744,7 +1755,7 @@ function runYoutubeHlsFfmpeg(streamId, videoUrl, audioUrl, dir, indexPath) {
     '-reconnect_delay_max', '5',
     '-i', url,
   ];
-  console.log(`[WatchHLS] Starting YouTube HLS conversion for ${streamId}`);
+  console.log(`[WatchHLS] Packaging YouTube tracks for ${streamId} with stream copy`);
 
   return new Promise((resolve, reject) => {
     const ffmpegArgs = [
@@ -1756,12 +1767,7 @@ function runYoutubeHlsFfmpeg(streamId, videoUrl, audioUrl, dir, indexPath) {
       ...inputArgs(audioUrl),
       '-map', '0:v:0',
       '-map', '1:a:0',
-      '-c:v', 'libx264',
-      '-preset', 'veryfast',
-      '-pix_fmt', 'yuv420p',
-      '-c:a', 'aac',
-      '-b:a', '160k',
-      '-ac', '2',
+      '-c:v', 'copy', '-c:a', 'copy',
       '-shortest',
       '-f', 'hls',
       '-hls_time', String(WATCH_HLS_SEGMENT_SECONDS),

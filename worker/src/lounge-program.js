@@ -151,6 +151,44 @@ async function musicItem(query, timeout = 45000) {
     metadata: { provider: 'youtube', videoId: video.id, artist: video.uploader || video.channel || '', duration: Number(video.duration) || 0 } };
 }
 
+// Try other uploads of the requested song when the first source cannot be
+// packaged. Never switch to a different track just to keep the radio moving.
+async function playableMusicItem(item) {
+  if (await musicSource.prepare(item.metadata.videoId)) return item;
+  if (!musicSource.failure?.(item.metadata.videoId)) return null;
+  musicSource.stop(item.metadata.videoId);
+  const query = String(item.title || '').slice(0, 150);
+  const words = title => new Set(String(title || '').toLowerCase()
+    .replace(/\b(?:official|audio|video|lyrics?|visualizer|hd|hq)\b/g, ' ')
+    .match(/[a-z0-9]{2,}/g) || []);
+  const expected = words(query);
+  let candidates = [];
+  try {
+    const { stdout } = await run('yt-dlp', ['--flat-playlist', '--skip-download', '--dump-single-json', '--no-warnings', `ytsearch5:${query}`], { timeout: 15000, maxBuffer: 4 * 1024 * 1024 });
+    candidates = JSON.parse(stdout).entries || [];
+  } catch (error) { console.warn('[Lounge] Alternate song search:', error.message); }
+  for (const video of candidates.slice(0, 5)) {
+    const id = String(video?.id || '');
+    if (!/^[\w-]{11}$/.test(id) || id === item.metadata.videoId) continue;
+    const matched = [...expected].filter(word => words(video.title).has(word)).length;
+    if (expected.size && matched < Math.max(1, Math.ceil(expected.size * 0.6))) continue;
+    const alternate = { ...item, title: String(video.title || item.title), playbackUrl: `/lounge/music/hls/${id}/index.m3u8`,
+      metadata: { ...item.metadata, videoId: id, artist: video.uploader || video.channel || item.metadata.artist,
+        duration: Number(video.duration) || item.metadata.duration } };
+    try {
+      if (!await musicSource.prepare(id)) {
+        if (musicSource.failure?.(id)) { musicSource.stop(id); continue; }
+        return alternate;
+      }
+      console.log(`[Lounge] Using playable alternate ${id} for ${item.metadata.videoId}`);
+      return alternate;
+    } catch (error) { console.warn(`[Lounge] Alternate ${id} unavailable:`, error.message); }
+  }
+  const error = Error(`Could not find a playable upload of "${query}" after checking the top five results`);
+  error.songTitle = query;
+  throw error;
+}
+
 function radioState() {
   const stored = readState();
   if (!stored.radio) stored.radio = { enabled: false, seeds: [], cursor: 0 };
@@ -257,14 +295,21 @@ function prefetchNextRadio() {
   const forRequestId = lane.current.requestId;
   if (prefetchedRadio?.forRequestId === forRequestId || radioPrefetch?.forRequestId === forRequestId) return;
   const promise = discoverRadioEntry().then(async entry => {
-    const ready = entry && readState().music.current?.requestId === forRequestId && radioState().enabled
-      ? await musicSource.prepare(entry.item.metadata.videoId) : false;
+    let ready = false;
+    if (entry && readState().music.current?.requestId === forRequestId && radioState().enabled) {
+      const playable = await playableMusicItem(entry.item);
+      if (playable) { entry.item = playable; ready = true; }
+    }
     if (entry && readState().music.current?.requestId === forRequestId && radioState().enabled && !readState().music.queue.length)
       prefetchedRadio = { forRequestId, entry, ready };
     else if (entry?.item?.metadata?.videoId !== readState().music.current?.item?.metadata?.videoId)
       musicSource.stop(entry?.item?.metadata?.videoId);
     return entry;
-  }).catch(error => { console.warn('[Lounge] Radio prefetch failed:', error.message); return null; })
+  }).catch(error => {
+    console.warn('[Lounge] Radio prefetch failed:', error.message);
+    if (error.songTitle) musicSource.notifyFailure?.(error.songTitle);
+    return null;
+  })
     .finally(() => { if (radioPrefetch?.forRequestId === forRequestId) radioPrefetch = null; });
   radioPrefetch = { forRequestId, promise };
 }
@@ -280,9 +325,18 @@ async function advanceMusic() {
     if (previous && radioPrefetch?.forRequestId === previous.requestId) await radioPrefetch.promise;
     next = prefetchedRadio?.forRequestId === (previous?.requestId || null) ? prefetchedRadio.entry : await discoverRadioEntry();
     if (next) {
-      const ready = await musicSource.prepare(next.item.metadata.videoId);
-      if (!ready) {
-        prefetchedRadio = { forRequestId: previous?.requestId || null, entry: next, ready: false };
+      try {
+        const playable = await playableMusicItem(next.item);
+        if (!playable) {
+          prefetchedRadio = { forRequestId: previous?.requestId || null, entry: next, ready: false };
+          return;
+        }
+        next.item = playable;
+      }
+      catch (error) {
+        console.warn('[Lounge] Radio could not prepare song:', error.message);
+        if (error.songTitle) musicSource.notifyFailure?.(error.songTitle);
+        prefetchedRadio = null;
         return;
       }
     }
@@ -343,8 +397,19 @@ async function tick(now = Date.now()) {
       awaitingMusicSource = lane.current.requestId;
       if (currentMusicPreparation?.forRequestId !== lane.current.requestId) {
         const forRequestId = lane.current.requestId;
-        const promise = musicSource.prepare(lane.current.item.metadata.videoId)
-          .catch(error => console.warn('[Lounge] Current song preparation:', error.message))
+        const failed = musicSource.failure?.(lane.current.item.metadata.videoId);
+        const promise = (failed ? playableMusicItem(lane.current.item) : musicSource.prepare(lane.current.item.metadata.videoId))
+          .then(item => {
+            if (item && typeof item === 'object' && lane.current?.requestId === forRequestId) {
+              lane.current.item = item;
+              save();
+            }
+          })
+          .catch(error => {
+            console.warn('[Lounge] Current song preparation:', error.message);
+            if (error.songTitle) musicSource.notifyFailure?.(error.songTitle);
+            if (error.songTitle && lane.current?.requestId === forRequestId) advanceMusic().catch(err => console.warn('[Lounge] Radio recovery:', err.message));
+          })
           .finally(() => { if (currentMusicPreparation?.forRequestId === forRequestId) currentMusicPreparation = null; });
         currentMusicPreparation = { forRequestId, promise };
       }
@@ -380,7 +445,8 @@ async function tick(now = Date.now()) {
 
 async function request(body) {
   const laneName = body.lane === 'movie' ? 'movie' : 'music';
-  const item = laneName === 'movie' ? await movieItem(body.query, body.itemId) : await musicItem(body.query);
+  const requested = laneName === 'movie' ? await movieItem(body.query, body.itemId) : await musicItem(body.query);
+  const item = laneName === 'movie' ? requested : await playableMusicItem(requested) || requested;
   const stored = readState();
   if (laneName === 'music') rememberSong(item);
   const lane = stored[laneName];
