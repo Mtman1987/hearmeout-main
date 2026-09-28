@@ -200,11 +200,6 @@ function radioState() {
   const stored = readState();
   if (!stored.radio) stored.radio = { enabled: false, seeds: [], cursor: 0 };
   if (!Array.isArray(stored.radio.history)) stored.radio.history = [];
-  // Older clear-queue behavior also disabled radio. Existing saved state has no
-  // explicit disable marker, so restore radio when a seed library exists.
-  if (stored.radio.explicitlyDisabled !== true && stored.radio.enabled !== true && stored.radio.seeds?.length) {
-    stored.radio.enabled = true;
-  }
   return stored.radio;
 }
 
@@ -260,7 +255,7 @@ function playlistStarter() {
 
 function humanFallback() {
   const radio = radioState();
-  const blocked = new Set((radio.playedIds || []).slice(-20));
+  const blocked = new Set((radio.playedIds || []).slice(-Math.max(0, radio.history.length - 1)));
   const currentId = String(readState().music.current?.item?.metadata?.videoId || '');
   if (currentId) blocked.add(currentId);
   const chosen = radio.history.slice().reverse().find(song => !blocked.has(song.id));
