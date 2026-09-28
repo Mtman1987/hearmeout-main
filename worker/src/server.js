@@ -3146,7 +3146,8 @@ process.on('unhandledRejection', (reason) => {
 });
 
 // ── Start ───────────────────────────────────────────────────────────────
-app.listen(PORT, '0.0.0.0', () => {
+// Fly process DNS resolves to a private IPv6 address. Bind both IPv6 and IPv4.
+app.listen(PORT, '::', () => {
   console.log(`[DJ Worker] Server running on port ${PORT}`);
   console.log(`[DJ Worker] App URL: ${APP_URL}`);
   console.log(`[DJ Worker] Cache dir: ${CACHE_DIR}`);
