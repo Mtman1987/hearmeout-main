@@ -116,18 +116,29 @@
       if (!next) { if (selection) { selection='';hls?.destroy();video.pause();video.removeAttribute('src');video.load();} status.hidden=false;status.textContent='Waiting for a Lounge request';return; }
       if (next === selection) return;
       hls?.destroy(); hls = null; video.pause(); video.removeAttribute('src'); video.load();
-      let startAt = -1;
       if (lane === 'movie') {
         const info = await(await fetch(worker+'/lounge/direct/status',{cache:'no-store'})).json();
         if (!info.ready || info.requestId !== item.requestId) {selection='';status.hidden=false;status.textContent=info.error || 'Preparing '+item.item.title;return;}
-        startAt = Math.max(0, Number(info.viewerPosition || 0));
       }
       selection=next;const myEpoch=++epoch;status.hidden=false;status.textContent='Buffering '+item.item.title;
       const videoId=String(item.item?.metadata?.videoId||'');
       const url=worker+(lane==='movie'?'/lounge/direct/hls/index.m3u8':'/lounge/music/hls/'+encodeURIComponent(videoId)+'/index.m3u8');
       if (window.Hls?.isSupported()) {
-        hls=new Hls({startPosition:startAt,maxBufferLength:45,maxMaxBufferLength:90,lowLatencyMode:false});
-        hls.on(Hls.Events.ERROR,(_event,detail)=>{if(detail.fatal && epoch===myEpoch){hls.destroy();hls=null;selection='';status.hidden=false;status.textContent='Retrying '+item.item.title;}});
+        hls=new Hls({
+          startPosition:-1,
+          liveSyncDurationCount:3,
+          liveMaxLatencyDurationCount:6,
+          maxLiveSyncPlaybackRate:1.05,
+          maxBufferLength:30,
+          maxMaxBufferLength:45,
+          lowLatencyMode:false
+        });
+        hls.on(Hls.Events.ERROR,(_event,detail)=>{
+          if(!detail.fatal||epoch!==myEpoch)return;
+          if(detail.type===Hls.ErrorTypes.MEDIA_ERROR){try{hls.recoverMediaError();return}catch{}}
+          if(detail.type===Hls.ErrorTypes.NETWORK_ERROR){try{hls.startLoad(-1);return}catch{}}
+          hls.destroy();hls=null;selection='';status.hidden=false;status.textContent='Rejoining live movie feed';
+        });
         hls.attachMedia(video);hls.on(Hls.Events.MEDIA_ATTACHED,()=>hls.loadSource(url));
       } else if (video.canPlayType('application/vnd.apple.mpegurl')) video.src=url;
       else {selection='';status.textContent='Media player unavailable';}

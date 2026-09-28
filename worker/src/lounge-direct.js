@@ -55,14 +55,14 @@ function createDirectLounge({ program, sourceForMovie, root, onMovieEnded }) {
       if (english) audioIndex = '0:' + english.index;
     } catch { /* The first audio track remains usable when the probe is unavailable. */ }
 
-    const args = ['-hide_banner', '-loglevel', 'warning', '-nostdin', '-readrate', '1.4',
+    const args = ['-hide_banner', '-loglevel', 'warning', '-nostdin', '-readrate', '1',
       '-user_agent', 'DiscordStreamHub/1.0', '-reconnect', '1', '-reconnect_streamed', '1',
       '-reconnect_delay_max', '5', ...(startPosition > 1 ? ['-ss', startPosition.toFixed(3)] : []), '-i', source.url,
       '-map', '0:v:0', '-map', audioIndex,
       ...(videoCodec === 'h264' ? ['-c:v', 'copy'] : ['-vf', 'scale=854:480:force_original_aspect_ratio=decrease:flags=fast_bilinear,pad=854:480:(ow-iw)/2:(oh-ih)/2', '-c:v', 'libx264', '-threads', '2', '-preset', 'ultrafast', '-crf', '27', '-pix_fmt', 'yuv420p']),
       '-c:a', 'aac', '-b:a', '160k', '-ac', '2',
-      '-f', 'hls', '-hls_time', '4', '-hls_list_size', '0', '-hls_playlist_type', 'event',
-      '-hls_flags', 'independent_segments+temp_file',
+      '-f', 'hls', '-hls_time', '4', '-hls_list_size', '12', '-hls_delete_threshold', '3',
+      '-hls_flags', 'independent_segments+temp_file+delete_segments+program_date_time',
       '-hls_segment_filename', join(dir, 'segment_%06d.ts'), join(dir, 'index.m3u8')];
     const child = spawn('ffmpeg', args, { stdio: ['ignore', 'ignore', 'pipe'] });
     process = child;
@@ -106,7 +106,7 @@ function createDirectLounge({ program, sourceForMovie, root, onMovieEnded }) {
     const captureElapsed = Math.max(0, (Date.now() - Number(current.captureStartedAt || Date.now())) / 1000);
     const playbackPosition = Math.max(0, Number(current.captureStartPosition || 0) + captureElapsed);
     return { active: true, requestId: current.requestId, title: current.title, requester: current.requester,
-      ready: segments.length > 0 && bufferedSeconds >= 24, bufferedSeconds: Math.round(bufferedSeconds),
+      ready: segments.length >= 3 && bufferedSeconds >= 12, bufferedSeconds: Math.round(bufferedSeconds),
       segmentCount: segments.length, playbackPosition, viewerPosition: captureElapsed, error: error || null };
   }
 

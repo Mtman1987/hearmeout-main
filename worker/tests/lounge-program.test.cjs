@@ -76,6 +76,9 @@ test('Lounge worker owns movie and music state, including queue handoff', async 
     const radio = await program.radio({ control: 'add', query: 'https://www.youtube.com/playlist?list=PLtest' });
     assert.equal(radio.radio.seedCount, 2);
     await program.radio({ control: 'on' });
+    assert.equal(program.program().music.current, null, 'auto-radio must stay idle while a movie owns the Lounge');
+    await program.control({ lane: 'movie', control: 'clear' });
+    await program.radio({ control: 'on' });
     assert.equal(program.program().music.current.item.metadata.videoId, 'M7lc1UVf-VE');
     await program.control({ lane: 'music', control: 'next' });
     assert.equal(program.program().music.current.item.metadata.videoId, 'dQw4w9WgXcQ');
