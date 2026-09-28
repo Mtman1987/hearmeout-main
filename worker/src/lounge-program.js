@@ -360,6 +360,18 @@ async function advanceMusic() {
   radioAdvance = (async () => {
   const stored = readState();
   const lane = stored.music;
+  if (stored.movie.current && stored.movie.playback.status === 'playing' && !lane.queue.length) {
+    if (lane.current?.requestedBy?.userId === 'auto-radio') {
+      const previousId = lane.current.item?.metadata?.videoId;
+      lane.current = null;
+      lane.playback.position = 0;
+      lane.playback.updatedAt = Date.now();
+      lane.playback.status = 'idle';
+      if (previousId) musicSource.stop(previousId);
+      save();
+    }
+    return;
+  }
   const previous = lane.current;
   let next = lane.queue.shift();
   if (!next && radioState().enabled) {
@@ -437,6 +449,16 @@ async function radio(body) {
 async function tick(now = Date.now()) {
   const stored = readState();
   const lane = stored.music;
+  if (stored.movie.current && stored.movie.playback.status === 'playing' && lane.current?.requestedBy?.userId === 'auto-radio') {
+    const previousId = lane.current.item?.metadata?.videoId;
+    lane.current = null;
+    lane.playback.position = 0;
+    lane.playback.updatedAt = now;
+    lane.playback.status = 'idle';
+    if (previousId) musicSource.stop(previousId);
+    save();
+    return program();
+  }
   if (lane.current && lane.playback.status === 'playing') {
     if (musicSource.isReady && !musicSource.isReady(lane.current.item?.metadata?.videoId)) {
       awaitingMusicSource = lane.current.requestId;
