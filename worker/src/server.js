@@ -1103,6 +1103,7 @@ app.get('/cache-stats', authorizeWorker, (req, res) => {
 // ── Watch HLS Transcoder ────────────────────────────────────────────────
 const watchHlsJobs = new Map();
 const watchHlsJobMeta = new Map();
+const loungeMusicStops = new Map();
 const watchHlsFailures = new Map();
 const WATCH_HLS_FAILURE_TTL_MS = 2 * 60 * 1000;
 
@@ -1457,6 +1458,7 @@ function ensureYoutubeWatchHls(videoId, clientResolved = null) {
     try {
       await runYoutubeHlsFromYtDlp(clean, videoId, dir, indexPath, true);
     } catch (error) {
+      if (error?.message === 'Lounge song was superseded') throw error;
       if (!ytDlpCookieArgs().length) throw error;
       console.warn(`[WatchHLS] Retrying ${clean} without stale YouTube cookies`);
       try { rmSync(dir, { recursive: true, force: true }); } catch {}
@@ -1490,6 +1492,34 @@ function getRecentWatchHlsFailure(streamId) {
   }
   return failure;
 }
+
+function loungeMusicReady(videoId) {
+  if (!isValidVideoId(videoId)) return false;
+  const streamId = youtubeWatchHlsId(videoId);
+  const { dir, indexPath } = watchHlsPaths(streamId);
+  if (!hasUsableWatchHlsIndex(dir, indexPath)) return false;
+  const manifest = readFileSync(indexPath, 'utf8');
+  return manifest.includes('#EXT-X-ENDLIST') || (manifest.match(/#EXTINF:/g) || []).length >= 2;
+}
+
+if (RUN_LOUNGE) loungeProgram.configureMusicSource({
+  isReady: loungeMusicReady,
+  prepare: async (videoId) => {
+    if (!isValidVideoId(videoId)) return false;
+    if (loungeMusicReady(videoId)) return true;
+    const streamId = youtubeWatchHlsId(videoId);
+    ensureYoutubeWatchHls(videoId).catch(error => console.warn('[Lounge] Song preparation:', error.message));
+    for (let attempt = 0; attempt < 50; attempt++) {
+      if (loungeMusicReady(videoId)) return true;
+      if (getRecentWatchHlsFailure(streamId)) return false;
+      await new Promise(resolve => setTimeout(resolve, 500));
+    }
+    return false;
+  },
+  stop: (videoId) => {
+    if (isValidVideoId(videoId)) loungeMusicStops.get(youtubeWatchHlsId(videoId))?.();
+  },
+});
 
 try {
   pruneWatchHlsRoot();
@@ -1676,6 +1706,8 @@ function runYoutubeHlsFromYtDlp(streamId, videoId, dir, indexPath, useCookies = 
       stop(video); stop(audio); stop(ffmpeg);
       reject(error);
     };
+    const stopConversion = () => fail(new Error('Lounge song was superseded'));
+    if (RUN_LOUNGE) loungeMusicStops.set(streamId, stopConversion);
     video.stderr.on('data', chunk => { videoError = `${videoError}${chunk}`.slice(-2000); });
     audio.stderr.on('data', chunk => { audioError = `${audioError}${chunk}`.slice(-2000); });
     ffmpeg.stderr.on('data', chunk => { ffmpegError = `${ffmpegError}${chunk}`.slice(-4000); });
@@ -1685,6 +1717,7 @@ function runYoutubeHlsFromYtDlp(streamId, videoId, dir, indexPath, useCookies = 
     video.once('exit', code => { if (!ffmpegExited && code !== 0) fail(new Error(videoError || `video yt-dlp exited with ${code}`)); });
     audio.once('exit', code => { if (!ffmpegExited && code !== 0) fail(new Error(audioError || `audio yt-dlp exited with ${code}`)); });
     ffmpeg.once('exit', code => {
+      if (loungeMusicStops.get(streamId) === stopConversion) loungeMusicStops.delete(streamId);
       ffmpegExited = true;
       if (settled) return;
       if (storageFailure()) { fail(new Error(storageFailure())); return; }
@@ -3006,22 +3039,23 @@ app.post('/lounge/media/actions', authorizeWorker, async (req, res) => {
 
 if (RUN_LOUNGE) setInterval(() => loungeProgram.tick().catch(error => console.warn('[Lounge] Radio tick:', error.message)), 5000).unref();
 
-app.get('/lounge/music/hls/:file', authorizeViewer('lounge'), async (req, res) => {
+app.get(['/lounge/music/hls/:file', '/lounge/music/hls/:videoId/:file'], authorizeViewer('lounge'), async (req, res) => {
   try {
     const current = loungeProgram.program().music.current;
     if (!current || loungeProgram.program().music.playback.status !== 'playing') return res.status(404).end();
     const videoId = String(current.item?.metadata?.videoId || '');
     if (!isValidVideoId(videoId)) return res.status(404).end();
+    if (req.params.videoId && req.params.videoId !== videoId) return res.status(404).end();
     const file = cleanHlsFileName(req.params.file);
     const streamId = youtubeWatchHlsId(videoId);
     const { dir, indexPath } = watchHlsPaths(streamId);
     if (file === 'index.m3u8') {
       ensureYoutubeWatchHls(videoId).catch(error => console.warn('[Lounge] Music preparation:', error.message));
-      if (!await waitForWatchHlsIndex(streamId, 3000)) return res.status(202).json({ error: 'Preparing song' });
+      if (!loungeMusicReady(videoId)) return res.status(202).json({ error: 'Preparing song' });
     }
     const path = existsSync(join(dir, file)) ? join(dir, file) : await waitForWatchHlsFile(streamId, file);
     if (!path) return res.status(404).end();
-    res.setHeader('Cache-Control', file.endsWith('.m3u8') ? 'no-store' : 'public, max-age=3600');
+    res.setHeader('Cache-Control', file.endsWith('.m3u8') || !req.params.videoId ? 'no-store' : 'public, max-age=3600');
     res.setHeader('Content-Type', file.endsWith('.m3u8') ? 'application/vnd.apple.mpegurl' : 'video/mp2t');
     if (file.endsWith('.m3u8')) return res.send(readFileSync(path, 'utf8'));
     return createReadStream(path).pipe(res);

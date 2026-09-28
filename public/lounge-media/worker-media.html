@@ -60,7 +60,8 @@
       }
       selection=next;const myEpoch=++epoch;status.hidden=false;status.textContent='Buffering '+item.item.title;
       hls?.destroy();video.pause();video.removeAttribute('src');video.load();
-      const url=worker+(lane==='movie'?'/lounge/direct/hls/index.m3u8':'/lounge/music/hls/index.m3u8');
+      const videoId=String(item.item?.metadata?.videoId||'');
+      const url=worker+(lane==='movie'?'/lounge/direct/hls/index.m3u8':'/lounge/music/hls/'+encodeURIComponent(videoId)+'/index.m3u8');
       if (window.Hls?.isSupported()) {
         hls=new Hls({startPosition:-1,maxBufferLength:45,maxMaxBufferLength:90,lowLatencyMode:false});
         hls.on(Hls.Events.ERROR,(_event,detail)=>{if(detail.fatal && epoch===myEpoch){hls.destroy();hls=null;selection='';status.hidden=false;status.textContent='Retrying '+item.item.title;}});

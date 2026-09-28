@@ -16,6 +16,13 @@ let durationRetryAt = 0;
 let radioAdvance = null;
 let prefetchedRadio = null;
 let radioPrefetch = null;
+let currentMusicPreparation = null;
+let awaitingMusicSource = null;
+let musicSource = { prepare: async () => true, stop: () => {} };
+
+function configureMusicSource(source) {
+  musicSource = source;
+}
 
 function emptyLane() {
   return { current: null, queue: [], playback: { status: 'idle', position: 0, updatedAt: Date.now(), muted: false, volume: 85 } };
@@ -140,7 +147,7 @@ async function musicItem(query, timeout = 45000) {
   const found = JSON.parse(stdout);
   const video = Array.isArray(found.entries) ? found.entries[0] : found;
   if (!/^[\w-]{11}$/.test(String(video?.id || ''))) throw Error('No playable song found');
-  return { type: 'music', title: String(video.title || value), playbackUrl: `/lounge/music/hls/index.m3u8`,
+  return { type: 'music', title: String(video.title || value), playbackUrl: `/lounge/music/hls/${video.id}/index.m3u8`,
     metadata: { provider: 'youtube', videoId: video.id, artist: video.uploader || video.channel || '', duration: Number(video.duration) || 0 } };
 }
 
@@ -163,6 +170,8 @@ function rememberPlayed(entry) {
     history.push({ id, title: String(entry.item.title || ''), artist: String(entry.item.metadata.artist || ''), duration: Number(entry.item.metadata.duration) || 0, playedAt: Date.now() });
     if (history.length > 30) history.splice(0, history.length - 30);
   }
+  if (prefetchedRadio?.entry?.item?.metadata?.videoId && prefetchedRadio.entry.item.metadata.videoId !== id)
+    musicSource.stop(prefetchedRadio?.entry?.item?.metadata?.videoId);
   prefetchedRadio = null;
 }
 
@@ -177,7 +186,7 @@ function rememberSong(item) {
 
 function radioEntry(song) {
   return { requestId: randomUUID(), requestedBy: { userId: 'auto-radio', username: 'Auto-Radio' }, addedAt: new Date().toISOString(),
-    item: { type: 'music', title: song.title, playbackUrl: '/lounge/music/hls/index.m3u8',
+    item: { type: 'music', title: song.title, playbackUrl: `/lounge/music/hls/${song.id}/index.m3u8`,
       metadata: { provider: 'youtube', videoId: song.id, artist: song.artist || '', duration: Number(song.duration) || 0 } } };
 }
 
@@ -240,12 +249,16 @@ async function discoverRadioEntry() {
 
 function prefetchNextRadio() {
   const lane = readState().music;
-  if (!radioState().enabled || !lane.current || lane.queue.length) return;
+  if (!radioState().enabled || !lane.current || lane.queue.length || musicSource.isReady && !musicSource.isReady(lane.current.item.metadata.videoId)) return;
   const forRequestId = lane.current.requestId;
   if (prefetchedRadio?.forRequestId === forRequestId || radioPrefetch?.forRequestId === forRequestId) return;
-  const promise = discoverRadioEntry().then(entry => {
-    if (readState().music.current?.requestId === forRequestId && radioState().enabled && !readState().music.queue.length)
-      prefetchedRadio = { forRequestId, entry };
+  const promise = discoverRadioEntry().then(async entry => {
+    const ready = entry && readState().music.current?.requestId === forRequestId && radioState().enabled
+      ? await musicSource.prepare(entry.item.metadata.videoId) : false;
+    if (entry && readState().music.current?.requestId === forRequestId && radioState().enabled && !readState().music.queue.length)
+      prefetchedRadio = { forRequestId, entry, ready };
+    else if (entry?.item?.metadata?.videoId !== readState().music.current?.item?.metadata?.videoId)
+      musicSource.stop(entry?.item?.metadata?.videoId);
     return entry;
   }).catch(error => { console.warn('[Lounge] Radio prefetch failed:', error.message); return null; })
     .finally(() => { if (radioPrefetch?.forRequestId === forRequestId) radioPrefetch = null; });
@@ -261,7 +274,14 @@ async function advanceMusic() {
   let next = lane.queue.shift();
   if (!next && radioState().enabled) {
     if (previous && radioPrefetch?.forRequestId === previous.requestId) await radioPrefetch.promise;
-    next = previous && prefetchedRadio?.forRequestId === previous.requestId ? prefetchedRadio.entry : await discoverRadioEntry();
+    next = prefetchedRadio?.forRequestId === (previous?.requestId || null) ? prefetchedRadio.entry : await discoverRadioEntry();
+    if (next) {
+      const ready = await musicSource.prepare(next.item.metadata.videoId);
+      if (!ready) {
+        prefetchedRadio = { forRequestId: previous?.requestId || null, entry: next, ready: false };
+        return;
+      }
+    }
   }
   if (lane.current !== previous) return;
   // A human request arriving while discovery was in flight takes priority.
@@ -273,6 +293,8 @@ async function advanceMusic() {
   lane.playback.updatedAt = Date.now();
   lane.playback.status = lane.current ? 'playing' : 'idle';
   if (lane.current) rememberPlayed(lane.current);
+  if (previous?.item?.metadata?.videoId && previous.item.metadata.videoId !== lane.current?.item?.metadata?.videoId)
+    musicSource.stop(previous.item.metadata.videoId);
   if (!lane.current && stored.movie.current && stored.movie.playback.status === 'paused') stored.movie.playback.status = 'playing';
   save();
   })().finally(() => { radioAdvance = null; });
@@ -313,6 +335,23 @@ async function tick(now = Date.now()) {
   const stored = readState();
   const lane = stored.music;
   if (lane.current && lane.playback.status === 'playing') {
+    if (musicSource.isReady && !musicSource.isReady(lane.current.item?.metadata?.videoId)) {
+      awaitingMusicSource = lane.current.requestId;
+      if (currentMusicPreparation?.forRequestId !== lane.current.requestId) {
+        const forRequestId = lane.current.requestId;
+        const promise = musicSource.prepare(lane.current.item.metadata.videoId)
+          .catch(error => console.warn('[Lounge] Current song preparation:', error.message))
+          .finally(() => { if (currentMusicPreparation?.forRequestId === forRequestId) currentMusicPreparation = null; });
+        currentMusicPreparation = { forRequestId, promise };
+      }
+      return;
+    }
+    if (awaitingMusicSource === lane.current.requestId) {
+      lane.playback.position = 0;
+      lane.playback.updatedAt = now;
+      awaitingMusicSource = null;
+      save();
+    }
     const duration = Number(lane.current.item?.metadata?.duration);
     if (!duration && !durationLookup && now >= durationRetryAt) {
       const id = lane.current.item?.metadata?.videoId;
@@ -362,6 +401,7 @@ async function control(body) {
         : stored[requestedLane].current ? requestedLane : stored.movie.current ? 'movie' : requestedLane)
     : body.targetLane === 'movie' ? 'movie' : requestedLane;
   const lane = stored[laneName];
+  const previousMusicId = laneName === 'music' ? lane.current?.item?.metadata?.videoId : null;
   const action = body.control === 'next-active' ? 'next' : String(body.control || '');
   if (action === 'next' && laneName === 'music') await advanceMusic();
   else if (action === 'next') lane.current = lane.queue.shift() || null;
@@ -379,6 +419,11 @@ async function control(body) {
     if (other.current && other.playback.status === 'paused') other.playback.status = 'playing';
   }
   if (action === 'next' || action === 'clear') lane.playback.position = 0;
+  if (action === 'clear' && laneName === 'music') {
+    if (prefetchedRadio?.entry?.item?.metadata?.videoId) musicSource.stop(prefetchedRadio.entry.item.metadata.videoId);
+    if (previousMusicId) musicSource.stop(previousMusicId);
+    prefetchedRadio = null;
+  }
   lane.playback.updatedAt = Date.now();
   save();
   return { success: true, action: 'hmo.media.control', lane: laneName, session: publicLane(lane), program: program() };
@@ -391,4 +436,4 @@ function source(movie) {
   return new URL(`/${metadata.pathKind}/${encodeURIComponent(username)}/${encodeURIComponent(password)}/${metadata.streamId}.${metadata.extension}`, base).toString();
 }
 
-module.exports = { program, search, request, control, radio, tick, source };
+module.exports = { program, search, request, control, radio, tick, source, configureMusicSource };
