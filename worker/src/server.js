@@ -99,7 +99,16 @@ const spotlightBroadcast = createSpotlightHls({
   spotlightEndpoint: process.env.SPOTLIGHT_ENDPOINT || 'https://discord-stream-hub-new.fly.dev/api/community-spotlight',
 });
 const directLounge = RUN_LOUNGE && process.env.HMO_LOUNGE_DIRECT_ONLY === 'true'
-  ? createDirectLounge({ program: loungeProgram.program, sourceForMovie: loungeProgram.source, root: '/data' })
+  ? createDirectLounge({
+      program: loungeProgram.program,
+      sourceForMovie: loungeProgram.source,
+      root: '/data',
+      onMovieEnded: async (requestId) => {
+        const current = loungeProgram.program().movie.current;
+        if (current?.requestId !== requestId) return;
+        await loungeProgram.control({ control: 'next', lane: 'movie', targetLane: 'movie' });
+      },
+    })
   : null;
 const loungeBroadcast = RUN_LOUNGE && !directLounge ? createLoungeBroadcast({
   chromiumPath: CHROMIUM_PATH,
