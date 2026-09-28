@@ -88,6 +88,7 @@ const WATCH_HLS_SEGMENT_SECONDS = Number(process.env.WATCH_HLS_SEGMENT_SECONDS |
 const WATCH_HLS_LIST_SIZE = Number(process.env.WATCH_HLS_LIST_SIZE || 90);
 const WATCH_HLS_DELETE_THRESHOLD = Number(process.env.WATCH_HLS_DELETE_THRESHOLD || 12);
 const WATCH_HLS_BUDGET_BYTES = Number(process.env.WATCH_HLS_BUDGET_BYTES || 1536 * 1024 * 1024);
+const WATCH_HLS_MIN_FREE_BYTES = Number(process.env.WATCH_HLS_MIN_FREE_BYTES || 1024 * 1024 * 1024);
 const FLY_MACHINE_ID = process.env.FLY_MACHINE_ID || '';
 const FLY_APP_NAME = process.env.FLY_APP_NAME || 'hmo-dj-worker';
 const WORKER_ROLE = String(process.env.HMO_WORKER_ROLE || 'all').trim().toLowerCase();
@@ -1201,14 +1202,27 @@ function watchHlsOutputArgs(streamId) {
 }
 
 function protectWatchHlsStorage(child, dir) {
-  // Full VOD sources need more space than rolling live output. Stop the
-  // preparation with an explicit error before it exhausts the worker volume.
+  // Keep enough shared-volume headroom for new music, direct movie output,
+  // cookies, and worker state. When space gets tight, evict the oldest inactive
+  // HLS caches before failing the active preparation.
   let failure = '';
+  let lastPruneAt = 0;
   const timer = setInterval(() => {
     try {
-      const stats = statfsSync(dir);
-      if (stats.bavail * stats.bsize < 512 * 1024 * 1024) {
-        failure = 'Movie preparation needs more free worker cache space';
+      let stats = statfsSync(dir);
+      let freeBytes = stats.bavail * stats.bsize;
+      if (freeBytes < WATCH_HLS_MIN_FREE_BYTES && Date.now() - lastPruneAt > 15000) {
+        lastPruneAt = Date.now();
+        const targetBytes = Math.floor(WATCH_HLS_BUDGET_BYTES * 0.7);
+        const pruned = pruneWatchHlsRoot(targetBytes);
+        if (pruned.removed.length) {
+          console.log(`[WatchHLS] Low-space prune removed ${pruned.removed.length} inactive cache(s)`);
+        }
+        stats = statfsSync(dir);
+        freeBytes = stats.bavail * stats.bsize;
+      }
+      if (freeBytes < 512 * 1024 * 1024) {
+        failure = 'Media preparation needs more free worker cache space';
         child.kill('SIGTERM');
         clearInterval(timer);
       }
@@ -1391,7 +1405,7 @@ function ensureWatchHls(streamId, sourceUrl) {
     }
   }
   mkdirSync(dir, { recursive: true });
-  pruneWatchHlsRoot();
+  pruneWatchHlsRoot(Math.floor(WATCH_HLS_BUDGET_BYTES * 0.8));
   try { if (existsSync(indexPath)) unlinkSync(indexPath); } catch {}
 
   const promise = runWatchHlsFfmpeg(clean, preparationUrl, dir, indexPath)
@@ -1424,7 +1438,7 @@ function ensureYoutubeWatchHls(videoId, clientResolved = null) {
   const hasClientResolvedStreams = Boolean(clientVideoUrl && clientAudioUrl);
 
   mkdirSync(dir, { recursive: true });
-  pruneWatchHlsRoot();
+  pruneWatchHlsRoot(Math.floor(WATCH_HLS_BUDGET_BYTES * 0.8));
   try { if (existsSync(indexPath)) unlinkSync(indexPath); } catch {}
 
   const promise = (async () => {
