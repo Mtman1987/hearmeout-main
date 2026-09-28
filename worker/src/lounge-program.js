@@ -13,6 +13,9 @@ let catalog = { at: 0, items: [] };
 let state;
 let durationLookup = null;
 let durationRetryAt = 0;
+let radioAdvance = null;
+let prefetchedRadio = null;
+let radioPrefetch = null;
 
 function emptyLane() {
   return { current: null, queue: [], playback: { status: 'idle', position: 0, updatedAt: Date.now(), muted: false, volume: 85 } };
@@ -51,7 +54,7 @@ function publicLane(lane) {
 
 function program() {
   const stored = readState();
-  return { movie: publicLane(stored.movie), music: publicLane(stored.music), radio: { enabled: stored.radio?.enabled === true, seedCount: stored.radio?.seeds?.length || 0 } };
+  return { movie: publicLane(stored.movie), music: publicLane(stored.music), radio: { enabled: stored.radio?.enabled === true, seedCount: stored.radio?.seeds?.length || 0, recentCount: stored.radio?.history?.length || 0, mode: 'recent-music' } };
 }
 
 function provider() {
@@ -129,11 +132,11 @@ async function movieItem(query, itemId) {
     metadata: { provider: 'xtream', kind: selected.kind, streamId: selected.streamId, extension: selected.extension, pathKind } };
 }
 
-async function musicItem(query) {
+async function musicItem(query, timeout = 45000) {
   const value = String(query || '').trim();
   if (!value) throw Error('A song or YouTube URL is required');
   const input = /^https?:\/\//i.test(value) ? value : `ytsearch1:${value}`;
-  const { stdout } = await run('yt-dlp', ['--no-playlist', '--skip-download', '--dump-single-json', '--no-warnings', input], { timeout: 45000, maxBuffer: 8 * 1024 * 1024 });
+  const { stdout } = await run('yt-dlp', ['--no-playlist', '--skip-download', '--dump-single-json', '--no-warnings', input], { timeout, maxBuffer: 8 * 1024 * 1024 });
   const found = JSON.parse(stdout);
   const video = Array.isArray(found.entries) ? found.entries[0] : found;
   if (!/^[\w-]{11}$/.test(String(video?.id || ''))) throw Error('No playable song found');
@@ -144,7 +147,23 @@ async function musicItem(query) {
 function radioState() {
   const stored = readState();
   if (!stored.radio) stored.radio = { enabled: false, seeds: [], cursor: 0 };
+  if (!Array.isArray(stored.radio.history)) stored.radio.history = [];
   return stored.radio;
+}
+
+function rememberPlayed(entry) {
+  const id = String(entry?.item?.metadata?.videoId || '');
+  if (!/^[\w-]{11}$/.test(id)) return;
+  const radio = radioState();
+  radio.playedIds ||= [];
+  radio.playedIds.push(id);
+  radio.playedIds = radio.playedIds.slice(-30);
+  if (entry.requestedBy?.userId !== 'auto-radio') {
+    const history = radio.history;
+    history.push({ id, title: String(entry.item.title || ''), artist: String(entry.item.metadata.artist || ''), duration: Number(entry.item.metadata.duration) || 0, playedAt: Date.now() });
+    if (history.length > 30) history.splice(0, history.length - 30);
+  }
+  prefetchedRadio = null;
 }
 
 function rememberSong(item) {
@@ -156,29 +175,108 @@ function rememberSong(item) {
   if (radio.seeds.length > MAX_RADIO_SEEDS) { radio.seeds.shift(); radio.cursor = Math.max(0, radio.cursor - 1); }
 }
 
-function nextRadioEntry() {
-  const stored = readState();
-  const radio = radioState();
-  if (!radio.enabled || !radio.seeds.length) return null;
-  const currentId = stored.music.current?.item?.metadata?.videoId;
-  const index = radio.cursor % radio.seeds.length;
-  let offset = 0;
-  if (radio.seeds.length > 1 && radio.seeds[index].id === currentId) offset = 1;
-  const seed = radio.seeds[(index + offset) % radio.seeds.length];
-  radio.cursor = (index + offset + 1) % radio.seeds.length;
+function radioEntry(song) {
   return { requestId: randomUUID(), requestedBy: { userId: 'auto-radio', username: 'Auto-Radio' }, addedAt: new Date().toISOString(),
-    item: { type: 'music', title: seed.title, playbackUrl: '/lounge/music/hls/index.m3u8',
-      metadata: { provider: 'youtube', videoId: seed.id, artist: seed.artist, duration: seed.duration } } };
+    item: { type: 'music', title: song.title, playbackUrl: '/lounge/music/hls/index.m3u8',
+      metadata: { provider: 'youtube', videoId: song.id, artist: song.artist || '', duration: Number(song.duration) || 0 } } };
 }
 
-function advanceMusic() {
+function playlistStarter() {
+  const radio = radioState();
+  if (!radio.seeds.length) return null;
+  // A playlist is a reference library: sample a handful spread across it,
+  // rather than making a 480-song playlist the next 480 on-air selections.
+  const count = Math.min(6, radio.seeds.length);
+  const samples = Array.from({ length: count }, (_, index) => radio.seeds[Math.floor(index * radio.seeds.length / count)]);
+  const recentlyHeard = new Set((radio.playedIds || []).slice(-Math.min(count - 1, 12)));
+  const cursor = Number(radio.cursor) || 0;
+  const selected = samples.slice(cursor % count).concat(samples.slice(0, cursor % count)).find(song => !recentlyHeard.has(song.id)) || samples[cursor % count];
+  radio.cursor = (samples.indexOf(selected) + 1) % count;
+  return radioEntry(selected);
+}
+
+function humanFallback() {
+  const radio = radioState();
+  const recentIds = new Set((radio.playedIds || []).slice(-Math.max(0, radio.history.length - 1)));
+  const chosen = radio.history.slice().reverse().find(song => !recentIds.has(song.id)) || radio.history.at(-1);
+  return chosen ? radioEntry(chosen) : null;
+}
+
+async function discoverRadioEntry() {
+  const radio = radioState();
+  if (!radio.enabled) return null;
+  const recent = radio.history.slice(-6);
+  const roomHasProfile = new Set(radio.history.map(song => song.id)).size >= 3;
+  // Two recent anchors are enough to follow changes in the room without
+  // repeatedly searching all 480 playlist entries or issuing unbounded calls.
+  const anchors = [recent.at(-1), recent.slice(0, -1).reverse().find(song => song.artist && song.artist !== recent.at(-1)?.artist)].filter(Boolean);
+  const blocked = new Set((radio.playedIds || []).slice(-20));
+  if (!roomHasProfile && radio.seeds.length) {
+    const starter = playlistStarter();
+    if (starter) return starter;
+  }
+  for (const anchor of anchors) {
+    const artist = String(anchor.artist || '').replace(/\b(?:VEVO|Topic|Official)\b/ig, '').trim();
+    if (!artist) continue;
+    try {
+      const query = `ytsearch8:${artist} songs like ${String(anchor.title || '').slice(0, 70)}`;
+      const { stdout } = await run('yt-dlp', ['--flat-playlist', '--skip-download', '--dump-single-json', '--no-warnings', query], { timeout: 15000, maxBuffer: 4 * 1024 * 1024 });
+      const results = JSON.parse(stdout);
+      const candidates = (Array.isArray(results.entries) ? results.entries : [])
+        .filter(video => /^[\w-]{11}$/.test(String(video?.id || '')) && !blocked.has(video.id))
+        .filter(video => !/\b(?:playlist|full album|hour mix|livestream|reaction)\b/i.test(String(video.title || '')))
+        .filter(video => !Number(video.duration) || Number(video.duration) >= 80 && Number(video.duration) <= 540);
+      for (const video of candidates.slice(0, 1)) {
+        try {
+          const item = await musicItem(`https://www.youtube.com/watch?v=${video.id}`, 20000);
+          if (!blocked.has(item.metadata.videoId) && (!item.metadata.duration || item.metadata.duration <= 540))
+            return radioEntry({ id: item.metadata.videoId, title: item.title, artist: item.metadata.artist, duration: item.metadata.duration });
+        } catch (error) { console.warn('[Lounge] Radio candidate unavailable:', error.message); }
+      }
+    } catch (error) { console.warn('[Lounge] Radio discovery unavailable:', error.message); }
+  }
+  return roomHasProfile ? humanFallback() : playlistStarter() || humanFallback();
+}
+
+function prefetchNextRadio() {
+  const lane = readState().music;
+  if (!radioState().enabled || !lane.current || lane.queue.length) return;
+  const forRequestId = lane.current.requestId;
+  if (prefetchedRadio?.forRequestId === forRequestId || radioPrefetch?.forRequestId === forRequestId) return;
+  const promise = discoverRadioEntry().then(entry => {
+    if (readState().music.current?.requestId === forRequestId && radioState().enabled && !readState().music.queue.length)
+      prefetchedRadio = { forRequestId, entry };
+    return entry;
+  }).catch(error => { console.warn('[Lounge] Radio prefetch failed:', error.message); return null; })
+    .finally(() => { if (radioPrefetch?.forRequestId === forRequestId) radioPrefetch = null; });
+  radioPrefetch = { forRequestId, promise };
+}
+
+async function advanceMusic() {
+  if (radioAdvance) return radioAdvance;
+  radioAdvance = (async () => {
   const stored = readState();
   const lane = stored.music;
-  lane.current = lane.queue.shift() || nextRadioEntry();
+  const previous = lane.current;
+  let next = lane.queue.shift();
+  if (!next && radioState().enabled) {
+    if (previous && radioPrefetch?.forRequestId === previous.requestId) await radioPrefetch.promise;
+    next = previous && prefetchedRadio?.forRequestId === previous.requestId ? prefetchedRadio.entry : await discoverRadioEntry();
+  }
+  if (lane.current !== previous) return;
+  // A human request arriving while discovery was in flight takes priority.
+  if (lane.queue.length && (!next || next.requestedBy?.userId === 'auto-radio')) next = lane.queue.shift();
+  else if (!radioState().enabled && next?.requestedBy?.userId === 'auto-radio') next = null;
+  lane.current = next || null;
+  prefetchedRadio = null;
   lane.playback.position = 0;
   lane.playback.updatedAt = Date.now();
   lane.playback.status = lane.current ? 'playing' : 'idle';
+  if (lane.current) rememberPlayed(lane.current);
   if (!lane.current && stored.movie.current && stored.movie.playback.status === 'paused') stored.movie.playback.status = 'playing';
+  save();
+  })().finally(() => { radioAdvance = null; });
+  return radioAdvance;
 }
 
 async function radio(body) {
@@ -204,13 +302,14 @@ async function radio(body) {
       if (stored.music.current) rememberSong(stored.music.current.item);
       for (const queued of stored.music.queue) rememberSong(queued.item);
     }
-    if (settings.enabled && !stored.music.current && !stored.music.queue.length) advanceMusic();
+    if (settings.enabled && stored.music.current && stored.music.current.requestedBy?.userId !== 'auto-radio' && !settings.history.some(song => song.id === stored.music.current.item?.metadata?.videoId)) rememberPlayed(stored.music.current);
+    if (settings.enabled && !stored.music.current && !stored.music.queue.length) await advanceMusic();
   } else if (control !== 'status') throw Error('Unsupported radio control');
   save();
   return { success: true, action: 'hmo.media.radio', radio: program().radio, added: control === 'add' ? settings.seeds.length - beforeCount : undefined, program: program() };
 }
 
-function tick(now = Date.now()) {
+async function tick(now = Date.now()) {
   const stored = readState();
   const lane = stored.music;
   if (lane.current && lane.playback.status === 'playing') {
@@ -228,13 +327,12 @@ function tick(now = Date.now()) {
         .finally(() => { durationLookup = null; });
     }
     if (duration > 0 && lane.playback.position + (now - lane.playback.updatedAt) / 1000 >= duration) {
-      advanceMusic();
-      save();
+      await advanceMusic();
     }
-  } else if (!lane.current && stored.radio?.enabled && stored.radio.seeds?.length) {
-    advanceMusic();
-    save();
+  } else if (!lane.current && stored.radio?.enabled && (stored.radio.seeds?.length || stored.radio.history?.length)) {
+    await advanceMusic();
   }
+  if (lane.current && lane.playback.status === 'playing' && stored.radio?.enabled && !lane.queue.length) prefetchNextRadio();
 }
 
 async function request(body) {
@@ -249,12 +347,13 @@ async function request(body) {
     lane.playback = { ...lane.playback, status: 'playing', position: 0, updatedAt: Date.now() };
     const other = stored[laneName === 'movie' ? 'music' : 'movie'];
     if (other.current && other.playback.status === 'playing') other.playback.status = 'paused';
+    if (laneName === 'music') rememberPlayed(entry);
   } else lane.queue.push(entry);
   save();
   return { success: true, action: 'hmo.media.request', message: `Queued up: "${item.title}"`, request: entry, session: publicLane(lane) };
 }
 
-function control(body) {
+async function control(body) {
   const stored = readState();
   const requestedLane = body.lane === 'movie' ? 'movie' : 'music';
   const laneName = body.control === 'next-active' && !body.targetLane
@@ -264,7 +363,7 @@ function control(body) {
     : body.targetLane === 'movie' ? 'movie' : requestedLane;
   const lane = stored[laneName];
   const action = body.control === 'next-active' ? 'next' : String(body.control || '');
-  if (action === 'next' && laneName === 'music') advanceMusic();
+  if (action === 'next' && laneName === 'music') await advanceMusic();
   else if (action === 'next') lane.current = lane.queue.shift() || null;
   else if (action === 'clear') { lane.current = null; lane.queue = []; if (laneName === 'music') radioState().enabled = false; }
   else if (action === 'play' || action === 'pause') {
