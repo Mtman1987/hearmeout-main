@@ -1,6 +1,6 @@
 const { spawn, execFile } = require('node:child_process');
 const { promisify } = require('node:util');
-const { mkdirSync, existsSync, readFileSync, statSync, createReadStream } = require('node:fs');
+const { mkdirSync, existsSync, readFileSync, statSync, createReadStream, rmSync } = require('node:fs');
 const { join } = require('node:path');
 const probe = promisify(execFile);
 
@@ -19,15 +19,28 @@ function createDirectLounge({ program, sourceForMovie, root }) {
     if (!movie?.current || movie.playback?.status !== 'playing') return null;
     const match = String(movie.current.item?.playbackUrl || '').match(/^\/api\/watch\/xtream\/hls\/(vod|series)-(\d+)\/index\.m3u8$/);
     if (!match) return null;
-    return { requestId: movie.current.requestId, title: movie.current.item.title, requester: movie.current.requestedBy?.username || '', kind: match[1], id: match[2], selection: movie };
+    return {
+      requestId: movie.current.requestId,
+      title: movie.current.item.title,
+      requester: movie.current.requestedBy?.username || '',
+      kind: match[1],
+      id: match[2],
+      playbackPosition: Math.max(0, Number(movie.playback?.position || 0)),
+      seekRevision: Number(movie.playback?.seekRevision || 0),
+      selection: movie,
+    };
   }
 
   async function start(movie) {
     if (process && process.exitCode === null) process.kill('SIGTERM');
     process = null; error = '';
     const dir = join(folder, movie.requestId.replace(/[^a-zA-Z0-9_-]/g, ''));
+    rmSync(dir, { recursive: true, force: true });
     mkdirSync(dir, { recursive: true });
     const source = { url: sourceForMovie(movie.selection) };
+    const startPosition = Math.max(0, Number(movie.playbackPosition || 0));
+    movie.captureStartedAt = Date.now();
+    movie.captureStartPosition = startPosition;
 
     let audioIndex = '0:a:0?';
     let videoCodec = 'h264';
@@ -42,7 +55,7 @@ function createDirectLounge({ program, sourceForMovie, root }) {
 
     const args = ['-hide_banner', '-loglevel', 'warning', '-nostdin', '-readrate', '1.4',
       '-user_agent', 'DiscordStreamHub/1.0', '-reconnect', '1', '-reconnect_streamed', '1',
-      '-reconnect_delay_max', '5', '-i', source.url,
+      '-reconnect_delay_max', '5', ...(startPosition > 1 ? ['-ss', startPosition.toFixed(3)] : []), '-i', source.url,
       '-map', '0:v:0', '-map', audioIndex,
       ...(videoCodec === 'h264' ? ['-c:v', 'copy'] : ['-vf', 'scale=854:480:force_original_aspect_ratio=decrease:flags=fast_bilinear,pad=854:480:(ow-iw)/2:(oh-ih)/2', '-c:v', 'libx264', '-threads', '2', '-preset', 'ultrafast', '-crf', '27', '-pix_fmt', 'yuv420p']),
       '-c:a', 'aac', '-b:a', '160k', '-ac', '2',
@@ -64,7 +77,9 @@ function createDirectLounge({ program, sourceForMovie, root }) {
     checking = (async () => {
       const next = await selectedMovie();
       if (!next) { current = null; if (process && process.exitCode === null) process.kill('SIGTERM'); process = null; return; }
-      if (next.requestId !== current?.requestId || (error && Date.now() - lastFailed > 12000)) {
+      const seekChanged = next.requestId === current?.requestId
+        && Number(next.seekRevision || 0) !== Number(current?.seekRevision || 0);
+      if (next.requestId !== current?.requestId || seekChanged || (error && Date.now() - lastFailed > 12000)) {
         current = next;
         try { await start(next); } catch (failure) { error = failure.message; lastFailed = Date.now(); }
       }
@@ -80,9 +95,11 @@ function createDirectLounge({ program, sourceForMovie, root }) {
     const manifest = existsSync(path) ? readFileSync(path, 'utf8') : '';
     const segments = manifest.split(/\r?\n/).filter(line => /^segment_\d+\.ts$/.test(line));
     const bufferedSeconds = [...manifest.matchAll(/#EXTINF:([\d.]+)/g)].reduce((sum, match) => sum + Number(match[1]), 0);
+    const captureElapsed = Math.max(0, (Date.now() - Number(current.captureStartedAt || Date.now())) / 1000);
+    const playbackPosition = Math.max(0, Number(current.captureStartPosition || 0) + captureElapsed);
     return { active: true, requestId: current.requestId, title: current.title, requester: current.requester,
       ready: segments.length > 0 && bufferedSeconds >= 24, bufferedSeconds: Math.round(bufferedSeconds),
-      segmentCount: segments.length, error: error || null };
+      segmentCount: segments.length, playbackPosition, viewerPosition: captureElapsed, error: error || null };
   }
 
   async function file(name, res) {
