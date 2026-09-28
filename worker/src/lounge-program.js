@@ -25,7 +25,14 @@ function configureMusicSource(source) {
 }
 
 function emptyLane() {
-  return { current: null, queue: [], playback: { status: 'idle', position: 0, updatedAt: Date.now(), muted: false, volume: 85 } };
+  return { current: null, queue: [], playback: { status: 'idle', position: 0, updatedAt: Date.now(), muted: false, volume: 85, seekRevision: 0 } };
+}
+
+function livePlayback(playback, now = Date.now()) {
+  const base = Math.max(0, Number(playback?.position || 0));
+  const updatedAt = Number(playback?.updatedAt || now);
+  const elapsed = playback?.status === 'playing' ? Math.max(0, (now - updatedAt) / 1000) : 0;
+  return { ...playback, position: base + elapsed, updatedAt: playback?.status === 'playing' ? now : updatedAt };
 }
 
 function readState() {
@@ -53,7 +60,7 @@ function publicLane(lane) {
       requestedBy: { username: lane.current.requestedBy.username },
       item: lane.current.item,
     },
-    playback: lane.playback,
+    playback: livePlayback(lane.playback),
     queue: [],
     queueCount: lane.queue.length,
   };
@@ -353,7 +360,10 @@ async function advanceMusic() {
   if (lane.current) rememberPlayed(lane.current);
   if (previous?.item?.metadata?.videoId && previous.item.metadata.videoId !== lane.current?.item?.metadata?.videoId)
     musicSource.stop(previous.item.metadata.videoId);
-  if (!lane.current && stored.movie.current && stored.movie.playback.status === 'paused') stored.movie.playback.status = 'playing';
+  if (!lane.current && stored.movie.current && stored.movie.playback.status === 'paused') {
+    stored.movie.playback.status = 'playing';
+    stored.movie.playback.updatedAt = Date.now();
+  }
   save();
   })().finally(() => { radioAdvance = null; });
   return radioAdvance;
@@ -455,7 +465,12 @@ async function request(body) {
     lane.current = entry;
     lane.playback = { ...lane.playback, status: 'playing', position: 0, updatedAt: Date.now() };
     const other = stored[laneName === 'movie' ? 'music' : 'movie'];
-    if (other.current && other.playback.status === 'playing') other.playback.status = 'paused';
+    if (other.current && other.playback.status === 'playing') {
+      const paused = livePlayback(other.playback);
+      other.playback.position = paused.position;
+      other.playback.updatedAt = Date.now();
+      other.playback.status = 'paused';
+    }
     if (laneName === 'music') rememberPlayed(entry);
   } else lane.queue.push(entry);
   save();
@@ -480,13 +495,24 @@ async function control(body) {
     if (lane.playback.status === 'playing') lane.playback.position += (Date.now() - lane.playback.updatedAt) / 1000;
     lane.playback.status = lane.current ? (action === 'play' ? 'playing' : 'paused') : 'idle';
   }
+  else if (action === 'seek' || action === 'forward' || action === 'rewind') {
+    if (!lane.current) throw Error('Nothing is playing in that Lounge lane');
+    const currentPosition = livePlayback(lane.playback).position;
+    const requested = Number(body.value ?? body.position);
+    if (!Number.isFinite(requested)) throw Error('A finite playback position is required');
+    lane.playback.position = Math.max(0, action === 'seek' ? requested : currentPosition + (action === 'forward' ? requested : -requested));
+    lane.playback.seekRevision = Number(lane.playback.seekRevision || 0) + 1;
+  }
   else if (action === 'volume') lane.playback.volume = Math.max(0, Math.min(100, Number(body.value) || 0));
   else if (action === 'mute' || action === 'unmute') lane.playback.muted = action === 'mute';
   else throw Error('Unsupported Lounge control');
   if (action === 'next' || action === 'clear') lane.playback.status = lane.current ? 'playing' : 'idle';
   if (!lane.current) {
     const other = stored[laneName === 'movie' ? 'music' : 'movie'];
-    if (other.current && other.playback.status === 'paused') other.playback.status = 'playing';
+    if (other.current && other.playback.status === 'paused') {
+      other.playback.status = 'playing';
+      other.playback.updatedAt = Date.now();
+    }
   }
   if (action === 'next' || action === 'clear') lane.playback.position = 0;
   if (action === 'clear' && laneName === 'music') {
