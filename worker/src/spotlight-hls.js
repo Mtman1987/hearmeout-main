@@ -7,9 +7,16 @@ const { join } = require('node:path');
 
 const run = promisify(execFile);
 
+function inspectSpotlightPlaylist(playlist, ageMs) {
+  const segmentCount = (playlist.match(/^seg_\d+\.ts$/gm) || []).length;
+  const duration = Math.max(0, ...(playlist.match(/^#EXTINF:([\d.]+)/gm) || [])
+    .map(line => Number(line.slice(8)) || 0));
+  return { segmentCount, stalled: segmentCount >= 2 && (ageMs > 15000 || duration > 15) };
+}
+
 function createSpotlightHls({ spotlightEndpoint, root = '/tmp/spotlight-hls' }) {
   let login = '', generation = '', encoder = null, failure = '', inflight = null, timer = null, lastPoll = 0;
-  let recoveries = 0;
+  let recoveries = 0, startedAt = 0;
 
   function stop() {
     if (encoder && encoder.exitCode === null) encoder.kill('SIGTERM');
@@ -33,11 +40,15 @@ function createSpotlightHls({ spotlightEndpoint, root = '/tmp/spotlight-hls' }) 
 
   function status() {
     const playlist = manifest();
-    const segments = (playlist.match(/^seg_\d+\.ts$/gm) || []).length;
+    const path = join(root, generation, 'index.m3u8');
+    const ageMs = generation && existsSync(path) ? Date.now() - statSync(path).mtimeMs : Date.now() - startedAt;
+    // A live process and eight old segments do not prove that video is moving.
+    const { segmentCount: segments, stalled } = inspectSpotlightPlaylist(playlist, ageMs);
     const active = Boolean(encoder && encoder.exitCode === null && !encoder.killed);
     return { configured: true, active, activated: Boolean(login), currentLogin: login,
-      generation, ready: active && segments >= 2, segmentCount: segments,
-      recoveryCount: recoveries, error: failure || null };
+      generation, ready: active && segments >= 2 && !stalled, segmentCount: segments,
+      stalled, playlistAgeMs: Math.max(0, Math.round(ageMs)), recoveryCount: recoveries,
+      error: stalled ? 'Spotlight video stopped advancing' : failure || null };
   }
 
   async function refresh() {
@@ -53,12 +64,14 @@ function createSpotlightHls({ spotlightEndpoint, root = '/tmp/spotlight-hls' }) 
         failure = 'No live community Spotlight is available';
         return status();
       }
-      if (selected === login && encoder && encoder.exitCode === null && !encoder.killed) return status();
+      if (selected === login && encoder && encoder.exitCode === null && !encoder.killed && !status().stalled) return status();
+      if (selected === login && status().stalled) recoveries++;
       const source = await resolve(selected);
       stop();
       const previous = generation;
       login = selected;
       generation = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+      startedAt = Date.now();
       const folder = join(root, generation);
       mkdirSync(folder, { recursive: true });
       const child = spawn('ffmpeg', [
@@ -75,7 +88,7 @@ function createSpotlightHls({ spotlightEndpoint, root = '/tmp/spotlight-hls' }) 
       child.stderr.resume(); // Never log signed Twitch playlist URLs.
       child.once('error', () => { if (encoder === child) failure = 'Spotlight encoder could not start'; });
       child.once('close', () => { if (encoder === child) { failure = 'Spotlight stream disconnected'; recoveries++; } });
-      if (previous) setTimeout(() => rmSync(join(root, previous), { recursive: true, force: true }), 30000).unref();
+      if (previous) setTimeout(() => rmSync(join(root, previous), { recursive: true, force: true }), 10000).unref();
       return status();
     })().catch(error => {
       failure = /Spotlight directory/.test(error.message) ? error.message : 'Spotlight stream is reconnecting';
@@ -103,4 +116,4 @@ function createSpotlightHls({ spotlightEndpoint, root = '/tmp/spotlight-hls' }) 
   return { start, status, file, consent: async () => ({ ...status(), warningCleared: false }) };
 }
 
-module.exports = { createSpotlightHls };
+module.exports = { createSpotlightHls, inspectSpotlightPlaylist };

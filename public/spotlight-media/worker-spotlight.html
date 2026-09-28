@@ -35,7 +35,7 @@
     const program=await response.json();
     if(!program.ready){
       if(generation){generation='';reset();}
-      status.hidden=false;status.textContent=program.error||'Preparing live Spotlight';return;
+      health(false);status.hidden=false;status.textContent=program.error||'Preparing live Spotlight';return;
     }
     if(program.generation===generation)return;
     generation=program.generation;reset();status.hidden=false;status.textContent='Buffering '+program.currentLogin;
