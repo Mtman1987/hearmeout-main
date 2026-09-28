@@ -252,13 +252,9 @@ function radioSongSignature(title) {
 }
 
 function blockedRadioSongSignatures() {
-  const stored = readState();
-  const radio = radioState();
-  const titles = [
-    stored.music.current?.item?.title,
-    ...radio.history.slice(-20).map(song => song.title),
-  ];
-  return new Set(titles.map(radioSongSignature).filter(Boolean));
+  const currentTitle = readState().music.current?.item?.title;
+  const signature = radioSongSignature(currentTitle);
+  return new Set(signature ? [signature] : []);
 }
 
 function playlistStarter() {
