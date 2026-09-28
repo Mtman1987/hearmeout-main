@@ -254,3 +254,5 @@ workspace shell, navigation, top bar, tabs, avatars, Space Mountain chat
 surface, and motion. Custom HearMeOut themes remain account-backed app state and
 become active when follow mode is off. Voice, volume, push-to-talk hardware,
 room playback, and OBS behavior remain app/device concerns.
+
+<!-- Lounge autoplay recovery deploy trigger -->
