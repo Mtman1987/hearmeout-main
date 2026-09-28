@@ -200,6 +200,11 @@ function radioState() {
   const stored = readState();
   if (!stored.radio) stored.radio = { enabled: false, seeds: [], cursor: 0 };
   if (!Array.isArray(stored.radio.history)) stored.radio.history = [];
+  // Older clear-queue behavior also disabled radio. Existing saved state has no
+  // explicit disable marker, so restore radio when a seed library exists.
+  if (stored.radio.explicitlyDisabled !== true && stored.radio.enabled !== true && stored.radio.seeds?.length) {
+    stored.radio.enabled = true;
+  }
   return stored.radio;
 }
 
@@ -255,8 +260,10 @@ function playlistStarter() {
 
 function humanFallback() {
   const radio = radioState();
-  const recentIds = new Set((radio.playedIds || []).slice(-Math.max(0, radio.history.length - 1)));
-  const chosen = radio.history.slice().reverse().find(song => !recentIds.has(song.id)) || radio.history.at(-1);
+  const blocked = new Set((radio.playedIds || []).slice(-20));
+  const currentId = String(readState().music.current?.item?.metadata?.videoId || '');
+  if (currentId) blocked.add(currentId);
+  const chosen = radio.history.slice().reverse().find(song => !blocked.has(song.id));
   return chosen ? radioEntry(chosen) : null;
 }
 
@@ -293,7 +300,7 @@ async function discoverRadioEntry() {
       }
     } catch (error) { console.warn('[Lounge] Radio discovery unavailable:', error.message); }
   }
-  return roomHasProfile ? humanFallback() : playlistStarter() || humanFallback();
+  return roomHasProfile ? (humanFallback() || playlistStarter()) : (playlistStarter() || humanFallback());
 }
 
 function prefetchNextRadio() {
@@ -388,6 +395,7 @@ async function radio(body) {
     if (settings.seeds.length === beforeCount) throw Error('No new playable videos found in that playlist');
   } else if (control === 'on' || control === 'off') {
     settings.enabled = control === 'on';
+    settings.explicitlyDisabled = control === 'off';
     if (settings.enabled) {
       if (stored.music.current) rememberSong(stored.music.current.item);
       for (const queued of stored.music.queue) rememberSong(queued.item);
@@ -490,7 +498,7 @@ async function control(body) {
   const action = body.control === 'next-active' ? 'next' : String(body.control || '');
   if (action === 'next' && laneName === 'music') await advanceMusic();
   else if (action === 'next') lane.current = lane.queue.shift() || null;
-  else if (action === 'clear') { lane.current = null; lane.queue = []; if (laneName === 'music') radioState().enabled = false; }
+  else if (action === 'clear') { lane.current = null; lane.queue = []; }
   else if (action === 'play' || action === 'pause') {
     if (lane.playback.status === 'playing') lane.playback.position += (Date.now() - lane.playback.updatedAt) / 1000;
     lane.playback.status = lane.current ? (action === 'play' ? 'playing' : 'paused') : 'idle';
