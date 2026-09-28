@@ -42,9 +42,15 @@
       if (pulseAt > lastUnmutePulseAt) { lastUnmutePulseAt = pulseAt; tryUnmute(); }
     } catch {}
   }
-  function tryUnmute(){
+  async function tryUnmute(){
     policyMuted=false;volume();
-    if(video.paused) void resume();
+    if(video.readyState<3) return;
+    try {
+      await video.play();
+    } catch {
+      policyMuted=true;volume();
+      try { await video.play(); } catch {}
+    }
   }
   async function resume(){
     if(!video.paused || video.readyState<3) return;
@@ -55,19 +61,14 @@
       policyMuted=true;volume();
       try {
         await video.play();
-        status.hidden=false;status.textContent='Media playing muted — !unmute can retry audio';
+        status.hidden=true;
       } catch {}
     }
   }
   video.addEventListener('canplay',()=>void resume());
   video.addEventListener('progress',()=>void resume());
   video.addEventListener('timeupdate',()=>void resume());
-  video.addEventListener('playing',()=>{
-    status.hidden=true;
-    if(policyMuted){
-      [250,1000].forEach(delay=>setTimeout(()=>{if(policyMuted)tryUnmute();},delay));
-    }
-  });
+  video.addEventListener('playing',()=>{status.hidden=true;});
   async function poll(){
     try {
       const response = await fetch(worker+'/lounge/media/program',{cache:'no-store'});

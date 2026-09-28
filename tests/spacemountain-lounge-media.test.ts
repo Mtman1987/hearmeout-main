@@ -61,3 +61,21 @@ test('play skips an expired current item or restarts it when the queue is empty'
   assert.match(watchService, /if \(session\.queue\.length > 0\) action = 'next'/);
   assert.match(watchService, /else position = 0/);
 });
+
+
+test('Lounge worker viewers keep autoplay fallback stable instead of auto-unmute looping', () => {
+  const mediaViewer = fs.readFileSync(path.join(process.cwd(), 'public/lounge-media/worker-media.html'), 'utf8');
+  const spotlightViewer = fs.readFileSync(path.join(process.cwd(), 'public/spotlight-media/worker-spotlight.html'), 'utf8');
+
+  for (const viewer of [mediaViewer, spotlightViewer]) {
+    assert.match(viewer, /policyMuted/);
+    assert.match(viewer, /async function tryUnmute\(\)/);
+    assert.match(viewer, /async function resume\(\)/);
+    assert.doesNotMatch(viewer, /\[250,1000\]/);
+    assert.doesNotMatch(viewer, /setTimeout\(\(\)=>\{if\(policyMuted\)tryUnmute\(\)/);
+    assert.doesNotMatch(viewer, /playbackRate|currentTime\s*=/);
+  }
+
+  assert.doesNotMatch(mediaViewer, /Media playing muted/);
+  assert.doesNotMatch(spotlightViewer, /Spotlight playing muted/);
+});
