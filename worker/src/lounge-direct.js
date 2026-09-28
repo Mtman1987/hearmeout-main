@@ -4,7 +4,7 @@ const { mkdirSync, existsSync, readFileSync, statSync, createReadStream, rmSync 
 const { join } = require('node:path');
 const probe = promisify(execFile);
 
-function createDirectLounge({ program, sourceForMovie, root }) {
+function createDirectLounge({ program, sourceForMovie, root, onMovieEnded }) {
   let current = null;
   let process = null;
   let error = '';
@@ -69,7 +69,13 @@ function createDirectLounge({ program, sourceForMovie, root }) {
     let details = '';
     child.stderr.on('data', chunk => { details = (details + chunk).slice(-1000); });
     child.once('error', err => { error = err.message; });
-    child.once('close', code => { if (code !== 0 && current?.requestId === movie.requestId) error = details.replace(source.url, '[source]') || 'Movie preparation stopped'; });
+    child.once('close', code => {
+      if (code === 0 && current?.requestId === movie.requestId) {
+        Promise.resolve(onMovieEnded?.(movie.requestId)).catch(err => console.warn('[Lounge] Movie advance failed:', err?.message || err));
+        return;
+      }
+      if (code !== 0 && current?.requestId === movie.requestId) error = details.replace(source.url, '[source]') || 'Movie preparation stopped';
+    });
   }
 
   async function sync() {
