@@ -2,10 +2,10 @@
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>SpaceMountain Lounge Spotlight</title>
 <style>html,body,video{margin:0;width:100%;height:100%;overflow:hidden;background:#000}video{display:block;object-fit:contain}#status{position:absolute;inset:0;display:grid;place-items:center;color:#fff;background:#090919;font:600 20px system-ui;text-align:center}#status[hidden]{display:none}</style></head>
 <body><video id="player" autoplay playsinline></video><div id="status" role="status">Finding live Spotlight</div>
-<script src="https://hmo-dj-worker.fly.dev:4445/spotlight/hls.js"></script>
+<script src="/api/worker-media/spotlight/hls.js"></script>
 <script>
 (() => {
-  const worker = 'https://hmo-dj-worker.fly.dev:4445';
+  const worker = '/api/worker-media';
   const video = document.getElementById('player');
   const status = document.getElementById('status');
   let hls, generation = '', groupLevel = .58, masterLevel = 1, sourceVolume = 1, focus = 1, sourceMuted = false, brb = false, policyMuted = false, lastUnmutePulseAt = 0;

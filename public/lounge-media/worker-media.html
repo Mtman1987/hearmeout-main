@@ -2,10 +2,10 @@
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>SpaceMountain Lounge media</title>
 <style>html,body,video{margin:0;width:100%;height:100%;overflow:hidden;background:#000}video{display:block;object-fit:contain}#channel-bug{position:absolute;right:2%;bottom:2%;width:clamp(34px,8%,78px);height:auto;pointer-events:none;z-index:1}#status{position:absolute;inset:0;display:grid;place-items:center;padding:6%;box-sizing:border-box;background:radial-gradient(circle,#20153d,#090919 65%,#000);color:#fff;text-align:center;font:600 clamp(16px,2.5vw,30px) system-ui;z-index:2}#status[hidden]{display:none}</style></head>
 <body><video id="player" autoplay playsinline></video><audio id="theme" preload="auto"></audio><img id="channel-bug" src="/lounge-media/munch-tv-bug.gif" alt="Munch TV"><div id="status" role="status">Connecting to Lounge worker</div>
-<script src="https://hmo-dj-worker.fly.dev:4444/lounge/hls.js"></script>
+<script src="/api/worker-media/lounge/hls.js"></script>
 <script>
 (() => {
-  const worker = 'https://hmo-dj-worker.fly.dev:4444';
+  const worker = '/api/worker-media';
   const video = document.getElementById('player');
   const status = document.getElementById('status');
   const theme = document.getElementById('theme');
