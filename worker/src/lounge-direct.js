@@ -102,12 +102,21 @@ function createDirectLounge({ program, sourceForMovie, root, onMovieEnded }) {
     const path = join(dir, 'index.m3u8');
     const manifest = existsSync(path) ? readFileSync(path, 'utf8') : '';
     const segments = manifest.split(/\r?\n/).filter(line => /^segment_\d+\.ts$/.test(line));
-    const bufferedSeconds = [...manifest.matchAll(/#EXTINF:([\d.]+)/g)].reduce((sum, match) => sum + Number(match[1]), 0);
+    const durations = [...manifest.matchAll(/#EXTINF:([\d.]+)/g)].map(match => Number(match[1]));
+    const bufferedSeconds = durations.reduce((sum, seconds) => sum + seconds, 0);
+    const programTimes = [...manifest.matchAll(/#EXT-X-PROGRAM-DATE-TIME:([^\r\n]+)/g)];
+    const lastStart = Date.parse(programTimes.at(-1)?.[1] || '');
+    const lastEnd = lastStart + (durations.at(-1) || 0) * 1000;
+    const lagSeconds = Number.isFinite(lastEnd) ? Math.max(0, (Date.now() - lastEnd) / 1000) : Infinity;
+    const manifestAgeSeconds = existsSync(path) ? Math.max(0, (Date.now() - statSync(path).mtimeMs) / 1000) : Infinity;
+    const streamFresh = lagSeconds <= 30 && manifestAgeSeconds <= 30;
     const captureElapsed = Math.max(0, (Date.now() - Number(current.captureStartedAt || Date.now())) / 1000);
     const playbackPosition = Math.max(0, Number(current.captureStartPosition || 0) + captureElapsed);
     return { active: true, requestId: current.requestId, title: current.title, requester: current.requester,
-      ready: segments.length >= 3 && bufferedSeconds >= 12, bufferedSeconds: Math.round(bufferedSeconds),
-      segmentCount: segments.length, playbackPosition, viewerPosition: captureElapsed, error: error || null };
+      ready: segments.length >= 3 && bufferedSeconds >= 12 && streamFresh, bufferedSeconds: Math.round(bufferedSeconds),
+      segmentCount: segments.length, lagSeconds: Number.isFinite(lagSeconds) ? Math.round(lagSeconds) : null,
+      playbackPosition, viewerPosition: captureElapsed,
+      error: error || (!streamFresh && segments.length ? 'Movie stream is behind the live queue' : null) };
   }
 
   async function file(name, res) {

@@ -93,7 +93,13 @@ primary_region = "iad"
   cpus = 1
 
 [[vm]]
-  processes = ["lounge", "spotlight"]
+  processes = ["lounge"]
+  memory = "1gb"
+  cpu_kind = "performance"
+  cpus = 1
+
+[[vm]]
+  processes = ["spotlight"]
   memory = "1gb"
   cpu_kind = "shared"
   cpus = 1
