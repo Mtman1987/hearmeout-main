@@ -43,6 +43,8 @@ const PUBLIC_PREFIXES = [
   '/api/spotlight-media/',
   '/lounge-media',
   '/api/lounge-media/',
+  // Read-only Lounge and Spotlight media proxy for unattended browser sources.
+  '/api/worker-media/',
   // Exactly four channel theme tracks are public for the unattended BRB overlay.
   '/api/lounge/theme-music',
   '/_next/',
