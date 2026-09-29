@@ -114,7 +114,7 @@
       const item = lane && program[lane].current;
       const next = item ? lane+':'+item.requestId : '';
       if (!next) { if (selection) { selection='';hls?.destroy();video.pause();video.removeAttribute('src');video.load();} status.hidden=false;status.textContent='Waiting for a Lounge request';return; }
-      if (next === selection) return;
+      if (next === selection) { void resume(); return; }
       hls?.destroy(); hls = null; video.pause(); video.removeAttribute('src'); video.load();
       if (lane === 'movie') {
         const info = await(await fetch(worker+'/lounge/direct/status',{cache:'no-store'})).json();
@@ -143,7 +143,12 @@
       } else if (video.canPlayType('application/vnd.apple.mpegurl')) video.src=url;
       else {selection='';status.textContent='Media player unavailable';}
       volume();resume();
-    } catch {status.hidden=false;status.textContent='Connecting to Lounge worker';}
+    } catch {
+      if (!video.paused && video.readyState >= 2 && (!Number.isFinite(video.duration) || video.currentTime + .5 < video.duration)) {
+        status.hidden=true; return;
+      }
+      status.hidden=false;status.textContent='Connecting to Lounge worker';
+    }
   }
   void poll();void refreshVolume();setInterval(poll,2500);setInterval(refreshVolume,3000);
 })();
