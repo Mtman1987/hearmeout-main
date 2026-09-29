@@ -17,6 +17,14 @@
   ];
   let hls, selection = '', mix = .85, master = 1, source = 1, programLevel = 1, focus = 1, muted = false, programMuted = false, commercialActive = false, epoch = 0, policyMuted = false, lastUnmutePulseAt = 0;
   let themeIndex = 0, themeFailures = 0, themeLatched = false;
+  // Tell the broadcast parent this player actually booted. The parent uses
+  // this to repair an initial browser error page without reloading live video.
+  function announceReady(){
+    if (!window.Hls?.isSupported() && !video.canPlayType('application/vnd.apple.mpegurl')) return;
+    if (window.parent !== window) window.parent.postMessage({type:'spmt-lounge-media-ready'}, 'https://spmt.live');
+  }
+  announceReady();
+  setInterval(announceReady, 5000);
   theme.src = themeTracks[themeIndex];
   function volume(){
     video.volume = Math.min(1, mix * master * source * programLevel * focus);
