@@ -1,41 +1,27 @@
 <!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>SpaceMountain Lounge Spotlight</title>
-<style>html,body,video{margin:0;width:100%;height:100%;overflow:hidden;background:#000}video{display:block;object-fit:contain}#status{position:absolute;inset:0;display:grid;place-items:center;color:#fff;background:#090919;font:600 20px system-ui;text-align:center}#status[hidden]{display:none}</style></head>
-<body><video id="player" autoplay playsinline></video><div id="status" role="status">Finding live Spotlight</div>
+<style>html,body,video{margin:0;width:100%;height:100%;overflow:hidden;background:#000}video{display:block;object-fit:contain}#status{position:absolute;inset:0;display:grid;place-items:center;color:#fff;background:#090919;font:600 20px system-ui;text-align:center}#status[hidden]{display:none}#enable-audio{position:absolute;left:50%;bottom:16px;transform:translateX(-50%);z-index:3;padding:12px 18px;border:1px solid #fff;border-radius:999px;background:#101626;color:#fff;font:700 16px system-ui;cursor:pointer}#enable-audio[hidden]{display:none}</style></head>
+<body><video id="player" autoplay playsinline></video><button id="enable-audio" type="button" hidden>🔊 Enable Audio</button><div id="status" role="status">Finding live Spotlight</div>
 <script src="/api/worker-media/spotlight/hls.js"></script>
 <script>
 (() => {
   const worker = '/api/worker-media';
   const video = document.getElementById('player');
   const status = document.getElementById('status');
-  let hls, generation = '', groupLevel = .58, masterLevel = 1, sourceVolume = 1, focus = 1, sourceMuted = false, brb = false, policyMuted = false, lastUnmutePulseAt = 0;
-  function volume(){video.volume=Math.min(1,groupLevel*masterLevel*sourceVolume*focus);video.muted=sourceMuted||brb||policyMuted;}
+  const enableAudio = document.getElementById('enable-audio');
+  video.muted = false;
+  enableAudio.addEventListener('click', () => { volume(); void video.play().then(() => { enableAudio.hidden = true; }).catch(() => {}); });
+  let hls, generation = '', groupLevel = .58, masterLevel = 1, sourceVolume = 1, focus = 1, sourceMuted = false, brb = false;
+  function volume(){video.volume=Math.min(1,groupLevel*masterLevel*sourceVolume*focus);video.muted=sourceMuted||brb;}
   function health(healthy){if(window.parent!==window)window.parent.postMessage({type:'spmt-lounge-spotlight-health',healthy},'https://spmt.live');}
-  async function tryUnmute(){
-    policyMuted=false;volume();
-    if(video.readyState<3)return;
-    try {
-      await video.play();
-    } catch {
-      policyMuted=true;volume();
-      try { await video.play(); health(true); } catch {}
-    }
-  }
   async function resume(){
-    if(!video.paused||video.readyState<3)return;
-    try {
+    if(video.paused && video.readyState>=3)try{
       await video.play();
-    } catch(error) {
-      if(error?.name!=='NotAllowedError'){
-        status.hidden=false;status.textContent='Reconnecting Spotlight';return;
-      }
-      policyMuted=true;volume();
-      try {
-        await video.play();
-        status.hidden=true;
-        health(true);
-      } catch {
-        status.hidden=false;status.textContent='Reconnecting Spotlight';
+      enableAudio.hidden=true;
+    }catch(error){
+      if(error?.name==='NotAllowedError'){
+        status.hidden=false;status.textContent='Tap Enable Audio to start Spotlight';
+        enableAudio.hidden=false;
       }
     }
   }
@@ -48,8 +34,7 @@
     if(event.data?.type==='spmt-lounge-brb-audio'&&typeof event.data.active==='boolean'){brb=event.data.active;volume();}
     if(event.data?.type==='spmt-lounge-program-focus'&&typeof event.data.focused==='boolean'){focus=event.data.focused?1:.2;volume();}
     if(event.data?.type==='spmt-lounge-unmute-pulse'){
-      const pulseAt=Number(event.data.at||0);
-      if(pulseAt>lastUnmutePulseAt){lastUnmutePulseAt=pulseAt;tryUnmute();}
+      void resume();
     }
   });
   async function mix(){try{
@@ -59,10 +44,8 @@
     const levels=payload.levels;
     const spotlight=Number(levels?.spotlight),all=Number(levels?.all??100);
     if(spotlight>=0&&spotlight<=100&&all>=0&&all<=100){groupLevel=spotlight/100;masterLevel=all/100;volume();}
-    const pulseAt=Number(payload?.unmutePulseAt??0);
-    if(pulseAt>lastUnmutePulseAt){lastUnmutePulseAt=pulseAt;tryUnmute();}
   }catch{}}
-  function reset(){hls?.destroy();hls=null;video.pause();video.removeAttribute('src');video.load();health(false);}
+  function reset(){hls?.destroy();hls=null;enableAudio.hidden=true;video.pause();video.removeAttribute('src');video.load();health(false);}
   async function poll(){try{
     const response=await fetch(worker+'/spotlight/program',{cache:'no-store'});
     if(!response.ok)throw Error('Spotlight worker unavailable');
@@ -71,7 +54,7 @@
       if(generation){generation='';reset();}
       health(false);status.hidden=false;status.textContent=program.error||'Preparing live Spotlight';return;
     }
-    if(program.generation===generation)return;
+    if(program.generation===generation){void resume();return;}
     generation=program.generation;reset();status.hidden=false;status.textContent='Buffering '+program.currentLogin;
     const url=worker+'/spotlight/hls/'+encodeURIComponent(generation)+'/index.m3u8';
     if(window.Hls?.isSupported()){
@@ -82,7 +65,7 @@
     else{generation='';status.textContent='Spotlight player unavailable';}
     volume();resume();
   }catch{status.hidden=false;status.textContent='Connecting to Spotlight worker';health(false);}}
-  video.addEventListener('playing',()=>{status.hidden=true;health(true);});
+  video.addEventListener('playing',()=>{status.hidden=true;enableAudio.hidden=true;health(true);});
   video.addEventListener('canplay',()=>void resume());video.addEventListener('progress',()=>void resume());video.addEventListener('timeupdate',()=>void resume());
   video.addEventListener('waiting',()=>health(false));
   volume();void poll();void mix();setInterval(poll,2500);setInterval(mix,3000);
