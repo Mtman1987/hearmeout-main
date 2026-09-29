@@ -8,7 +8,7 @@ const worker = readFileSync(new URL('../public/lounge-media/worker-media.html', 
 test('BRB never mutes HearMeOut media', () => {
   assert.match(legacy, /video\.muted=sourceMuted;/);
   assert.doesNotMatch(legacy, /video\.muted=sourceMuted\|\|brbActive/);
-  assert.match(worker, /video\.muted = muted \|\| programMuted \|\| policyMuted;/);
+  assert.match(worker, /video\.muted = muted \|\| programMuted;/);
 });
 
 test('commercial music starts for every BRB mode and stays latched through one full song', () => {

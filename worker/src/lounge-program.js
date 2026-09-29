@@ -18,6 +18,8 @@ let prefetchedRadio = null;
 let radioPrefetch = null;
 let currentMusicPreparation = null;
 let awaitingMusicSource = null;
+// Clear invalidates requests that were still resolving when the lane was cleared.
+const requestEpoch = { music: 0, movie: 0 };
 let musicSource = { prepare: async () => true, stop: () => {} };
 
 function configureMusicSource(source) {
@@ -512,8 +514,10 @@ async function tick(now = Date.now()) {
 
 async function request(body) {
   const laneName = body.lane === 'movie' ? 'movie' : 'music';
+  const epoch = requestEpoch[laneName];
   const requested = laneName === 'movie' ? await movieItem(body.query, body.itemId) : await musicItem(body.query);
   const item = laneName === 'movie' ? requested : await playableMusicItem(requested) || requested;
+  if (epoch !== requestEpoch[laneName]) throw Error('Lounge request canceled by !clear');
   const stored = readState();
   if (laneName === 'music') rememberSong(item);
   const lane = stored[laneName];
@@ -547,7 +551,7 @@ async function control(body) {
   const action = body.control === 'next-active' ? 'next' : String(body.control || '');
   if (action === 'next' && laneName === 'music') await advanceMusic();
   else if (action === 'next') lane.current = lane.queue.shift() || null;
-  else if (action === 'clear') { lane.current = null; lane.queue = []; }
+  else if (action === 'clear') { requestEpoch[laneName]++; lane.current = null; lane.queue = []; }
   else if (action === 'play' || action === 'pause') {
     if (lane.playback.status === 'playing') lane.playback.position += (Date.now() - lane.playback.updatedAt) / 1000;
     lane.playback.status = lane.current ? (action === 'play' ? 'playing' : 'paused') : 'idle';

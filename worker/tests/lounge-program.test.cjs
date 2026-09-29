@@ -208,3 +208,42 @@ esac
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+
+test('clear cancels a song request still preparing and permits a newer request', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'hmo-clear-pending-'));
+  const previous = { ...process.env };
+  try {
+    process.env.LOUNGE_STATE_FILE = join(root, 'program.json');
+    const bin = join(root, 'bin');
+    mkdirSync(bin);
+    writeFileSync(join(bin, 'yt-dlp'), '#!/bin/sh\necho \'{"id":"AAAAAAAAAAA","title":"Test Song","duration":180}\'\n', { mode: 0o755 });
+    process.env.PATH = `${bin}:${previous.PATH}`;
+    delete require.cache[require.resolve('../src/lounge-program')];
+    const program = require('../src/lounge-program');
+    let release, entered;
+    const preparing = new Promise(resolve => { entered = resolve; });
+    const blocked = new Promise(resolve => { release = resolve; });
+    let first = true;
+    program.configureMusicSource({
+      prepare: async () => {
+        if (first) { first = false; entered(); await blocked; }
+        return true;
+      }, stop: () => {},
+    });
+    const request = program.request({ lane: 'music', query: 'Test Song', actorName: 'viewer' });
+    const canceled = assert.rejects(request, /canceled by !clear/);
+    await preparing;
+    await program.control({ lane: 'music', control: 'clear' });
+    release();
+    await canceled;
+    assert.equal(program.program().music.current, null);
+    await program.request({ lane: 'music', query: 'Test Song', actorName: 'viewer' });
+    assert.equal(program.program().music.current.item.title, 'Test Song');
+  } finally {
+    delete require.cache[require.resolve('../src/lounge-program')];
+    Object.keys(process.env).forEach(key => { if (!(key in previous)) delete process.env[key]; });
+    Object.assign(process.env, previous);
+    rmSync(root, { recursive: true, force: true });
+  }
+});
