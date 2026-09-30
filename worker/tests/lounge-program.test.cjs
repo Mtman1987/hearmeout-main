@@ -316,3 +316,39 @@ esac
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+
+test('manual skip blacklists live and location variants of the skipped song family', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'hmo-skip-title-family-'));
+  const previous = { ...process.env };
+  try {
+    process.env.LOUNGE_STATE_FILE = join(root, 'program.json');
+    const bin = join(root, 'bin');
+    mkdirSync(bin);
+    writeFileSync(join(bin, 'yt-dlp'), `#!/bin/sh
+case "$*" in
+  *ytsearch8*) echo '{"entries":[
+    {"id":"SAMEFAMILY1","title":"Artist - Bowl For Two Live in New York","uploader":"Artist","duration":180},
+    {"id":"SAMEFAMILY2","title":"Artist - Bowl For Two Live in Florida","uploader":"Artist","duration":180},
+    {"id":"DIFFERENT01","title":"Artist - Different Song","uploader":"Artist","duration":180}
+  ]}' ;;
+  *SKIPPED0001*) echo '{"id":"SKIPPED0001","title":"Artist - Bowl For Two","uploader":"Artist","duration":180}' ;;
+  *DIFFERENT01*) echo '{"id":"DIFFERENT01","title":"Artist - Different Song","uploader":"Artist","duration":180}' ;;
+  *) echo '{"id":"DIFFERENT01","title":"Artist - Different Song","uploader":"Artist","duration":180}' ;;
+esac
+`, { mode: 0o755 });
+    process.env.PATH = `${bin}:${previous.PATH}`;
+    delete require.cache[require.resolve('../src/lounge-program')];
+    const program = require('../src/lounge-program');
+    program.configureMusicSource({ prepare: async () => true, failure: () => '', stop: () => {} });
+    await program.request({ lane: 'music', query: 'https://www.youtube.com/watch?v=SKIPPED0001', actorName: 'viewer' });
+    await program.radio({ control: 'on' });
+    await program.control({ lane: 'music', control: 'next-active' });
+    assert.equal(program.program().music.current.item.metadata.videoId, 'DIFFERENT01');
+  } finally {
+    delete require.cache[require.resolve('../src/lounge-program')];
+    Object.keys(process.env).forEach(key => { if (!(key in previous)) delete process.env[key]; });
+    Object.assign(process.env, previous);
+    rmSync(root, { recursive: true, force: true });
+  }
+});

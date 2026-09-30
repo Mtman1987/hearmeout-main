@@ -365,7 +365,9 @@ function radioEntry(song) {
 
 function radioSongSignature(title, artist = '') {
   let value = String(title || '').toLowerCase()
-    .replace(/\b(?:official\s+)?(?:music\s+)?video\b|\bofficial\s+audio\b|\blyrics?\b|\blive\b|\bremaster(?:ed)?\b|\bcover\b|\bkaraoke\b|\bacoustic\b/gi, ' ')
+    .replace(/\b(?:official\s+)?(?:music\s+)?video\b|\bofficial\s+audio\b|\blyrics?\b|\blive\b|\bremaster(?:ed)?\b|\bcover\b|\bkaraoke\b|\bacoustic\b|\b(?:radio|album|single)\s+version\b|\b(?:remix|edit|mix)\b/gi, ' ')
+    .replace(/\b(?:at|in|from)\s+[a-z0-9][a-z0-9\s.'’-]{1,60}$/gi, ' ')
+    .replace(/\b(?:19|20)\d{2}\b/g, ' ')
     .replace(/\([^)]*\)|\[[^\]]*\]|\{[^}]*\}/g, ' ')
     .replace(/[^a-z0-9]+/g, ' ')
     .replace(/\s+/g, ' ')
@@ -697,9 +699,12 @@ async function control(body) {
   const previousMusicId = laneName === 'music' ? lane.current?.item?.metadata?.videoId : null;
   const action = body.control === 'next-active' ? 'next' : String(body.control || '');
   if (action === 'next' && laneName === 'music') {
-    // A manual skip must stop the current source immediately, even if autoradio
-    // is still preparing its replacement. Never leave the skipped request active.
+    // A manual skip rejects the song family, not just this exact YouTube upload.
+    // Keep the canonical title blocked across live/remix/location variants so
+    // autoradio cannot answer a skip with another version of the same song.
     const skippedId = lane.current?.item?.metadata?.videoId;
+    const skippedSignature = radioSongSignature(lane.current?.item?.title, lane.current?.item?.metadata?.artist);
+    if (skippedSignature) stored.radio.blockedTitle = { signature: skippedSignature, remaining: 12 };
     lane.current = null;
     lane.playback.position = 0;
     lane.playback.updatedAt = Date.now();
