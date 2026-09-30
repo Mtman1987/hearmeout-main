@@ -27,6 +27,7 @@ const { captureYoutubeBroadcast } = require('./youtube-broadcast-capture');
 const { createSpotlightHls } = require('./spotlight-hls');
 const { createLoungeBroadcast } = require('./lounge-broadcast');
 const { createDirectLounge } = require('./lounge-direct');
+const { createRestreamControl } = require('./restream-control');
 const loungeProgram = require('./lounge-program');
 
 Object.assign(globalThis, {
@@ -115,6 +116,7 @@ const loungeBroadcast = RUN_LOUNGE && !directLounge ? createLoungeBroadcast({
   puppeteer,
   sourceUrl: process.env.LOUNGE_SOURCE_URL || 'https://hearmeout-main.fly.dev/overlay/system-spacemountainlive-lounge?clean=1',
 }) : null;
+const restreamControl = RUN_LOUNGE ? createRestreamControl({ chromiumPath: CHROMIUM_PATH, puppeteer }) : null;
 
 const VIDEO_ID_RE = /^[A-Za-z0-9_-]{11}$/;
 const OFFLINE_AUDIO_EXTENSIONS = new Set(['.mp3', '.m4a', '.aac', '.ogg', '.opus', '.wav', '.flac']);
@@ -3063,6 +3065,27 @@ app.post('/lounge/media/actions', authorizeWorker, async (req, res) => {
   } catch (error) {
     console.warn('[Lounge] Action failed:', error?.message || String(error));
     return res.status(502).json({ error: error?.message || 'Lounge action failed' });
+  }
+});
+
+app.get('/restream/status', authorizeWorker, async (_req, res) => {
+  if (!restreamControl) return res.status(404).json({ error: 'Restream control is available only on the Lounge worker' });
+  try { return res.json(await restreamControl.status()); }
+  catch (error) { return res.status(502).json({ error: error?.message || String(error) }); }
+});
+
+app.post('/restream/reset', authorizeWorker, async (req, res) => {
+  if (!restreamControl) return res.status(404).json({ error: 'Restream control is available only on the Lounge worker' });
+  try {
+    const holdMs = Number(req.body?.holdMs || 15000);
+    return res.json(await restreamControl.controlledReset({ holdMs }));
+  } catch (error) {
+    console.warn('[Restream] Controlled reset failed:', error?.message || String(error));
+    return res.status(409).json({
+      ok: false,
+      error: error?.message || 'Controlled Restream reset failed',
+      status: await restreamControl.status().catch(() => null),
+    });
   }
 });
 
