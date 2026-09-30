@@ -485,8 +485,9 @@ function prefetchNextRadio() {
       musicSource.stop(entry?.item?.metadata?.videoId);
     return entry;
   }).catch(error => {
+    // Autoradio prefetch is background work. A candidate failure must not be
+    // announced as though the currently playing user request failed.
     console.warn('[Lounge] Radio prefetch failed:', error.message);
-    if (error.songTitle) musicSource.notifyFailure?.(error.songTitle);
     return null;
   })
     .finally(() => { if (radioPrefetch?.forRequestId === forRequestId) radioPrefetch = null; });
@@ -525,8 +526,9 @@ async function advanceMusic() {
         next.item = playable;
       }
       catch (error) {
+        // Keep failed autoradio candidates private; only explicit user requests
+        // should produce a chat-visible failure.
         console.warn('[Lounge] Radio could not prepare song:', error.message);
-        if (error.songTitle) musicSource.notifyFailure?.(error.songTitle);
         prefetchedRadio = null;
         return;
       }
