@@ -168,6 +168,43 @@ test('automatic handoff waits for a prepared feed and stops the previous convers
   }
 });
 
+test('manual skip removes the current song even when autoradio replacement is not ready', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'hmo-skip-immediate-'));
+  const previous = { ...process.env };
+  try {
+    process.env.LOUNGE_STATE_FILE = join(root, 'program.json');
+    const bin = join(root, 'bin');
+    mkdirSync(bin);
+    writeFileSync(join(bin, 'yt-dlp'), `#!/bin/sh
+case "$*" in
+  *--flat-playlist*) echo '{"entries":[{"id":"AAAAAAAAAAA","title":"First","duration":180},{"id":"BBBBBBBBBBB","title":"Second","duration":180}]}' ;;
+  *) echo '{"id":"AAAAAAAAAAA","title":"First","duration":180}' ;;
+esac
+`, { mode: 0o755 });
+    process.env.PATH = `${bin}:${previous.PATH}`;
+    delete require.cache[require.resolve('../src/lounge-program')];
+    const program = require('../src/lounge-program');
+    const stopped = [];
+    program.configureMusicSource({
+      prepare: async id => id === 'AAAAAAAAAAA',
+      failure: id => id === 'BBBBBBBBBBB' ? 'not ready' : '',
+      stop: id => stopped.push(id),
+    });
+    await program.request({ lane: 'music', query: 'First', actorName: 'viewer' });
+    await program.radio({ control: 'add', query: 'https://youtube.com/playlist?list=PLtest' });
+    await program.radio({ control: 'on' });
+    const before = program.program().music.current?.requestId;
+    await program.control({ lane: 'music', control: 'next-active' });
+    assert.notEqual(program.program().music.current?.requestId, before);
+    assert.ok(stopped.includes('AAAAAAAAAAA'));
+  } finally {
+    delete require.cache[require.resolve('../src/lounge-program')];
+    Object.keys(process.env).forEach(key => { if (!(key in previous)) delete process.env[key]; });
+    Object.assign(process.env, previous);
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('radio follows human picks and never trains on its own selections', async () => {
   const root = mkdtempSync(join(tmpdir(), 'hmo-room-taste-'));
   const previous = { ...process.env };
