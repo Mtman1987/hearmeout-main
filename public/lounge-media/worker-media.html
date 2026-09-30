@@ -86,7 +86,7 @@
     } catch {} finally { mixPending = false; }
   }
   async function resume(){
-    if (!video.paused || video.readyState < 3) return;
+    if (video.ended || !video.paused || video.readyState < 3) return;
     try {
       await video.play();
       enableAudio.hidden = true;
@@ -117,7 +117,7 @@
       const item = lane && program[lane].current;
       const next = item ? lane+':'+item.requestId : '';
       if (!next) { if (selection) { selection='';hls?.destroy();video.pause();video.removeAttribute('src');video.load();} enableAudio.hidden=true;status.hidden=false;status.textContent='Waiting for a Lounge request';return; }
-      if (next === selection) { void resume(); return; }
+      if (next === selection) { if (!video.ended) void resume(); return; }
       hls?.destroy(); hls = null; video.pause(); video.removeAttribute('src'); video.load();
       if (lane === 'movie') {
         const info = await(await fetch(worker+'/lounge/direct/status',{cache:'no-store',signal:AbortSignal.timeout(30000)})).json();
