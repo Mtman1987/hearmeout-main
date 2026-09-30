@@ -685,7 +685,18 @@ async function control(body) {
   const lane = stored[laneName];
   const previousMusicId = laneName === 'music' ? lane.current?.item?.metadata?.videoId : null;
   const action = body.control === 'next-active' ? 'next' : String(body.control || '');
-  if (action === 'next' && laneName === 'music') await advanceMusic();
+  if (action === 'next' && laneName === 'music') {
+    // A manual skip must stop the current source immediately, even if autoradio
+    // is still preparing its replacement. Never leave the skipped request active.
+    const skippedId = lane.current?.item?.metadata?.videoId;
+    lane.current = null;
+    lane.playback.position = 0;
+    lane.playback.updatedAt = Date.now();
+    lane.playback.status = 'idle';
+    if (skippedId) musicSource.stop(skippedId);
+    save();
+    await advanceMusic();
+  }
   else if (action === 'next') lane.current = lane.queue.shift() || null;
   else if (action === 'clear') { requestEpoch[laneName]++; lane.current = null; lane.queue = []; }
   else if (action === 'play' || action === 'pause') {
