@@ -247,3 +247,35 @@ test('clear cancels a song request still preparing and permits a newer request',
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+
+test('radio rejects alternate versions of the latest human-picked title', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'hmo-radio-title-dedupe-'));
+  const previous = { ...process.env };
+  try {
+    process.env.LOUNGE_STATE_FILE = join(root, 'program.json');
+    const bin = join(root, 'bin');
+    mkdirSync(bin);
+    writeFileSync(join(bin, 'yt-dlp'), `#!/bin/sh
+case "$*" in
+  *ytsearch8*) echo '{"entries":[
+    {"id":"THUNDERLIVE","title":"AC/DC - Thunderstruck (Live at River Plate)","uploader":"AC/DC","duration":300},
+    {"id":"OTHERSNG001","title":"AC/DC - Back In Black (Official Video)","uploader":"AC/DC","duration":255}
+  ]}' ;;
+  *THUNDER0001*) echo '{"id":"THUNDER0001","title":"AC/DC - Thunderstruck (Official Video)","uploader":"AC/DC","duration":292}' ;;
+  *OTHERSNG001*) echo '{"id":"OTHERSNG001","title":"AC/DC - Back In Black (Official Video)","uploader":"AC/DC","duration":255}' ;;
+esac
+`, { mode: 0o755 });
+    process.env.PATH = `${bin}:${previous.PATH}`;
+    delete require.cache[require.resolve('../src/lounge-program')];
+    const program = require('../src/lounge-program');
+    await program.request({ lane: 'music', query: 'https://www.youtube.com/watch?v=THUNDER0001', actorName: 'viewer' });
+    await program.radio({ control: 'on' });
+    await program.control({ lane: 'music', control: 'next' });
+    assert.equal(program.program().music.current.item.metadata.videoId, 'OTHERSNG001');
+  } finally {
+    Object.keys(process.env).forEach(key => { if (!(key in previous)) delete process.env[key]; });
+    Object.assign(process.env, previous);
+    rmSync(root, { recursive: true, force: true });
+  }
+});
