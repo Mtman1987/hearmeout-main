@@ -221,6 +221,11 @@ function rememberPlayed(entry) {
     const history = radio.history;
     history.push({ id, title: String(entry.item.title || ''), artist: String(entry.item.metadata.artist || ''), duration: Number(entry.item.metadata.duration) || 0, playedAt: Date.now() });
     if (history.length > 30) history.splice(0, history.length - 30);
+    const signature = radioSongSignature(entry.item.title, entry.item.metadata.artist);
+    if (signature) radio.blockedTitle = { signature, remaining: 5 };
+  } else if (radio.blockedTitle?.remaining > 0) {
+    radio.blockedTitle.remaining = Math.max(0, Number(radio.blockedTitle.remaining) - 1);
+    if (!radio.blockedTitle.remaining) delete radio.blockedTitle;
   }
   if (prefetchedRadio?.entry?.item?.metadata?.videoId && prefetchedRadio.entry.item.metadata.videoId !== id)
     musicSource.stop(prefetchedRadio?.entry?.item?.metadata?.videoId);
@@ -242,24 +247,36 @@ function radioEntry(song) {
       metadata: { provider: 'youtube', videoId: song.id, artist: song.artist || '', duration: Number(song.duration) || 0 } } };
 }
 
-function radioSongSignature(title) {
+function radioSongSignature(title, artist = '') {
   let value = String(title || '').toLowerCase()
     .replace(/\b(?:official\s+)?(?:music\s+)?video\b|\bofficial\s+audio\b|\blyrics?\b|\blive\b|\bremaster(?:ed)?\b|\bcover\b|\bkaraoke\b|\bacoustic\b/gi, ' ')
     .replace(/\([^)]*\)|\[[^\]]*\]|\{[^}]*\}/g, ' ')
+    .replace(/[^a-z0-9]+/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
-  const dash = value.match(/^.{1,60}?\s[-–—]\s(.{3,})$/);
-  if (dash) value = dash[1];
-  return value.replace(/[^a-z0-9]+/g, ' ').trim();
+  const artistText = String(artist || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').replace(/\s+/g, ' ').trim();
+  if (artistText && value.includes(artistText)) value = value.split(artistText).join(' ').replace(/\s+/g, ' ').trim();
+  return value;
 }
 
 function blockedRadioSongSignatures() {
   const stored = readState();
-  const titles = [
-    stored.music.current?.item?.title,
-    ...(stored.radio?.history || []).slice(-12).map(song => song?.title),
+  const current = stored.music.current?.item;
+  const values = [
+    radioSongSignature(current?.title, current?.metadata?.artist),
+    Number(stored.radio?.blockedTitle?.remaining || 0) > 0 ? String(stored.radio.blockedTitle.signature || '') : '',
   ];
-  return new Set(titles.map(radioSongSignature).filter(Boolean));
+  return new Set(values.filter(Boolean));
+}
+
+function isBlockedRadioTitle(title, artist = '') {
+  const candidate = radioSongSignature(title, artist);
+  if (!candidate) return false;
+  for (const blocked of blockedRadioSongSignatures()) {
+    if (candidate === blocked) return true;
+    if (blocked.length >= 5 && ((' ' + candidate + ' ').includes(' ' + blocked + ' ') || (' ' + blocked + ' ').includes(' ' + candidate + ' '))) return true;
+  }
+  return false;
 }
 
 function isBlockedRadioTitle(title, blockedTitles) {
@@ -289,8 +306,12 @@ function playlistStarter() {
     if (!recentlyHeard.has(candidate.id) && !isBlockedRadioTitle(candidate.title, blockedTitles)) break;
     index = (index + 1) % count;
   }
-  const selected = radio.seeds[index * step % count];
-  radio.cursor = (index + 1) % count;
+  let selected = radio.seeds[index * step % count];
+  if (recentlyHeard.has(selected.id) || isBlockedRadioTitle(selected.title, selected.artist)) {
+    selected = radio.seeds.find(candidate => !isBlockedRadioTitle(candidate.title, candidate.artist) && candidate.id !== readState().music.current?.item?.metadata?.videoId) || null;
+  }
+  if (!selected) return null;
+  radio.cursor = (radio.seeds.indexOf(selected) + 1) % count;
   return radioEntry(selected);
 }
 
