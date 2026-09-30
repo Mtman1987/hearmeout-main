@@ -1,58 +1,21 @@
 export function renderLoungePlayer() {
-  return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>SpaceMountain Lounge live view</title><style>html,body,video{margin:0;width:100%;height:100%;overflow:hidden;background:#000}video{display:block;object-fit:contain}#preparing{position:absolute;inset:0;z-index:2;display:none;box-sizing:border-box;align-items:center;justify-content:center;padding:5%;color:#fff;background:radial-gradient(circle at center,#20153d 0%,#090919 65%,#000 100%);font:600 clamp(18px,3vw,32px)/1.35 system-ui,sans-serif;text-align:center}#preparing .card{width:min(84%,650px);padding:clamp(24px,5vw,52px);border:2px solid #55d7ed;border-radius:24px;box-shadow:0 0 32px #339fd080;background:#0d1739}#preparing .eyebrow{color:#77ddf0;font-size:clamp(14px,1.6vw,20px);letter-spacing:.12em;text-transform:uppercase}#preparing .title{margin:18px 0 10px;overflow-wrap:anywhere}#preparing .requester{color:#d7c5ff;font-size:clamp(15px,2vw,22px);font-weight:400}#preparing .detail{margin-top:20px;color:#c1c8d4;font-size:clamp(14px,1.5vw,18px);font-weight:400}</style></head><body><video id="player" autoplay playsinline></video><div id="preparing" role="status" aria-live="polite"><div class="card"><div id="preparing-kind" class="eyebrow">Preparing your media</div><div id="preparing-title" class="title"></div><div id="preparing-requester" class="requester"></div><div id="preparing-detail" class="detail">Your selection is loading</div></div></div><iframe id="direct-player" title="Lounge media" allow="autoplay" style="display:none;border:0;width:100%;height:100%"></iframe><audio id="theme" preload="auto"></audio><script>
+  return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>SpaceMountain Lounge live view</title><style>html,body,video{margin:0;width:100%;height:100%;overflow:hidden;background:#000}video{display:block;object-fit:contain}#preparing{position:absolute;inset:0;z-index:2;display:none;box-sizing:border-box;align-items:center;justify-content:center;padding:5%;color:#fff;background:radial-gradient(circle at center,#20153d 0%,#090919 65%,#000 100%);font:600 clamp(18px,3vw,32px)/1.35 system-ui,sans-serif;text-align:center}#preparing .card{width:min(84%,650px);padding:clamp(24px,5vw,52px);border:2px solid #55d7ed;border-radius:24px;box-shadow:0 0 32px #339fd080;background:#0d1739}#preparing .eyebrow{color:#77ddf0;font-size:clamp(14px,1.6vw,20px);letter-spacing:.12em;text-transform:uppercase}#preparing .title{margin:18px 0 10px;overflow-wrap:anywhere}#preparing .requester{color:#d7c5ff;font-size:clamp(15px,2vw,22px);font-weight:400}#preparing .detail{margin-top:20px;color:#c1c8d4;font-size:clamp(14px,1.5vw,18px);font-weight:400}</style></head><body><video id="player" autoplay playsinline></video><div id="preparing" role="status" aria-live="polite"><div class="card"><div id="preparing-kind" class="eyebrow">Preparing your media</div><div id="preparing-title" class="title"></div><div id="preparing-requester" class="requester"></div><div id="preparing-detail" class="detail">Your selection is loading</div></div></div><iframe id="direct-player" title="Lounge media" allow="autoplay" style="display:none;border:0;width:100%;height:100%"></iframe><script>
 const video=document.getElementById('player');
-const theme=document.getElementById('theme');
 const directPlayer=document.getElementById('direct-player');
 const directMode=new URLSearchParams(location.search).get('direct')==='1';
 if(directMode){video.style.display='none';directPlayer.style.display='block';directPlayer.src='/overlay/system-spacemountainlive-lounge?clean=1&direct=1&volume=0.85&muted=0';directPlayer.addEventListener('load',()=>applyBroadcastVolume())}
-const themeTracks=[
- '/api/offline-music?id=c3BhY2Vtb3VudGFpbmxpdmUvc3BtdC5tcDM',
- '/api/offline-music?id=c3BhY2Vtb3VudGFpbmxpdmUvc3BtdDIubXAz',
- '/api/offline-music?id=c3BhY2Vtb3VudGFpbmxpdmUvc3BtdDMubXAz',
- '/api/offline-music?id=c3BhY2Vtb3VudGFpbmxpdmUvc3BtdDQubXAz'
-];
-let themeIndex=0,themeFailures=0,themeActive=false,commercialActive=false;
-theme.src=themeTracks[0];
-function playTheme(){if(themeActive)theme.play().catch(error=>console.warn('[Lounge] Theme autoplay unavailable:',error))}
-function advanceTheme(failed){
- if(!themeActive)return;
- themeFailures=failed?themeFailures+1:0;
- if(themeFailures>=themeTracks.length){themeActive=false;theme.pause();return}
- if(!commercialActive&&!failed){themeActive=false;theme.pause();return}
- themeIndex=(themeIndex+1)%themeTracks.length;
- theme.src=themeTracks[themeIndex];
- theme.currentTime=0;
- playTheme();
-}
-theme.addEventListener('ended',()=>advanceTheme(false));
-theme.addEventListener('error',()=>advanceTheme(true));
-theme.addEventListener('playing',()=>{themeFailures=0});
-function setThemeActive(active){
- commercialActive=active;
- if(active&&!themeActive){
-  themeActive=true;themeFailures=0;theme.currentTime=0;playTheme();
- }
-}
 video.volume=.85;video.muted=false;
-let groupLevel=.85,masterLevel=1,sourceVolume=1,sourceMuted=false,brbActive=false;
+let groupLevel=.85,masterLevel=1,sourceVolume=1,sourceMuted=false;
 function applyBroadcastVolume(){
  const volume=groupLevel*masterLevel*sourceVolume;
  video.volume=volume;video.muted=sourceMuted;
  if(directMode)directPlayer.contentWindow?.postMessage({type:'hmo.lounge.broadcast-volume',volume,muted:sourceMuted},location.origin);
- theme.volume=volume;theme.muted=sourceMuted;
 }
 window.addEventListener('message',(event)=>{
  if(event.source!==window.parent||event.origin!=='https://spmt.live'||event.data?.type!=='spmt.obspmt.audio')return;
  const level=Number(event.data.volume);
  if(!Number.isFinite(level)||level<0||level>1||typeof event.data.muted!=='boolean')return;
  sourceVolume=level;sourceMuted=event.data.muted;applyBroadcastVolume();
-});
-window.addEventListener('message',(event)=>{
- if(event.source!==window.parent||event.origin!=='https://spmt.live'
-  ||event.data?.type!=='spmt-lounge-brb-audio'||typeof event.data.active!=='boolean')return;
- brbActive=event.data.active;
- setThemeActive(brbActive);
- applyBroadcastVolume();
 });
 // This is the OBS browser source. Twitch viewers adjust their own local
 // volume; the one broadcast mix is applied here before OBS sends it out.

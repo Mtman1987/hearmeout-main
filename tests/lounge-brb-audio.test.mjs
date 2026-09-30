@@ -11,9 +11,10 @@ test('BRB never mutes HearMeOut media', () => {
   assert.match(worker, /video\.muted = muted \|\| programMuted;/);
 });
 
-test('commercial music starts for every BRB mode and stays latched through one full song', () => {
-  assert.match(legacy, /setThemeActive\(brbActive\);/);
-  assert.match(legacy, /if\(!commercialActive&&!failed\)\{themeActive=false;theme\.pause\(\);return\}/);
-  assert.match(worker, /if \(commercialActive\) beginCommercialMusic\(\);/);
-  assert.match(worker, /if \(!commercialActive && !failed\) \{ themeLatched = false; theme\.pause\(\); return; \}/);
+test('commercial breaks never start or replace audio inside the HearMeOut program player', () => {
+  for (const source of [legacy, worker]) {
+    assert.doesNotMatch(source, /spmt-lounge-brb-audio/);
+    assert.doesNotMatch(source, /commercialActive|beginCommercialMusic|setThemeActive|themeTracks/);
+    assert.doesNotMatch(source, /<audio id="theme"/);
+  }
 });
