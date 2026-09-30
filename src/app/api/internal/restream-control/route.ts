@@ -6,7 +6,7 @@ export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 const LOUNGE_WORKER_URL = String(
-  process.env.LOUNGE_WORKER_URL || 'http://hmo-lounge-worker.internal:3002',
+  process.env.LOUNGE_WORKER_URL || 'http://lounge.process.hmo-dj-worker.internal:3002',
 ).replace(/\/$/, '');
 
 function safeEqual(actual: string, expected: string) {
