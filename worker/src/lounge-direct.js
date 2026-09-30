@@ -45,6 +45,7 @@ function createDirectLounge({ program, sourceForMovie, root, onMovieEnded }) {
     movie.captureStartPosition = startPosition;
 
     let audioIndex = '0:a:0?';
+    let audioCodec = '';
     let videoCodec = 'h264';
     try {
       const result = await probe('ffprobe', ['-v', 'error', '-user_agent', 'DiscordStreamHub/1.0', '-show_entries', 'stream=index,codec_name,codec_type:stream_tags=language,title', '-of', 'json', source.url], { timeout: 15000, maxBuffer: 1024 * 1024 });
@@ -52,7 +53,11 @@ function createDirectLounge({ program, sourceForMovie, root, onMovieEnded }) {
       videoCodec = streams.find(s => s.codec_type === 'video')?.codec_name || 'h264';
       const tracks = streams.filter(s => s.codec_type === 'audio');
       const english = tracks.find(s => /^(en|eng|english)$/i.test(s.tags?.language || '') || /english/i.test(s.tags?.title || ''));
-      if (english) audioIndex = '0:' + english.index;
+      const selectedAudio = english || tracks[0];
+      if (selectedAudio) {
+        audioIndex = '0:' + selectedAudio.index;
+        audioCodec = String(selectedAudio.codec_name || '').toLowerCase();
+      }
     } catch { /* The first audio track remains usable when the probe is unavailable. */ }
 
     const args = ['-hide_banner', '-loglevel', 'warning', '-nostdin', '-readrate', '1',
@@ -60,7 +65,7 @@ function createDirectLounge({ program, sourceForMovie, root, onMovieEnded }) {
       '-reconnect_delay_max', '5', ...(startPosition > 1 ? ['-ss', startPosition.toFixed(3)] : []), '-i', source.url,
       '-map', '0:v:0', '-map', audioIndex,
       ...(videoCodec === 'h264' ? ['-c:v', 'copy'] : ['-vf', 'scale=854:480:force_original_aspect_ratio=decrease:flags=fast_bilinear,pad=854:480:(ow-iw)/2:(oh-ih)/2', '-c:v', 'libx264', '-threads', '2', '-preset', 'ultrafast', '-crf', '27', '-pix_fmt', 'yuv420p']),
-      '-c:a', 'aac', '-b:a', '160k', '-ac', '2',
+      ...(audioCodec === 'aac' ? ['-c:a', 'copy'] : ['-c:a', 'aac', '-b:a', '160k', '-ac', '2']),
       '-f', 'hls', '-hls_time', '4', '-hls_list_size', '12', '-hls_delete_threshold', '3',
       '-hls_flags', 'independent_segments+temp_file+delete_segments+program_date_time',
       '-hls_segment_filename', join(dir, 'segment_%06d.ts'), join(dir, 'index.m3u8')];
