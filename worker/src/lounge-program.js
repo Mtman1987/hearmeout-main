@@ -255,6 +255,17 @@ async function musicItem(query, timeout = 45000) {
   const value = String(query || '').trim();
   if (!value) throw Error('A song or YouTube URL is required');
 
+  const provider = String(process.env.LOUNGE_YOUTUBE_SEARCH_PROVIDER || (process.env.NODE_ENV === 'production' ? 'youtubei' : 'yt-dlp')).toLowerCase();
+  if (provider === 'yt-dlp') {
+    const input = /^https?:\/\//i.test(value) ? value : `ytsearch1:${value}`;
+    const { stdout } = await run('yt-dlp', ['--no-playlist', '--skip-download', '--dump-single-json', '--no-warnings', input], { timeout, maxBuffer: 8 * 1024 * 1024 });
+    const found = JSON.parse(stdout);
+    const legacyVideo = Array.isArray(found.entries) ? found.entries[0] : found;
+    if (!/^[\w-]{11}$/.test(String(legacyVideo?.id || ''))) throw Error('No playable song found');
+    return { type: 'music', title: String(legacyVideo.title || value), playbackUrl: `/lounge/music/hls/${legacyVideo.id}/index.m3u8`,
+      metadata: { provider: 'youtube', videoId: legacyVideo.id, artist: legacyVideo.uploader || legacyVideo.channel || '', duration: Number(legacyVideo.duration) || 0 } };
+  }
+
   const directId = /^https?:\/\//i.test(value) ? youtubeVideoId(value) : '';
   let video = null;
   if (directId) {
