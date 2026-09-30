@@ -49,8 +49,17 @@ export async function GET(request: NextRequest) {
 export async function POST(request: NextRequest) {
   if (!authorized(request)) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   const body = await request.json().catch(() => ({}));
-  if (String(body?.action || '') !== 'reset') {
-    return NextResponse.json({ error: 'Only the controlled reset action is supported' }, { status: 400 });
+  const action = String(body?.action || '');
+  if (action !== 'start' && action !== 'reset') {
+    return NextResponse.json({ error: 'Only the controlled start and reset actions are supported' }, { status: 400 });
+  }
+  if (action === 'start') {
+    const result = await callWorker('/restream/start', {
+      method: 'POST',
+      body: JSON.stringify({}),
+      signal: AbortSignal.timeout(120000),
+    });
+    return NextResponse.json(result.body, { status: result.status, headers: { 'cache-control': 'no-store' } });
   }
   const holdMs = Math.max(5000, Math.min(Number(body?.holdMs || 15000), 30000));
   const result = await callWorker('/restream/reset', {
