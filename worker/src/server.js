@@ -3074,6 +3074,20 @@ app.get('/restream/status', authorizeWorker, async (_req, res) => {
   catch (error) { return res.status(502).json({ error: error?.message || String(error) }); }
 });
 
+app.post('/restream/ensure-live', authorizeWorker, async (_req, res) => {
+  if (!restreamControl) return res.status(404).json({ error: 'Restream control is available only on the Lounge worker' });
+  try {
+    return res.json(await restreamControl.ensureLive());
+  } catch (error) {
+    console.warn('[Restream] Ensure-live recovery failed:', error?.message || String(error));
+    return res.status(409).json({
+      ok: false,
+      error: error?.message || 'Restream ensure-live recovery failed',
+      status: await restreamControl.status().catch(() => null),
+    });
+  }
+});
+
 app.post('/restream/reset', authorizeWorker, async (req, res) => {
   if (!restreamControl) return res.status(404).json({ error: 'Restream control is available only on the Lounge worker' });
   try {
