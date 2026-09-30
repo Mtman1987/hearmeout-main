@@ -71,15 +71,27 @@ function createDirectLounge({ program, sourceForMovie, root, onMovieEnded }) {
       '-hls_segment_filename', join(dir, 'segment_%06d.ts'), join(dir, 'index.m3u8')];
     const child = spawn('ffmpeg', args, { stdio: ['ignore', 'ignore', 'pipe'] });
     process = child;
+    lastFailed = 0;
     let details = '';
     child.stderr.on('data', chunk => { details = (details + chunk).slice(-1000); });
-    child.once('error', err => { error = err.message; });
+    child.once('error', err => {
+      if (process !== child) return;
+      error = err.message;
+      lastFailed = Date.now();
+    });
     child.once('close', code => {
-      if (code === 0 && current?.requestId === movie.requestId) {
+      // A seek intentionally terminates the previous ffmpeg process while the
+      // requestId stays the same. Ignore callbacks from superseded children so
+      // they cannot poison or advance the replacement stream.
+      if (process !== child) return;
+      if (code === 0 && current?.requestId === movie.requestId && Number(current?.seekRevision || 0) === Number(movie.seekRevision || 0)) {
         Promise.resolve(onMovieEnded?.(movie.requestId)).catch(err => console.warn('[Lounge] Movie advance failed:', err?.message || err));
         return;
       }
-      if (code !== 0 && current?.requestId === movie.requestId) error = details.replace(source.url, '[source]') || 'Movie preparation stopped';
+      if (code !== 0 && current?.requestId === movie.requestId && Number(current?.seekRevision || 0) === Number(movie.seekRevision || 0)) {
+        error = details.replace(source.url, '[source]') || 'Movie preparation stopped';
+        lastFailed = Date.now();
+      }
     });
   }
 
