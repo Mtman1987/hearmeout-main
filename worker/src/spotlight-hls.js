@@ -14,6 +14,10 @@ function inspectSpotlightPlaylist(playlist, ageMs) {
   return { segmentCount, stalled: segmentCount >= 2 && (ageMs > 15000 || duration > 15) };
 }
 
+function shouldRecycleSpotlight(status, restartAfterMs = 120000) {
+  return Boolean(status?.stalled && Number(status?.playlistAgeMs || 0) >= restartAfterMs);
+}
+
 function createSpotlightHls({ spotlightEndpoint, root = '/tmp/spotlight-hls' }) {
   let login = '', generation = '', encoder = null, failure = '', inflight = null, timer = null, lastPoll = 0;
   let recoveries = 0, startedAt = 0, failedLogin = '', failedLoginUntil = 0;
@@ -64,8 +68,16 @@ function createSpotlightHls({ spotlightEndpoint, root = '/tmp/spotlight-hls' }) 
         failure = 'No live community Spotlight is available';
         return status();
       }
-      if (selected === login && encoder && encoder.exitCode === null && !encoder.killed && !status().stalled) return status();
-      if (selected === login && status().stalled) recoveries++;
+      const current = status();
+      if (selected === login && encoder && encoder.exitCode === null && !encoder.killed) {
+        if (!current.stalled) return current;
+        // A Twitch preroll/ad discontinuity can pause segment advancement without
+        // meaning the source session is dead. Keep the same upstream session so
+        // we do not create a fresh preroll loop. The Lounge sponsor cover handles
+        // the temporary gap; recycle only after a sustained two-minute stall.
+        if (!shouldRecycleSpotlight(current)) return current;
+        recoveries++;
+      }
       if (selected === failedLogin && Date.now() < failedLoginUntil) {
         stop(); login = ''; generation = '';
         failure = 'Selected Spotlight source is offline; waiting for the live rotation to change';
@@ -130,4 +142,4 @@ function createSpotlightHls({ spotlightEndpoint, root = '/tmp/spotlight-hls' }) 
   return { start, status, file, consent: async () => ({ ...status(), warningCleared: false }) };
 }
 
-module.exports = { createSpotlightHls, inspectSpotlightPlaylist };
+module.exports = { createSpotlightHls, inspectSpotlightPlaylist, shouldRecycleSpotlight };
