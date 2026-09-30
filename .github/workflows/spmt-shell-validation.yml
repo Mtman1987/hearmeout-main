@@ -47,6 +47,10 @@ jobs:
           node --check worker/src/spotlight-broadcast.js
           node --check worker/src/server.js
           node --test tests/spotlight-source-contract.test.cjs
+      - name: Test bounded Restream controller
+        run: |
+          node --check worker/src/restream-control.js
+          node --test tests/restream-control-contract.test.cjs
       - name: Typecheck
         run: npm run typecheck
       - name: Production build
