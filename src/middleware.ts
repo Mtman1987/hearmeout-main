@@ -32,6 +32,8 @@ const PUBLIC_PREFIXES = [
   '/api/internal/bot/actions',
   // Authenticated with the existing DJ worker credential inside the route.
   '/api/internal/watch/search',
+  // Service-authenticated controller for the planned 48-hour Restream/Twitch session reset.
+  '/api/internal/restream-control',
   // The source resolver verifies HMO_WORKER_SHARED_SECRET inside its handler.
   // The Lounge worker has no user browser session when it prepares a movie.
   '/api/watch/xtream/source/',
