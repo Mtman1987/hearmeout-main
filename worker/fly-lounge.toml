@@ -11,6 +11,8 @@ primary_region = "iad"
   HMO_WORKER_ROLE = "lounge"
   HMO_LOUNGE_DIRECT_ONLY = "true"
   HMO_PRIVATE_RENDERER = "false"
+  RESTREAM_PROFILE_DIR = "/data/restream-chromium"
+  RESTREAM_AUTOMATION_ENABLED = "false"
 
 [mounts]
   source = "data"
