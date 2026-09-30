@@ -153,16 +153,122 @@ async function movieItem(query, itemId) {
     metadata: { provider: 'xtream', kind: selected.kind, streamId: selected.streamId, extension: selected.extension, pathKind } };
 }
 
+let youtubeSearchClientPromise = null;
+
+function youtubeVideoId(value) {
+  const raw = String(value || '').trim();
+  const direct = raw.match(/^[A-Za-z0-9_-]{11}$/);
+  if (direct) return direct[0];
+  try {
+    const url = new URL(raw);
+    const host = url.hostname.replace(/^www\./, '').toLowerCase();
+    if (host === 'youtu.be') {
+      const id = url.pathname.split('/').filter(Boolean)[0] || '';
+      return /^[A-Za-z0-9_-]{11}$/.test(id) ? id : '';
+    }
+    if (host.endsWith('youtube.com')) {
+      const id = url.searchParams.get('v') || url.pathname.match(/\/(?:shorts|embed)\/([A-Za-z0-9_-]{11})/)?.[1] || '';
+      return /^[A-Za-z0-9_-]{11}$/.test(id) ? id : '';
+    }
+  } catch {}
+  return '';
+}
+
+function youtubeText(value) {
+  if (value == null) return '';
+  if (typeof value === 'string' || typeof value === 'number') return String(value);
+  if (typeof value?.text === 'string') return value.text;
+  try {
+    const rendered = value.toString?.();
+    return rendered && rendered !== '[object Object]' ? String(rendered) : '';
+  } catch { return ''; }
+}
+
+function youtubeDurationSeconds(value) {
+  const direct = Number(value?.seconds ?? value);
+  if (Number.isFinite(direct) && direct > 0) return direct;
+  const text = youtubeText(value);
+  if (!/^\d{1,2}(?::\d{2}){1,2}$/.test(text)) return 0;
+  return text.split(':').reduce((total, part) => total * 60 + Number(part), 0);
+}
+
+function normalizeYoutubeVideo(video) {
+  const id = String(video?.id || video?.video_id || video?.videoId || '');
+  if (!/^[A-Za-z0-9_-]{11}$/.test(id)) return null;
+  return {
+    id,
+    title: youtubeText(video?.title) || 'YouTube video',
+    uploader: youtubeText(video?.author?.name || video?.channel?.name || video?.author || video?.channel),
+    duration: youtubeDurationSeconds(video?.duration),
+  };
+}
+
+function ytDlpSearchArgs(query, limit) {
+  const cookieFile = String(process.env.YTDLP_COOKIES_FILE || process.env.YOUTUBE_COOKIES_FILE || '/data/youtube-cookies.txt').trim();
+  const bgutilHome = String(process.env.YTDLP_BGUTIL_SERVER_HOME || '').trim();
+  return [
+    '--flat-playlist',
+    '--skip-download',
+    '--dump-single-json',
+    '--no-warnings',
+    '--js-runtimes', 'node',
+    ...(bgutilHome ? ['--extractor-args', `youtubepot-bgutilscript:server_home=${bgutilHome}`] : []),
+    ...(cookieFile && existsSync(cookieFile) ? ['--cookies', cookieFile] : []),
+    `ytsearch${Math.max(1, Math.min(8, Number(limit) || 5))}:${query}`,
+  ];
+}
+
+async function searchYoutubeVideos(query, limit = 5, timeout = 20000) {
+  const count = Math.max(1, Math.min(8, Number(limit) || 5));
+  const provider = String(process.env.LOUNGE_YOUTUBE_SEARCH_PROVIDER || (process.env.NODE_ENV === 'production' ? 'youtubei' : 'yt-dlp')).toLowerCase();
+
+  if (provider !== 'yt-dlp') {
+    try {
+      youtubeSearchClientPromise ||= import('youtubei.js').then(async ({ Innertube }) => Innertube.create());
+      const yt = await youtubeSearchClientPromise;
+      const search = await Promise.race([
+        yt.search(String(query || '').trim(), { type: 'video' }),
+        new Promise((_, reject) => setTimeout(() => reject(Error('YouTube search timed out')), timeout)),
+      ]);
+      const videos = Array.isArray(search?.videos)
+        ? search.videos
+        : Array.isArray(search?.results)
+          ? search.results
+          : [];
+      const normalized = videos.map(normalizeYoutubeVideo).filter(Boolean).slice(0, count);
+      if (normalized.length) return normalized;
+    } catch (error) {
+      console.warn('[Lounge] youtubei song search unavailable, trying yt-dlp fallback:', error.message);
+      youtubeSearchClientPromise = null;
+    }
+  }
+
+  const { stdout } = await run('yt-dlp', ytDlpSearchArgs(query, count), { timeout, maxBuffer: 8 * 1024 * 1024 });
+  const found = JSON.parse(stdout);
+  return (Array.isArray(found?.entries) ? found.entries : [])
+    .map(normalizeYoutubeVideo)
+    .filter(Boolean)
+    .slice(0, count);
+}
+
 async function musicItem(query, timeout = 45000) {
   const value = String(query || '').trim();
   if (!value) throw Error('A song or YouTube URL is required');
-  const input = /^https?:\/\//i.test(value) ? value : `ytsearch1:${value}`;
-  const { stdout } = await run('yt-dlp', ['--no-playlist', '--skip-download', '--dump-single-json', '--no-warnings', input], { timeout, maxBuffer: 8 * 1024 * 1024 });
-  const found = JSON.parse(stdout);
-  const video = Array.isArray(found.entries) ? found.entries[0] : found;
-  if (!/^[\w-]{11}$/.test(String(video?.id || ''))) throw Error('No playable song found');
+
+  const directId = /^https?:\/\//i.test(value) ? youtubeVideoId(value) : '';
+  let video = null;
+  if (directId) {
+    video = { id: directId, title: value, uploader: '', duration: 0 };
+  } else if (/^https?:\/\//i.test(value)) {
+    throw Error('Could not find a YouTube video ID in that URL');
+  } else {
+    const candidates = await searchYoutubeVideos(value, 5, Math.min(timeout, 20000));
+    video = candidates[0] || null;
+  }
+
+  if (!video?.id) throw Error('No playable song found');
   return { type: 'music', title: String(video.title || value), playbackUrl: `/lounge/music/hls/${video.id}/index.m3u8`,
-    metadata: { provider: 'youtube', videoId: video.id, artist: video.uploader || video.channel || '', duration: Number(video.duration) || 0 } };
+    metadata: { provider: 'youtube', videoId: video.id, artist: video.uploader || '', duration: Number(video.duration) || 0 } };
 }
 
 // Try other uploads of the requested song when the first source cannot be
@@ -178,8 +284,7 @@ async function playableMusicItem(item) {
   const expected = words(query);
   let candidates = [];
   try {
-    const { stdout } = await run('yt-dlp', ['--flat-playlist', '--skip-download', '--dump-single-json', '--no-warnings', `ytsearch5:${query}`], { timeout: 15000, maxBuffer: 4 * 1024 * 1024 });
-    candidates = JSON.parse(stdout).entries || [];
+    candidates = await searchYoutubeVideos(query, 5, 20000);
   } catch (error) { console.warn('[Lounge] Alternate song search:', error.message); }
   for (const video of candidates.slice(0, 5)) {
     const id = String(video?.id || '');
@@ -187,7 +292,7 @@ async function playableMusicItem(item) {
     const matched = [...expected].filter(word => words(video.title).has(word)).length;
     if (expected.size && matched < Math.max(1, Math.ceil(expected.size * 0.6))) continue;
     const alternate = { ...item, title: String(video.title || item.title), playbackUrl: `/lounge/music/hls/${id}/index.m3u8`,
-      metadata: { ...item.metadata, videoId: id, artist: video.uploader || video.channel || item.metadata.artist,
+      metadata: { ...item.metadata, videoId: id, artist: video.uploader || item.metadata.artist,
         duration: Number(video.duration) || item.metadata.duration } };
     try {
       if (!await musicSource.prepare(id)) {
@@ -331,12 +436,11 @@ async function discoverRadioEntry() {
     const artist = String(anchor.artist || '').replace(/\b(?:VEVO|Topic|Official)\b/ig, '').trim();
     if (!artist) continue;
     try {
-      const query = `ytsearch8:${artist} songs like ${String(anchor.title || '').slice(0, 70)}`;
-      const { stdout } = await run('yt-dlp', ['--flat-playlist', '--skip-download', '--dump-single-json', '--no-warnings', query], { timeout: 15000, maxBuffer: 4 * 1024 * 1024 });
-      const results = JSON.parse(stdout);
-      const candidates = (Array.isArray(results.entries) ? results.entries : [])
+      const query = `${artist} songs like ${String(anchor.title || '').slice(0, 70)}`;
+      const results = await searchYoutubeVideos(query, 8, 20000);
+      const candidates = results
         .filter(video => /^[\w-]{11}$/.test(String(video?.id || '')) && !blocked.has(video.id))
-        .filter(video => !isBlockedRadioTitle(video.title, video.uploader || video.channel || ''))
+        .filter(video => !isBlockedRadioTitle(video.title, video.uploader || ''))
         .filter(video => !/\b(?:playlist|full album|hour mix|livestream|reaction)\b/i.test(String(video.title || '')))
         .filter(video => !Number(video.duration) || Number(video.duration) >= 80 && Number(video.duration) <= 540);
       for (const video of candidates.slice(0, 1)) {
