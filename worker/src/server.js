@@ -1529,8 +1529,23 @@ function loungeMusicReady(videoId) {
 }
 
 let lastSongFailureNoticeAt = 0;
+function completedLoungeMusicDuration(videoId) {
+  if (!isValidVideoId(videoId)) return 0;
+  try {
+    const { indexPath } = watchHlsPaths(youtubeWatchHlsId(videoId));
+    if (!existsSync(indexPath)) return 0;
+    const manifest = readFileSync(indexPath, 'utf8');
+    if (!/#EXT-X-ENDLIST\s*$/m.test(manifest)) return 0;
+    return (manifest.match(/^#EXTINF:([\d.]+)/gm) || [])
+      .reduce((total, line) => total + (Number(line.slice(8).split(',')[0]) || 0), 0);
+  } catch {
+    return 0;
+  }
+}
+
 if (RUN_LOUNGE) loungeProgram.configureMusicSource({
   isReady: loungeMusicReady,
+  duration: completedLoungeMusicDuration,
   failure: (videoId) => getRecentWatchHlsFailure(youtubeWatchHlsId(videoId))?.message,
   notifyFailure: async (title) => {
     if (Date.now() - lastSongFailureNoticeAt < 10 * 60_000) return;
