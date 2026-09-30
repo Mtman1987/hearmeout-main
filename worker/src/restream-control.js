@@ -48,6 +48,7 @@ function createRestreamControl({ chromiumPath, puppeteer }) {
   let browser;
   let page;
   let launchTask;
+  let startTask;
   let resetTask;
   let lastError = '';
 
@@ -237,8 +238,36 @@ function createRestreamControl({ chromiumPath, puppeteer }) {
     return true;
   }
 
+  async function controlledStart() {
+    if (process.env.RESTREAM_AUTOMATION_ENABLED !== 'true') throw Error('Restream automation is disabled');
+    if (resetTask) throw Error('Restream reset is already in progress');
+    if (startTask) return startTask;
+    startTask = (async () => {
+      const before = await status();
+      if (before.state !== 'offline') throw Error('Restream start requires a recognized offline state; current state is ' + before.state);
+
+      const startLabel = await clickExactly(START_LABELS);
+      let started = await waitForState('live', 15000);
+      if (started.state !== 'live') {
+        await maybeConfirm(START_CONFIRM_LABELS);
+        started = await waitForState('live', 45000);
+      }
+      if (started.state !== 'live') throw Error('Restream did not reach a recognized live state after ' + startLabel);
+
+      return {
+        ok: true,
+        action: 'controlled-start',
+        startedWith: startLabel,
+        before,
+        after: started,
+      };
+    })().finally(() => { startTask = undefined; });
+    return startTask;
+  }
+
   async function controlledReset({ holdMs = 15000 } = {}) {
     if (process.env.RESTREAM_AUTOMATION_ENABLED !== 'true') throw Error('Restream automation is disabled');
+    if (startTask) throw Error('Restream start is already in progress');
     if (resetTask) return resetTask;
     resetTask = (async () => {
       const before = await status();
@@ -283,7 +312,7 @@ function createRestreamControl({ chromiumPath, puppeteer }) {
     display = undefined;
   }
 
-  return { status, controlledReset, close };
+  return { status, controlledStart, controlledReset, close };
 }
 
 module.exports = { createRestreamControl, allowedRestreamHost };
