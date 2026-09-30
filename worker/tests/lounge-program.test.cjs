@@ -49,7 +49,7 @@ test('Lounge worker owns movie and music state, including queue handoff', async 
     process.env.XTREAM_ENABLE_SERIES = 'false';
     const bin = join(root, 'bin');
     mkdirSync(bin);
-    writeFileSync(join(bin, 'yt-dlp'), '#!/bin/sh\ncase "$*" in *--flat-playlist*) echo \'{"entries":[{"id":"M7lc1UVf-VE","title":"Playlist Song","duration":120}]}\';; *) echo \'{"id":"dQw4w9WgXcQ","title":"Test Song","uploader":"Test Artist","duration":180}\';; esac\n', { mode: 0o755 });
+    writeFileSync(join(bin, 'yt-dlp'), '#!/bin/sh\ncase "$*" in *--flat-playlist*) echo \'{"entries":[{"id":"M7lc1UVf-VE","title":"Playlist Song","duration":120},{"id":"XXXXXXXXXXX","title":"Different Song","duration":120}]}\';; *) echo \'{"id":"dQw4w9WgXcQ","title":"Test Song","uploader":"Test Artist","duration":180}\';; esac\n', { mode: 0o755 });
     process.env.PATH = `${bin}:${previous.PATH}`;
     global.fetch = async url => {
       assert.equal(new URL(url).searchParams.get('action'), 'get_vod_streams');
