@@ -20,7 +20,7 @@ let currentMusicPreparation = null;
 let awaitingMusicSource = null;
 // Clear invalidates requests that were still resolving when the lane was cleared.
 const requestEpoch = { music: 0, movie: 0 };
-let musicSource = { prepare: async () => true, stop: () => {} };
+let musicSource = { prepare: async () => true, stop: () => {}, duration: () => 0 };
 
 function configureMusicSource(source) {
   musicSource = source;
@@ -626,7 +626,16 @@ async function tick(now = Date.now()) {
       awaitingMusicSource = null;
       save();
     }
-    const duration = Number(lane.current.item?.metadata?.duration);
+    let duration = Number(lane.current.item?.metadata?.duration);
+    if (!duration) {
+      const hlsDuration = Number(musicSource.duration?.(lane.current.item?.metadata?.videoId) || 0);
+      if (hlsDuration > 0) {
+        lane.current.item.metadata.duration = hlsDuration;
+        for (const seed of radioState().seeds) if (seed.id === lane.current.item.metadata.videoId) seed.duration = hlsDuration;
+        duration = hlsDuration;
+        save();
+      }
+    }
     if (!duration && !durationLookup && now >= durationRetryAt) {
       const id = lane.current.item?.metadata?.videoId;
       durationRetryAt = now + 60_000;
