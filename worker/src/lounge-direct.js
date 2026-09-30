@@ -32,9 +32,35 @@ function createDirectLounge({ program, sourceForMovie, root, onMovieEnded }) {
     };
   }
 
+  async function stopActiveProcess() {
+    const previous = process;
+    process = null;
+    if (!previous || previous.exitCode !== null) return;
+    await new Promise((resolve) => {
+      let settled = false;
+      let forceTimer;
+      let finishTimer;
+      const finish = () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(forceTimer);
+        clearTimeout(finishTimer);
+        resolve();
+      };
+      previous.once('close', finish);
+      try { previous.kill('SIGTERM'); } catch { finish(); return; }
+      forceTimer = setTimeout(() => {
+        if (previous.exitCode === null) {
+          try { previous.kill('SIGKILL'); } catch {}
+        }
+        finishTimer = setTimeout(finish, 250);
+      }, 1000);
+    });
+  }
+
   async function start(movie) {
-    if (process && process.exitCode === null) process.kill('SIGTERM');
-    process = null; error = '';
+    await stopActiveProcess();
+    error = '';
     rmSync(folder, { recursive: true, force: true });
     mkdirSync(folder, { recursive: true });
     const dir = join(folder, movie.requestId.replace(/[^a-zA-Z0-9_-]/g, ''));
@@ -101,7 +127,7 @@ function createDirectLounge({ program, sourceForMovie, root, onMovieEnded }) {
     lastChecked = Date.now();
     checking = (async () => {
       const next = await selectedMovie();
-      if (!next) { current = null; if (process && process.exitCode === null) process.kill('SIGTERM'); process = null; return; }
+      if (!next) { current = null; await stopActiveProcess(); return; }
       const seekChanged = next.requestId === current?.requestId
         && Number(next.seekRevision || 0) !== Number(current?.seekRevision || 0);
       if (next.requestId !== current?.requestId || seekChanged || (error && Date.now() - lastFailed > 12000)) {
@@ -130,7 +156,7 @@ function createDirectLounge({ program, sourceForMovie, root, onMovieEnded }) {
     const captureElapsed = Math.max(0, (Date.now() - Number(current.captureStartedAt || Date.now())) / 1000);
     const playbackPosition = Math.max(0, Number(current.captureStartPosition || 0) + captureElapsed);
     return { active: true, requestId: current.requestId, title: current.title, requester: current.requester,
-      ready: segments.length >= 3 && bufferedSeconds >= 12 && streamFresh, bufferedSeconds: Math.round(bufferedSeconds),
+      ready: segments.length >= 2 && bufferedSeconds >= 12 && streamFresh, bufferedSeconds: Math.round(bufferedSeconds),
       segmentCount: segments.length, lagSeconds: Number.isFinite(lagSeconds) ? Math.round(lagSeconds) : null,
       playbackPosition, viewerPosition: captureElapsed,
       error: error || (!streamFresh && segments.length ? 'Movie stream is behind the live queue' : null) };
