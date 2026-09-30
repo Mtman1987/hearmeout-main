@@ -31,3 +31,14 @@ test('Restream profile persists but automation starts fail-closed', () => {
   assert.match(fly, /RESTREAM_PROFILE_DIR = "\/data\/restream-chromium"/);
   assert.match(fly, /RESTREAM_AUTOMATION_ENABLED = "false"/);
 });
+
+
+test('one-way recovery can start but cannot stop Restream', () => {
+  assert.match(control, /async function ensureLive/);
+  assert.match(control, /RESTREAM_RECOVERY_ENABLED/);
+  assert.match(control, /requires a recognized offline state/);
+  assert.match(server, /app\.post\('\/restream\/ensure-live', authorizeWorker/);
+  assert.match(route, /action === 'ensure-live'/);
+  assert.match(fly, /RESTREAM_RECOVERY_ENABLED = "true"/);
+  assert.match(fly, /RESTREAM_AUTOMATION_ENABLED = "false"/);
+});
