@@ -14,8 +14,11 @@ function inspectSpotlightPlaylist(playlist, ageMs) {
   return { segmentCount, stalled: segmentCount >= 2 && (ageMs > 15000 || duration > 15) };
 }
 
-function shouldRecycleSpotlight(status, restartAfterMs = 120000) {
-  return Boolean(status?.stalled && Number(status?.playlistAgeMs || 0) >= restartAfterMs);
+function shouldRecycleSpotlight() {
+  // A stalled Twitch playlist can simply be a preroll/ad discontinuity.
+  // Never recycle an otherwise-live upstream Spotlight session because doing so
+  // creates a brand-new Twitch session and therefore another preroll.
+  return false;
 }
 
 function createSpotlightHls({ spotlightEndpoint, root = '/tmp/spotlight-hls' }) {
@@ -70,13 +73,10 @@ function createSpotlightHls({ spotlightEndpoint, root = '/tmp/spotlight-hls' }) 
       }
       const current = status();
       if (selected === login && encoder && encoder.exitCode === null && !encoder.killed) {
-        if (!current.stalled) return current;
-        // A Twitch preroll/ad discontinuity can pause segment advancement without
-        // meaning the source session is dead. Keep the same upstream session so
-        // we do not create a fresh preroll loop. The Lounge sponsor cover handles
-        // the temporary gap; recycle only after a sustained two-minute stall.
-        if (!shouldRecycleSpotlight(current)) return current;
-        recoveries++;
+        // Keep the exact same Twitch source session through prerolls and other
+        // temporary playlist stalls. Re-resolving the channel would create a
+        // new Twitch session and can trigger another preroll indefinitely.
+        return current;
       }
       if (selected === failedLogin && Date.now() < failedLoginUntil) {
         stop(); login = ''; generation = '';
