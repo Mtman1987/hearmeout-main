@@ -83,7 +83,9 @@ test('Lounge worker owns movie and music state, including queue handoff', async 
     await program.control({ lane: 'music', control: 'next' });
     assert.equal(program.program().music.current.item.metadata.videoId, 'XXXXXXXXXXX');
     await program.tick(Date.now() + 181000);
-    assert.equal(program.program().music.current.item.metadata.videoId, 'M7lc1UVf-VE');
+    // M7 was manually skipped, so autoradio must not immediately recycle it.
+    assert.equal(program.program().music.current.item.metadata.videoId, 'dQw4w9WgXcQ');
+    assert.notEqual(program.program().music.current.item.metadata.videoId, 'M7lc1UVf-VE');
     assert.equal(program.program().radio.recentCount, 2);
     await program.radio({ control: 'off' });
     await program.control({ lane: 'music', control: 'next' });
