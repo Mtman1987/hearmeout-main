@@ -262,6 +262,15 @@ function blockedRadioSongSignatures() {
   return new Set(titles.map(radioSongSignature).filter(Boolean));
 }
 
+function isBlockedRadioTitle(title, blockedTitles) {
+  const signature = radioSongSignature(title);
+  if (!signature) return false;
+  for (const blocked of blockedTitles) {
+    if (signature === blocked || signature.includes(blocked) || blocked.includes(signature)) return true;
+  }
+  return false;
+}
+
 function playlistStarter() {
   const radio = radioState();
   if (!radio.seeds.length) return null;
@@ -277,7 +286,7 @@ function playlistStarter() {
   let index = cursor % count;
   for (let attempt = 0; attempt < count - 1; attempt++) {
     const candidate = radio.seeds[index * step % count];
-    if (!recentlyHeard.has(candidate.id) && !blockedTitles.has(radioSongSignature(candidate.title))) break;
+    if (!recentlyHeard.has(candidate.id) && !isBlockedRadioTitle(candidate.title, blockedTitles)) break;
     index = (index + 1) % count;
   }
   const selected = radio.seeds[index * step % count];
@@ -291,7 +300,7 @@ function humanFallback() {
   const blockedTitles = blockedRadioSongSignatures();
   const currentId = String(readState().music.current?.item?.metadata?.videoId || '');
   if (currentId) blocked.add(currentId);
-  const chosen = radio.history.slice().reverse().find(song => !blocked.has(song.id) && !blockedTitles.has(radioSongSignature(song.title)));
+  const chosen = radio.history.slice().reverse().find(song => !blocked.has(song.id) && !isBlockedRadioTitle(song.title, blockedTitles));
   return chosen ? radioEntry(chosen) : null;
 }
 
@@ -318,14 +327,14 @@ async function discoverRadioEntry() {
       const results = JSON.parse(stdout);
       const candidates = (Array.isArray(results.entries) ? results.entries : [])
         .filter(video => /^[\w-]{11}$/.test(String(video?.id || '')) && !blocked.has(video.id))
-        .filter(video => !blockedTitles.has(radioSongSignature(video.title)))
+        .filter(video => !isBlockedRadioTitle(video.title, blockedTitles))
         .filter(video => !/\b(?:playlist|full album|hour mix|livestream|reaction)\b/i.test(String(video.title || '')))
         .filter(video => !Number(video.duration) || Number(video.duration) >= 80 && Number(video.duration) <= 540);
       for (const video of candidates.slice(0, 1)) {
         try {
           const item = await musicItem(`https://www.youtube.com/watch?v=${video.id}`, 20000);
           if (!blocked.has(item.metadata.videoId)
-            && !blockedTitles.has(radioSongSignature(item.title))
+            && !isBlockedRadioTitle(item.title, blockedTitles)
             && (!item.metadata.duration || item.metadata.duration <= 540))
             return radioEntry({ id: item.metadata.videoId, title: item.title, artist: item.metadata.artist, duration: item.metadata.duration });
         } catch (error) { console.warn('[Lounge] Radio candidate unavailable:', error.message); }
