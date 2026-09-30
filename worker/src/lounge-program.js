@@ -279,15 +279,6 @@ function isBlockedRadioTitle(title, artist = '') {
   return false;
 }
 
-function isBlockedRadioTitle(title, blockedTitles) {
-  const signature = radioSongSignature(title);
-  if (!signature) return false;
-  for (const blocked of blockedTitles) {
-    if (signature === blocked || signature.includes(blocked) || blocked.includes(signature)) return true;
-  }
-  return false;
-}
-
 function playlistStarter() {
   const radio = radioState();
   if (!radio.seeds.length) return null;
@@ -298,12 +289,11 @@ function playlistStarter() {
   let step = count > 6 ? Math.floor(count / 6) : 1;
   while (gcd(step, count) !== 1) step++;
   const recentlyHeard = new Set((radio.playedIds || []).slice(-Math.min(count - 1, 30)));
-  const blockedTitles = blockedRadioSongSignatures();
   const cursor = Number(radio.cursor) || 0;
   let index = cursor % count;
   for (let attempt = 0; attempt < count - 1; attempt++) {
     const candidate = radio.seeds[index * step % count];
-    if (!recentlyHeard.has(candidate.id) && !isBlockedRadioTitle(candidate.title, blockedTitles)) break;
+    if (!recentlyHeard.has(candidate.id) && !isBlockedRadioTitle(candidate.title, candidate.artist)) break;
     index = (index + 1) % count;
   }
   let selected = radio.seeds[index * step % count];
@@ -318,10 +308,9 @@ function playlistStarter() {
 function humanFallback() {
   const radio = radioState();
   const blocked = new Set((radio.playedIds || []).slice(-Math.max(0, radio.history.length - 1)));
-  const blockedTitles = blockedRadioSongSignatures();
   const currentId = String(readState().music.current?.item?.metadata?.videoId || '');
   if (currentId) blocked.add(currentId);
-  const chosen = radio.history.slice().reverse().find(song => !blocked.has(song.id) && !isBlockedRadioTitle(song.title, blockedTitles));
+  const chosen = radio.history.slice().reverse().find(song => !blocked.has(song.id) && !isBlockedRadioTitle(song.title, song.artist));
   return chosen ? radioEntry(chosen) : null;
 }
 
@@ -334,7 +323,6 @@ async function discoverRadioEntry() {
   // repeatedly searching all 480 playlist entries or issuing unbounded calls.
   const anchors = [recent.at(-1), recent.slice(0, -1).reverse().find(song => song.artist && song.artist !== recent.at(-1)?.artist)].filter(Boolean);
   const blocked = new Set((radio.playedIds || []).slice(-20));
-  const blockedTitles = blockedRadioSongSignatures();
   if (!roomHasProfile && radio.seeds.length) {
     const starter = playlistStarter();
     if (starter) return starter;
@@ -348,14 +336,14 @@ async function discoverRadioEntry() {
       const results = JSON.parse(stdout);
       const candidates = (Array.isArray(results.entries) ? results.entries : [])
         .filter(video => /^[\w-]{11}$/.test(String(video?.id || '')) && !blocked.has(video.id))
-        .filter(video => !isBlockedRadioTitle(video.title, blockedTitles))
+        .filter(video => !isBlockedRadioTitle(video.title, video.uploader || video.channel || ''))
         .filter(video => !/\b(?:playlist|full album|hour mix|livestream|reaction)\b/i.test(String(video.title || '')))
         .filter(video => !Number(video.duration) || Number(video.duration) >= 80 && Number(video.duration) <= 540);
       for (const video of candidates.slice(0, 1)) {
         try {
           const item = await musicItem(`https://www.youtube.com/watch?v=${video.id}`, 20000);
           if (!blocked.has(item.metadata.videoId)
-            && !isBlockedRadioTitle(item.title, blockedTitles)
+            && !isBlockedRadioTitle(item.title, item.metadata?.artist || '')
             && (!item.metadata.duration || item.metadata.duration <= 540))
             return radioEntry({ id: item.metadata.videoId, title: item.title, artist: item.metadata.artist, duration: item.metadata.duration });
         } catch (error) { console.warn('[Lounge] Radio candidate unavailable:', error.message); }
