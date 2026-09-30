@@ -18,9 +18,12 @@ test('Restream controller is persistent, origin-bounded and label-bounded', () =
   assert.doesNotMatch(control, /document\.querySelector\('button'\)\.click/);
 });
 
-test('Restream reset remains behind worker auth and the main service-auth proxy', () => {
+test('Restream start and reset remain behind worker auth and the main service-auth proxy', () => {
   assert.match(server, /app\.get\('\/restream\/status', authorizeWorker/);
+  assert.match(server, /app\.post\('\/restream\/start', authorizeWorker/);
   assert.match(server, /app\.post\('\/restream\/reset', authorizeWorker/);
+  assert.match(control, /Restream start requires a recognized offline state/);
+  assert.match(route, /action !== 'start' && action !== 'reset'/);
   assert.match(route, /SPMT_API_KEY/);
   assert.match(route, /getDjWorkerRequestHeaders/);
   assert.match(route, /http:\/\/lounge\.process\.hmo-dj-worker\.internal:3002/);
