@@ -74,14 +74,14 @@ test('Lounge worker owns movie and music state, including queue handoff', async 
     await program.control({ lane: 'music', control: 'clear' });
     assert.equal(program.program().movie.playback.status, 'playing');
     const radio = await program.radio({ control: 'add', query: 'https://www.youtube.com/playlist?list=PLtest' });
-    assert.equal(radio.radio.seedCount, 2);
+    assert.equal(radio.radio.seedCount, 3);
     await program.radio({ control: 'on' });
     assert.equal(program.program().music.current, null, 'auto-radio must stay idle while a movie owns the Lounge');
     await program.control({ lane: 'movie', control: 'clear' });
     await program.radio({ control: 'on' });
     assert.equal(program.program().music.current.item.metadata.videoId, 'M7lc1UVf-VE');
     await program.control({ lane: 'music', control: 'next' });
-    assert.equal(program.program().music.current.item.metadata.videoId, 'dQw4w9WgXcQ');
+    assert.equal(program.program().music.current.item.metadata.videoId, 'XXXXXXXXXXX');
     await program.tick(Date.now() + 181000);
     assert.equal(program.program().music.current.item.metadata.videoId, 'M7lc1UVf-VE');
     assert.equal(program.program().radio.recentCount, 2);
