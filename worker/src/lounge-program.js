@@ -244,8 +244,8 @@ function radioEntry(song) {
 
 function radioSongSignature(title) {
   let value = String(title || '').toLowerCase()
-    .replace(/\b(?:official\s+)?(?:music\s+)?video\b|\bofficial\s+audio\b|\blyrics?\b/gi, ' ')
-    .replace(/[\[\]{}]/g, ' ')
+    .replace(/\b(?:official\s+)?(?:music\s+)?video\b|\bofficial\s+audio\b|\blyrics?\b|\blive\b|\bremaster(?:ed)?\b|\bcover\b|\bkaraoke\b|\bacoustic\b/gi, ' ')
+    .replace(/\([^)]*\)|\[[^\]]*\]|\{[^}]*\}/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
   const dash = value.match(/^.{1,60}?\s[-–—]\s(.{3,})$/);
@@ -254,9 +254,12 @@ function radioSongSignature(title) {
 }
 
 function blockedRadioSongSignatures() {
-  const currentTitle = readState().music.current?.item?.title;
-  const signature = radioSongSignature(currentTitle);
-  return new Set(signature ? [signature] : []);
+  const stored = readState();
+  const titles = [
+    stored.music.current?.item?.title,
+    ...(stored.radio?.history || []).slice(-12).map(song => song?.title),
+  ];
+  return new Set(titles.map(radioSongSignature).filter(Boolean));
 }
 
 function playlistStarter() {
