@@ -21,9 +21,14 @@ let awaitingMusicSource = null;
 // Clear invalidates requests that were still resolving when the lane was cleared.
 const requestEpoch = { music: 0, movie: 0 };
 let musicSource = { prepare: async () => true, stop: () => {}, duration: () => 0 };
+let movieSource = { stop: async () => {}, discardCache: () => {} };
 
 function configureMusicSource(source) {
   musicSource = source;
+}
+
+function configureMovieSource(source) {
+  movieSource = source || movieSource;
 }
 
 function emptyLane() {
@@ -697,7 +702,12 @@ async function control(body) {
     : body.targetLane === 'movie' ? 'movie' : requestedLane;
   const lane = stored[laneName];
   const previousMusicId = laneName === 'music' ? lane.current?.item?.metadata?.videoId : null;
+  const previousMovie = laneName === 'movie' ? lane.current : null;
   const action = body.control === 'next-active' ? 'next' : String(body.control || '');
+  // Both skip and clear are terminal for the selected movie. Invalidate any
+  // request that started resolving before this control so stale async work
+  // cannot reinsert the movie after the viewer has moved on.
+  if (laneName === 'movie' && (action === 'next' || action === 'clear')) requestEpoch.movie++;
   if (action === 'next' && laneName === 'music') {
     // A manual skip rejects the song family, not just this exact YouTube upload.
     // Keep the canonical title blocked across live/remix/location variants so
@@ -714,7 +724,7 @@ async function control(body) {
     await advanceMusic();
   }
   else if (action === 'next') lane.current = lane.queue.shift() || null;
-  else if (action === 'clear') { requestEpoch[laneName]++; lane.current = null; lane.queue = []; }
+  else if (action === 'clear') { if (laneName !== 'movie') requestEpoch[laneName]++; lane.current = null; lane.queue = []; }
   else if (action === 'play' || action === 'pause') {
     if (lane.playback.status === 'playing') lane.playback.position += (Date.now() - lane.playback.updatedAt) / 1000;
     lane.playback.status = lane.current ? (action === 'play' ? 'playing' : 'paused') : 'idle';
@@ -746,6 +756,10 @@ async function control(body) {
   }
   lane.playback.updatedAt = Date.now();
   save();
+  if (laneName === 'movie' && (action === 'next' || action === 'clear') && previousMovie) {
+    await movieSource.stop?.(previousMovie.requestId);
+    movieSource.discardCache?.(previousMovie.item);
+  }
   return { success: true, action: 'hmo.media.control', lane: laneName, session: publicLane(lane), program: program() };
 }
 
@@ -756,4 +770,4 @@ function source(movie) {
   return new URL(`/${metadata.pathKind}/${encodeURIComponent(username)}/${encodeURIComponent(password)}/${metadata.streamId}.${metadata.extension}`, base).toString();
 }
 
-module.exports = { program, search, request, control, radio, tick, source, configureMusicSource };
+module.exports = { program, search, request, control, radio, tick, source, configureMusicSource, configureMovieSource };
