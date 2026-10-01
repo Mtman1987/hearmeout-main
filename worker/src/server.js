@@ -1543,6 +1543,38 @@ function completedLoungeMusicDuration(videoId) {
   }
 }
 
+function discardLoungeMovieCache(item) {
+  const metadata = item?.metadata || {};
+  const streamId = String(metadata.streamId || '');
+  const kind = String(metadata.pathKind || metadata.kind || '').toLowerCase();
+  if (!/^\d+$/.test(streamId) || !['movie', 'series', 'vod'].includes(kind)) return;
+  const typed = (kind === 'movie' ? 'vod' : kind) + '-' + streamId;
+  const clean = cleanWatchStreamId(typed);
+  const dirs = [
+    join(WATCH_HLS_DIR, clean),
+    join(WATCH_HLS_DIR, clean.replace(/-multiaudio-v3$/, '-multiaudio-v2')),
+  ];
+  const remove = () => {
+    for (const dir of dirs) {
+      try { rmSync(dir, { recursive: true, force: true }); } catch {}
+    }
+    watchHlsFailures.delete(clean);
+  };
+  const active = watchHlsJobs.get(clean);
+  if (active) {
+    active.then(remove, remove);
+    return;
+  }
+  remove();
+}
+
+if (RUN_LOUNGE) loungeProgram.configureMovieSource({
+  stop: async (requestId) => {
+    await directLounge?.stop?.(requestId);
+  },
+  discardCache: discardLoungeMovieCache,
+});
+
 if (RUN_LOUNGE) loungeProgram.configureMusicSource({
   isReady: loungeMusicReady,
   duration: completedLoungeMusicDuration,
