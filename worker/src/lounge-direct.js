@@ -138,6 +138,17 @@ function createDirectLounge({ program, sourceForMovie, root, onMovieEnded }) {
     return checking;
   }
 
+  async function stop(requestId) {
+    if (requestId && current?.requestId && current.requestId !== requestId) return false;
+    current = null;
+    error = '';
+    lastFailed = 0;
+    await stopActiveProcess();
+    rmSync(folder, { recursive: true, force: true });
+    mkdirSync(folder, { recursive: true });
+    return true;
+  }
+
   async function status() {
     await sync();
     if (!current) return { active: false };
@@ -174,7 +185,7 @@ function createDirectLounge({ program, sourceForMovie, root, onMovieEnded }) {
     res.setHeader('Content-Type', name.endsWith('.m3u8') ? 'application/vnd.apple.mpegurl' : 'video/mp2t');
     return createReadStream(path).pipe(res);
   }
-  return { status, file };
+  return { status, file, stop };
 }
 
 module.exports = { createDirectLounge };
