@@ -23,7 +23,7 @@ primary_region = "iad"
   APP_URL = "https://hearmeout-main.fly.dev"
   NEXT_PUBLIC_LIVEKIT_URL = "wss://streamweaver-7atx04ct.livekit.cloud"
   RESTREAM_PROFILE_DIR = "/data/restream-chromium"
-  RESTREAM_AUTOMATION_ENABLED = "false"
+  RESTREAM_AUTOMATION_ENABLED = "true"
 
 [[mounts]]
   source = "data"
