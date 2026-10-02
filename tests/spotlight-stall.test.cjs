@@ -81,11 +81,12 @@ test('Spotlight recovers a stuck initial encoder and a repeatedly corrupt timeli
   assert.equal(shouldRecycleSpotlight({ stalled: true, playlistAgeMs: 1000, stalledForMs: 120000 }), true);
   assert.equal(shouldRecycleSpotlight({ stalled: false, playlistAgeMs: 1000, stalledForMs: 120000 }), false);
 });
-test('Spotlight preserves a short stall, then replaces the stuck encoder once', async () => {
+test('Spotlight waits through one preroll and reuses its session for stall recovery', async () => {
   const vm = require('node:vm');
   const fs = require('node:fs');
   const { EventEmitter } = require('node:events');
-  let now = 1000000, modifiedAt = now, resolves = 0, spawned = [];
+  let now = 1000000, modifiedAt = now, resolves = 0, spawned = [], preroll = true;
+  const marker = '#EXT-X-DATERANGE:ID="ad",CLASS="twitch-stitched-ad",START-DATE="' + new Date(now).toISOString() + '",DURATION=30';
   const fakeFs = {
     existsSync: () => true,
     mkdirSync() {}, rmSync() {}, createReadStream() {},
@@ -102,18 +103,28 @@ test('Spotlight preserves a short stall, then replaces the stuck encoder once', 
       return child;
     },
   };
-  const sandbox = { module: { exports: {} }, Date: { now: () => now }, Math,
+  const sandbox = { module: { exports: {} }, Date: { now: () => now, parse: Date.parse }, Math,
     require(name) {
       if (name === 'node:fs') return fakeFs;
       if (name === 'node:child_process') return fakeChild;
       return require(name);
     },
-    fetch: async () => ({ ok: true, json: async () => ({ spotlight: { twitchLogin: 'captain' } }) }),
+    fetch: async () => ({ ok: true, json: async () => ({ spotlight: { twitchLogin: 'captain' } }), text: async () => preroll ? marker : '' }),
     AbortSignal, setInterval: () => 1, setTimeout: () => ({ unref() {} }),
   };
   vm.runInNewContext(fs.readFileSync(require.resolve('../worker/src/spotlight-hls'), 'utf8'), sandbox);
   const worker = sandbox.module.exports.createSpotlightHls({ spotlightEndpoint: 'https://example.com/directory' });
   await worker.start();
+  assert.equal(resolves, 1);
+  assert.equal(spawned.length, 0, 'preroll must finish before opening the encoder');
+  assert.equal(worker.status().commercialBreak.active, true);
+  now += 20000;
+  await worker.start();
+  assert.equal(resolves, 1, 'pending preroll keeps the original Twitch session');
+  assert.equal(spawned.length, 0);
+  now += 30000; preroll = false; modifiedAt = now;
+  await worker.start();
+  assert.equal(spawned.length, 1);
   assert.equal(resolves, 1);
   assert.equal(worker.status().recoveryCount, 0);
   now += 21000;
@@ -124,6 +135,7 @@ test('Spotlight preserves a short stall, then replaces the stuck encoder once', 
   assert.equal(spawned.length, 2, 'two minutes without progress replaces the encoder');
   assert.equal(spawned[0].killed, true);
   assert.equal(worker.status().recoveryCount, 1);
+  assert.equal(resolves, 1, 'recovery must not resolve a new session with another preroll');
   modifiedAt = now;
   await worker.start();
   assert.equal(spawned.length, 2, 'a healthy replacement is not repeatedly restarted');
