@@ -128,3 +128,55 @@ test('Spotlight preserves a short stall, then replaces the stuck encoder once', 
   await worker.start();
   assert.equal(spawned.length, 2, 'a healthy replacement is not repeatedly restarted');
 });
+
+test('an empty directory is not reported as stalled video', async () => {
+  const vm = require('node:vm');
+  const fs = require('node:fs');
+  const sandbox = { module: { exports: {} }, Date: { now: () => 200000 },
+    require(name) {
+      if (name === 'node:fs') return { existsSync: () => false };
+      return require(name);
+    },
+    fetch: async () => ({ ok: true, json: async () => ({ spotlight: null }) }),
+    AbortSignal, setInterval: () => 1, setTimeout,
+  };
+  vm.runInNewContext(fs.readFileSync(require.resolve('../worker/src/spotlight-hls'), 'utf8'), sandbox);
+  const worker = sandbox.module.exports.createSpotlightHls({ spotlightEndpoint: 'https://example.com/directory' });
+  const status = await worker.start();
+  assert.equal(status.active, false);
+  assert.equal(status.stalled, false);
+  assert.equal(status.error, 'No live community Spotlight is available');
+});
+
+test('the viewer preserves buffered playback through a short same-source stall', async () => {
+  const vm = require('node:vm'), fs = require('node:fs');
+  let program = { active: true, ready: true, generation: 'same', currentLogin: 'captain' };
+  let destroyed = 0; const timers = [];
+  const video = { paused: false, readyState: 4, muted: false,
+    play() { this.paused = false; return Promise.resolve(); },
+    pause() { this.paused = true; }, load() {}, removeAttribute() {},
+    addEventListener() {}, canPlayType() { return ''; },
+  };
+  class Hls {
+    static isSupported() { return true; }
+    static Events = { ERROR: 'error', MEDIA_ATTACHED: 'attached' };
+    destroy() { destroyed++; } on() {} attachMedia() {} loadSource() {}
+  }
+  const nodes = { player: video, status: { hidden: false }, 'enable-audio': { hidden: true, addEventListener() {} } };
+  const context = { Hls, window: { Hls, parent: { postMessage() {} }, addEventListener() {} },
+    document: { getElementById: id => nodes[id] }, AbortSignal, console,
+    fetch: async url => ({ ok: true, json: async () => String(url).includes('/spotlight/program') ? program : { levels: { spotlight: 80 } } }),
+    setInterval: (fn, ms) => { timers.push({ fn, ms }); return 1; },
+  };
+  const html = fs.readFileSync(require('node:path').join(__dirname, '../public/spotlight-media/worker-spotlight.html'), 'utf8');
+  vm.runInNewContext(html.match(/<script>\n([\s\S]*?)<\/script>/)[1], context);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(destroyed, 0);
+  program = { ...program, ready: false, stalled: true };
+  await timers.find(t => t.ms === 2500).fn();
+  assert.equal(destroyed, 0, 'a temporary stall does not discard already buffered video');
+  assert.equal(video.paused, false);
+  program = { ...program, active: false };
+  await timers.find(t => t.ms === 2500).fn();
+  assert.equal(destroyed, 1, 'a stopped source is still released');
+});
