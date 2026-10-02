@@ -31,7 +31,7 @@ function inspectSpotlightCommercial(playlist, now = Date.now()) {
     const activeUntil = until + 12000;
     if (!Number.isFinite(activeUntil) || until <= start || activeUntil <= now) continue;
     if (!found || activeUntil > found.activeUntil) found = {
-      id: attrs.ID, breakStartedAt: start, activeUntil,
+      id: attrs.ID, breakStartedAt: start, sourceEndsAt: until, activeUntil,
     };
   }
   return found;
@@ -73,7 +73,7 @@ function createSpotlightHls({ spotlightEndpoint, root = '/tmp/spotlight-hls' }) 
       const marker = inspectSpotlightCommercial(await response.text());
       if (source !== sourceUrl) return;
       if (marker) commercialBreak = marker;
-      else if (commercialBreak?.activeUntil <= Date.now()) commercialBreak = null;
+      else if (commercialBreak?.sourceEndsAt + 300000 <= Date.now()) commercialBreak = null;
     } catch { /* Retain the last confirmed marker only until its expiry. */ }
   }
 
@@ -104,6 +104,10 @@ function createSpotlightHls({ spotlightEndpoint, root = '/tmp/spotlight-hls' }) 
       generation, ready: active && segments >= 2 && !stalled, segmentCount: segments,
       stalled, playlistAgeMs: Math.max(0, Math.round(ageMs)), recoveryCount: recoveries,
       commercialBreak: commercialBreak && commercialBreak.activeUntil > Date.now()
+        ? { ...commercialBreak, active: true } : null,
+      // A viewer can still be playing an ad after the source marker expires.
+      // Retain the bounded interval so each viewer can apply its own latency.
+      recentCommercialBreak: commercialBreak && commercialBreak.sourceEndsAt + 300000 > Date.now()
         ? { ...commercialBreak, active: true } : null,
       error: stalled ? 'Spotlight video stopped advancing' : failure || null };
   }

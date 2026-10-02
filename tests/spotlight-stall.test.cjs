@@ -15,7 +15,7 @@ test('Spotlight exposes only a current stitched ad marker and its relay expiry',
   const now = Date.parse('2026-10-02T08:00:10Z');
   const marker = '#EXT-X-DATERANGE:ID="ad-1",CLASS="twitch-stitched-ad",START-DATE="2026-10-02T08:00:00Z",DURATION=30,X-SECRET="signed-url"';
   assert.deepEqual(inspectSpotlightCommercial(marker, now), {
-    id: 'ad-1', breakStartedAt: now - 10000, activeUntil: now + 32000,
+    id: 'ad-1', breakStartedAt: now - 10000, sourceEndsAt: now + 20000, activeUntil: now + 32000,
   });
   assert.equal(inspectSpotlightCommercial(marker, now + 32000), null);
   assert.equal(inspectSpotlightCommercial(marker.replace('DURATION=30', 'PLANNED-DURATION=30'), now)?.id, 'ad-1');
@@ -144,6 +144,13 @@ test('Spotlight waits through one preroll and reuses its session for stall recov
   modifiedAt = now;
   await worker.start();
   assert.equal(spawned.length, 3, 'a healthy replacement is not repeatedly restarted');
+  preroll = true;
+  marker = '#EXT-X-DATERANGE:ID="buffered-ad",CLASS="twitch-stitched-ad",START-DATE="' + new Date(now).toISOString() + '",DURATION=30';
+  await worker.start();
+  now += 50000; preroll = false; modifiedAt = now;
+  await worker.start();
+  assert.equal(worker.status().commercialBreak, null, 'the source ad has ended');
+  assert.equal(worker.status().recentCommercialBreak.id, 'buffered-ad', 'retain the interval for buffered viewers');
   // A marker can arrive after a clean preflight but before any output exists.
   outputPlaylist = '';
   now += 21000;
@@ -225,7 +232,7 @@ test('the viewer preserves buffered playback through a short same-source stall',
 
 test('Spotlight buffers before autoplay and recovers network/media errors without discarding video', async () => {
   const vm=require('node:vm'),fs=require('node:fs');
-  let ahead=4;const handlers={},players=[];
+  let ahead=4;const handlers={},players=[], timers=[], messages=[];
   const video={paused:true,readyState:4,currentTime:100,
     buffered:{length:1,start:()=>100,end:()=>100+ahead},
     addEventListener:(event,fn)=>{handlers[event]=fn;},
@@ -242,7 +249,7 @@ test('Spotlight buffers before autoplay and recovers network/media errors withou
   const nodes={player:video,status:{},'enable-audio':{addEventListener(){}}};
   const html=fs.readFileSync(require('node:path').join(__dirname,'../public/spotlight-media/worker-spotlight.html'),'utf8');
   vm.runInNewContext(html.match(/<script>\n([\s\S]*?)<\/script>/)[1],{
-    Hls,window:{Hls,parent:{postMessage(){}},addEventListener(){}},AbortSignal,setInterval(){},
+    Hls,window:{Hls,parent:{postMessage(value){messages.push(value);}},addEventListener(){}},AbortSignal,setInterval(fn,ms){timers.push({fn,ms});},
     document:{getElementById:id=>nodes[id]},
     fetch:async url=>({ok:true,json:async()=>url.endsWith('/spotlight/program')?{ready:true,generation:'one',currentLogin:'captain'}:{levels:{spotlight:80}}}),
   });
@@ -250,6 +257,12 @@ test('Spotlight buffers before autoplay and recovers network/media errors withou
   assert.equal(video.paused,true);
   assert.doesNotMatch(html,/<video[^>]*autoplay/);
   ahead=12;await handlers.canplay();assert.equal(video.paused,false);
+  players[0].latency=24;
+  timers.find(t=>t.ms===1000).fn();
+  assert.equal(messages.at(-1).delayMs,36000);
+  players[0].latency=54;
+  timers.find(t=>t.ms===1000).fn();
+  assert.equal(messages.at(-1).delayMs,66000, 'a paused playhead extends its own cover');
   assert.equal(players[0].config.maxLiveSyncPlaybackRate,1);
   assert.equal(players[0].config.liveMaxLatencyDurationCount,Infinity);
   players[0].events.error(null,{fatal:true,type:'network'});
