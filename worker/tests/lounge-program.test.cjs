@@ -354,3 +354,27 @@ esac
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+
+test('direct Lounge HLS isolates cached segment URLs across movies and restarts', () => {
+  const { rewriteManifestForGeneration, internalSegmentName } = require('../src/lounge-direct');
+  const manifest = '#EXTM3U\n#EXTINF:4.000,\nsegment_000000.ts\n#EXTINF:4.000,\nsegment_000001.ts\n';
+  const scary = rewriteManifestForGeneration(manifest, 'scary-request', 'capture-a');
+  const hailMary = rewriteManifestForGeneration(manifest, 'hail-request', 'capture-b');
+  const restarted = rewriteManifestForGeneration(manifest, 'hail-request', 'capture-c');
+
+  assert.match(scary, /scary-request-capture-a-segment_000000\.ts/);
+  assert.match(hailMary, /hail-request-capture-b-segment_000000\.ts/);
+  assert.match(restarted, /hail-request-capture-c-segment_000000\.ts/);
+  assert.notEqual(scary, hailMary);
+  assert.notEqual(hailMary, restarted);
+
+  assert.equal(
+    internalSegmentName('hail-request-capture-b-segment_000001.ts', 'hail-request', 'capture-b'),
+    'segment_000001.ts',
+  );
+  assert.equal(
+    internalSegmentName('scary-request-capture-a-segment_000001.ts', 'hail-request', 'capture-b'),
+    null,
+  );
+});
