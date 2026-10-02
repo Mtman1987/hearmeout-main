@@ -11,6 +11,21 @@ export async function loungeWorker(path: string, method = 'GET', signal?: AbortS
   });
 }
 
+export async function loungeMediaAction(body: Record<string, unknown>, signal: AbortSignal = AbortSignal.timeout(45000)) {
+  const upstream = await fetch(`${LOUNGE_WORKER_URL}/lounge/media/actions`, {
+    method: 'POST',
+    headers: getDjWorkerRequestHeaders({ 'content-type': 'application/json', accept: 'application/json' }),
+    body: JSON.stringify(body),
+    cache: 'no-store',
+    signal,
+  });
+  const payload = await upstream.json().catch(() => ({})) as Record<string, unknown>;
+  if (!upstream.ok) {
+    throw new Error(String(payload.error || `Lounge worker returned ${upstream.status}`));
+  }
+  return payload;
+}
+
 export async function loungeAction(action: 'start') {
   try {
     const upstream = await loungeWorker(action, 'POST', AbortSignal.timeout(30000));

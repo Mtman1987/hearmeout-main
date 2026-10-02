@@ -27,7 +27,7 @@ function internalSegmentName(name, requestId, generation) {
   return /^segment_\d{6}\.ts$/.test(segment) ? segment : null;
 }
 
-function createDirectLounge({ program, sourceForMovie, root, onMovieEnded }) {
+function createDirectLounge({ program, sourceForMovie, root, onMovieEnded, onMovieProgress }) {
   let current = null;
   let process = null;
   let error = '';
@@ -38,6 +38,7 @@ function createDirectLounge({ program, sourceForMovie, root, onMovieEnded }) {
   let lastObservedSegment = -1;
   let lastSegmentAdvanceAt = 0;
   let lastTelemetryAt = 0;
+  let lastCheckpointAt = 0;
   const folder = join(root, 'lounge-direct');
   rmSync(folder, { recursive: true, force: true });
   mkdirSync(folder, { recursive: true });
@@ -194,6 +195,11 @@ function createDirectLounge({ program, sourceForMovie, root, onMovieEnded }) {
     const streamFresh = lagSeconds <= 30 && manifestAgeSeconds <= 30;
     const captureElapsed = Math.max(0, (Date.now() - Number(current.captureStartedAt || Date.now())) / 1000);
     const playbackPosition = Math.max(0, Number(current.captureStartPosition || 0) + captureElapsed);
+    if (Date.now() - lastCheckpointAt >= 60_000) {
+      lastCheckpointAt = Date.now();
+      try { onMovieProgress?.(current.requestId, playbackPosition, lastCheckpointAt); }
+      catch (failure) { console.warn('[Lounge] Movie checkpoint failed:', failure?.message || failure); }
+    }
     const mediaSequence = Math.max(0, Number(manifest.match(/#EXT-X-MEDIA-SEQUENCE:(\d+)/)?.[1] || 0));
     const lastSegment = Number(segments.at(-1)?.match(/segment_(\d+)\.ts/)?.[1] ?? -1);
     const streamKey = streamKeyForGeneration(current.requestId, current.generation);

@@ -6,7 +6,6 @@ import {
   getWatchSession,
   requestWatchItem,
   requestWatchMusicItem,
-  searchWatchProviderOptions,
 } from '@/lib/watch-request-service';
 import { ACTIVITY_ROOM_ID, getGlobalWatchSessionId, getMusicWatchSessionId, getRoomWatchSessionId } from '@/lib/watch-session';
 import {
@@ -17,6 +16,7 @@ import {
 } from '@/lib/bot-room-action-service';
 import { getDjWorkerUrl } from '@/lib/dj-worker-config';
 import { getDjWorkerRequestHeaders } from '@/lib/dj-worker-auth';
+import { loungeMediaAction } from '@/lib/lounge-worker';
 import { SPACEMOUNTAIN_LOUNGE_MUSIC_SESSION_ID, SPACEMOUNTAIN_LOUNGE_MOVIE_SESSION_ID } from '@/lib/spacemountain-lounge';
 
 export const dynamic = 'force-dynamic';
@@ -171,8 +171,14 @@ export async function POST(request: NextRequest) {
         const requestedLane = text(body?.lane, 20).toLowerCase();
         const kind = getSpaceMountainLoungeLane(sessionId, requestedLane);
         const targetSessionId = getSpaceMountainLoungeSessionId(sessionId, requestedLane);
-        const session = getPublicWatchSession(getWatchSession(targetSessionId, undefined, undefined, kind), publicBaseUrl(request));
-        return NextResponse.json({ success: true, action, session });
+        const payload = await loungeMediaAction({
+          action,
+          tenantId,
+          sessionId: targetSessionId,
+          lane: kind,
+          actorUserId: actor.actorUserId,
+        });
+        return NextResponse.json(payload);
       }
       const mediaKind = sessionId === getGlobalWatchSessionId() ? 'movie' : 'music';
       const session = getPublicWatchSession(getWatchSession(sessionId, undefined, undefined, mediaKind), publicBaseUrl(request));
@@ -185,21 +191,8 @@ export async function POST(request: NextRequest) {
       }
       const query = text(body?.query, 160);
       if (!query) return NextResponse.json({ error: 'A movie title is required' }, { status: 400 });
-      const seen = new Set<string>();
-      const options = (await searchWatchProviderOptions(query))
-        .filter((item) => {
-          const key = `${item.title.trim().toLowerCase()}:${item.year || ''}`;
-          if (seen.has(key)) return false;
-          seen.add(key);
-          return true;
-        })
-        .slice(0, 3)
-        .map((item) => ({
-          id: item.id,
-          title: item.title,
-          year: item.year || null,
-        }));
-      return NextResponse.json({ success: true, action, query, options });
+      const payload = await loungeMediaAction({ action, tenantId, lane: 'movie', query });
+      return NextResponse.json(payload);
     }
 
     if (action === 'hmo.media.request') {
@@ -208,27 +201,17 @@ export async function POST(request: NextRequest) {
       if (isSpaceMountainLoungeSession(tenantId, sessionId)) {
         const requestedLane = text(body?.lane, 20).toLowerCase();
         const kind = getSpaceMountainLoungeLane(sessionId, requestedLane);
-        const requestIdentity = {
+        const payload = await loungeMediaAction({
+          action,
+          tenantId,
           sessionId: getSpaceMountainLoungeSessionId(sessionId, requestedLane),
+          lane: kind,
           query,
           itemId: kind === 'movie' ? text(body?.itemId, 100) || undefined : undefined,
-          username: text(body?.actorName, 100) || 'SpaceMountainLive',
-          userId: text(body?.actorUserId, 160) || 'spacemountainlive',
-        };
-        const result = kind === 'movie'
-          ? await requestWatchItem(requestIdentity)
-          : await requestWatchMusicItem({ ...requestIdentity, platform: 'twitch' });
-        if ('error' in result) {
-          const failed = result as { error: string; result?: { message?: string } };
-          return NextResponse.json({ error: failed.result?.message || failed.error }, { status: 404 });
-        }
-        return NextResponse.json({
-          success: true,
-          action,
-          message: ('result' in result ? result.result?.message : '') || 'Added to the SpaceMountain lounge queue.',
-          request: result.request,
-          session: getPublicWatchSession(result.session, publicBaseUrl(request)),
+          actorName: text(body?.actorName, 100) || 'SpaceMountainLive',
+          actorUserId: text(body?.actorUserId, 160) || 'spacemountainlive',
         });
+        return NextResponse.json(payload);
       }
       const requestIdentity = {
         sessionId,
@@ -260,6 +243,20 @@ export async function POST(request: NextRequest) {
     const controlSessionId = isSpaceMountainLoungeSession(tenantId, sessionId)
       ? getSpaceMountainLoungeSessionId(sessionId, requestedLane)
       : sessionId;
+    if (isSpaceMountainLoungeSession(tenantId, sessionId)) {
+      const payload = await loungeMediaAction({
+        action,
+        tenantId,
+        sessionId: controlSessionId,
+        lane: getSpaceMountainLoungeLane(sessionId, requestedLane),
+        control,
+        ...(Number.isFinite(value) ? { value } : {}),
+        actorUserId: text(body?.actorUserId, 160),
+        actorName: text(body?.actorName, 100) || 'SpaceMountainLive',
+        expectedRequestId: text(body?.expectedRequestId, 200) || undefined,
+      });
+      return NextResponse.json(payload);
+    }
     const session = await controlWatchSession(controlSessionId, control, Number.isFinite(value) ? value : undefined, undefined, {
       actorUserId: text(body?.actorUserId, 160),
       isAdmin: true,

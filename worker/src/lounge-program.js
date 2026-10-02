@@ -749,6 +749,20 @@ async function control(body) {
   return { success: true, action: 'hmo.media.control', lane: laneName, session: publicLane(lane), program: program() };
 }
 
+function checkpoint(laneName, requestId, position, now = Date.now()) {
+  const stored = readState();
+  const lane = stored[laneName === 'movie' ? 'movie' : 'music'];
+  if (!lane.current || lane.current.requestId !== requestId || lane.playback.status !== 'playing') return false;
+  const next = Number(position);
+  if (!Number.isFinite(next) || next < 0) return false;
+  const current = livePlayback(lane.playback, now).position;
+  if (next + 1 < current) return false;
+  lane.playback.position = Math.max(current, next);
+  lane.playback.updatedAt = now;
+  save();
+  return true;
+}
+
 function source(movie) {
   const metadata = movie?.current?.item?.metadata;
   if (!metadata || !/^\d+$/.test(String(metadata.streamId)) || !/^[a-z0-9]+$/.test(String(metadata.extension))) throw Error('No provider source selected');
@@ -756,4 +770,4 @@ function source(movie) {
   return new URL(`/${metadata.pathKind}/${encodeURIComponent(username)}/${encodeURIComponent(password)}/${metadata.streamId}.${metadata.extension}`, base).toString();
 }
 
-module.exports = { program, search, request, control, radio, tick, source, configureMusicSource };
+module.exports = { program, search, request, control, radio, tick, checkpoint, source, configureMusicSource };
