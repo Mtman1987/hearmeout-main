@@ -7,6 +7,38 @@ const { join } = require('node:path');
 
 const run = promisify(execFile);
 
+// Repair packet clocks at Twitch stitched-ad boundaries while retaining stream
+// copy and valid B-frame offsets. Twitch can jump both DTS and PTS-DTS by hours.
+function spotlightTimestampFilter(audio = false) {
+  const step = audio ? '1024/(SR*TB)' : '1/(30*TB)';
+  const duration = `if(between(DURATION,1,1/TB),DURATION,${step})`;
+  const dts = `if(eq(N,0),0,PREV_OUTDTS+if(between(DTS-PREV_INDTS,1,1/TB),DTS-PREV_INDTS,${duration}))`;
+  return `setts=dts='${dts}':pts='${dts}+if(between(PTS-DTS,-1/TB,1/TB),PTS-DTS,0)':duration='${duration}'`;
+}
+
+function inspectSpotlightCommercial(playlist, now = Date.now()) {
+  let found = null;
+  for (const line of String(playlist).split(/\r?\n/)) {
+    if (!line.startsWith('#EXT-X-DATERANGE:')) continue;
+    const attrs = Object.fromEntries([...line.matchAll(/([A-Z0-9-]+)=(?:"([^"]*)"|([^,]*))/g)]
+      .map(match => [match[1], match[2] ?? match[3]]));
+    if (attrs.CLASS !== 'twitch-stitched-ad') continue;
+    const start = Date.parse(attrs['START-DATE']);
+    const end = Date.parse(attrs['END-DATE']);
+    const seconds = Number(attrs.DURATION || attrs['PLANNED-DURATION']);
+    if (!Number.isFinite(start) || start > now || !attrs.ID) continue;
+    const until = Number.isFinite(end) ? end : start + seconds * 1000;
+    // Match the relay's buffered playback instead of dropping the cover while
+    // its last ad segments are still playing. Ignore old playlist markers.
+    const activeUntil = until + 12000;
+    if (!Number.isFinite(activeUntil) || until <= start || activeUntil <= now) continue;
+    if (!found || activeUntil > found.activeUntil) found = {
+      id: attrs.ID, breakStartedAt: start, activeUntil,
+    };
+  }
+  return found;
+}
+
 function inspectSpotlightPlaylist(playlist, ageMs) {
   const segmentCount = (playlist.match(/^seg_\d+\.ts$/gm) || []).length;
   const duration = Math.max(0, ...(playlist.match(/^#EXTINF:([\d.]+)/gm) || [])
@@ -25,10 +57,25 @@ function shouldRecycleSpotlight(state) {
 function createSpotlightHls({ spotlightEndpoint, root = '/tmp/spotlight-hls' }) {
   let login = '', generation = '', encoder = null, failure = '', inflight = null, timer = null, lastPoll = 0;
   let recoveries = 0, startedAt = 0, failedLogin = '', failedLoginUntil = 0, stalledSince = null;
+  let sourceUrl = '', commercialBreak = null;
 
   function stop() {
     if (encoder && encoder.exitCode === null) encoder.kill('SIGTERM');
     encoder = null;
+    sourceUrl = ''; commercialBreak = null;
+  }
+
+  async function inspectSourceCommercial() {
+    if (!sourceUrl) return;
+    const source = sourceUrl;
+    try {
+      const response = await fetch(source, { signal: AbortSignal.timeout(8000) });
+      if (!response.ok) return;
+      const marker = inspectSpotlightCommercial(await response.text());
+      if (source !== sourceUrl) return;
+      if (marker) commercialBreak = marker;
+      else if (commercialBreak?.activeUntil <= Date.now()) commercialBreak = null;
+    } catch { /* Retain the last confirmed marker only until its expiry. */ }
   }
 
   async function resolve(loginName) {
@@ -56,6 +103,8 @@ function createSpotlightHls({ spotlightEndpoint, root = '/tmp/spotlight-hls' }) 
     return { configured: true, active, activated: Boolean(login), currentLogin: login,
       generation, ready: active && segments >= 2 && !stalled, segmentCount: segments,
       stalled, playlistAgeMs: Math.max(0, Math.round(ageMs)), recoveryCount: recoveries,
+      commercialBreak: commercialBreak && commercialBreak.activeUntil > Date.now()
+        ? { ...commercialBreak, active: true } : null,
       error: stalled ? 'Spotlight video stopped advancing' : failure || null };
   }
 
@@ -79,7 +128,8 @@ function createSpotlightHls({ spotlightEndpoint, root = '/tmp/spotlight-hls' }) 
       if (selected === login && encoder && encoder.exitCode === null && !encoder.killed && !recycle) {
         // Keep the exact same Twitch source session through prerolls and other
         // temporary playlist stalls. Only a prolonged stall permits re-resolving.
-        return current;
+        await inspectSourceCommercial();
+        return status();
       }
       if (selected === failedLogin && Date.now() < failedLoginUntil) {
         stop(); login = ''; generation = '';
@@ -98,6 +148,7 @@ function createSpotlightHls({ spotlightEndpoint, root = '/tmp/spotlight-hls' }) 
       }
       if (recycle) recoveries++;
       stop();
+      sourceUrl = source;
       stalledSince = null;
       const previous = generation;
       login = selected;
@@ -109,6 +160,7 @@ function createSpotlightHls({ spotlightEndpoint, root = '/tmp/spotlight-hls' }) 
         '-hide_banner', '-loglevel', 'error', '-nostdin',
         '-rw_timeout', '15000000', '-i', source,
         '-map', '0:v:0', '-map', '0:a:0?', '-c:v', 'copy', '-c:a', 'copy',
+        '-bsf:v', spotlightTimestampFilter(), '-bsf:a', spotlightTimestampFilter(true),
         '-f', 'hls', '-hls_time', '4', '-hls_list_size', '8',
         '-hls_flags', 'delete_segments+independent_segments+temp_file',
         '-hls_delete_threshold', '3',
@@ -120,6 +172,7 @@ function createSpotlightHls({ spotlightEndpoint, root = '/tmp/spotlight-hls' }) 
       child.once('error', () => { if (encoder === child) failure = 'Spotlight encoder could not start'; });
       child.once('close', () => { if (encoder === child) { failure = 'Spotlight stream disconnected'; recoveries++; } });
       if (previous) setTimeout(() => rmSync(join(root, previous), { recursive: true, force: true }), 10000).unref();
+      await inspectSourceCommercial();
       return status();
     })().catch(error => {
       failure = /Spotlight directory/.test(error.message) ? error.message : 'Spotlight stream is reconnecting';
@@ -147,4 +200,5 @@ function createSpotlightHls({ spotlightEndpoint, root = '/tmp/spotlight-hls' }) 
   return { start, status, file, consent: async () => ({ ...status(), warningCleared: false }) };
 }
 
-module.exports = { createSpotlightHls, inspectSpotlightPlaylist, shouldRecycleSpotlight };
+module.exports = { createSpotlightHls, inspectSpotlightPlaylist, shouldRecycleSpotlight,
+  spotlightTimestampFilter, inspectSpotlightCommercial };
