@@ -139,7 +139,7 @@ function createSpotlightHls({ spotlightEndpoint, root = '/tmp/spotlight-hls' }) 
           const marker = commercialBreak;
           pendingSource = { login: selected, url: sourceUrl };
           stop();
-          generation = '';
+          // Retain the old generation so normal reopening removes its files.
           commercialBreak = marker;
           stalledSince = null;
           failure = 'Waiting for the current Twitch preroll to finish';
