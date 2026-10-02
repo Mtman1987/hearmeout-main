@@ -42,6 +42,11 @@ jobs:
         run: node --import tsx --test tests/spmt-shell-parity.test.ts
       - name: Test workspace theme contract
         run: npm run test:workspace-theme
+      - name: Test Lounge media resilience
+        run: |
+          node --check worker/src/lounge-direct.js
+          node --check worker/src/server.js
+          node --test worker/tests/lounge-program.test.cjs
       - name: Test persistent Spotlight source
         run: |
           node --check worker/src/spotlight-broadcast.js
