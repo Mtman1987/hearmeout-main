@@ -232,7 +232,7 @@ test('the viewer preserves buffered playback through a short same-source stall',
 
 test('Spotlight buffers before autoplay and recovers network/media errors without discarding video', async () => {
   const vm=require('node:vm'),fs=require('node:fs');
-  let ahead=4;const handlers={},players=[], timers=[], messages=[];
+  let ahead=4, clock=1000000;const handlers={},players=[], timers=[], messages=[];
   const video={paused:true,readyState:4,currentTime:100,
     buffered:{length:1,start:()=>100,end:()=>100+ahead},
     addEventListener:(event,fn)=>{handlers[event]=fn;},
@@ -249,7 +249,7 @@ test('Spotlight buffers before autoplay and recovers network/media errors withou
   const nodes={player:video,status:{},'enable-audio':{addEventListener(){}}};
   const html=fs.readFileSync(require('node:path').join(__dirname,'../public/spotlight-media/worker-spotlight.html'),'utf8');
   vm.runInNewContext(html.match(/<script>\n([\s\S]*?)<\/script>/)[1],{
-    Hls,window:{Hls,parent:{postMessage(value){messages.push(value);}},addEventListener(){}},AbortSignal,setInterval(fn,ms){timers.push({fn,ms});},
+    Date: {now:()=>clock}, Hls,window:{Hls,parent:{postMessage(value){messages.push(value);}},addEventListener(){}},AbortSignal,setInterval(fn,ms){timers.push({fn,ms});},
     document:{getElementById:id=>nodes[id]},
     fetch:async url=>({ok:true,json:async()=>url.endsWith('/spotlight/program')?{ready:true,generation:'one',currentLogin:'captain'}:{levels:{spotlight:80}}}),
   });
@@ -260,7 +260,7 @@ test('Spotlight buffers before autoplay and recovers network/media errors withou
   players[0].latency=24;
   timers.find(t=>t.ms===1000).fn();
   assert.equal(messages.at(-1).delayMs,36000);
-  players[0].latency=54;
+  clock+=30000; // HLS's cached latency stays 24 while both media and source stall.
   timers.find(t=>t.ms===1000).fn();
   assert.equal(messages.at(-1).delayMs,66000, 'a paused playhead extends its own cover');
   assert.equal(players[0].config.maxLiveSyncPlaybackRate,1);
