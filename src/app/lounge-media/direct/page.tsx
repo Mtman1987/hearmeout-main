@@ -10,6 +10,7 @@ export default function DirectLoungePlayer() {
   const requestRef = useRef('');
   const [movie, setMovie] = useState<Movie>({ active: false });
   const [playing, setPlaying] = useState(false);
+  const [empty, setEmpty] = useState(false);
   useEffect(() => {
     let cancelled = false;
     const announcePlayerLoaded = () => window.parent.postMessage({ type: 'spmt-lounge-media-ready' }, 'https://spmt.live');
@@ -60,13 +61,25 @@ export default function DirectLoungePlayer() {
 
     const poll = async () => {
       try {
-        const [programResponse, statusResponse] = await Promise.all([
-          fetch('/api/lounge-media/program', { cache: 'no-store' }),
-          fetch(worker + '/lounge/direct/status', { cache: 'no-store' }),
-        ]);
-        if (cancelled || !programResponse.ok || !statusResponse.ok) return;
+        const programResponse = await fetch('/api/lounge-media/program', { cache: 'no-store' });
+        if (cancelled || !programResponse.ok) return;
         const program = await programResponse.json();
+        if (cancelled) return;
+        const movieActive = program?.movie?.current && program.movie.playback?.status === 'playing';
+        const musicActive = program?.music?.current && program.music.playback?.status === 'playing';
+        if (!movieActive && !musicActive) {
+          setEmpty(true); setPlaying(false);
+          if (requestRef.current) {
+            requestRef.current = '';
+            hlsRef.current?.destroy(); hlsRef.current = null;
+            video.pause(); video.removeAttribute('src'); video.load();
+          }
+          return;
+        }
+        setEmpty(false);
         if (program?.movie?.current && program.movie.playback?.status === 'playing') {
+          const statusResponse = await fetch(worker + '/lounge/direct/status', { cache: 'no-store' });
+          if (cancelled || !statusResponse.ok) return;
           const next: Movie = await statusResponse.json();
           if (cancelled) return;
           setMovie(next);
@@ -94,8 +107,6 @@ export default function DirectLoungePlayer() {
         }
         if (program?.music?.current && program.music.playback?.status === 'playing')
           window.location.replace('/lounge-media/player?legacy=1');
-        else if (!program?.movie?.current)
-          window.location.replace('/lounge-media/player?legacy=1');
       } catch {}
     };
     void poll(); void refreshVolume();
@@ -110,15 +121,15 @@ export default function DirectLoungePlayer() {
       hlsRef.current?.destroy();
     };
   }, []);
-  return <main style={{ position: 'fixed', inset: 0, background: '#000', overflow: 'hidden' }}>
+  return <main data-empty-request-prompt="v1" style={{ position: 'fixed', inset: 0, background: '#000', overflow: 'hidden' }}>
     <video ref={videoRef} autoPlay playsInline style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
     {!playing && <div role="status" style={{ position: 'absolute', inset: 0, display: 'grid', placeItems: 'center', padding: '5%', color: '#fff', background: 'radial-gradient(circle,#20153d,#090919 65%,#000)', font: '600 clamp(18px,3vw,32px) system-ui', textAlign: 'center' }}>
-      <div style={{ width: 'min(84%,650px)', padding: '5%', border: '2px solid #55d7ed', borderRadius: 24, boxShadow: '0 0 32px #339fd080', background: '#0d1739' }}>
-        <div style={{ color: '#77ddf0', fontSize: '65%', letterSpacing: '.12em', textTransform: 'uppercase' }}>Preparing your movie</div>
-        <div style={{ margin: '18px 0 10px' }}>{movie.title || 'Loading selection'}</div>
-        <div style={{ color: '#d7c5ff', fontSize: '65%' }}>{movie.requester ? 'Selected by ' + movie.requester : ''}</div>
-        <div style={{ marginTop: 20, color: '#c1c8d4', fontSize: '55%', fontWeight: 400 }}>
-          {movie.error || (movie.ready ? 'Buffering video for smooth playback' : movie.active ? 'Prepared ' + (movie.bufferedSeconds || 0) + ' seconds' : 'Connecting to the Lounge worker')}
+      <div style={{ width: 'min(92%,650px)', padding: 'clamp(12px,3vw,32px)', border: '2px solid #55d7ed', borderRadius: 16, boxShadow: '0 0 32px #339fd080', background: '#0d1739' }}>
+        <div style={{ color: '#77ddf0', fontSize: '65%', letterSpacing: '.12em', textTransform: 'uppercase' }}>{empty ? 'Requests welcome' : 'Preparing your movie'}</div>
+        <div style={{ margin: '10px 0' }}>{empty ? 'What should we play next?' : movie.title || 'Loading selection'}</div>
+        <div style={{ color: '#d7c5ff', fontSize: empty ? 'clamp(14px,2vw,22px)' : '65%' }}>{empty ? 'Request a song: !sr <song or artist>' : movie.requester ? 'Selected by ' + movie.requester : ''}</div>
+        <div style={{ marginTop: empty ? 10 : 20, color: '#c1c8d4', fontSize: empty ? 'clamp(14px,1.5vw,18px)' : '55%', fontWeight: 400 }}>
+          {empty ? 'Request something to watch: !wr <title or link>' : movie.error || (movie.ready ? 'Buffering video for smooth playback' : movie.active ? 'Prepared ' + (movie.bufferedSeconds || 0) + ' seconds' : 'Connecting to the Lounge worker')}
         </div>
       </div>
     </div>}
