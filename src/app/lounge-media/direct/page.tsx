@@ -12,6 +12,9 @@ export default function DirectLoungePlayer() {
   const [playing, setPlaying] = useState(false);
   useEffect(() => {
     let cancelled = false;
+    const announcePlayerLoaded = () => window.parent.postMessage({ type: 'spmt-lounge-media-ready' }, 'https://spmt.live');
+    announcePlayerLoaded();
+    const readyTimer = window.setInterval(announcePlayerLoaded, 5000);
     let mix = .85, master = 1, source = 1, muted = false, brb = false;
     const video = videoRef.current!;
     const applyVolume = () => { video.volume = Math.min(1, mix * master * source); video.muted = muted || brb; };
@@ -101,7 +104,7 @@ export default function DirectLoungePlayer() {
     const timer = window.setInterval(poll, 2500);
     const volumeTimer = window.setInterval(refreshVolume, 3000);
     return () => {
-      cancelled = true; window.clearInterval(timer); window.clearInterval(volumeTimer);
+      cancelled = true; window.clearInterval(readyTimer); window.clearInterval(timer); window.clearInterval(volumeTimer);
       window.removeEventListener('message', onMessage);
       video.removeEventListener('progress', resume); video.removeEventListener('canplay', resume);
       video.removeEventListener('waiting', onWaiting); video.removeEventListener('playing', onPlaying);
