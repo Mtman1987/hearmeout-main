@@ -49,13 +49,14 @@ function inspectSpotlightPlaylist(playlist, ageMs) {
 }
 
 function shouldRecycleSpotlight(state) {
-  // Preserve one Twitch session through short ads; recover a genuinely stuck
-  // encoder or invalid timeline after two minutes rather than waiting forever.
-  return Boolean(state?.stalled && Math.max(state.playlistAgeMs || 0, state.stalledForMs || 0) >= 120000);
+  // Short gaps can use the cache. Do not spend two minutes waiting for an
+  // encoder that has failed to produce video.
+  return Boolean(state?.stalled && Math.max(state.playlistAgeMs || 0, state.stalledForMs || 0) >= 30000);
 }
 
 function createSpotlightHls({ spotlightEndpoint, root = '/tmp/spotlight-hls' }) {
   let login = '', generation = '', encoder = null, failure = '', inflight = null, timer = null, lastPoll = 0;
+  let consecutiveStalls = 0;
   let recoveries = 0, startedAt = 0, failedLogin = '', failedLoginUntil = 0, stalledSince = null;
   let sourceUrl = '', commercialBreak = null, pendingSource = null;
 
@@ -130,6 +131,7 @@ function createSpotlightHls({ spotlightEndpoint, root = '/tmp/spotlight-hls' }) 
       if (selected === login && encoder && encoder.exitCode === null && !encoder.killed && !recycle) {
         // Keep the exact same Twitch source session through prerolls and other
         // temporary playlist stalls. Only a prolonged stall permits re-resolving.
+        if(!current.stalled&&current.segmentCount>=2)consecutiveStalls=0;
         await inspectSourceCommercial();
         return status();
       }
@@ -141,8 +143,8 @@ function createSpotlightHls({ spotlightEndpoint, root = '/tmp/spotlight-hls' }) 
       let source;
       try {
         // Reopening the same usable session avoids a new preroll on every recovery.
-        source = selected === login && sourceUrl ? sourceUrl
-          : pendingSource?.login === selected ? pendingSource.url : await resolve(selected);
+        source = pendingSource?.login === selected ? pendingSource.url
+          : selected === login && sourceUrl && consecutiveStalls === 0 ? sourceUrl : await resolve(selected);
         failedLogin = ''; failedLoginUntil = 0;
       } catch {
         stop(); login = ''; generation = '';
@@ -172,7 +174,8 @@ function createSpotlightHls({ spotlightEndpoint, root = '/tmp/spotlight-hls' }) 
         return status();
       }
       pendingSource = null;
-      if (recycle) recoveries++;
+      if (recycle) { recoveries++; consecutiveStalls++; }
+      else if(selected!==login) consecutiveStalls=0;
       stop();
       sourceUrl = source;
       stalledSince = null;
@@ -187,7 +190,7 @@ function createSpotlightHls({ spotlightEndpoint, root = '/tmp/spotlight-hls' }) 
         '-rw_timeout', '15000000', '-i', source,
         '-map', '0:v:0', '-map', '0:a:0?', '-c:v', 'copy', '-c:a', 'copy',
         '-bsf:v', spotlightTimestampFilter(), '-bsf:a', spotlightTimestampFilter(true),
-        '-f', 'hls', '-hls_time', '4', '-hls_list_size', '8',
+        '-f', 'hls', '-hls_time', '4', '-hls_list_size', '24',
         '-hls_flags', 'delete_segments+independent_segments+temp_file',
         '-hls_delete_threshold', '3',
         '-hls_segment_filename', join(folder, 'seg_%06d.ts'), join(folder, 'index.m3u8'),
@@ -196,7 +199,7 @@ function createSpotlightHls({ spotlightEndpoint, root = '/tmp/spotlight-hls' }) 
       failure = '';
       child.stderr.resume(); // Never log signed Twitch playlist URLs.
       child.once('error', () => { if (encoder === child) failure = 'Spotlight encoder could not start'; });
-      child.once('close', () => { if (encoder === child) { failure = 'Spotlight stream disconnected'; recoveries++; } });
+      child.once('close', () => { if (encoder === child) { failure = 'Spotlight stream disconnected'; recoveries++; consecutiveStalls++; } });
       if (previous) setTimeout(() => rmSync(join(root, previous), { recursive: true, force: true }), 10000).unref();
       await inspectSourceCommercial();
       return status();

@@ -11,7 +11,7 @@
   const enableAudio = document.getElementById('enable-audio');
   video.muted = false;
   enableAudio.addEventListener('click', () => { volume(); void video.play().then(() => { enableAudio.hidden = true; }).catch(() => {}); });
-  let hls, selection = '', mix = .85, master = 1, source = 1, programLevel = 1, focus = 1, muted = false, programMuted = false, epoch = 0;
+  let hls, selection = '', mix = .85, master = 1, source = 1, programLevel = 1, focus = 1, muted = false, programMuted = false, epoch = 0, playbackLane = '';
   function volume(){
     video.volume = Math.max(0, Math.min(1, mix * master * source * programLevel * focus));
     video.muted = muted || programMuted;
@@ -45,8 +45,16 @@
       if (media >= 0 && media <= 100 && all >= 0 && all <= 100) {mix = media/100;master = all/100;volume();}
     } catch {} finally { mixPending = false; }
   }
+  function bufferedAhead(){
+    for(let i=0;i<video.buffered.length;i++){
+      if(video.buffered.start(i)<=video.currentTime+.1&&video.buffered.end(i)>video.currentTime)
+        return video.buffered.end(i)-video.currentTime;
+    }
+    return 0;
+  }
   async function resume(){
     if (video.ended || !video.paused || video.readyState < 3) return;
+    if (playbackLane === 'movie' && bufferedAhead() < 16) return;
     try {
       await video.play();
       enableAudio.hidden = true;
@@ -62,6 +70,11 @@
   video.addEventListener('progress',()=>void resume());
   video.addEventListener('timeupdate',()=>void resume());
   video.addEventListener('playing',()=>{status.hidden=true;enableAudio.hidden=true;});
+  video.addEventListener('waiting',()=>{
+    if(playbackLane==='movie'&&bufferedAhead()<2){
+      video.pause();status.hidden=false;status.textContent='Buffering movie for smooth playback';
+    }
+  });
   async function poll(){
     if (pollPending) return;
     pollPending = true;
@@ -82,23 +95,26 @@
         info = await statusResponse.json();
       }
       const next = item ? lane+':'+item.requestId+(lane==='movie'&&info?.generation?':'+info.generation:'') : '';
-      if (!next) { if (selection) { selection='';hls?.destroy();video.pause();video.removeAttribute('src');video.load();} enableAudio.hidden=true;status.hidden=false;status.textContent='Waiting for a Lounge request';return; }
+      if (!next) { if (selection) { selection='';playbackLane='';hls?.destroy();video.pause();video.removeAttribute('src');video.load();} enableAudio.hidden=true;status.hidden=false;status.textContent='Waiting for a Lounge request';return; }
       if (next === selection) { if (!video.ended) void resume(); return; }
       hls?.destroy(); hls = null; video.pause(); video.removeAttribute('src'); video.load();
       if (lane === 'movie') {
         if (!info?.ready || info.requestId !== item.requestId || !info.streamKey) {selection='';status.hidden=false;status.textContent=info?.error || 'Preparing '+item.item.title;return;}
       }
-      selection=next;const myEpoch=++epoch;enableAudio.hidden=true;status.hidden=false;status.textContent='Buffering '+item.item.title;
+      playbackLane=lane;video.autoplay=lane!=='movie';selection=next;const myEpoch=++epoch;enableAudio.hidden=true;status.hidden=false;status.textContent='Buffering '+item.item.title;
       const videoId=String(item.item?.metadata?.videoId||'');
       const url=worker+(lane==='movie'?'/lounge/direct/hls/'+encodeURIComponent(info.streamKey)+'/index.m3u8':'/lounge/music/hls/'+encodeURIComponent(videoId)+'/index.m3u8');
       if (window.Hls?.isSupported()) {
         hls=new Hls({
           startPosition:-1,
-          liveSyncDurationCount:3,
-          liveMaxLatencyDurationCount:6,
-          maxLiveSyncPlaybackRate:lane==='music'?1:1.05,
-          maxBufferLength:30,
-          maxMaxBufferLength:45,
+          // Join movies with a larger safety buffer; thereafter keep normal
+          // speed and never seek just to chase the worker's live edge.
+          liveSyncDurationCount:lane==='movie'?6:3,
+          liveMaxLatencyDurationCount:Infinity,
+          maxLiveSyncPlaybackRate:1,
+          maxBufferLength:60,
+          maxMaxBufferLength:90,
+          backBufferLength:30,
           lowLatencyMode:false,
           manifestLoadingTimeOut:30000,
           levelLoadingTimeOut:30000,
@@ -107,7 +123,7 @@
         hls.on(Hls.Events.ERROR,(_event,detail)=>{
           if(!detail.fatal||epoch!==myEpoch)return;
           if(detail.type===Hls.ErrorTypes.MEDIA_ERROR){try{hls.recoverMediaError();return}catch{}}
-          if(detail.type===Hls.ErrorTypes.NETWORK_ERROR){try{hls.startLoad(-1);return}catch{}}
+          if(detail.type===Hls.ErrorTypes.NETWORK_ERROR){try{hls.startLoad(video.currentTime);return}catch{}}
           hls.destroy();hls=null;selection='';status.hidden=false;status.textContent='Rejoining live movie feed';
         });
         hls.attachMedia(video);hls.on(Hls.Events.MEDIA_ATTACHED,()=>hls.loadSource(url));
