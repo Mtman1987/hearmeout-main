@@ -1,8 +1,27 @@
 const { spawn, execFile } = require('node:child_process');
+const { randomUUID } = require('node:crypto');
 const { promisify } = require('node:util');
 const { mkdirSync, existsSync, readFileSync, statSync, createReadStream, rmSync } = require('node:fs');
 const { join } = require('node:path');
 const probe = promisify(execFile);
+
+function safeHlsToken(value) {
+  return String(value || '').replace(/[^a-zA-Z0-9_-]/g, '');
+}
+
+function rewriteManifestForGeneration(manifest, requestId, generation) {
+  const prefix = safeHlsToken(requestId) + '-' + safeHlsToken(generation) + '-';
+  return String(manifest || '').split(/\r?\n/).map(line =>
+    /^segment_\d{6}\.ts$/.test(line) ? prefix + line : line
+  ).join('\n');
+}
+
+function internalSegmentName(name, requestId, generation) {
+  const prefix = safeHlsToken(requestId) + '-' + safeHlsToken(generation) + '-';
+  if (!String(name || '').startsWith(prefix)) return null;
+  const segment = String(name).slice(prefix.length);
+  return /^segment_\d{6}\.ts$/.test(segment) ? segment : null;
+}
 
 function createDirectLounge({ program, sourceForMovie, root, onMovieEnded }) {
   let current = null;
@@ -69,6 +88,7 @@ function createDirectLounge({ program, sourceForMovie, root, onMovieEnded }) {
     const startPosition = Math.max(0, Number(movie.playbackPosition || 0));
     movie.captureStartedAt = Date.now();
     movie.captureStartPosition = startPosition;
+    movie.generation = randomUUID().replace(/-/g, '');
 
     let audioIndex = '0:a:0?';
     let audioCodec = '';
@@ -155,7 +175,7 @@ function createDirectLounge({ program, sourceForMovie, root, onMovieEnded }) {
     const streamFresh = lagSeconds <= 30 && manifestAgeSeconds <= 30;
     const captureElapsed = Math.max(0, (Date.now() - Number(current.captureStartedAt || Date.now())) / 1000);
     const playbackPosition = Math.max(0, Number(current.captureStartPosition || 0) + captureElapsed);
-    return { active: true, requestId: current.requestId, title: current.title, requester: current.requester,
+    return { active: true, requestId: current.requestId, generation: current.generation, title: current.title, requester: current.requester,
       ready: segments.length >= 2 && bufferedSeconds >= 12 && streamFresh, bufferedSeconds: Math.round(bufferedSeconds),
       segmentCount: segments.length, lagSeconds: Number.isFinite(lagSeconds) ? Math.round(lagSeconds) : null,
       playbackPosition, viewerPosition: captureElapsed,
@@ -166,15 +186,24 @@ function createDirectLounge({ program, sourceForMovie, root, onMovieEnded }) {
     const state = await status();
     if (!state.active) return res.status(404).json({ error: 'No movie selected' });
     if (!state.ready) return res.status(202).json({ error: state.error || 'Preparing movie', bufferedSeconds: state.bufferedSeconds });
-    if (!/^(?:index\.m3u8|segment_\d{6}\.ts)$/.test(name)) return res.status(400).end();
-    const dir = join(folder, state.requestId.replace(/[^a-zA-Z0-9_-]/g, ''));
-    const path = join(dir, name);
+    const dir = join(folder, safeHlsToken(state.requestId));
+    if (name === 'index.m3u8') {
+      const path = join(dir, 'index.m3u8');
+      if (!existsSync(path) || !statSync(path).isFile()) return res.status(404).end();
+      const manifest = rewriteManifestForGeneration(readFileSync(path, 'utf8'), state.requestId, state.generation);
+      res.setHeader('Cache-Control', 'no-store');
+      res.setHeader('Content-Type', 'application/vnd.apple.mpegurl');
+      return res.send(manifest);
+    }
+    const segment = internalSegmentName(name, state.requestId, state.generation);
+    if (!segment) return res.status(400).end();
+    const path = join(dir, segment);
     if (!existsSync(path) || !statSync(path).isFile()) return res.status(404).end();
-    res.setHeader('Cache-Control', name.endsWith('.m3u8') ? 'no-store' : 'public, max-age=3600');
-    res.setHeader('Content-Type', name.endsWith('.m3u8') ? 'application/vnd.apple.mpegurl' : 'video/mp2t');
+    res.setHeader('Cache-Control', 'public, max-age=3600, immutable');
+    res.setHeader('Content-Type', 'video/mp2t');
     return createReadStream(path).pipe(res);
   }
   return { status, file };
 }
 
-module.exports = { createDirectLounge };
+module.exports = { createDirectLounge, rewriteManifestForGeneration, internalSegmentName };
