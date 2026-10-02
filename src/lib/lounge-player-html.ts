@@ -1,5 +1,5 @@
 export function renderLoungePlayer() {
-  return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>SpaceMountain Lounge live view</title><style>html,body,video{margin:0;width:100%;height:100%;overflow:hidden;background:#000}video{display:block;object-fit:contain}#preparing{position:absolute;inset:0;z-index:2;display:none;box-sizing:border-box;align-items:center;justify-content:center;padding:5%;color:#fff;background:radial-gradient(circle at center,#20153d 0%,#090919 65%,#000 100%);font:600 clamp(18px,3vw,32px)/1.35 system-ui,sans-serif;text-align:center}#preparing .card{width:min(84%,650px);padding:clamp(24px,5vw,52px);border:2px solid #55d7ed;border-radius:24px;box-shadow:0 0 32px #339fd080;background:#0d1739}#preparing .eyebrow{color:#77ddf0;font-size:clamp(14px,1.6vw,20px);letter-spacing:.12em;text-transform:uppercase}#preparing .title{margin:18px 0 10px;overflow-wrap:anywhere}#preparing .requester{color:#d7c5ff;font-size:clamp(15px,2vw,22px);font-weight:400}#preparing .detail{margin-top:20px;color:#c1c8d4;font-size:clamp(14px,1.5vw,18px);font-weight:400}</style></head><body><video id="player" autoplay playsinline></video><div id="preparing" role="status" aria-live="polite"><div class="card"><div id="preparing-kind" class="eyebrow">Preparing your media</div><div id="preparing-title" class="title"></div><div id="preparing-requester" class="requester"></div><div id="preparing-detail" class="detail">Your selection is loading</div></div></div><iframe id="direct-player" title="Lounge media" allow="autoplay" style="display:none;border:0;width:100%;height:100%"></iframe><script>
+  return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>SpaceMountain Lounge live view</title><style>html,body,video{margin:0;width:100%;height:100%;overflow:hidden;background:#000}video{display:block;object-fit:contain}#preparing{position:absolute;inset:0;z-index:2;display:none;box-sizing:border-box;align-items:center;justify-content:center;padding:5%;color:#fff;background:radial-gradient(circle at center,#20153d 0%,#090919 65%,#000 100%);font:600 clamp(18px,3vw,32px)/1.35 system-ui,sans-serif;text-align:center}#preparing .card{width:min(84%,650px);padding:clamp(24px,5vw,52px);border:2px solid #55d7ed;border-radius:24px;box-shadow:0 0 32px #339fd080;background:#0d1739}#preparing .eyebrow{color:#77ddf0;font-size:clamp(14px,1.6vw,20px);letter-spacing:.12em;text-transform:uppercase}#preparing .title{margin:18px 0 10px;overflow-wrap:anywhere}#preparing .requester{color:#d7c5ff;font-size:clamp(15px,2vw,22px);font-weight:400}#preparing .detail{margin-top:20px;color:#c1c8d4;font-size:clamp(14px,1.5vw,18px);font-weight:400}#preparing.empty .card{width:min(92%,650px);padding:clamp(12px,3vw,32px);border-radius:16px}#preparing.empty .title{margin:10px 0;font-size:clamp(18px,3vw,30px)}#preparing.empty .detail{margin-top:10px}</style></head><body><video id="player" autoplay playsinline></video><div id="preparing" role="status" aria-live="polite"><div class="card"><div id="preparing-kind" class="eyebrow">Preparing your media</div><div id="preparing-title" class="title"></div><div id="preparing-requester" class="requester"></div><div id="preparing-detail" class="detail">Your selection is loading</div></div></div><iframe id="direct-player" title="Lounge media" allow="autoplay" style="display:none;border:0;width:100%;height:100%"></iframe><script>
 // Parent recovery tracks page load separately from media buffering.
 function announcePlayerLoaded(){window.parent.postMessage({type:'spmt-lounge-media-ready'},'https://spmt.live')}
 announcePlayerLoaded();setInterval(announcePlayerLoaded,5000);
@@ -121,6 +121,14 @@ const preparingDetail=document.getElementById('preparing-detail');
 function setPreparing(visible){
  preparing.style.display=visible?'flex':'none';
 }
+function showRequestPrompt(){
+ preparing.classList.add('empty');
+ preparingKind.textContent='Requests welcome';
+ preparingTitle.textContent='What should we play next?';
+ preparingRequester.textContent='Request a song: !sr <song or artist>';
+ preparingDetail.textContent='Request something to watch: !wr <title or link>';
+ setPreparing(true);
+}
 function currentProgram(data){
  const lanes=['movie','music'].map(lane=>({lane,state:data?.[lane]}))
   .filter(entry=>entry.state?.current&&entry.state.playback?.status==='playing')
@@ -144,7 +152,8 @@ async function refreshProgram(){
    if(next&&lane==='movie'){window.location.replace('/lounge-media/direct');return}
    if(next&&!directMode)connect();
   }
-  if(!next){setPreparing(false);return}
+  if(!next){showRequestPrompt();return}
+  preparing.classList.remove('empty');
   let ready=false;
   if(directMode){
    try{
