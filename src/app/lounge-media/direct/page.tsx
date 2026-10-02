@@ -121,14 +121,14 @@ export default function DirectLoungePlayer() {
       hlsRef.current?.destroy();
     };
   }, []);
-  return <main data-empty-request-prompt="v2" style={{ position: 'fixed', inset: 0, background: '#000', overflow: 'hidden' }}>
+  return <main data-empty-request-prompt="v3" style={{ position: 'fixed', inset: 0, background: '#000', overflow: 'hidden' }}>
     <video ref={videoRef} autoPlay playsInline style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
-    {!playing && <div role="status" style={{ position: 'absolute', inset: 0, display: 'grid', placeItems: 'center', padding: empty ? '3%' : '5%', color: '#fff', background: 'radial-gradient(circle,#20153d,#090919 65%,#000)', font: empty ? '600 clamp(10px,3vw,32px)/1.2 system-ui' : '600 clamp(18px,3vw,32px) system-ui', textAlign: 'center' }}>
-      <div style={{ width: empty ? 'min(100%,650px)' : 'min(92%,650px)', boxSizing: 'border-box', padding: empty ? 'clamp(6px,2vw,32px)' : 'clamp(12px,3vw,32px)', border: '2px solid #55d7ed', borderRadius: 16, boxShadow: '0 0 32px #339fd080', background: '#0d1739' }}>
-        <div style={{ color: '#77ddf0', fontSize: empty ? 'clamp(9px,1.6vw,20px)' : '65%', letterSpacing: '.12em', textTransform: 'uppercase' }}>{empty ? 'Requests welcome' : 'Preparing your movie'}</div>
-        <div style={{ margin: empty ? '4px 0' : '10px 0', fontSize: empty ? 'clamp(12px,3vw,30px)' : undefined }}>{empty ? 'What should we play next?' : movie.title || 'Loading selection'}</div>
-        <div style={{ color: '#d7c5ff', fontSize: empty ? 'clamp(10px,2vw,22px)' : '65%' }}>{empty ? 'Song: !sr <song or artist>' : movie.requester ? 'Selected by ' + movie.requester : ''}</div>
-        <div style={{ marginTop: empty ? 4 : 20, color: '#c1c8d4', fontSize: empty ? 'clamp(10px,1.5vw,18px)' : '55%', fontWeight: 400 }}>
+    {!playing && <div role="status" style={{ position: 'absolute', inset: 0, display: 'grid', placeItems: 'center', padding: empty ? 0 : '5%', color: '#fff', background: 'radial-gradient(circle,#20153d,#090919 65%,#000)', font: empty ? '600 clamp(13px,min(6.5vw,10vh),32px)/1.2 system-ui' : '600 clamp(18px,3vw,32px) system-ui', textAlign: 'center' }}>
+      <div style={{ width: empty ? '100%' : 'min(92%,650px)', height: empty ? '100%' : undefined, display: empty ? 'flex' : undefined, flexDirection: 'column', justifyContent: 'center', boxSizing: 'border-box', padding: empty ? 'clamp(4px,1vw,20px)' : 'clamp(12px,3vw,32px)', border: '2px solid #55d7ed', borderRadius: 16, boxShadow: '0 0 32px #339fd080', background: '#0d1739' }}>
+        <div style={{ color: '#77ddf0', fontSize: empty ? 'clamp(11px,min(5.5vw,8.5vh),24px)' : '65%', letterSpacing: '.12em', textTransform: 'uppercase' }}>{empty ? 'Requests welcome' : 'Preparing your movie'}</div>
+        <div style={{ margin: empty ? '4px 0' : '10px 0', fontSize: empty ? 'clamp(18px,min(9vw,16vh),48px)' : undefined }}>{empty ? 'What should we play next?' : movie.title || 'Loading selection'}</div>
+        <div style={{ color: '#d7c5ff', fontSize: empty ? 'clamp(13px,min(6.5vw,10vh),32px)' : '65%' }}>{empty ? 'Song: !sr <song or artist>' : movie.requester ? 'Selected by ' + movie.requester : ''}</div>
+        <div style={{ marginTop: empty ? 4 : 20, color: '#c1c8d4', fontSize: empty ? 'clamp(13px,min(6.5vw,10vh),32px)' : '55%', fontWeight: 400 }}>
           {empty ? 'Watch: !wr <title or link>' : movie.error || (movie.ready ? 'Buffering video for smooth playback' : movie.active ? 'Prepared ' + (movie.bufferedSeconds || 0) + ' seconds' : 'Connecting to the Lounge worker')}
         </div>
       </div>
