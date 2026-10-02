@@ -109,6 +109,7 @@ const directLounge = RUN_LOUNGE && process.env.HMO_LOUNGE_DIRECT_ONLY === 'true'
         if (current?.requestId !== requestId) return;
         await loungeProgram.control({ control: 'next', lane: 'movie', targetLane: 'movie' });
       },
+      onMovieProgress: (requestId, position, now) => loungeProgram.checkpoint('movie', requestId, position, now),
     })
   : null;
 const loungeBroadcast = RUN_LOUNGE && !directLounge ? createLoungeBroadcast({
