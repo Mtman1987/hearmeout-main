@@ -12,6 +12,10 @@
   video.muted = false;
   enableAudio.addEventListener('click', () => { volume(); void video.play().then(() => { enableAudio.hidden = true; }).catch(() => {}); });
   let hls, selection = '', mix = .85, master = 1, source = 1, programLevel = 1, focus = 1, muted = false, programMuted = false, epoch = 0;
+  function volume(){
+    video.volume = Math.max(0, Math.min(1, mix * master * source * programLevel * focus));
+    video.muted = muted || programMuted;
+  }
   volume();
   window.addEventListener('message', event => {
     if (event.source !== window.parent || event.origin !== 'https://spmt.live') return;
