@@ -1,6 +1,6 @@
 <!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>SpaceMountain Lounge media</title>
-<style>html,body,video{margin:0;width:100%;height:100%;overflow:hidden;background:#000}video{display:block;object-fit:contain}#channel-bug{position:absolute;right:2%;bottom:2%;width:clamp(34px,8%,78px);height:auto;pointer-events:none;z-index:1}#status{position:absolute;inset:0;display:grid;place-items:center;padding:6%;box-sizing:border-box;background:radial-gradient(circle,#20153d,#090919 65%,#000);color:#fff;text-align:center;font:600 clamp(16px,2.5vw,30px) system-ui;z-index:2}#status[hidden]{display:none}#enable-audio{position:absolute;left:50%;bottom:16px;transform:translateX(-50%);z-index:3;padding:12px 18px;border:1px solid #fff;border-radius:999px;background:#101626;color:#fff;font:700 16px system-ui;cursor:pointer}#enable-audio[hidden]{display:none}</style></head>
+<style>html,body,video{margin:0;width:100%;height:100%;overflow:hidden;background:#000}video{display:block;object-fit:contain}#channel-bug{position:absolute;right:2%;bottom:2%;width:clamp(34px,8%,78px);height:auto;pointer-events:none;z-index:1}#status{position:absolute;inset:0;display:grid;place-items:center;padding:6%;box-sizing:border-box;background:radial-gradient(circle,#20153d,#090919 65%,#000);color:#fff;text-align:center;font:600 clamp(16px,2.5vw,30px) system-ui;z-index:2}#status.empty{padding:2%;white-space:pre-line;font:600 clamp(13px,min(6.5vw,10vh),32px)/1.25 system-ui}#status[hidden]{display:none}#enable-audio{position:absolute;left:50%;bottom:16px;transform:translateX(-50%);z-index:3;padding:12px 18px;border:1px solid #fff;border-radius:999px;background:#101626;color:#fff;font:700 16px system-ui;cursor:pointer}#enable-audio[hidden]{display:none}</style></head>
 <body><video id="player" autoplay playsinline></video><img id="channel-bug" src="/lounge-media/munch-tv-bug.gif" alt="Munch TV"><button id="enable-audio" type="button" hidden>🔊 Enable Audio</button><div id="status" role="status">Connecting to Lounge worker</div>
 <script src="https://hmo-dj-worker.fly.dev:4444/lounge/hls.js"></script>
 <script>
@@ -95,7 +95,8 @@
         info = await statusResponse.json();
       }
       const next = item ? lane+':'+item.requestId+(lane==='movie'&&info?.generation?':'+info.generation:'') : '';
-      if (!next) { if (selection) { selection='';playbackLane='';hls?.destroy();video.pause();video.removeAttribute('src');video.load();} enableAudio.hidden=true;status.hidden=false;status.textContent='Waiting for a Lounge request';return; }
+      if (!next) { if (selection) { selection='';playbackLane='';hls?.destroy();video.pause();video.removeAttribute('src');video.load();} enableAudio.hidden=true;status.hidden=false;status.className='empty';status.textContent='What should we play next?\nSong: !sr <song or artist>\nWatch: !wr <title or link>';return; }
+      status.className='';
       if (next === selection) { if (!video.ended) void resume(); return; }
       hls?.destroy(); hls = null; video.pause(); video.removeAttribute('src'); video.load();
       if (lane === 'movie') {
