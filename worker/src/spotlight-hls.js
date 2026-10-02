@@ -98,8 +98,9 @@ function createSpotlightHls({ spotlightEndpoint, root = '/tmp/spotlight-hls' }) 
     const path = join(root, generation, 'index.m3u8');
     const ageMs = generation && existsSync(path) ? Date.now() - statSync(path).mtimeMs : Date.now() - startedAt;
     // A live process and eight old segments do not prove that video is moving.
-    const { segmentCount: segments, stalled } = inspectSpotlightPlaylist(playlist, ageMs);
+    const { segmentCount: segments, stalled: playlistStalled } = inspectSpotlightPlaylist(playlist, ageMs);
     const active = Boolean(encoder && encoder.exitCode === null && !encoder.killed);
+    const stalled = active && Boolean(generation) && playlistStalled;
     return { configured: true, active, activated: Boolean(login), currentLogin: login,
       generation, ready: active && segments >= 2 && !stalled, segmentCount: segments,
       stalled, playlistAgeMs: Math.max(0, Math.round(ageMs)), recoveryCount: recoveries,

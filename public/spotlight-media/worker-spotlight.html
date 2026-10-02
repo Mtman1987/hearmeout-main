@@ -57,7 +57,10 @@
     if(!response.ok)throw Error('Spotlight worker unavailable');
     const program=await response.json();
     if(!program.ready){
-      if(generation){generation='';reset();}
+      // A short source stall does not invalidate this generation or its buffer.
+      const sameSource=program.active&&generation&&program.generation===generation;
+      if(!sameSource&&generation){generation='';reset();}
+      if(sameSource&&!video.paused&&video.readyState>=2){status.hidden=true;void resume();return;}
       health(false);status.hidden=false;status.textContent=program.error||'Preparing live Spotlight';return;
     }
     if(program.generation===generation){void resume();return;}
