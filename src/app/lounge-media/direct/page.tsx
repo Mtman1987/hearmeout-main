@@ -15,9 +15,9 @@ export default function DirectLoungePlayer() {
     const announcePlayerLoaded = () => window.parent.postMessage({ type: 'spmt-lounge-media-ready' }, 'https://spmt.live');
     announcePlayerLoaded();
     const readyTimer = window.setInterval(announcePlayerLoaded, 5000);
-    let mix = .85, master = 1, source = 1, muted = false, brb = false;
+    let mix = .85, master = 1, source = 1, muted = false;
     const video = videoRef.current!;
-    const applyVolume = () => { video.volume = Math.min(1, mix * master * source); video.muted = muted || brb; };
+    const applyVolume = () => { video.volume = Math.min(1, mix * master * source); video.muted = muted; };
     applyVolume();
     const onMessage = (event: MessageEvent) => {
       if (event.source !== window.parent || event.origin !== 'https://spmt.live') return;
@@ -27,9 +27,7 @@ export default function DirectLoungePlayer() {
           source = level; muted = event.data.muted; applyVolume();
         }
       }
-      if (event.data?.type === 'spmt-lounge-brb-audio' && typeof event.data.active === 'boolean') {
-        brb = event.data.active; applyVolume();
-      }
+
     };
     window.addEventListener('message', onMessage);
     const refreshVolume = async () => {

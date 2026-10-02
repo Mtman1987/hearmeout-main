@@ -86,11 +86,12 @@ test('Spotlight waits through one preroll and reuses its session for stall recov
   const fs = require('node:fs');
   const { EventEmitter } = require('node:events');
   let now = 1000000, modifiedAt = now, resolves = 0, spawned = [], preroll = true;
-  const marker = '#EXT-X-DATERANGE:ID="ad",CLASS="twitch-stitched-ad",START-DATE="' + new Date(now).toISOString() + '",DURATION=30';
+  let marker = '#EXT-X-DATERANGE:ID="ad",CLASS="twitch-stitched-ad",START-DATE="' + new Date(now).toISOString() + '",DURATION=30';
+  let outputPlaylist = playlist([4, 4, 4]);
   const fakeFs = {
     existsSync: () => true,
     mkdirSync() {}, rmSync() {}, createReadStream() {},
-    readFileSync: () => playlist([4, 4, 4]),
+    readFileSync: () => outputPlaylist,
     statSync: () => ({ mtimeMs: modifiedAt }),
   };
   const fakeChild = {
@@ -139,6 +140,26 @@ test('Spotlight waits through one preroll and reuses its session for stall recov
   modifiedAt = now;
   await worker.start();
   assert.equal(spawned.length, 2, 'a healthy replacement is not repeatedly restarted');
+  // A marker can arrive after a clean preflight but before any output exists.
+  outputPlaylist = '';
+  now += 21000;
+  preroll = true;
+  marker = '#EXT-X-DATERANGE:ID="late-ad",CLASS="twitch-stitched-ad",START-DATE="' + new Date(now).toISOString() + '",DURATION=30';
+  await worker.start();
+  assert.equal(spawned[1].killed, true, 'late preroll releases the stuck empty encoder');
+  assert.equal(worker.status().active, false);
+  assert.equal(worker.status().commercialBreak.id, 'late-ad');
+  assert.equal(spawned.length, 2);
+  now += 10000;
+  await worker.start();
+  assert.equal(spawned.length, 2, 'do not reopen while the same preroll is active');
+  now += 40000; preroll = false; modifiedAt = now;
+  outputPlaylist = playlist([4, 4, 4]);
+  await worker.start();
+  assert.equal(spawned.length, 3, 'reopen the retained session after its late preroll');
+  assert.equal(resolves, 1, 'late preroll must not create another Twitch ad session');
+  assert.equal(worker.status().ready, true);
+
 });
 
 test('an empty directory is not reported as stalled video', async () => {
