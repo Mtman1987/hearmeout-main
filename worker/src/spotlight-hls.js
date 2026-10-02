@@ -58,6 +58,7 @@ function createSpotlightHls({ spotlightEndpoint, root = '/tmp/spotlight-hls' }) 
   let login = '', generation = '', encoder = null, failure = '', inflight = null, timer = null, lastPoll = 0;
   let recoveries = 0, startedAt = 0, failedLogin = '', failedLoginUntil = 0, stalledSince = null;
   let sourceUrl = '', commercialBreak = null;
+  let encoderProgress = null, encoderIssue = null;
 
   function stop() {
     if (encoder && encoder.exitCode === null) encoder.kill('SIGTERM');
@@ -105,6 +106,7 @@ function createSpotlightHls({ spotlightEndpoint, root = '/tmp/spotlight-hls' }) 
       stalled, playlistAgeMs: Math.max(0, Math.round(ageMs)), recoveryCount: recoveries,
       commercialBreak: commercialBreak && commercialBreak.activeUntil > Date.now()
         ? { ...commercialBreak, active: true } : null,
+      encoderProgress, encoderIssue,
       error: stalled ? 'Spotlight video stopped advancing' : failure || null };
   }
 
@@ -149,6 +151,7 @@ function createSpotlightHls({ spotlightEndpoint, root = '/tmp/spotlight-hls' }) 
       if (recycle) recoveries++;
       stop();
       sourceUrl = source;
+      encoderProgress = null; encoderIssue = null;
       stalledSince = null;
       const previous = generation;
       login = selected;
@@ -158,6 +161,7 @@ function createSpotlightHls({ spotlightEndpoint, root = '/tmp/spotlight-hls' }) 
       mkdirSync(folder, { recursive: true });
       const child = spawn('ffmpeg', [
         '-hide_banner', '-loglevel', 'error', '-nostdin',
+        '-progress', 'pipe:2', '-stats_period', '5',
         '-rw_timeout', '15000000', '-i', source,
         '-map', '0:v:0', '-map', '0:a:0?', '-c:v', 'copy', '-c:a', 'copy',
         '-bsf:v', spotlightTimestampFilter(), '-bsf:a', spotlightTimestampFilter(true),
@@ -168,7 +172,26 @@ function createSpotlightHls({ spotlightEndpoint, root = '/tmp/spotlight-hls' }) 
       ], { stdio: ['ignore', 'ignore', 'pipe'] });
       encoder = child;
       failure = '';
-      child.stderr.resume(); // Never log signed Twitch playlist URLs.
+      let diagnostic = '';
+      child.stderr.on('data', chunk => {
+        if (encoder !== child) return;
+        diagnostic += String(chunk);
+        const lines = diagnostic.split(/\r?\n/);
+        diagnostic = lines.pop().slice(-4096);
+        for (const line of lines) {
+          const progress = line.match(/^(frame|out_time_us|total_size)=(\d+)$/);
+          if (progress) encoderProgress = { ...(encoderProgress || {}),
+            [progress[1]]: Number(progress[2]), updatedAt: Date.now() };
+          // Report fixed classifications only; stderr can contain signed URLs.
+          for (const [pattern, issue] of [
+            [/HTTP error|Server returned 4\d\d|Server returned 5\d\d/, 'upstream-http-error'],
+            [/No space left on device/, 'output-disk-full'],
+            [/Error opening input|Failed to open segment/, 'upstream-input-error'],
+            [/Non-monotonous DTS|non monotonically increasing dts/, 'packet-clock-error'],
+            [/Error writing|Unable to open|Failed to update header/, 'output-write-error'],
+          ]) if (pattern.test(line)) encoderIssue = issue;
+        }
+      });
       child.once('error', () => { if (encoder === child) failure = 'Spotlight encoder could not start'; });
       child.once('close', () => { if (encoder === child) { failure = 'Spotlight stream disconnected'; recoveries++; } });
       if (previous) setTimeout(() => rmSync(join(root, previous), { recursive: true, force: true }), 10000).unref();
