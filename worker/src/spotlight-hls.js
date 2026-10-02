@@ -11,19 +11,20 @@ function inspectSpotlightPlaylist(playlist, ageMs) {
   const segmentCount = (playlist.match(/^seg_\d+\.ts$/gm) || []).length;
   const duration = Math.max(0, ...(playlist.match(/^#EXTINF:([\d.]+)/gm) || [])
     .map(line => Number(line.slice(8)) || 0));
-  return { segmentCount, stalled: segmentCount >= 2 && (ageMs > 15000 || duration > 15) };
+  // Stream-copy HLS cuts at source keyframes, so a healthy chunk can exceed 15s.
+  // Allow two chunk intervals for progress, but still reject timestamp jumps.
+  return { segmentCount, stalled: ageMs > Math.max(15000, duration * 2000) || (segmentCount >= 2 && duration > 60) };
 }
 
-function shouldRecycleSpotlight() {
-  // A stalled Twitch playlist can simply be a preroll/ad discontinuity.
-  // Never recycle an otherwise-live upstream Spotlight session because doing so
-  // creates a brand-new Twitch session and therefore another preroll.
-  return false;
+function shouldRecycleSpotlight(state) {
+  // Preserve one Twitch session through short ads; recover a genuinely stuck
+  // encoder or invalid timeline after two minutes rather than waiting forever.
+  return Boolean(state?.stalled && Math.max(state.playlistAgeMs || 0, state.stalledForMs || 0) >= 120000);
 }
 
 function createSpotlightHls({ spotlightEndpoint, root = '/tmp/spotlight-hls' }) {
   let login = '', generation = '', encoder = null, failure = '', inflight = null, timer = null, lastPoll = 0;
-  let recoveries = 0, startedAt = 0, failedLogin = '', failedLoginUntil = 0;
+  let recoveries = 0, startedAt = 0, failedLogin = '', failedLoginUntil = 0, stalledSince = null;
 
   function stop() {
     if (encoder && encoder.exitCode === null) encoder.kill('SIGTERM');
@@ -67,15 +68,17 @@ function createSpotlightHls({ spotlightEndpoint, root = '/tmp/spotlight-hls' }) 
       const data = await response.json();
       const selected = String(data?.spotlight?.twitchLogin || data?.spotlight?.user?.twitchLogin || '').replace(/^@/, '').toLowerCase();
       if (!selected || !/^[a-z0-9_]{1,25}$/.test(selected)) {
-        if (login) { stop(); login = ''; generation = ''; }
+        if (login) { stop(); login = ''; generation = ''; stalledSince = null; }
         failure = 'No live community Spotlight is available';
         return status();
       }
       const current = status();
-      if (selected === login && encoder && encoder.exitCode === null && !encoder.killed) {
+      if (current.active && current.stalled) { if (stalledSince === null) stalledSince = Date.now(); }
+      else stalledSince = null;
+      const recycle = current.active && shouldRecycleSpotlight({ ...current, stalledForMs: stalledSince === null ? 0 : Date.now() - stalledSince });
+      if (selected === login && encoder && encoder.exitCode === null && !encoder.killed && !recycle) {
         // Keep the exact same Twitch source session through prerolls and other
-        // temporary playlist stalls. Re-resolving the channel would create a
-        // new Twitch session and can trigger another preroll indefinitely.
+        // temporary playlist stalls. Only a prolonged stall permits re-resolving.
         return current;
       }
       if (selected === failedLogin && Date.now() < failedLoginUntil) {
@@ -93,7 +96,9 @@ function createSpotlightHls({ spotlightEndpoint, root = '/tmp/spotlight-hls' }) 
         failure = 'Selected Spotlight source is offline; waiting for the live rotation to change';
         return status();
       }
+      if (recycle) recoveries++;
       stop();
+      stalledSince = null;
       const previous = generation;
       login = selected;
       generation = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
