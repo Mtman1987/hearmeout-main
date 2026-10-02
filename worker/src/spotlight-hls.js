@@ -133,6 +133,19 @@ function createSpotlightHls({ spotlightEndpoint, root = '/tmp/spotlight-hls' }) 
         // temporary playlist stalls. Only a prolonged stall permits re-resolving.
         if(!current.stalled&&current.segmentCount>=2)consecutiveStalls=0;
         await inspectSourceCommercial();
+        // Twitch may attach a preroll only after our preflight request. An
+        // encoder opened before that marker can stay stuck with zero output
+        // even after the source advances. Close that empty demuxer, retaining
+        // the same signed session, and let the existing preroll wait reopen it.
+        if (current.segmentCount === 0 && current.stalled && commercialBreak) {
+          const marker = commercialBreak;
+          pendingSource = { login: selected, url: sourceUrl };
+          stop();
+          // Retain the old generation so normal reopening removes its files.
+          commercialBreak = marker;
+          stalledSince = null;
+          failure = 'Waiting for the current Twitch preroll to finish';
+        }
         return status();
       }
       if (selected === failedLogin && Date.now() < failedLoginUntil) {
