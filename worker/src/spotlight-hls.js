@@ -7,14 +7,11 @@ const { join } = require('node:path');
 
 const run = promisify(execFile);
 
-// Repair packet clocks at Twitch stitched-ad boundaries while retaining stream
-// copy and valid B-frame offsets. Twitch can jump both DTS and PTS-DTS by hours.
-function spotlightTimestampFilter(audio = false) {
-  const step = audio ? '1024/(SR*TB)' : '1/(30*TB)';
-  const duration = `if(between(DURATION,1,1/TB),DURATION,${step})`;
-  // Preserve the live epoch: the HLS muxer uses the input start time to cut segments.
-  const dts = `if(eq(N,0),DTS,PREV_OUTDTS+if(between(DTS-PREV_INDTS,1,1/TB),DTS-PREV_INDTS,${duration}))`;
-  return `setts=dts='${dts}':pts='${dts}+if(between(PTS-DTS,-1/TB,1/TB),PTS-DTS,0)':duration='${duration}'`;
+// Keep the decode clock and packet durations intact. Rewriting DTS prevents
+// continuous Twitch HLS output from advancing on the production FFmpeg build.
+// Repair only impossible presentation offsets introduced at stitched-ad cuts.
+function spotlightTimestampFilter() {
+  return "setts=pts='DTS+if(between(PTS-DTS,-1/TB,1/TB),PTS-DTS,0)'";
 }
 
 function inspectSpotlightCommercial(playlist, now = Date.now()) {
