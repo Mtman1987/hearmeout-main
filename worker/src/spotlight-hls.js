@@ -57,7 +57,7 @@ function shouldRecycleSpotlight(state) {
 function createSpotlightHls({ spotlightEndpoint, root = '/tmp/spotlight-hls' }) {
   let login = '', generation = '', encoder = null, failure = '', inflight = null, timer = null, lastPoll = 0;
   let recoveries = 0, startedAt = 0, failedLogin = '', failedLoginUntil = 0, stalledSince = null;
-  let sourceUrl = '', commercialBreak = null;
+  let sourceUrl = '', commercialBreak = null, pendingSource = null;
 
   function stop() {
     if (encoder && encoder.exitCode === null) encoder.kill('SIGTERM');
@@ -119,6 +119,7 @@ function createSpotlightHls({ spotlightEndpoint, root = '/tmp/spotlight-hls' }) 
       const selected = String(data?.spotlight?.twitchLogin || data?.spotlight?.user?.twitchLogin || '').replace(/^@/, '').toLowerCase();
       if (!selected || !/^[a-z0-9_]{1,25}$/.test(selected)) {
         if (login) { stop(); login = ''; generation = ''; stalledSince = null; }
+        pendingSource = null;
         failure = 'No live community Spotlight is available';
         return status();
       }
@@ -139,7 +140,9 @@ function createSpotlightHls({ spotlightEndpoint, root = '/tmp/spotlight-hls' }) 
       }
       let source;
       try {
-        source = await resolve(selected);
+        // Reopening the same usable session avoids a new preroll on every recovery.
+        source = selected === login && sourceUrl ? sourceUrl
+          : pendingSource?.login === selected ? pendingSource.url : await resolve(selected);
         failedLogin = ''; failedLoginUntil = 0;
       } catch {
         stop(); login = ''; generation = '';
@@ -147,6 +150,28 @@ function createSpotlightHls({ spotlightEndpoint, root = '/tmp/spotlight-hls' }) 
         failure = 'Selected Spotlight source is offline; waiting for the live rotation to change';
         return status();
       }
+      // Opening FFmpeg during a stitched preroll can leave its demuxer stuck
+      // even after the playlist becomes live. Keep one session pending until
+      // that preroll expires instead of repeatedly resolving a fresh ad.
+      const sourceResponse = await fetch(source, { signal: AbortSignal.timeout(8000) });
+      if (!sourceResponse.ok) {
+        if (sourceResponse.status === 401 || sourceResponse.status === 403) {
+          pendingSource = null;
+          if (source === sourceUrl) sourceUrl = '';
+        }
+        throw Error('Spotlight source playlist unavailable');
+      }
+      const preroll = inspectSpotlightCommercial(await sourceResponse.text());
+      if (preroll) {
+        pendingSource = { login: selected, url: source };
+        if (!current.active) {
+          login = selected;
+          commercialBreak = preroll;
+          failure = 'Waiting for the current Twitch preroll to finish';
+        }
+        return status();
+      }
+      pendingSource = null;
       if (recycle) recoveries++;
       stop();
       sourceUrl = source;
