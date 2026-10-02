@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from 'react';
 import Hls from 'hls.js';
 
 const worker = 'https://hmo-dj-worker.fly.dev:4444';
-type Movie = { active: boolean; requestId?: string; title?: string; requester?: string; ready?: boolean; bufferedSeconds?: number; error?: string | null };
+type Movie = { active: boolean; requestId?: string; generation?: string; streamKey?: string; title?: string; requester?: string; ready?: boolean; bufferedSeconds?: number; error?: string | null };
 export default function DirectLoungePlayer() {
   const videoRef = useRef<HTMLVideoElement>(null);
   const hlsRef = useRef<Hls | null>(null);
@@ -69,8 +69,9 @@ export default function DirectLoungePlayer() {
           const next: Movie = await statusResponse.json();
           if (cancelled) return;
           setMovie(next);
-          if (!next.ready || !next.requestId || next.requestId === requestRef.current) return;
-          requestRef.current = next.requestId;
+          const playbackKey = next.requestId && next.generation ? next.requestId + ':' + next.generation : '';
+          if (!next.ready || !next.requestId || !next.streamKey || !playbackKey || playbackKey === requestRef.current) return;
+          requestRef.current = playbackKey;
           setPlaying(false);
           hlsRef.current?.destroy();
           video.pause(); video.removeAttribute('src'); video.load();
@@ -84,9 +85,9 @@ export default function DirectLoungePlayer() {
               }
             });
             hls.attachMedia(video);
-            hls.on(Hls.Events.MEDIA_ATTACHED, () => hls.loadSource(worker + '/lounge/direct/hls/index.m3u8'));
+            hls.on(Hls.Events.MEDIA_ATTACHED, () => hls.loadSource(worker + '/lounge/direct/hls/' + encodeURIComponent(next.streamKey!) + '/index.m3u8'));
           } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
-            video.src = worker + '/lounge/direct/hls/index.m3u8';
+            video.src = worker + '/lounge/direct/hls/' + encodeURIComponent(next.streamKey!) + '/index.m3u8';
           }
           return;
         }
