@@ -356,6 +356,43 @@ esac
 });
 
 
+test('movie checkpoints persist forward progress without rewinding', () => {
+  const root = mkdtempSync(join(tmpdir(), 'hmo-movie-checkpoint-'));
+  const previous = { ...process.env };
+  try {
+    process.env.LOUNGE_STATE_FILE = join(root, 'program.json');
+    writeFileSync(process.env.LOUNGE_STATE_FILE, JSON.stringify({
+      movie: {
+        current: {
+          requestId: 'movie-request',
+          requestedBy: { userId: 'owner', username: 'mtman1987' },
+          addedAt: new Date(1000).toISOString(),
+          item: { type: 'movie', title: 'Project Hail Mary - 2026', playbackUrl: '/api/watch/xtream/hls/vod-2643526/index.m3u8', metadata: { streamId: '2643526', extension: 'mp4', pathKind: 'movie' } },
+        },
+        queue: [],
+        playback: { status: 'playing', position: 10, updatedAt: 1000, muted: false, volume: 85, seekRevision: 0 },
+      },
+      music: { current: null, queue: [], playback: { status: 'idle', position: 0, updatedAt: 1000, muted: false, volume: 85, seekRevision: 0 } },
+      radio: { enabled: false, seeds: [], cursor: 0 },
+    }));
+    delete require.cache[require.resolve('../src/lounge-program')];
+    const program = require('../src/lounge-program');
+    assert.equal(program.checkpoint('movie', 'movie-request', 72, 61_000), true);
+    let saved = JSON.parse(readFileSync(process.env.LOUNGE_STATE_FILE, 'utf8'));
+    assert.equal(saved.movie.playback.position, 72);
+    assert.equal(saved.movie.playback.updatedAt, 61_000);
+    assert.equal(program.checkpoint('movie', 'wrong-request', 90, 62_000), false);
+    assert.equal(program.checkpoint('movie', 'movie-request', 60, 62_000), false);
+    saved = JSON.parse(readFileSync(process.env.LOUNGE_STATE_FILE, 'utf8'));
+    assert.equal(saved.movie.playback.position, 72);
+  } finally {
+    delete require.cache[require.resolve('../src/lounge-program')];
+    Object.keys(process.env).forEach(key => { if (!(key in previous)) delete process.env[key]; });
+    Object.assign(process.env, previous);
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('direct Lounge HLS isolates cached segment URLs across movies and restarts', () => {
   const { rewriteManifestForGeneration, internalSegmentName } = require('../src/lounge-direct');
   const manifest = '#EXTM3U\n#EXTINF:4.000,\nsegment_000000.ts\n#EXTINF:4.000,\nsegment_000001.ts\n';
