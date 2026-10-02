@@ -66,8 +66,8 @@ test('Spotlight rejects segments that stopped arriving', () => {
 
 test('Spotlight keeps one Twitch session through a temporary preroll stall', () => {
   assert.equal(shouldRecycleSpotlight({ stalled: true, playlistAgeMs: 21000 }), false);
-  assert.equal(shouldRecycleSpotlight({ stalled: true, playlistAgeMs: 119000 }), false);
-  assert.equal(shouldRecycleSpotlight({ stalled: true, playlistAgeMs: 120000 }), true);
+  assert.equal(shouldRecycleSpotlight({ stalled: true, playlistAgeMs: 29000 }), false);
+  assert.equal(shouldRecycleSpotlight({ stalled: true, playlistAgeMs: 30000 }), true);
 });
 
 test('Spotlight allows healthy long keyframe chunks while they are progressing', () => {
@@ -130,15 +130,19 @@ test('Spotlight waits through one preroll and reuses its session for stall recov
   now += 21000;
   await worker.start();
   assert.equal(spawned.length, 1, 'short stalls preserve the Twitch session');
-  now = modifiedAt + 120000;
+  now = modifiedAt + 30000;
   await worker.start();
-  assert.equal(spawned.length, 2, 'two minutes without progress replaces the encoder');
+  assert.equal(spawned.length, 2, 'thirty seconds without progress replaces the encoder');
   assert.equal(spawned[0].killed, true);
   assert.equal(worker.status().recoveryCount, 1);
   assert.equal(resolves, 1, 'recovery must not resolve a new session with another preroll');
+  now += 31000;
+  await worker.start();
+  assert.equal(spawned.length, 3, 'a second stalled encoder is replaced');
+  assert.equal(resolves, 2, 'repeated failure obtains a fresh Twitch session');
   modifiedAt = now;
   await worker.start();
-  assert.equal(spawned.length, 2, 'a healthy replacement is not repeatedly restarted');
+  assert.equal(spawned.length, 3, 'a healthy replacement is not repeatedly restarted');
 });
 
 test('an empty directory is not reported as stalled video', async () => {
@@ -164,7 +168,8 @@ test('the viewer preserves buffered playback through a short same-source stall',
   const vm = require('node:vm'), fs = require('node:fs');
   let program = { active: true, ready: true, generation: 'same', currentLogin: 'captain' };
   let destroyed = 0; const timers = [];
-  const video = { paused: false, readyState: 4, muted: false,
+  const video = { paused: false, readyState: 4, muted: false, currentTime: 10,
+    buffered: { length: 1, start: () => 0, end: () => 40 },
     play() { this.paused = false; return Promise.resolve(); },
     pause() { this.paused = true; }, load() {}, removeAttribute() {},
     addEventListener() {}, canPlayType() { return ''; },
@@ -190,5 +195,46 @@ test('the viewer preserves buffered playback through a short same-source stall',
   assert.equal(video.paused, false);
   program = { ...program, active: false };
   await timers.find(t => t.ms === 2500).fn();
-  assert.equal(destroyed, 1, 'a stopped source is still released');
+  assert.equal(destroyed, 0, 'a reconnecting source keeps its playable buffer');
+  program = { ...program, currentLogin: '', generation: '' };
+  await timers.find(t => t.ms === 2500).fn();
+  assert.equal(destroyed, 1, 'an explicitly removed Spotlight source is released');
+});
+
+test('Spotlight buffers before autoplay and recovers network/media errors without discarding video', async () => {
+  const vm=require('node:vm'),fs=require('node:fs');
+  let ahead=4;const handlers={},players=[];
+  const video={paused:true,readyState:4,currentTime:100,
+    buffered:{length:1,start:()=>100,end:()=>100+ahead},
+    addEventListener:(event,fn)=>{handlers[event]=fn;},
+    play:async()=>{video.paused=false;},pause:()=>{video.paused=true;},load(){},removeAttribute(){},canPlayType(){return '';}};
+  class Hls{
+    static isSupported(){return true;}
+    static Events={ERROR:'error',MEDIA_ATTACHED:'attached'};
+    static ErrorTypes={NETWORK_ERROR:'network',MEDIA_ERROR:'media'};
+    constructor(config){this.config=config;this.events={};players.push(this);}
+    on(event,fn){this.events[event]=fn;}attachMedia(){}loadSource(){}
+    destroy(){this.destroyed=true;}startLoad(position){this.position=position;}
+    recoverMediaError(){this.recovered=true;}
+  }
+  const nodes={player:video,status:{},'enable-audio':{addEventListener(){}}};
+  const html=fs.readFileSync(require('node:path').join(__dirname,'../public/spotlight-media/worker-spotlight.html'),'utf8');
+  vm.runInNewContext(html.match(/<script>\n([\s\S]*?)<\/script>/)[1],{
+    Hls,window:{Hls,parent:{postMessage(){}},addEventListener(){}},AbortSignal,setInterval(){},
+    document:{getElementById:id=>nodes[id]},
+    fetch:async url=>({ok:true,json:async()=>url.endsWith('/spotlight/program')?{ready:true,generation:'one',currentLogin:'captain'}:{levels:{spotlight:80}}}),
+  });
+  await new Promise(setImmediate);
+  assert.equal(video.paused,true);
+  assert.doesNotMatch(html,/<video[^>]*autoplay/);
+  ahead=12;await handlers.canplay();assert.equal(video.paused,false);
+  assert.equal(players[0].config.maxLiveSyncPlaybackRate,1);
+  assert.equal(players[0].config.liveMaxLatencyDurationCount,Infinity);
+  players[0].events.error(null,{fatal:true,type:'network'});
+  assert.equal(players[0].position,100);assert.equal(players[0].destroyed,undefined);
+  players[0].events.error(null,{fatal:true,type:'media'});
+  assert.equal(players[0].recovered,true);
+  ahead=1;handlers.waiting();assert.equal(video.paused,true);
+  ahead=8;await handlers.progress();assert.equal(video.paused,true);
+  ahead=12;await handlers.progress();assert.equal(video.paused,false);
 });
