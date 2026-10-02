@@ -9,15 +9,19 @@ function safeHlsToken(value) {
   return String(value || '').replace(/[^a-zA-Z0-9_-]/g, '');
 }
 
+function streamKeyForGeneration(requestId, generation) {
+  return safeHlsToken(requestId) + '-' + safeHlsToken(generation);
+}
+
 function rewriteManifestForGeneration(manifest, requestId, generation) {
-  const prefix = safeHlsToken(requestId) + '-' + safeHlsToken(generation) + '-';
+  const prefix = streamKeyForGeneration(requestId, generation) + '-';
   return String(manifest || '').split(/\r?\n/).map(line =>
     /^segment_\d{6}\.ts$/.test(line) ? prefix + line : line
   ).join('\n');
 }
 
 function internalSegmentName(name, requestId, generation) {
-  const prefix = safeHlsToken(requestId) + '-' + safeHlsToken(generation) + '-';
+  const prefix = streamKeyForGeneration(requestId, generation) + '-';
   if (!String(name || '').startsWith(prefix)) return null;
   const segment = String(name).slice(prefix.length);
   return /^segment_\d{6}\.ts$/.test(segment) ? segment : null;
@@ -30,6 +34,10 @@ function createDirectLounge({ program, sourceForMovie, root, onMovieEnded }) {
   let checking = null;
   let lastChecked = 0;
   let lastFailed = 0;
+  let lastObservedStreamKey = '';
+  let lastObservedSegment = -1;
+  let lastSegmentAdvanceAt = 0;
+  let lastTelemetryAt = 0;
   const folder = join(root, 'lounge-direct');
   rmSync(folder, { recursive: true, force: true });
   mkdirSync(folder, { recursive: true });
@@ -89,6 +97,10 @@ function createDirectLounge({ program, sourceForMovie, root, onMovieEnded }) {
     movie.captureStartedAt = Date.now();
     movie.captureStartPosition = startPosition;
     movie.generation = randomUUID().replace(/-/g, '');
+    lastObservedStreamKey = streamKeyForGeneration(movie.requestId, movie.generation);
+    lastObservedSegment = -1;
+    lastSegmentAdvanceAt = Date.now();
+    console.log(`[LoungeHLS] generation-start request=${safeHlsToken(movie.requestId)} generation=${movie.generation} position=${startPosition.toFixed(1)}`);
 
     let audioIndex = '0:a:0?';
     let audioCodec = '';
@@ -148,9 +160,16 @@ function createDirectLounge({ program, sourceForMovie, root, onMovieEnded }) {
     checking = (async () => {
       const next = await selectedMovie();
       if (!next) { current = null; await stopActiveProcess(); return; }
-      const seekChanged = next.requestId === current?.requestId
+      const sameRequest = next.requestId === current?.requestId;
+      const seekChanged = sameRequest
         && Number(next.seekRevision || 0) !== Number(current?.seekRevision || 0);
-      if (next.requestId !== current?.requestId || seekChanged || (error && Date.now() - lastFailed > 12000)) {
+      const recovering = sameRequest && !seekChanged && error && Date.now() - lastFailed > 12000;
+      if (recovering && current) {
+        const elapsed = Math.max(0, (Date.now() - Number(current.captureStartedAt || Date.now())) / 1000);
+        const lastKnownPosition = Math.max(0, Number(current.captureStartPosition || 0) + elapsed);
+        next.playbackPosition = Math.max(Number(next.playbackPosition || 0), lastKnownPosition);
+      }
+      if (!sameRequest || seekChanged || recovering) {
         current = next;
         try { await start(next); } catch (failure) { error = failure.message; lastFailed = Date.now(); }
       }
@@ -175,9 +194,33 @@ function createDirectLounge({ program, sourceForMovie, root, onMovieEnded }) {
     const streamFresh = lagSeconds <= 30 && manifestAgeSeconds <= 30;
     const captureElapsed = Math.max(0, (Date.now() - Number(current.captureStartedAt || Date.now())) / 1000);
     const playbackPosition = Math.max(0, Number(current.captureStartPosition || 0) + captureElapsed);
-    return { active: true, requestId: current.requestId, generation: current.generation, title: current.title, requester: current.requester,
-      ready: segments.length >= 2 && bufferedSeconds >= 12 && streamFresh, bufferedSeconds: Math.round(bufferedSeconds),
-      segmentCount: segments.length, lagSeconds: Number.isFinite(lagSeconds) ? Math.round(lagSeconds) : null,
+    const mediaSequence = Math.max(0, Number(manifest.match(/#EXT-X-MEDIA-SEQUENCE:(\d+)/)?.[1] || 0));
+    const lastSegment = Number(segments.at(-1)?.match(/segment_(\d+)\.ts/)?.[1] ?? -1);
+    const streamKey = streamKeyForGeneration(current.requestId, current.generation);
+    if (streamKey !== lastObservedStreamKey) {
+      lastObservedStreamKey = streamKey;
+      lastObservedSegment = -1;
+      lastSegmentAdvanceAt = Date.now();
+    }
+    if (Number.isFinite(lastSegment) && lastSegment > lastObservedSegment) {
+      lastObservedSegment = lastSegment;
+      lastSegmentAdvanceAt = Date.now();
+    }
+    const stalledMs = lastSegmentAdvanceAt ? Date.now() - lastSegmentAdvanceAt : 0;
+    if (segments.length >= 2 && process?.exitCode === null && stalledMs > 25000 && !error) {
+      error = 'Movie HLS stopped advancing';
+      lastFailed = Date.now() - 12001;
+      console.warn(`[LoungeHLS] stalled request=${safeHlsToken(current.requestId)} generation=${current.generation} lastSegment=${lastSegment} manifestAge=${manifestAgeSeconds.toFixed(1)}s`);
+    }
+    const ready = segments.length >= 2 && bufferedSeconds >= 12 && streamFresh;
+    if (Date.now() - lastTelemetryAt >= 15000) {
+      lastTelemetryAt = Date.now();
+      console.log(`[LoungeHLS] request=${safeHlsToken(current.requestId)} generation=${current.generation} mediaSequence=${mediaSequence} lastSegment=${lastSegment} position=${playbackPosition.toFixed(1)} manifestAge=${Number.isFinite(manifestAgeSeconds) ? manifestAgeSeconds.toFixed(1) : 'na'}s lag=${Number.isFinite(lagSeconds) ? lagSeconds.toFixed(1) : 'na'}s ready=${ready}`);
+    }
+    return { active: true, requestId: current.requestId, generation: current.generation, streamKey, title: current.title, requester: current.requester,
+      ready, bufferedSeconds: Math.round(bufferedSeconds),
+      segmentCount: segments.length, mediaSequence, lastSegment,
+      lagSeconds: Number.isFinite(lagSeconds) ? Math.round(lagSeconds) : null,
       playbackPosition, viewerPosition: captureElapsed,
       error: error || (!streamFresh && segments.length ? 'Movie stream is behind the live queue' : null) };
   }
@@ -203,7 +246,25 @@ function createDirectLounge({ program, sourceForMovie, root, onMovieEnded }) {
     res.setHeader('Content-Type', 'video/mp2t');
     return createReadStream(path).pipe(res);
   }
-  return { status, file };
+
+  async function fileForGeneration(streamKey, name, res) {
+    const state = await status();
+    if (!state.active) return res.status(404).json({ error: 'No movie selected' });
+    if (!state.ready) return res.status(202).json({ error: state.error || 'Preparing movie', bufferedSeconds: state.bufferedSeconds });
+    if (String(streamKey || '') !== state.streamKey) {
+      res.setHeader('Cache-Control', 'no-store');
+      return res.status(410).end();
+    }
+    if (!/^(?:index\.m3u8|segment_\d{6}\.ts)$/.test(name)) return res.status(400).end();
+    const dir = join(folder, safeHlsToken(state.requestId));
+    const path = join(dir, name);
+    if (!existsSync(path) || !statSync(path).isFile()) return res.status(404).end();
+    res.setHeader('Cache-Control', name.endsWith('.m3u8') ? 'no-store' : 'public, max-age=3600, immutable');
+    res.setHeader('Content-Type', name.endsWith('.m3u8') ? 'application/vnd.apple.mpegurl' : 'video/mp2t');
+    if (name.endsWith('.m3u8')) return res.send(readFileSync(path, 'utf8'));
+    return createReadStream(path).pipe(res);
+  }
+  return { status, file, fileForGeneration };
 }
 
-module.exports = { createDirectLounge, rewriteManifestForGeneration, internalSegmentName };
+module.exports = { createDirectLounge, streamKeyForGeneration, rewriteManifestForGeneration, internalSegmentName };

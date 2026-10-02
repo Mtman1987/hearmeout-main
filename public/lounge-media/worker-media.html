@@ -71,17 +71,22 @@
       programMuted = lane ? !!program[lane].playback?.muted : false;
       volume();
       const item = lane && program[lane].current;
-      const next = item ? lane+':'+item.requestId : '';
+      let info = null;
+      if (lane === 'movie') {
+        const statusResponse = await fetch(worker+'/lounge/direct/status',{cache:'no-store',signal:AbortSignal.timeout(30000)});
+        if (!statusResponse.ok) throw Error('Movie worker returned '+statusResponse.status);
+        info = await statusResponse.json();
+      }
+      const next = item ? lane+':'+item.requestId+(lane==='movie'&&info?.generation?':'+info.generation:'') : '';
       if (!next) { if (selection) { selection='';hls?.destroy();video.pause();video.removeAttribute('src');video.load();} enableAudio.hidden=true;status.hidden=false;status.textContent='Waiting for a Lounge request';return; }
       if (next === selection) { if (!video.ended) void resume(); return; }
       hls?.destroy(); hls = null; video.pause(); video.removeAttribute('src'); video.load();
       if (lane === 'movie') {
-        const info = await(await fetch(worker+'/lounge/direct/status',{cache:'no-store',signal:AbortSignal.timeout(30000)})).json();
-        if (!info.ready || info.requestId !== item.requestId) {selection='';status.hidden=false;status.textContent=info.error || 'Preparing '+item.item.title;return;}
+        if (!info?.ready || info.requestId !== item.requestId || !info.streamKey) {selection='';status.hidden=false;status.textContent=info?.error || 'Preparing '+item.item.title;return;}
       }
       selection=next;const myEpoch=++epoch;enableAudio.hidden=true;status.hidden=false;status.textContent='Buffering '+item.item.title;
       const videoId=String(item.item?.metadata?.videoId||'');
-      const url=worker+(lane==='movie'?'/lounge/direct/hls/index.m3u8':'/lounge/music/hls/'+encodeURIComponent(videoId)+'/index.m3u8');
+      const url=worker+(lane==='movie'?'/lounge/direct/hls/'+encodeURIComponent(info.streamKey)+'/index.m3u8':'/lounge/music/hls/'+encodeURIComponent(videoId)+'/index.m3u8');
       if (window.Hls?.isSupported()) {
         hls=new Hls({
           startPosition:-1,

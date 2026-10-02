@@ -29,9 +29,9 @@ primary_region = "iad"
   min_machines_running = 1
 
   [[http_service.checks]]
-    interval = "15s"
-    timeout = "5s"
-    grace_period = "30s"
+    interval = "20s"
+    timeout = "10s"
+    grace_period = "60s"
     method = "GET"
     path = "/api/health"
 

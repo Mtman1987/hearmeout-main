@@ -378,3 +378,16 @@ test('direct Lounge HLS isolates cached segment URLs across movies and restarts'
     null,
   );
 });
+
+
+test('direct Lounge generation keys identify one immutable HLS timeline', () => {
+  const { streamKeyForGeneration, rewriteManifestForGeneration, internalSegmentName } = require('../src/lounge-direct');
+  const keyA = streamKeyForGeneration('movie-request', 'generation-a');
+  const keyB = streamKeyForGeneration('movie-request', 'generation-b');
+  assert.notEqual(keyA, keyB);
+  assert.equal(keyA, 'movie-request-generation-a');
+  const manifest = rewriteManifestForGeneration('#EXTM3U\nsegment_000007.ts\n', 'movie-request', 'generation-a');
+  assert.match(manifest, /movie-request-generation-a-segment_000007\.ts/);
+  assert.equal(internalSegmentName('movie-request-generation-a-segment_000007.ts', 'movie-request', 'generation-a'), 'segment_000007.ts');
+  assert.equal(internalSegmentName('movie-request-generation-a-segment_000007.ts', 'movie-request', 'generation-b'), null);
+});
