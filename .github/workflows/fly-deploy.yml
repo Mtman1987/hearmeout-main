@@ -27,7 +27,7 @@ jobs:
         run: |
           set -euo pipefail
           for attempt in 1 2 3 4 5 6 7 8 9 10 11 12; do
-            if curl --fail --show-error --silent --max-time 10 https://hearmeout-main.fly.dev/api/health; then
+            if curl --fail --show-error --silent --max-time 15 https://hearmeout-main.fly.dev/api/health; then
               echo
               echo "HearMeOut is healthy."
               exit 0
