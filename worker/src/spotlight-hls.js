@@ -12,7 +12,8 @@ const run = promisify(execFile);
 function spotlightTimestampFilter(audio = false) {
   const step = audio ? '1024/(SR*TB)' : '1/(30*TB)';
   const duration = `if(between(DURATION,1,1/TB),DURATION,${step})`;
-  const dts = `if(eq(N,0),0,PREV_OUTDTS+if(between(DTS-PREV_INDTS,1,1/TB),DTS-PREV_INDTS,${duration}))`;
+  // Preserve the live epoch: the HLS muxer uses the input start time to cut segments.
+  const dts = `if(eq(N,0),DTS,PREV_OUTDTS+if(between(DTS-PREV_INDTS,1,1/TB),DTS-PREV_INDTS,${duration}))`;
   return `setts=dts='${dts}':pts='${dts}+if(between(PTS-DTS,-1/TB,1/TB),PTS-DTS,0)':duration='${duration}'`;
 }
 
