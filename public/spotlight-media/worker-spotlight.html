@@ -47,12 +47,19 @@
       void resume();
     }
   });
+  let commercialClock = null;
   function announceCommercialDelay(){
     // HLS latency tracks the actual playhead, including pauses. Include the
     // source demuxer's existing 12s tail rather than assuming a 12s viewer buffer.
     const measured = Number(hls?.latency);
     const nativeLag = video.seekable?.length ? video.seekable.end(video.seekable.length-1)-video.currentTime : 0;
-    const delayMs = Math.min(300000, Math.max(0, Number.isFinite(measured) && measured>0 ? measured : nativeLag)*1000+12000);
+    // HLS caches latency between media/playlist updates. Account for a frozen
+    // playhead even when the source playlist is stalled and that cache is stale.
+    const now = Date.now();
+    const elapsedLag = commercialClock ? commercialClock.lag + (now-commercialClock.at)/1000 - (video.currentTime-commercialClock.time) : 0;
+    const lag = Math.max(0, Number.isFinite(measured) ? measured : 0, nativeLag, elapsedLag);
+    commercialClock = { at: now, time: video.currentTime, lag };
+    const delayMs = Math.min(300000, lag*1000+12000);
     if(window.parent!==window)window.parent.postMessage({type:'spmt-lounge-spotlight-delay',delayMs},'https://spmt.live');
   }
   setInterval(announceCommercialDelay,1000);
@@ -65,7 +72,7 @@
     const spotlight=Number(levels?.spotlight),all=Number(levels?.all??100);
     if(spotlight>=0&&spotlight<=100&&all>=0&&all<=100){groupLevel=spotlight/100;masterLevel=all/100;volume();}
   }catch{}finally{mixPending=false;}}
-  function reset(){hls?.destroy();hls=null;enableAudio.hidden=true;video.pause();video.removeAttribute('src');video.load();health(false);}
+  function reset(){commercialClock=null;hls?.destroy();hls=null;enableAudio.hidden=true;video.pause();video.removeAttribute('src');video.load();health(false);}
   async function poll(){if(pollPending)return;pollPending=true;try{
     const response=await fetch(worker+'/spotlight/program',{cache:'no-store',signal:AbortSignal.timeout(30000)});
     if(!response.ok)throw Error('Spotlight worker unavailable');
