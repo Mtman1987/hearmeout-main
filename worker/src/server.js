@@ -3173,6 +3173,11 @@ app.get('/lounge/direct/status', async (_req, res) => {
   try { return res.json(await directLounge.status()); }
   catch (err) { return res.status(502).json({ error: err.message || String(err) }); }
 });
+app.get('/lounge/direct/hls/:streamKey/:file', async (req, res) => {
+  if (!directLounge) return res.status(404).end();
+  try { return await directLounge.fileForGeneration(String(req.params.streamKey || ''), String(req.params.file || ''), res); }
+  catch (err) { return res.status(502).json({ error: err.message || String(err) }); }
+});
 app.get('/lounge/direct/hls/:file', async (req, res) => {
   if (!directLounge) return res.status(404).end();
   try { return await directLounge.file(String(req.params.file || ''), res); }
