@@ -23,16 +23,39 @@ jobs:
       FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN_WORKER || secrets.FLY_API_TOKEN || secrets.FLY_API_TOKEN_MAIN }}
     steps:
       - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+      - name: Select affected worker processes
+        id: scope
+        env:
+          DEPLOY_BEFORE: ${{ github.event.before }}
+          DEPLOY_AFTER: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          target=all
+          if [ -n "$DEPLOY_BEFORE" ] && git cat-file -e "$DEPLOY_BEFORE^{commit}" 2>/dev/null; then
+            changed=$(git diff --name-only "$DEPLOY_BEFORE" "$DEPLOY_AFTER" -- worker/)
+            if [ "$changed" = "worker/src/spotlight-hls.js" ]; then target=spotlight; fi
+          fi
+          echo "target=$target" >> "$GITHUB_OUTPUT"
       - name: Check Lounge state and routing
         run: |
           node --check worker/src/server.js
           node --test worker/tests/lounge-program.test.cjs
+          node --check worker/src/spotlight-hls.js
+          node --test tests/spotlight-stall.test.cjs tests/spotlight-source-contract.test.cjs
       - uses: superfly/flyctl-actions/setup-flyctl@master
-      - name: Deploy the three isolated process groups
-        run: flyctl deploy . --config worker/fly.toml --dockerfile worker/Dockerfile --remote-only --ha=false --yes
+      - name: Deploy affected process groups
+        env:
+          DEPLOY_TARGET: ${{ steps.scope.outputs.target }}
+        run: |
+          set -euo pipefail
+          args=()
+          if [ "$DEPLOY_TARGET" = "spotlight" ]; then args+=(--process-groups spotlight); fi
+          flyctl deploy . --config worker/fly.toml --dockerfile worker/Dockerfile --remote-only --ha=false --yes "${args[@]}"
       - name: Check Lounge and Spotlight feeds
         run: |
           set -euo pipefail
