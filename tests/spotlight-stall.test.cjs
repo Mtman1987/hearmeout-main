@@ -96,7 +96,7 @@ test('Spotlight preserves a short stall, then replaces the stuck encoder once', 
     execFile(_cmd, _args, _opts, cb) { resolves++; cb(null, { stdout: 'https://example.com/live.m3u8' }); },
     spawn() {
       const child = new EventEmitter();
-      Object.assign(child, { exitCode: null, killed: false, stderr: { resume() {} },
+      Object.assign(child, { exitCode: null, killed: false, stderr: new EventEmitter(),
         kill() { this.killed = true; } });
       spawned.push(child);
       return child;
