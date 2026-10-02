@@ -9,6 +9,7 @@ const botActions = fs.readFileSync(path.join(process.cwd(), 'src/app/api/interna
 const lounge = fs.readFileSync(path.join(process.cwd(), 'src/lib/spacemountain-lounge.ts'), 'utf8');
 const activityAccess = fs.readFileSync(path.join(process.cwd(), 'src/lib/activity-access.ts'), 'utf8');
 const watchService = fs.readFileSync(path.join(process.cwd(), 'src/lib/watch/watch-request-service.ts'), 'utf8');
+const loungeWorker = fs.readFileSync(path.join(process.cwd(), 'src/lib/lounge-worker.ts'), 'utf8');
 
 test('Lounge overlay reads separate permanent music and movie sessions', () => {
   assert.doesNotMatch(source, /APOLLO_LOUNGE_PROXY|setLoungeState|advancingEndedRequestRef/);
@@ -37,6 +38,8 @@ test('SpaceMountain actions preserve separate music and movie queues', () => {
   assert.match(botActions, /SPACEMOUNTAIN_LOUNGE_MOVIE_SESSION_ID/);
   assert.match(botActions, /SPACEMOUNTAIN_LOUNGE_MUSIC_SESSION_ID/);
   assert.match(botActions, /sessionId: getSpaceMountainLoungeSessionId\(sessionId, requestedLane\)/);
+  assert.match(botActions, /await loungeMediaAction\(/);
+  assert.match(loungeWorker, /\/lounge\/media\/actions/);
   assert.doesNotMatch(botActions, /Apollo|requestApolloLounge|readApolloLoungeState|api\/watch\/broadcast\/lounge-twitch-request/);
 });
 
