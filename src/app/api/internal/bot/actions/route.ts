@@ -6,7 +6,6 @@ import {
   getWatchSession,
   requestWatchItem,
   requestWatchMusicItem,
-  searchWatchProviderOptions,
 } from '@/lib/watch-request-service';
 import { ACTIVITY_ROOM_ID, getGlobalWatchSessionId, getMusicWatchSessionId, getRoomWatchSessionId } from '@/lib/watch-session';
 import {
