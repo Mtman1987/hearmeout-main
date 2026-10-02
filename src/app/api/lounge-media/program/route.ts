@@ -1,46 +1,18 @@
-import { NextResponse } from 'next/server';
-import { getPublicWatchSession, getResolvedWatchSession } from '@/lib/watch-request-service';
-import {
-  SPACEMOUNTAIN_LOUNGE_MOVIE_SESSION_ID,
-  SPACEMOUNTAIN_LOUNGE_MUSIC_SESSION_ID,
-} from '@/lib/spacemountain-lounge';
+import { loungeWorker } from '@/lib/lounge-worker';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-// Expose only the current broadcast item to the public browser source.
-// Other watch sessions, queue entries and control routes stay private.
-function currentProgram(sessionId: string) {
-  const session = getPublicWatchSession(getResolvedWatchSession(sessionId));
-  const item = session.current?.item;
-  return {
-    current: item ? {
-      requestId: session.current!.requestId,
-      requestedBy: { username: session.current!.requestedBy.username },
-      item: {
-        type: item.type,
-        title: item.title,
-        artist: item.metadata?.artist,
-        source: item.source,
-        runtime: item.runtime,
-        overview: item.overview,
-        playbackUrl: item.playbackUrl,
-        metadata: {
-          provider: item.metadata?.provider,
-          videoPlaybackUrl: item.metadata?.videoPlaybackUrl,
-          embedPlaybackUrl: item.metadata?.embedPlaybackUrl,
-          audioPlaybackUrl: item.metadata?.audioPlaybackUrl,
-        },
-      },
-    } : null,
-    playback: session.playback,
-    queue: [],
-  };
-}
-
-export function GET() {
-  return NextResponse.json({
-    movie: currentProgram(SPACEMOUNTAIN_LOUNGE_MOVIE_SESSION_ID),
-    music: currentProgram(SPACEMOUNTAIN_LOUNGE_MUSIC_SESSION_ID),
-  }, { headers: { 'cache-control': 'no-store' } });
+// The persistent Lounge worker owns the current music/movie queue and clock.
+// Saved web watch sessions are separate and must not redirect this viewer.
+export async function GET() {
+  try {
+    const upstream = await loungeWorker('media/program', 'GET', AbortSignal.timeout(8000));
+    return new Response(upstream.body, {
+      status: upstream.status,
+      headers: { 'content-type': 'application/json', 'cache-control': 'no-store' },
+    });
+  } catch {
+    return Response.json({ error: 'Lounge worker unavailable' }, { status: 502 });
+  }
 }
