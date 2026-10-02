@@ -260,3 +260,25 @@ test('Spotlight buffers before autoplay and recovers network/media errors withou
   ahead=8;await handlers.progress();assert.equal(video.paused,true);
   ahead=12;await handlers.progress();assert.equal(video.paused,false);
 });
+
+test('Spotlight publishes live segments before input ends when Twitch starts hours into its clock', async t => {
+  const { spawn, spawnSync }=require('node:child_process');
+  const fs=require('node:fs'),path=require('node:path');
+  if(spawnSync('ffmpeg',['-version']).error?.code==='ENOENT'){t.skip('ffmpeg required');return;}
+  const folder=fs.mkdtempSync(path.join(require('node:os').tmpdir(),'spotlight-live-clock-'));
+  const input=path.join(folder,'input.ts'),output=path.join(folder,'index.m3u8');
+  t.after(()=>fs.rmSync(folder,{recursive:true,force:true}));
+  const fixture=spawnSync('ffmpeg',['-hide_banner','-loglevel','error','-f','lavfi','-i','testsrc2=size=160x90:rate=30','-f','lavfi','-i','sine=frequency=440:sample_rate=48000','-t','6','-c:v','libx264','-preset','ultrafast','-g','60','-c:a','aac','-output_ts_offset','18000','-f','mpegts',input],{timeout:15000});
+  assert.equal(fixture.status,0,String(fixture.stderr));
+  const child=spawn('ffmpeg',['-hide_banner','-loglevel','error','-nostdin','-stream_loop','-1','-re','-i',input,'-map','0:v:0','-map','0:a:0','-c','copy','-bsf:v',spotlightTimestampFilter(),'-bsf:a',spotlightTimestampFilter(true),'-f','hls','-hls_time','2','-hls_list_size','24','-hls_flags','delete_segments+independent_segments+temp_file','-hls_segment_filename',path.join(folder,'seg_%06d.ts'),output],{stdio:'ignore'});
+  t.after(()=>child.kill('SIGKILL'));
+  const deadline=Date.now()+8500;let manifest='';
+  while(Date.now()<deadline){
+    if(fs.existsSync(output))manifest=fs.readFileSync(output,'utf8');
+    if((manifest.match(/^seg_\d+\.ts$/gm)||[]).length>=2)break;
+    await new Promise(resolve=>setTimeout(resolve,250));
+  }
+  assert.equal(child.exitCode,null,'verify segments while the input is still running');
+  assert.ok((manifest.match(/^seg_\d+\.ts$/gm)||[]).length>=2,'a live HLS playlist must advance before EOF flush');
+  assert.ok(!manifest.includes('#EXT-X-ENDLIST'));
+});
