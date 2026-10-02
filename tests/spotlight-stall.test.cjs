@@ -115,6 +115,11 @@ test('Spotlight preserves a short stall, then replaces the stuck encoder once', 
   const worker = sandbox.module.exports.createSpotlightHls({ spotlightEndpoint: 'https://example.com/directory' });
   await worker.start();
   assert.equal(resolves, 1);
+  spawned[0].stderr.emit('data', 'frame=12\nout_time_us=4000000\nHTTP error 403 https://example.com/?token=PRIVATE\n');
+  assert.equal(worker.status().encoderProgress.frame, 12);
+  assert.equal(worker.status().encoderProgress.out_time_us, 4000000);
+  assert.equal(worker.status().encoderIssue, 'upstream-http-error');
+  assert.ok(!JSON.stringify(worker.status()).includes('PRIVATE'));
   assert.equal(worker.status().recoveryCount, 0);
   now += 21000;
   await worker.start();
