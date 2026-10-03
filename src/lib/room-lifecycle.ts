@@ -5,7 +5,8 @@ export function roomExpiryFrom(now = Date.now()) {
   return new Date(now + ROOM_LIFETIME_MS).toISOString();
 }
 
-export function effectiveRoomExpiry(expiresAt?: string, createdAt?: string) {
+export function effectiveRoomExpiry(expiresAt?: string, createdAt?: string, permanent = false) {
+  if (permanent) return null;
   const storedExpiry = expiresAt ? Date.parse(expiresAt) : Number.NaN;
   const createdTime = createdAt ? Date.parse(createdAt) : Number.NaN;
   const lifecycleExpiry = Number.isFinite(createdTime) ? createdTime + ROOM_LIFETIME_MS : Number.NaN;
