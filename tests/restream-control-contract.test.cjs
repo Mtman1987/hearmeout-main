@@ -30,7 +30,9 @@ test('Restream start and reset remain behind worker auth and the main service-au
   assert.match(middleware, /\/api\/internal\/restream-control/);
 });
 
-test('Restream profile persists but automation starts fail-closed', () => {
+test('Restream profile persists and approved automation retains explicit mutation guards', () => {
   assert.match(fly, /RESTREAM_PROFILE_DIR = "\/data\/restream-chromium"/);
-  assert.match(fly, /RESTREAM_AUTOMATION_ENABLED = "false"/);
+  assert.match(fly, /RESTREAM_AUTOMATION_ENABLED = "true"/);
+  const guards = control.match(/if \(process\.env\.RESTREAM_AUTOMATION_ENABLED !== 'true'\) throw Error\('Restream automation is disabled'\)/g) || [];
+  assert.equal(guards.length, 2, 'both start and reset must reject mutation when the explicit enable flag is absent');
 });
