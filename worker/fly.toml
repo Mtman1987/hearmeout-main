@@ -97,8 +97,8 @@ primary_region = "iad"
 [[vm]]
   processes = ["lounge"]
   memory = "2gb"
-  cpu_kind = "performance"
-  cpus = 1
+  cpu_kind = "shared"
+  cpus = 2
 
 [[vm]]
   processes = ["spotlight"]

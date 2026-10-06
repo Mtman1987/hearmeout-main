@@ -39,6 +39,17 @@ jobs:
           if [ -n "$DEPLOY_BEFORE" ] && git cat-file -e "$DEPLOY_BEFORE^{commit}" 2>/dev/null; then
             changed=$(git diff --name-only "$DEPLOY_BEFORE" "$DEPLOY_AFTER" -- worker/)
             if [ "$changed" = "worker/src/spotlight-hls.js" ]; then target=spotlight; fi
+            if [ "$changed" = "worker/fly.toml" ]; then
+              target=$(node <<'NODE'
+          const fs=require('fs'),{execFileSync}=require('child_process');
+          const before=execFileSync('git',['show',process.env.DEPLOY_BEFORE+':worker/fly.toml'],{encoding:'utf8'});
+          const after=fs.readFileSync('worker/fly.toml','utf8');
+          const old='processes = ["lounge"]\n  memory = "2gb"\n  cpu_kind = "performance"\n  cpus = 1';
+          const next='processes = ["lounge"]\n  memory = "2gb"\n  cpu_kind = "shared"\n  cpus = 2';
+          process.stdout.write(before.includes(old)&&after===before.replace(old,next)?'lounge':'all');
+          NODE
+              )
+            fi
           fi
           echo "target=$target" >> "$GITHUB_OUTPUT"
       - name: Check Lounge state and routing
@@ -54,7 +65,7 @@ jobs:
         run: |
           set -euo pipefail
           args=()
-          if [ "$DEPLOY_TARGET" = "spotlight" ]; then args+=(--process-groups spotlight); fi
+          if [ "$DEPLOY_TARGET" = "spotlight" ] || [ "$DEPLOY_TARGET" = "lounge" ]; then args+=(--process-groups "$DEPLOY_TARGET"); fi
           flyctl deploy . --config worker/fly.toml --dockerfile worker/Dockerfile --remote-only --ha=false --yes "${args[@]}"
       - name: Check Lounge and Spotlight feeds
         run: |
