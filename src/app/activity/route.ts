@@ -151,7 +151,6 @@ async function html(request: Request) {
         <div class="status" id="activity-status">Loading</div>
       </header>
       <div class="video-wrap">
-        <button id="enable-sound" type="button" hidden style="position:absolute;z-index:20;left:50%;top:50%;transform:translate(-50%,-50%);">▶ Start with sound</button>
         <video id="video" class="${isAudioOnly || isEmbeddedVideo ? 'hidden' : ''}" autoplay playsinline ${nativeSrc ? `src="${escapeHtml(nativeSrc)}"` : ''}></video>
         <iframe id="youtube" class="youtube-player ${isEmbeddedVideo ? '' : 'hidden'}" ${iframeSrc ? `src="${escapeHtml(iframeSrc)}"` : ''} allow="autoplay; fullscreen; encrypted-media; picture-in-picture" allowfullscreen></iframe>
         <audio id="audio" class="audio-player ${isAudioOnly ? '' : 'hidden'}" autoplay ${audioSrc ? `src="${escapeHtml(audioSrc)}"` : ''}></audio>
@@ -175,6 +174,7 @@ async function html(request: Request) {
         <button class="icon-btn" id="fullscreen" type="button" title="Fullscreen" aria-label="Fullscreen">⛶</button>
         <button id="media-mode" type="button" hidden>Video</button>
         <select id="audio-track" hidden aria-label="Movie audio language" title="Audio language"></select>
+        <button id="enable-sound" type="button">Enable sound</button>
         <button class="icon-btn" id="mute" type="button" title="Mute" aria-label="Mute">🔊</button>
         <div class="volume" title="Volume">
           <input id="volume" type="range" min="0" max="100" value="85" aria-label="Video volume" />

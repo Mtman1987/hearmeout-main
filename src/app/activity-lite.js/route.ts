@@ -104,6 +104,7 @@ let lastNativePlaybackAuthorityKey = '';
 let mediaIsBuffering = false;
 let muted = false;
 let autoplayBlocked = false;
+let soundActivatedByButton = false;
 const enableSoundBtn = document.getElementById('enable-sound');
 let currentDownloadUrl = '';
 let pendingRecommendation = null;
@@ -139,7 +140,10 @@ function audioOutputBlocked() {
 }
 
 function updateSoundPrompt() {
-  if (enableSoundBtn) enableSoundBtn.hidden = !(autoplayBlocked || audioOutputBlocked());
+  if (enableSoundBtn) {
+    enableSoundBtn.hidden = false;
+    enableSoundBtn.textContent = (autoplayBlocked || audioOutputBlocked()) ? 'Enable sound — tap to retry' : 'Enable sound';
+  }
 }
 
 function enableLocalAudioGain() {
@@ -192,6 +196,7 @@ function unlockLocalAudio(forceSound) {
   applyVolume();
   if (state?.current && (forceSound || state.playback?.status === 'playing')) {
     return startVideoPlayback().then((started) => {
+      if (started && !audioOutputBlocked() && !muted) soundActivatedByButton = true;
       updateSoundPrompt();
       reportActivityMedia('audio unlock', JSON.stringify({
         started, muted: media.muted, context: localAudioContext?.state || 'native',
@@ -1439,10 +1444,15 @@ downloadLink.addEventListener('click', () => {
 });
 
 muteBtn.addEventListener('click', () => {
-  muted = !muted;
+  // An apparently enabled speaker still needs a gesture to activate its output.
+  // The first press enables sound; subsequent presses retain normal local mute.
+  if (!soundActivatedByButton || muted || autoplayBlocked || audioOutputBlocked()) {
+    unlockLocalAudio(true);
+    return;
+  }
+  muted = true;
   applyVolume();
-  if (!muted) unlockLocalAudio(false);
-  mediaEl.textContent = muted ? 'Media: muted locally' : 'Media: unmuted locally';
+  mediaEl.textContent = 'Media: muted locally';
 });
 
 async function switchSession(nextSessionId) {
@@ -1774,22 +1784,13 @@ if (youtube) {
 ['pointermove', 'pointerdown', 'touchstart', 'keydown', 'focusin'].forEach((eventName) => {
   document.addEventListener(eventName, wakeControls, { passive: eventName !== 'keydown' });
 });
-['click', 'touchend', 'keydown'].forEach((eventName) => {
-  document.addEventListener(eventName, (event) => {
-    // Let controls keep their own mute/volume choices. A tap on the movie
-    // explicitly enables sound; other clicks only resume an existing output.
-    const target = event.target;
-    const onMovie = target === video || target === audio || target === enableSoundBtn
-      || Boolean(target?.closest?.('.video-wrap'));
-    unlockLocalAudio(onMovie);
-  }, { passive: true });
-});
 
 if (enableSoundBtn) enableSoundBtn.addEventListener('click', () => {
   unlockLocalAudio(true);
 });
 try {
   applyVolume();
+  updateSoundPrompt();
   scheduleControlsHide();
   discordHandshake();
   refresh();
