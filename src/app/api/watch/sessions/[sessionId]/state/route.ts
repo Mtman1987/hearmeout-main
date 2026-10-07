@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { getPublicWatchSession, getResolvedWatchSession } from '@/lib/watch-request-service';
-import { getDjWorkerUrl } from '@/lib/dj-worker-config';
+import { getMediaWorkerUrl } from '@/lib/dj-worker-config';
 import { getDjWorkerRequestHeaders } from '@/lib/dj-worker-auth';
 import { isValidVideoId } from '@/lib/validate-video-id';
 import { GET as getYoutubeHls } from '../../../youtube/hls/[videoId]/[file]/route';
@@ -37,8 +37,8 @@ function copyMediaHeaders(source: Headers) {
   return headers;
 }
 
-async function extractYoutubeAudio(videoId: string, refresh = false) {
-  const workerUrl = getDjWorkerUrl();
+async function extractYoutubeAudio(request: Request, videoId: string, refresh = false) {
+  const workerUrl = getMediaWorkerUrl(request);
   if (!workerUrl || !isValidVideoId(videoId)) return null;
 
   const url = new URL(`${workerUrl}/extract`);
@@ -58,7 +58,7 @@ async function extractYoutubeAudio(videoId: string, refresh = false) {
 }
 
 async function proxyDiscordYoutubeAudio(request: Request, videoId: string) {
-  let extracted = await extractYoutubeAudio(videoId, false);
+  let extracted = await extractYoutubeAudio(request, videoId, false);
   if (!extracted) return null;
 
   const fetchMedia = async (url: string) => {
@@ -129,6 +129,7 @@ export async function GET(request: Request, context: { params: Promise<{ session
           });
           const machine = segmentUrl.searchParams.get('machine');
           if (machine) params.set('machine', machine);
+          if (requestUrl.searchParams.get('lane') === 'activity') params.set('lane', 'activity');
           return `${statePath}?${params.toString()}`;
         })
         .join('\n');

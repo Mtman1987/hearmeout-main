@@ -25,7 +25,7 @@ test('shared Activity player, queue, controls, and media bypass browser login', 
     '/api/watch/sessions/discord-music-room/state',
     '/api/watch/sessions/discord-watch-room/state',
     '/api/watch/sessions/watch-discord-123-456-music/state',
-    '/api/watch/sessions/discord-music-room/state?mediaVideoId=abcdefghijk&mediaFile=source.webm',
+    '/api/watch/sessions/discord-music-room/state?mediaVideoId=abcdefghijk&mediaFile=source.webm&lane=activity',
     '/api/watch/sessions/discord-music-room/quick-control?action=play',
     '/activity-state/discord-music-room',
     '/activity/session/discord-music-room/state',
@@ -86,7 +86,7 @@ test('generated player starts Discord handshake and uses shared same-origin play
   assert.equal(messages[0][0][1].frame_id, 'frame-123');
   assert.equal(messages[0][1], 'https://discord.com');
   const media = vm.runInContext("appUrl('/api/watch/youtube/hls/abcdefghijk/index.m3u8')", context);
-  assert.equal(media, '/.proxy/api/watch/sessions/discord-music-room/state?mediaVideoId=abcdefghijk&mediaFile=source.webm');
+  assert.equal(media, '/.proxy/api/watch/sessions/discord-music-room/state?mediaVideoId=abcdefghijk&mediaFile=source.webm&lane=activity');
   assert.equal(vm.runInContext("JSON.stringify(apiUrls('/api/watch/sessions/discord-music-room/state'))", context),
     '["/.proxy/api/watch/sessions/discord-music-room/state"]');
   assert.equal(vm.runInContext("shouldResolveYoutubeInBrowser({id:'youtube-abcdefghijk', metadata:{playbackStrategy:'proxy'}})", context), false);
@@ -176,7 +176,7 @@ test('Activity routes API and same-app media URLs through the proxy exactly once
     '/api/youtube-audio/abcdefghijk',
   ]) {
     for (const input of [path, '/.proxy' + path, 'https://hearmeout-main.fly.dev' + path]) {
-      assert.equal(vm.runInContext(`appUrl(${JSON.stringify(input)})`, context), '/.proxy' + path);
+      assert.equal(vm.runInContext(`appUrl(${JSON.stringify(input)})`, context), '/.proxy' + path + (path.includes('/hls/') ? '?lane=activity' : ''));
     }
   }
   for (const external of ['https://www.youtube.com/embed/abcdefghijk', 'data:audio/mpeg;base64,AA', 'blob:https://example.com/audio']) {
@@ -387,4 +387,27 @@ test('Activity HLS bundle includes separate audio-track controllers', async () =
   const response=await exports.GET();
   assert.equal(response.headers.get('cache-control'),'no-store');
   assert.equal(await response.text(),'full bundle');
+});
+
+test('movie startup waits for a buffer and never speeds up to chase the clock', async () => {
+  const {context,elements}=playerContext();
+  let plays=0;
+  context.playNow=()=>{plays++;return Promise.resolve();};
+  vm.runInContext("state={current:{requestId:'movie',item:{type:'movie'}},playback:{status:'playing'}};hls={levels:[{details:{live:true}}],currentLevel:0};media.currentTime=0;media.duration=100;media.readyState=4;media.play=playNow;media.buffered={length:1,start:()=>0,end:()=>6}",context);
+  assert.equal(await vm.runInContext('startVideoPlayback()',context),false);
+  assert.equal(plays,0);
+  assert.equal(elements.get('loading-splash').hidden,false);
+  assert.match(elements.get('loading-message').textContent,/Warming/);
+  vm.runInContext('media.buffered.end=()=>18',context);
+  assert.equal(await vm.runInContext('startVideoPlayback()',context),true);
+  assert.equal(plays,1);
+  assert.equal(elements.get('loading-splash').hidden,true);
+  assert.equal(vm.runInContext("driftPlaybackRate(600,{type:'movie'},1.08)",context),1);
+  vm.runInContext('media.currentTime=7;updateSeekUi()',context);
+  assert.match(elements.get('position-label').textContent,/^0:07/);
+});
+
+test('Activity playlist URLs carry lane without moving normal browser playback', () => {
+  const {context}=playerContext();
+  assert.equal(vm.runInContext("appUrl('/api/watch/xtream/hls/vod-123/index.m3u8?machine=old')",context),'/.proxy/api/watch/xtream/hls/vod-123/index.m3u8?machine=old&lane=activity');
 });

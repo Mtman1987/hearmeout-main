@@ -24,7 +24,7 @@ jobs:
       - name: Check smooth movie playback
         run: node --test tests/lounge-smooth-playback.test.cjs
       - name: Verify Twitch queue isolation and Discord Activity startup
-        run: npm ci --ignore-scripts && node --import tsx --test tests/twitch-media-isolation.test.ts tests/discord-activity-startup.test.ts
+        run: npm ci --ignore-scripts && node --import tsx --test tests/twitch-media-isolation.test.ts tests/discord-activity-startup.test.ts tests/activity-worker-routing.test.ts
       - uses: superfly/flyctl-actions/setup-flyctl@master
       - name: Deploy live app
         run: flyctl deploy . --remote-only --config fly.toml --build-arg BUILD_SHA=${GITHUB_SHA} --build-arg GITHUB_SHA=${GITHUB_SHA} --build-arg GH_SHA=${GITHUB_SHA} --yes

@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { getDjWorkerUrl } from '@/lib/dj-worker-config';
+import { getMediaWorkerUrl, isActivityMediaRequest, activityMediaManifest } from '@/lib/dj-worker-config';
 import { isValidVideoId } from '@/lib/validate-video-id';
 import { getResolvedYoutubeUrls } from '@/app/api/watch/youtube/resolve/route';
 import { getDjWorkerRequestHeaders } from '@/lib/dj-worker-auth';
@@ -33,13 +33,14 @@ export async function GET(request: Request, context: { params: Promise<{ videoId
     }
 
     const cleanFile = cleanHlsFileName(file);
-    const workerUrl = getDjWorkerUrl();
+    const workerUrl = getMediaWorkerUrl(request);
     if (!workerUrl) {
       return NextResponse.json({ error: 'DJ worker not configured' }, { status: 503, headers: CORS_HEADERS });
     }
 
     const requestUrl = new URL(request.url);
-    const pinnedMachine = cleanMachineId(requestUrl.searchParams.get('machine'));
+    const activity = isActivityMediaRequest(request);
+      const pinnedMachine = activity ? null : cleanMachineId(requestUrl.searchParams.get('machine'));
     const remoteUrl = cleanFile === 'source.webm'
       ? new URL(`${workerUrl}/watch/youtube/cache/${encodeURIComponent(videoId)}/stream`)
       : new URL(`${workerUrl}/watch/youtube/hls/${encodeURIComponent(videoId)}/${encodeURIComponent(cleanFile)}`);
@@ -82,7 +83,11 @@ export async function GET(request: Request, context: { params: Promise<{ videoId
       headers.set('retry-after', '3');
     }
 
-    return new NextResponse(workerResponse.body, {
+    if (activity && file.endsWith('.m3u8') && workerResponse.ok) {
+        headers.delete('content-length');
+        return new NextResponse(activityMediaManifest(await workerResponse.text()), { status: workerResponse.status, headers });
+      }
+      return new NextResponse(workerResponse.body, {
       status: workerResponse.status,
       headers,
     });

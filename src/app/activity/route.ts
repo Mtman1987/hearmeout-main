@@ -70,6 +70,14 @@ async function html(request: Request) {
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>HearMeOut Discord Activity</title>
   <style>
+.loading-splash { position:absolute; inset:0; z-index:4; display:grid; place-content:center; text-align:center; gap:16px; background:radial-gradient(ellipse at top,#253658,#080d1a 70%); pointer-events:none; }
+.loading-splash[hidden] { display:none; }
+.loading-splash strong { font-size:clamp(22px,4vw,48px); letter-spacing:0.06em; color:#e5edff; }
+.loading-splash span { color:#c4d4f5; font-size:18px; }
+.loading-splash .loading-orbit { margin:auto; width:44px; height:44px; border:3px solid #435575; border-top-color:#94d9ff; border-radius:50%; animation:loading-spin 1.2s linear infinite; }
+@keyframes loading-spin { to { transform:rotate(360deg); } }
+@media(prefers-reduced-motion:reduce) { .loading-orbit { animation:none; } }
+
     * { box-sizing: border-box; }
     html, body { width: 100%; height: 100%; margin: 0; background: #000; color: #e5edf5; font-family: Arial, system-ui, sans-serif; }
     body { overflow: hidden; }
@@ -151,6 +159,7 @@ async function html(request: Request) {
         <div class="status" id="activity-status">Loading</div>
       </header>
       <div class="video-wrap">
+        <div class="loading-splash" id="loading-splash" role="status" aria-live="polite" ${current ? '' : 'hidden'}><strong>SPACEMOUNTAINLIVE</strong><div class="loading-orbit" aria-hidden="true"></div><span id="loading-message">Loading your stream…</span></div>
         <video id="video" class="${isAudioOnly || isEmbeddedVideo ? 'hidden' : ''}" autoplay playsinline ${nativeSrc ? `src="${escapeHtml(nativeSrc)}"` : ''}></video>
         <iframe id="youtube" class="youtube-player ${isEmbeddedVideo ? '' : 'hidden'}" ${iframeSrc ? `src="${escapeHtml(iframeSrc)}"` : ''} allow="autoplay; fullscreen; encrypted-media; picture-in-picture" allowfullscreen></iframe>
         <audio id="audio" class="audio-player ${isAudioOnly ? '' : 'hidden'}" autoplay ${audioSrc ? `src="${escapeHtml(audioSrc)}"` : ''}></audio>

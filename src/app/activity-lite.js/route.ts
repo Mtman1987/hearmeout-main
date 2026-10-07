@@ -134,6 +134,32 @@ let localAudioContext = null;
 let localAudioGain = null;
 const localAudioSources = new Map();
 let streamEndRecoveryTimer = null;
+let bufferWarmupTimer = null;
+const loadingSplash = document.getElementById('loading-splash');
+const loadingMessage = document.getElementById('loading-message');
+function showLoading(message) {
+  if (!loadingSplash) return;
+  loadingSplash.hidden = false;
+  if (loadingMessage) loadingMessage.textContent = message;
+}
+function hideLoading() {
+  if (loadingSplash) loadingSplash.hidden = true;
+}
+function bufferedAhead() {
+  const time = Number(media.currentTime || 0);
+  const ranges = media.buffered;
+  for (let i = 0; ranges && i < ranges.length; i++) {
+    if (ranges.start(i) <= time + 0.1 && ranges.end(i) > time) return ranges.end(i) - time;
+  }
+  return 0;
+}
+function movieBufferReady() {
+  if (state?.current?.item?.type !== 'movie' || !hls) return true;
+  const details = hls.levels?.[hls.currentLevel]?.details || hls.levels?.[0]?.details;
+  const remaining = Number(media.duration || Infinity) - Number(media.currentTime || 0);
+  return bufferedAhead() >= (details?.live === false ? Math.min(12, Math.max(0, remaining - 0.1)) : 12);
+}
+
 
 function audioOutputBlocked() {
   return Boolean(localAudioContext && localAudioSources.has(media) && localAudioContext.state !== 'running');
@@ -597,12 +623,19 @@ function appUrl(path) {
         // Discord's Electron build rejects the AAC MPEG-TS rendition even
         // after the proxy succeeds. Play the cached WebM/Opus source directly.
         mediaFile: 'source.webm',
+        lane: 'activity',
       });
       return '/.proxy/api/watch/sessions/' + encodeURIComponent(sessionId) + '/state?' + params.toString();
     }
     // Discord reserves routes on the Activity origin. Its documented proxy
     // prefix sends API/media requests through this application's URL mapping.
     // Plain /api paths can return Discord HTML instead of HearMeOut JSON.
+    if (/^\\/(?:api\\/watch|activity-provider)\\/(?:xtream|youtube)\\/hls\\//.test(nextPath)) {
+      const parts = nextPath.split('?');
+      const laneParams = new URLSearchParams(parts[1] || '');
+      laneParams.set('lane', 'activity');
+      nextPath = parts[0] + '?' + laneParams.toString();
+    }
     return '/.proxy' + nextPath;
   }
   if (youtubeHlsMatch) {
@@ -802,6 +835,7 @@ function playbackSyncPolicy(item) {
 }
 
 function driftPlaybackRate(signedDrift, item, currentRate) {
+  if (item?.type === 'movie') return 1;
   const policy = playbackSyncPolicy(item);
   const correcting = Math.abs(Number(currentRate || 1) - 1) > 0.001;
   const threshold = correcting ? policy.release : policy.deadband;
@@ -826,7 +860,7 @@ function currentMediaDuration() {
 function updateSeekUi() {
   if (!seekInput || !positionLabel) return;
   const duration = currentMediaDuration();
-  const currentPosition = state?.playback ? position(state.playback) : Number(media?.currentTime || 0);
+  const currentPosition = embeddedMode ? embeddedCurrentTime : Number(media?.currentTime || 0);
   const canSeek = Boolean(state?.current && duration > 0);
   seekInput.disabled = !canSeek;
   seekInput.max = String(Math.max(1, Math.round(duration || 1)));
@@ -905,6 +939,7 @@ function applyPlayback() {
 function startVideoPlayback(fromSoundButton = false) {
   if (!state || !state.current) return Promise.resolve(false);
   if (embeddedMode) {
+    hideLoading();
     pendingPlay = false;
     youtubeCommand('playVideo');
     applyVolume();
@@ -912,6 +947,15 @@ function startVideoPlayback(fromSoundButton = false) {
     return Promise.resolve(true);
   }
   pendingPlay = true;
+  if (!fromSoundButton && !movieBufferReady()) {
+    showLoading('Warming up your movie…');
+    const requestId = state.current.requestId;
+    if (!bufferWarmupTimer) bufferWarmupTimer = setTimeout(() => {
+      bufferWarmupTimer = null;
+      if (state?.current?.requestId === requestId && state.playback?.status === 'playing') startVideoPlayback();
+    }, 500);
+    return Promise.resolve(false);
+  }
   if (media.readyState < 2 && !fromSoundButton) {
     mediaEl.textContent = 'Media: loading';
     return Promise.resolve(false);
@@ -921,6 +965,7 @@ function startVideoPlayback(fromSoundButton = false) {
     .then(() => {
       pendingPlay = false;
       autoplayBlocked = false;
+      hideLoading();
       updateSoundPrompt();
       mediaEl.textContent = 'Media: playing';
       return true;
@@ -928,6 +973,7 @@ function startVideoPlayback(fromSoundButton = false) {
     .catch((err) => {
       pendingPlay = false;
       autoplayBlocked = err && err.name === 'NotAllowedError';
+      if (autoplayBlocked) hideLoading();
       updateSoundPrompt();
       mediaEl.textContent = autoplayBlocked ? 'Tap to start with sound' : 'Media: playback could not start';
       console.warn(err);
@@ -987,6 +1033,9 @@ function switchToYoutubeEmbedFallback(item, reason) {
 }
 
 async function loadMedia(item) {
+  if (bufferWarmupTimer) clearTimeout(bufferWarmupTimer);
+  bufferWarmupTimer = null;
+  showLoading('Loading your stream…');
   if (streamEndRecoveryTimer) clearTimeout(streamEndRecoveryTimer);
   streamEndRecoveryTimer = null;
   if (hls) {
@@ -1048,7 +1097,9 @@ async function loadMedia(item) {
       enableWorker: false,
       startPosition: item.type === 'movie' ? 0 : -1,
       lowLatencyMode: false,
-      backBufferLength: 30,
+      backBufferLength: 15,
+      maxBufferLength: 30,
+      maxMaxBufferLength: 60,
       manifestLoadingTimeOut: 60000,
       manifestLoadingMaxRetry: 4,
       manifestLoadingRetryDelay: 1000,
@@ -1102,6 +1153,7 @@ async function loadMedia(item) {
 
 function render(nextState) {
   state = nextState;
+  if (!state.current) hideLoading();
   handleTtsOverlay(state);
   if (state.id && state.id !== sessionId) {
     sessionId = state.id;
@@ -1630,6 +1682,8 @@ function onMediaPlay(event) {
 }
 function onMediaPlaying(event) {
   if (event.currentTarget !== media) return;
+  mediaIsBuffering = false;
+  hideLoading();
   mediaEl.textContent = 'Media: playing';
   reportActivityMedia('native media playing', state?.current?.item?.title || 'unknown');
 }
@@ -1640,7 +1694,7 @@ function onMediaCanPlay(event) {
   mediaEl.textContent = 'Media: ready';
   if (pendingPlay || (state && state.playback && state.playback.status === 'playing')) startVideoPlayback();
 }
-function onMediaWaiting(event) { if (event.currentTarget === media) { mediaIsBuffering = true; mediaEl.textContent = 'Media: buffering'; } }
+function onMediaWaiting(event) { if (event.currentTarget === media) { showLoading('Buffering your stream…'); mediaIsBuffering = true; mediaEl.textContent = 'Media: buffering'; } }
 function onMediaLoadedData(event) {
   if (event.currentTarget !== media) return;
   mediaIsBuffering = false;
@@ -1652,7 +1706,7 @@ function onMediaPause(event) {
     mediaEl.textContent = 'Media: paused';
   }
 }
-function onMediaSeeked(event) { if (event.currentTarget === media && !applying && state && state.current) mediaEl.textContent = 'Media: sync will restore live position'; }
+function onMediaSeeked(event) { if (event.currentTarget === media) mediaEl.textContent = 'Media: playing'; }
 function onMediaEnded(event) {
   if (event.currentTarget !== media) return;
   const requestId = state?.current?.requestId;

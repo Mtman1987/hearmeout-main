@@ -6,6 +6,7 @@ primary_region = "iad"
   dj = "/bin/sh /app/scripts/run-role.sh dj"
   lounge = "/bin/sh /app/scripts/run-role.sh lounge"
   spotlight = "/bin/sh /app/scripts/run-role.sh spotlight"
+  activity = "/bin/sh /app/scripts/run-role.sh activity"
 
 [build]
   dockerfile = "Dockerfile"
@@ -105,3 +106,34 @@ primary_region = "iad"
   memory = "1gb"
   cpu_kind = "shared"
   cpus = 1
+
+# On-demand Discord movie/music preparation. Public requests stay authenticated
+# by the worker secret; separate port prevents waking the DJ/Lounge.
+[[mounts]]
+  source = "activity_data"
+  destination = "/data"
+  initial_size = "8gb"
+  processes = ["activity"]
+
+[[services]]
+  processes = ["activity"]
+  internal_port = 3002
+  protocol = "tcp"
+  auto_stop_machines = "suspend"
+  auto_start_machines = true
+  min_machines_running = 0
+  [[services.ports]]
+    port = 4446
+    handlers = ["tls", "http"]
+  [[services.http_checks]]
+    interval = "30s"
+    timeout = "10s"
+    grace_period = "60s"
+    method = "GET"
+    path = "/health"
+
+[[vm]]
+  processes = ["activity"]
+  memory = "2gb"
+  cpu_kind = "shared"
+  cpus = 2

@@ -51,6 +51,10 @@ jobs:
               )
             fi
           fi
+          # A new on-demand Activity role must not restart the live Lounge/DJ.
+          if [ -n "${changed:-}" ] && ! echo "$changed" | grep -qvE '^worker/(fly.toml|scripts/run-role.sh)$'; then
+            if git diff "$DEPLOY_BEFORE" "$DEPLOY_AFTER" -- worker/fly.toml | grep -q '^+.*activity'; then target=activity; fi
+          fi
           echo "target=$target" >> "$GITHUB_OUTPUT"
       - name: Check Lounge state and routing
         run: |
@@ -65,12 +69,12 @@ jobs:
         run: |
           set -euo pipefail
           args=()
-          if [ "$DEPLOY_TARGET" = "spotlight" ] || [ "$DEPLOY_TARGET" = "lounge" ]; then args+=(--process-groups "$DEPLOY_TARGET"); fi
+          if [ "$DEPLOY_TARGET" = "spotlight" ] || [ "$DEPLOY_TARGET" = "lounge" ] || [ "$DEPLOY_TARGET" = "activity" ]; then args+=(--process-groups "$DEPLOY_TARGET"); fi
           flyctl deploy . --config worker/fly.toml --dockerfile worker/Dockerfile --remote-only --ha=false --yes "${args[@]}"
       - name: Check Lounge and Spotlight feeds
         run: |
           set -euo pipefail
-          for port in 4444 4445; do
+          for port in 4444 4445 4446; do
             ready=false
             for attempt in {1..18}; do
               if curl --fail --silent --show-error --max-time 10 "https://hmo-dj-worker.fly.dev:${port}/health"; then

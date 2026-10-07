@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { Readable } from 'node:stream';
-import { getDjWorkerUrl } from '@/lib/dj-worker-config';
+import { getMediaWorkerUrl, isActivityMediaRequest, activityMediaManifest } from '@/lib/dj-worker-config';
 import { ensureXtreamHls, getXtreamHlsFile, waitForXtreamHlsIndex } from '@/lib/watch/xtream-hls';
 import { getResolvedXtreamStreamUrl, type XtreamKind } from '@/lib/watch/xtream-provider';
 import { getDjWorkerRequestHeaders } from '@/lib/dj-worker-auth';
@@ -32,10 +32,11 @@ export async function GET(request: Request, context: { params: Promise<{ streamI
   const { streamId, file } = await context.params;
 
   try {
-    const workerUrl = getDjWorkerUrl();
+    const workerUrl = getMediaWorkerUrl(request);
     if (workerUrl) {
       const requestUrl = new URL(request.url);
-      const pinnedMachine = cleanMachineId(requestUrl.searchParams.get('machine'));
+      const activity = isActivityMediaRequest(request);
+      const pinnedMachine = activity ? null : cleanMachineId(requestUrl.searchParams.get('machine'));
       const remoteUrl = new URL(`${workerUrl}/watch/xtream/hls/${encodeURIComponent(streamId)}/${encodeURIComponent(file)}`);
       if (pinnedMachine) remoteUrl.searchParams.set('machine', pinnedMachine);
       if (file === 'index.m3u8') {
@@ -69,6 +70,10 @@ export async function GET(request: Request, context: { params: Promise<{ streamI
         headers.set('retry-after', '3');
       }
 
+      if (activity && file.endsWith('.m3u8') && workerResponse.ok) {
+        headers.delete('content-length');
+        return new NextResponse(activityMediaManifest(await workerResponse.text()), { status: workerResponse.status, headers });
+      }
       return new NextResponse(workerResponse.body, {
         status: workerResponse.status,
         headers,

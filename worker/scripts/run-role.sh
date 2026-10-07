@@ -2,7 +2,7 @@
 set -eu
 
 case "${1:-}" in
-  dj|lounge|spotlight) export HMO_WORKER_ROLE="$1" ;;
+  dj|lounge|spotlight|activity) export HMO_WORKER_ROLE="$1" ;;
   *) echo "Unknown worker role" >&2; exit 1 ;;
 esac
 
