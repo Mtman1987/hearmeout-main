@@ -3,11 +3,13 @@ import { join } from 'node:path';
 import { NextResponse } from 'next/server';
 
 export async function GET() {
-  const file = await readFile(join(process.cwd(), 'node_modules', 'hls.js', 'dist', 'hls.light.min.js'), 'utf8');
+  // Movie HLS uses a separate EXT-X-MEDIA audio rendition. The light build
+  // omits AudioTrackController/AudioStreamController and silently plays video only.
+  const file = await readFile(join(process.cwd(), 'node_modules', 'hls.js', 'dist', 'hls.min.js'), 'utf8');
   return new NextResponse(file, {
     headers: {
       'content-type': 'application/javascript; charset=utf-8',
-      'cache-control': 'public, max-age=3600',
+      'cache-control': 'no-store',
     },
   });
 }

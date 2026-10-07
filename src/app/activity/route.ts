@@ -138,7 +138,7 @@ async function html(request: Request) {
       .activity-chrome { transition: none; }
     }
   </style>
-  <script src="${escapeHtml(clientUrl('/api/activity/hls', discordProxy))}"></script>
+  <script src="${escapeHtml(clientUrl('/api/activity/hls?v=full-audio-20261007', discordProxy))}"></script>
 </head>
 <body>
   <main>

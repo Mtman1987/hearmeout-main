@@ -240,9 +240,9 @@ test('initial Activity HTML loads its media library through Discord while browse
     throw new Error('Unexpected import ' + name);
   } });
   for (const [url, path] of [
-    ['https://hearmeout-main.fly.dev/activity?frame_id=f', '/.proxy/api/activity/hls'],
-    ['https://1279582181768957963.discordsays.com/activity', '/.proxy/api/activity/hls'],
-    ['https://hearmeout-main.fly.dev/activity', '/api/activity/hls'],
+    ['https://hearmeout-main.fly.dev/activity?frame_id=f', '/.proxy/api/activity/hls?v=full-audio-20261007'],
+    ['https://1279582181768957963.discordsays.com/activity', '/.proxy/api/activity/hls?v=full-audio-20261007'],
+    ['https://hearmeout-main.fly.dev/activity', '/api/activity/hls?v=full-audio-20261007'],
   ]) {
     const html = await (await exports.GET(new Request(url))).text();
     assert.ok(html.includes(`<script src="${path}"></script>`), url);
@@ -372,4 +372,19 @@ test('public audio reports log only bounded playback diagnostics', async () => {
   assert.equal((await post('{}','private')).status,403);
   assert.equal((await post('{bad')).status,400);
   assert.equal((await post('x'.repeat(4097))).status,413);
+});
+
+test('Activity HLS bundle includes separate audio-track controllers', async () => {
+  const source=readFileSync(new URL('../src/app/activity-hls/route.ts',import.meta.url),'utf8');
+  const compiled=ts.transpileModule(source,{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText;
+  const exports:any={};
+  vm.runInNewContext(compiled,{exports,process:{cwd:()=>'/app'},require(name:string){
+    if(name==='node:fs/promises')return {readFile:async(path:string)=>{assert.equal(path,'/app/node_modules/hls.js/dist/hls.min.js');return 'full bundle';}};
+    if(name==='node:path')return {join:(...parts:string[])=>parts.join('/')};
+    if(name==='next/server')return {NextResponse:Response};
+    throw new Error(name);
+  }});
+  const response=await exports.GET();
+  assert.equal(response.headers.get('cache-control'),'no-store');
+  assert.equal(await response.text(),'full bundle');
 });
