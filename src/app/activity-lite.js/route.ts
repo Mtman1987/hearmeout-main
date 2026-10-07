@@ -147,6 +147,9 @@ function updateSoundPrompt() {
 }
 
 function enableLocalAudioGain() {
+  // Discord owns the output device. Keep its media on the native output path;
+  // MediaElementAudioSource permanently redirects it into a second audio graph.
+  if (IS_DISCORD_ACTIVITY) return Promise.resolve(false);
   try {
     const AudioContext = window.AudioContext || window.webkitAudioContext;
     if (!AudioContext) return Promise.resolve(false);
@@ -195,7 +198,7 @@ function unlockLocalAudio(forceSound) {
   if (localAudioContext) enableLocalAudioGain();
   applyVolume();
   if (state?.current && (forceSound || state.playback?.status === 'playing')) {
-    return startVideoPlayback().then((started) => {
+    return startVideoPlayback(true).then((started) => {
       if (started && !audioOutputBlocked() && !muted) soundActivatedByButton = true;
       updateSoundPrompt();
       reportActivityMedia('audio unlock', JSON.stringify({
@@ -407,15 +410,25 @@ function wakeControls() {
 
 function reportActivityMedia(message, details) {
   if (!IS_DISCORD_ACTIVITY) return;
-  fetch(appUrl('/api/client-log'), {
+  fetch(appUrl('/api/activity/audio-report?sessionId=' + encodeURIComponent(sessionId)), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      area: 'discord-activity-media',
-      message: message + (details ? ' | ' + details : ''),
-      roomId: sessionId,
-      identity: state?.current?.requestId || null,
+      version: 'native-audio-20261007',
+      event: String(message).slice(0, 80),
+      detail: String(details || '').slice(0, 200),
+      platform: params.get('platform') || '',
       userAgent: navigator.userAgent,
+      muted: Boolean(media.muted), volume: Number(media.volume),
+      paused: Boolean(media.paused), readyState: Number(media.readyState),
+      currentTime: Number(media.currentTime),
+      decodedAudioBytes: Number(media.webkitAudioDecodedByteCount || 0),
+      context: localAudioContext?.state || 'native',
+      routedThroughGain: localAudioSources.has(media),
+      audioTracks: hls?.audioTracks?.length || 0,
+      audioTrack: hls?.audioTrack ?? -1,
+      mediaError: media.error?.code || 0,
+      autoplayAllowed: document.permissionsPolicy?.allowsFeature?.('autoplay') ?? null,
     }),
   }).catch(() => {});
 }
@@ -889,7 +902,7 @@ function applyPlayback() {
   setTimeout(() => { applying = false; }, 100);
 }
 
-function startVideoPlayback() {
+function startVideoPlayback(fromSoundButton = false) {
   if (!state || !state.current) return Promise.resolve(false);
   if (embeddedMode) {
     pendingPlay = false;
@@ -899,7 +912,7 @@ function startVideoPlayback() {
     return Promise.resolve(true);
   }
   pendingPlay = true;
-  if (media.readyState < 2) {
+  if (media.readyState < 2 && !fromSoundButton) {
     mediaEl.textContent = 'Media: loading';
     return Promise.resolve(false);
   }
@@ -918,6 +931,7 @@ function startVideoPlayback() {
       updateSoundPrompt();
       mediaEl.textContent = autoplayBlocked ? 'Tap to start with sound' : 'Media: playback could not start';
       console.warn(err);
+      reportActivityMedia('play rejected', String(err?.name || 'unknown'));
       return false;
     });
 }
@@ -1056,9 +1070,13 @@ async function loadMedia(item) {
       mediaIsBuffering = false;
       if (state && state.playback && state.playback.status === 'playing') startVideoPlayback();
     });
-    hls.on(window.Hls.Events.AUDIO_TRACKS_UPDATED, updateHlsAudioTracks);
+    hls.on(window.Hls.Events.AUDIO_TRACKS_UPDATED, () => {
+      updateHlsAudioTracks();
+      reportActivityMedia('audio tracks updated', '');
+    });
     hls.on(window.Hls.Events.ERROR, (_event, data) => {
       const details = data && (data.details || data.type || data.reason || data.response && data.response.code);
+      reportActivityMedia('HLS error', String(details || 'unknown'));
       mediaEl.textContent = data && data.fatal
         ? 'Media: HLS error' + (details ? ' - ' + details : '')
         : 'Media: buffering' + (details ? ' - ' + details : '');

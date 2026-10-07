@@ -36,6 +36,11 @@ export function isPublicActivityRequest(url: URL, method: string) {
     return read && isSharedSession(url.searchParams.get('sessionId') || url.searchParams.get('session_id'));
   }
 
+  // Cookie-free, bounded player diagnostics for the same public shared rooms.
+  if (path === '/api/activity/audio-report') {
+    return method === 'POST' && isSharedSession(url.searchParams.get('sessionId'));
+  }
+
   const canonical = path.match(/^\/(?:api\/watch\/sessions|activity\/session)\/([^/]+)\/(state|request|accept|control|quick-control)$/);
   const legacy = path.match(/^\/activity-(state|request|control)\/([^/]+)(?:\/(accept))?$/);
   const sessionRoute = canonical || (legacy ? [legacy[0], legacy[2], legacy[3] || legacy[1]] : null);

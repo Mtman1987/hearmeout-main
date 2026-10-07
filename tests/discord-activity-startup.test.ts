@@ -140,7 +140,7 @@ test('idle controls hide after a tap despite the button retaining focus', () => 
 });
 
 test('mobile volume uses local gain and changes without affecting shared playback', async () => {
-  const { context } = playerContext();
+  const { context } = playerContext('https://hearmeout-main.fly.dev/activity');
   const gain = { value: 1 };
   let sources = 0;
   context.window.AudioContext = class {
@@ -281,7 +281,7 @@ test('source failures are not reported as an autoplay permission block', async (
 });
 
 test('suspended volume processor never takes audio away from the native player', async () => {
-  const {context}=playerContext();
+  const {context}=playerContext('https://hearmeout-main.fly.dev/activity');
   let sources=0;
   let release: Function = () => {};
   context.window.AudioContext=class {
@@ -329,4 +329,47 @@ test('playing video keeps the sound prompt when its connected output is suspende
   assert.match(vm.runInContext('enableSoundBtn.textContent',context),/retry/);
   vm.runInContext("localAudioContext.state='running';updateSoundPrompt()",context);
   assert.equal(vm.runInContext('enableSoundBtn.hidden',context),false);
+});
+
+test('Discord volume stays on native output and sound button invokes play while loading', async () => {
+  const {context,elements}=playerContext();
+  let contexts=0, plays=0;
+  context.window.AudioContext=class { constructor(){contexts++;} };
+  context.playNow=()=>{plays++;return Promise.resolve();};
+  vm.runInContext("state={current:{requestId:'same'},playback:{status:'playing'}};media.readyState=0;media.play=playNow;volumeInput.value='85';muted=true",context);
+  elements.get('volume').handlers.get('input')();
+  assert.equal(contexts,0);
+  elements.get('enable-sound').handlers.get('click')();
+  assert.equal(plays,1);
+  assert.equal(vm.runInContext('media.muted',context),false);
+  await new Promise(resolve=>setImmediate(resolve));
+});
+
+test('audio diagnostics pass middleware only for POST in public shared sessions', async () => {
+  const allowed=await middleware(new NextRequest('https://hmo.test/api/activity/audio-report?sessionId=discord-watch-room',{method:'POST'}));
+  assert.equal(allowed.headers.get('x-middleware-next'),'1');
+  for (const [sessionId,method] of [['watch-room-private-movie','POST'],['discord-watch-room','GET']]) {
+    const response=await middleware(new NextRequest('https://hmo.test/api/activity/audio-report?sessionId='+sessionId,{method}));
+    assert.equal(response.status,401);
+  }
+});
+
+test('public audio reports log only bounded playback diagnostics', async () => {
+  const source=readFileSync(new URL('../src/app/api/activity/audio-report/route.ts',import.meta.url),'utf8');
+  const compiled=ts.transpileModule(source,{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText;
+  const exports:any={}, logs:any[]=[];
+  vm.runInNewContext(compiled,{exports,Response,URL,Date,Number,console:{info(...args:any[]){logs.push(args);}},require(name:string){
+    if(name==='next/server')return {NextResponse:Response};
+    if(name==='@/lib/activity-access')return {isPublicActivityRequest:(url:URL)=>url.searchParams.get('sessionId')==='discord-watch-room'};
+    throw new Error(name);
+  }});
+  const post=(body:string,sessionId='discord-watch-room')=>exports.POST(new Request('https://hmo.test/api/activity/audio-report?sessionId='+sessionId,{method:'POST',body}));
+  assert.equal((await post(JSON.stringify({event:'audio unlock',muted:false,volume:0.85,audioTracks:1,userAgent:'test',secret:'discard'}))).status,204);
+  const report=JSON.parse(logs[0][1]);
+  assert.equal(report.muted,false);
+  assert.equal(report.audioTracks,1);
+  assert.equal(report.secret,undefined);
+  assert.equal((await post('{}','private')).status,403);
+  assert.equal((await post('{bad')).status,400);
+  assert.equal((await post('x'.repeat(4097))).status,413);
 });
