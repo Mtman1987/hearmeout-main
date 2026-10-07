@@ -245,3 +245,34 @@ test('initial Activity HTML loads its media library through Discord while browse
     assert.ok(html.includes(`<script src="${path}"></script>`), url);
   }
 });
+
+test('audible autoplay is attempted first and blocked playback recovers without changing the queue', async () => {
+  const { context } = playerContext();
+  vm.runInContext("state={current:{requestId:'same-movie'},playback:{status:'playing',volume:85}};media.readyState=4", context);
+  let calls=0;
+  context.attempt = () => {
+    calls++;
+    assert.equal(vm.runInContext('media.muted', context), false);
+    if(calls===1) return Promise.reject(Object.assign(new Error('gesture required'),{name:'NotAllowedError'}));
+    return Promise.resolve();
+  };
+  vm.runInContext('media.play=attempt',context);
+  assert.equal(await vm.runInContext('startVideoPlayback()',context),false);
+  assert.equal(vm.runInContext('enableSoundBtn.hidden',context),false);
+  assert.equal(await vm.runInContext('startVideoPlayback()',context),true);
+  assert.equal(vm.runInContext('enableSoundBtn.hidden',context),true);
+  assert.equal(vm.runInContext('state.current.requestId',context),'same-movie');
+  vm.runInContext('muted=true',context);
+  context.attempt=()=>Promise.resolve();
+  vm.runInContext('media.play=attempt',context);
+  await vm.runInContext('startVideoPlayback()',context);
+  assert.equal(vm.runInContext('media.muted',context),true);
+});
+
+test('source failures are not reported as an autoplay permission block', async () => {
+  const {context}=playerContext();
+  context.failPlay=()=>Promise.reject(Object.assign(new Error('source failed'),{name:'NotSupportedError'}));
+  vm.runInContext("state={current:{requestId:'movie'}};media.readyState=4;media.play=failPlay",context);
+  await vm.runInContext('startVideoPlayback()',context);
+  assert.equal(vm.runInContext('enableSoundBtn.hidden',context),true);
+});

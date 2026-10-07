@@ -102,7 +102,9 @@ let applying = false;
 let lastSeekApplyAt = 0;
 let lastNativePlaybackAuthorityKey = '';
 let mediaIsBuffering = false;
-let muted = true;
+let muted = false;
+let autoplayBlocked = false;
+const enableSoundBtn = document.getElementById('enable-sound');
 let currentDownloadUrl = '';
 let pendingRecommendation = null;
 let pendingPlay = false;
@@ -846,15 +848,20 @@ function startVideoPlayback() {
     mediaEl.textContent = 'Media: loading';
     return Promise.resolve(false);
   }
+  applyVolume();
   return media.play()
     .then(() => {
       pendingPlay = false;
+      autoplayBlocked = false;
+      if (enableSoundBtn) enableSoundBtn.hidden = true;
       mediaEl.textContent = 'Media: playing';
       return true;
     })
     .catch((err) => {
       pendingPlay = false;
-      mediaEl.textContent = 'Media: autoplay blocked; use Discord controls after opening Activity';
+      autoplayBlocked = err && err.name === 'NotAllowedError';
+      if (enableSoundBtn) enableSoundBtn.hidden = !autoplayBlocked;
+      mediaEl.textContent = autoplayBlocked ? 'Tap to start with sound' : 'Media: playback could not start';
       console.warn(err);
       return false;
     });
@@ -1721,9 +1728,15 @@ if (youtube) {
   document.addEventListener(eventName, () => {
     enableLocalAudioGain();
     applyVolume();
+    if (autoplayBlocked) startVideoPlayback();
   }, { passive: true });
 });
 
+if (enableSoundBtn) enableSoundBtn.addEventListener('click', () => {
+  enableLocalAudioGain();
+  applyVolume();
+  startVideoPlayback();
+});
 try {
   applyVolume();
   scheduleControlsHide();

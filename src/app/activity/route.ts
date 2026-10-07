@@ -151,7 +151,8 @@ async function html(request: Request) {
         <div class="status" id="activity-status">Loading</div>
       </header>
       <div class="video-wrap">
-        <video id="video" class="${isAudioOnly || isEmbeddedVideo ? 'hidden' : ''}" autoplay muted playsinline ${nativeSrc ? `src="${escapeHtml(nativeSrc)}"` : ''}></video>
+        <button id="enable-sound" type="button" hidden style="position:absolute;z-index:20;left:50%;top:50%;transform:translate(-50%,-50%);">▶ Start with sound</button>
+        <video id="video" class="${isAudioOnly || isEmbeddedVideo ? 'hidden' : ''}" autoplay playsinline ${nativeSrc ? `src="${escapeHtml(nativeSrc)}"` : ''}></video>
         <iframe id="youtube" class="youtube-player ${isEmbeddedVideo ? '' : 'hidden'}" ${iframeSrc ? `src="${escapeHtml(iframeSrc)}"` : ''} allow="autoplay; fullscreen; encrypted-media; picture-in-picture" allowfullscreen></iframe>
         <audio id="audio" class="audio-player ${isAudioOnly ? '' : 'hidden'}" autoplay ${audioSrc ? `src="${escapeHtml(audioSrc)}"` : ''}></audio>
         <div class="empty ${current ? 'hidden' : ''}" id="empty"><strong>No media loaded</strong><span>Use Discord controls to request and control playback.</span></div>
