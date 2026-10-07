@@ -75,7 +75,7 @@ async function proxyDiscordYoutubeAudio(request: Request, videoId: string) {
 
   let mediaResponse = await fetchMedia(extracted.url!);
   if (mediaResponse && (mediaResponse.status === 401 || mediaResponse.status === 403)) {
-    extracted = await extractYoutubeAudio(videoId, true);
+    extracted = await extractYoutubeAudio(request, videoId, true);
     if (extracted?.url) mediaResponse = await fetchMedia(extracted.url);
   }
   if (!mediaResponse?.ok && mediaResponse?.status !== 206) return null;
