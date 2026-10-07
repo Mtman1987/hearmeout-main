@@ -11,6 +11,19 @@ const APP_BASE_URL = ${JSON.stringify(appBaseUrl.replace(/\/$/, ''))};
 const MOVIE_SESSION_ID = 'discord-watch-room';
 const MUSIC_SESSION_ID = 'discord-music-room';
 const params = new URLSearchParams(location.search);
+// Recommendations belong to the requesting viewer. A shared "activity" user
+// lets a second viewer overwrite the first viewer's pending movie choice.
+const ACTIVITY_REQUESTER_ID = (() => {
+  try {
+    const saved = sessionStorage.getItem('hmo_activity_requester');
+    if (saved) return saved;
+    const id = 'activity-' + window.crypto.randomUUID();
+    sessionStorage.setItem('hmo_activity_requester', id);
+    return id;
+  } catch {
+    return 'activity-' + Math.random().toString(36).slice(2);
+  }
+})();
 const IS_DISCORD_ACTIVITY = Boolean(params.get('frame_id')) || location.hostname.endsWith('.discordsays.com');
 function cleanScopePart(value) {
   return String(value || '').trim().replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 80);
@@ -112,8 +125,33 @@ let ttsPlaying = false;
 let seekingLocally = false;
 const ttsQueue = [];
 const seenTtsIds = new Set();
-const CONTROL_HIDE_DELAY_MS = 30000;
+const CONTROL_HIDE_DELAY_MS = 2500;
 let controlsHideTimer = null;
+let localAudioContext = null;
+let localAudioGain = null;
+const localAudioSources = new Map();
+let streamEndRecoveryTimer = null;
+
+function enableLocalAudioGain() {
+  try {
+    const AudioContext = window.AudioContext || window.webkitAudioContext;
+    if (!AudioContext) return;
+    if (!localAudioContext) {
+      localAudioContext = new AudioContext();
+      localAudioGain = localAudioContext.createGain();
+      localAudioGain.connect(localAudioContext.destination);
+    }
+    for (const element of [video, audio]) {
+      if (!element || localAudioSources.has(element)) continue;
+      const source = localAudioContext.createMediaElementSource(element);
+      source.connect(localAudioGain);
+      localAudioSources.set(element, source);
+    }
+    localAudioContext.resume().catch(() => {});
+  } catch (err) {
+    console.warn('Local audio gain unavailable', err);
+  }
+}
 
 function updateHlsAudioTracks() {
   if (!audioTrackSelect || !hls) return;
@@ -298,9 +336,7 @@ function scheduleControlsHide() {
   if (controlsHideTimer) clearTimeout(controlsHideTimer);
   document.body.classList.remove('controls-hidden');
   controlsHideTimer = setTimeout(() => {
-    const activeElement = document.activeElement;
-    const controlsFocused = activeElement && activeElement.closest && activeElement.closest('.activity-chrome');
-    if (controlsFocused || drawerEl.classList.contains('open')) {
+    if (drawerEl.classList.contains('open')) {
       scheduleControlsHide();
       return;
     }
@@ -586,8 +622,7 @@ function isHlsPlaybackUrl(value) {
 function applyVolume() {
   const value = Math.max(0, Math.min(100, Number(volumeInput.value || 0)));
   const logical = value / 100;
-  const isMusic = Boolean(state && state.current && state.current.item && state.current.item.type === 'music');
-  const gain = isMusic && logical > 0 ? Math.pow(logical, 6) : logical;
+  const gain = logical;
   if (embeddedMode) {
     youtubeCommand('setVolume', [Math.round(gain * 100)]);
     youtubeCommand(muted || value === 0 ? 'mute' : 'unMute');
@@ -597,7 +632,9 @@ function applyVolume() {
     volumeLabel.textContent = (muted ? 0 : value) + '%';
     return;
   }
-  media.volume = gain;
+  const useAudioGain = localAudioGain && localAudioSources.has(media);
+  if (useAudioGain) localAudioGain.gain.value = muted ? 0 : gain;
+  media.volume = useAudioGain ? 1 : gain;
   media.muted = muted || value === 0;
   muteBtn.textContent = media.muted ? '🔇' : '🔊';
   muteBtn.title = media.muted ? 'Unmute' : 'Mute';
@@ -874,6 +911,8 @@ function switchToYoutubeEmbedFallback(item, reason) {
 }
 
 async function loadMedia(item) {
+  if (streamEndRecoveryTimer) clearTimeout(streamEndRecoveryTimer);
+  streamEndRecoveryTimer = null;
   if (hls) {
     hls.destroy();
     hls = null;
@@ -1059,13 +1098,14 @@ function setPendingRecommendation(recommendation) {
 
 function setDrawer(panelName) {
   const active = drawerEl.classList.contains('open') && drawerEl.dataset.panel === panelName;
-  drawerEl.classList.toggle('open', !active);
-  drawerEl.dataset.panel = active ? '' : panelName;
+  const open = Boolean(panelName) && !active;
+  drawerEl.classList.toggle('open', open);
+  drawerEl.dataset.panel = open ? panelName : '';
   document.querySelectorAll('[data-panel-section]').forEach((section) => {
-    section.classList.toggle('active', !active && section.dataset.panelSection === panelName);
+    section.classList.toggle('active', open && section.dataset.panelSection === panelName);
   });
   document.querySelectorAll('[data-panel]').forEach((button) => {
-    button.classList.toggle('active', !active && button.dataset.panel === panelName);
+    button.classList.toggle('active', open && button.dataset.panel === panelName);
   });
   document.body.classList.remove('focus-mode');
   wakeControls();
@@ -1342,6 +1382,7 @@ downloadLink.addEventListener('click', () => {
 });
 
 muteBtn.addEventListener('click', () => {
+  enableLocalAudioGain();
   muted = !muted;
   applyVolume();
   mediaEl.textContent = muted ? 'Media: muted locally' : 'Media: unmuted locally';
@@ -1408,6 +1449,7 @@ if (ttsToggleBtn) {
 }
 
 volumeInput.addEventListener('input', () => {
+  enableLocalAudioGain();
   const shouldUnmute = Number(volumeInput.value || 0) > 0 && muted;
   if (shouldUnmute) muted = false;
   applyVolume();
@@ -1422,6 +1464,8 @@ audioTrackSelect?.addEventListener('change', () => {
 });
 
 volumeInput.addEventListener('change', () => {
+  enableLocalAudioGain();
+  if (Number(volumeInput.value || 0) > 0) muted = false;
   applyVolume();
   mediaEl.textContent = 'Media: volume ' + volumeLabel.textContent;
 });
@@ -1448,8 +1492,11 @@ requestForm.addEventListener('submit', async (event) => {
   if (!query) return;
   try {
     const isMusicSession = sessionId === MUSIC_SESSION_ID || String(sessionId || '').toLowerCase().includes('music');
-    const requestUrl = '/api/watch/sessions/' + sessionId + '/request?query=' + encodeURIComponent(query) + '&username=' + encodeURIComponent('activity tester') + '&userId=activity&platform=activity&announceDiscord=1' + (isMusicSession ? '&mediaType=music' : '');
-    const result = await api(requestUrl);
+    const result = await api('/api/watch/sessions/' + sessionId + '/request', {
+      method: 'POST',
+      body: JSON.stringify({ query, username: 'Discord viewer', userId: ACTIVITY_REQUESTER_ID,
+        platform: 'activity', announceDiscord: true, ...(isMusicSession ? { mediaType: 'music' } : {}) }),
+    });
     if (result && result.success === false) {
       if (result.recommendation) {
         setPendingRecommendation(result.recommendation);
@@ -1462,7 +1509,7 @@ requestForm.addEventListener('submit', async (event) => {
     }
     queryInput.value = '';
     render(result.session);
-    setDrawer('queue');
+    setDrawer('');
     mediaEl.textContent = result.session && result.session.current ? 'Media: added to watch room' : 'Media: queued';
   } catch (err) {
     if (err.payload && err.payload.recommendation) {
@@ -1478,7 +1525,7 @@ acceptRecommendationBtn.addEventListener('click', async () => {
   try {
     const result = await api('/api/watch/sessions/' + sessionId + '/accept', {
       method: 'POST',
-      body: JSON.stringify({ username: 'activity tester', userId: 'activity', platform: 'activity' }),
+      body: JSON.stringify({ username: 'Discord viewer', userId: ACTIVITY_REQUESTER_ID, platform: 'activity' }),
     });
     if (result && result.success === false) {
       errorEl.textContent = result.error || 'No pending recommendation';
@@ -1486,6 +1533,7 @@ acceptRecommendationBtn.addEventListener('click', async () => {
     }
     setPendingRecommendation(null);
     render(result.session);
+    setDrawer('');
   } catch (err) {
     errorEl.textContent = err.message;
   }
@@ -1523,6 +1571,24 @@ function onMediaSeeked(event) { if (event.currentTarget === media && !applying &
 function onMediaEnded(event) {
   if (event.currentTarget !== media) return;
   const requestId = state?.current?.requestId;
+  // EVENT playlists grow while the worker prepares the movie. Their current
+  // buffer edge is not a completed movie, even if wall-clock time passed it.
+  const details = hls?.levels?.[hls.currentLevel]?.details || hls?.levels?.[0]?.details;
+  if (requestId && hls && details?.live !== false) {
+    mediaEl.textContent = 'Media: buffering';
+    reportActivityMedia('waiting for unfinished HLS', state.current.item.title);
+    if (streamEndRecoveryTimer) clearTimeout(streamEndRecoveryTimer);
+    const endedAt = Number(media.currentTime || 0);
+    streamEndRecoveryTimer = setTimeout(() => {
+      streamEndRecoveryTimer = null;
+      if (state?.current?.requestId !== requestId || !hls) return;
+      hls.startLoad(endedAt);
+      media.currentTime = Math.max(0, endedAt - 0.25);
+      pendingPlay = true;
+      startVideoPlayback();
+    }, 1500);
+    return;
+  }
   const duration = Number(media.duration || 0);
   const remote = state?.playback ? position(state.playback) : 0;
   const endedBeforeSharedTimeline = Boolean(
@@ -1650,6 +1716,12 @@ if (youtube) {
 
 ['pointermove', 'pointerdown', 'touchstart', 'keydown', 'focusin'].forEach((eventName) => {
   document.addEventListener(eventName, wakeControls, { passive: eventName !== 'keydown' });
+});
+['pointerdown', 'touchstart', 'keydown'].forEach((eventName) => {
+  document.addEventListener(eventName, () => {
+    enableLocalAudioGain();
+    applyVolume();
+  }, { passive: true });
 });
 
 try {

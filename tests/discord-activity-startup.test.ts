@@ -90,6 +90,79 @@ test('generated player starts Discord handshake and uses shared same-origin play
   assert.equal(vm.runInContext("shouldResolveYoutubeInBrowser({id:'youtube-abcdefghijk', metadata:{playbackStrategy:'proxy'}})", context), false);
 });
 
+test('a growing movie playlist cannot advance the shared queue at its buffer edge', () => {
+  const { context } = playerContext();
+  const timers: Array<() => void> = [];
+  context.setTimeout = (callback: () => void) => { timers.push(callback); return 1; };
+  vm.runInContext(`
+    state = {current:{requestId:'akira',item:{title:'Akira',type:'movie'}},playback:{status:'playing',position:198,updatedAt:Date.now()}};
+    media.duration=18; media.currentTime=18;
+    let nextCalls=0, resumes=0;
+    control=async()=>{nextCalls++;};
+    startVideoPlayback=()=>Promise.resolve(true);
+    hls={currentLevel:0,levels:[{details:{live:true}}],startLoad(){resumes++;}};
+    onMediaEnded({currentTarget:media});
+  `, context);
+  assert.equal(vm.runInContext('nextCalls', context), 0);
+  assert.equal(timers.length, 1);
+  timers[0]();
+  assert.equal(vm.runInContext('resumes', context), 1);
+  assert.equal(vm.runInContext('media.currentTime', context), 17.75);
+  vm.runInContext(`hls.levels[0].details.live=false; onMediaEnded({currentTarget:media});`, context);
+  assert.equal(vm.runInContext('nextCalls', context), 1);
+});
+
+test('stale stream recovery cannot resume a replacement movie', () => {
+  const { context } = playerContext();
+  let retry: () => void = () => {};
+  context.setTimeout = (callback: () => void) => { retry = callback; return 1; };
+  vm.runInContext(`state={current:{requestId:'old',item:{title:'Old'}}}; let resumes=0;
+    hls={currentLevel:0,levels:[{details:{live:true}}],startLoad(){resumes++;}};
+    onMediaEnded({currentTarget:media}); state.current.requestId='new';`, context);
+  retry();
+  assert.equal(vm.runInContext('resumes', context), 0);
+});
+
+test('idle controls hide after a tap despite the button retaining focus', () => {
+  const { context } = playerContext();
+  let timer: () => void = () => {};
+  let delay = 0;
+  const added: string[] = [];
+  context.document.body.classList.add = (value: string) => added.push(value);
+  context.document.activeElement = { closest: () => true };
+  context.setTimeout = (callback: () => void, ms: number) => { timer = callback; delay = ms; return 1; };
+  vm.runInContext('scheduleControlsHide()', context);
+  assert.equal(delay, 2500);
+  timer();
+  assert.deepEqual(added, ['controls-hidden']);
+});
+
+test('mobile volume uses local gain and changes without affecting shared playback', () => {
+  const { context } = playerContext();
+  const gain = { value: 1 };
+  let sources = 0;
+  context.window.AudioContext = class {
+    destination = {};
+    createGain() { return { gain, connect() {} }; }
+    createMediaElementSource() { sources++; return { connect() {} }; }
+    resume() { return Promise.resolve(); }
+  };
+  vm.runInContext(`state={current:{item:{type:'movie'}},playback:{volume:85}};
+    enableLocalAudioGain(); muted=false; volumeInput.value='25'; applyVolume();`, context);
+  assert.equal(gain.value, 0.25);
+  assert.equal(vm.runInContext('media.volume', context), 1);
+  assert.equal(vm.runInContext('state.playback.volume', context), 85);
+  vm.runInContext(`volumeInput.value='0';applyVolume();enableLocalAudioGain();`, context);
+  assert.equal(gain.value, 0);
+  assert.equal(sources, 2);
+});
+
+test('pending recommendations use distinct viewer identities', () => {
+  const first = playerContext();
+  const second = playerContext();
+  assert.notEqual(vm.runInContext('ACTIVITY_REQUESTER_ID', first.context), vm.runInContext('ACTIVITY_REQUESTER_ID', second.context));
+});
+
 test('Activity routes API and same-app media URLs through the proxy exactly once', () => {
   const { context } = playerContext();
   for (const path of [

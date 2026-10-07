@@ -88,7 +88,7 @@ async function html(request: Request) {
     .empty { position: absolute; inset: 0; display: grid; place-content: center; gap: 8px; text-align: center; color: #cbd5e1; background: rgba(0,0,0,.55); }
     .empty.hidden { display: none !important; }
     .activity-chrome { opacity: 1; transition: opacity .22s ease, transform .22s ease; }
-    body.controls-hidden .activity-chrome { opacity: 0; pointer-events: none; }
+    body.controls-hidden .activity-chrome { opacity: 0 !important; visibility: hidden; pointer-events: none; }
     body.controls-hidden .room-tabs { transform: translateY(-8px); }
     body.controls-hidden .toolbar, body.controls-hidden .meta { transform: translateY(8px); }
     body.controls-hidden .video-wrap { cursor: none; }
@@ -105,6 +105,7 @@ async function html(request: Request) {
     .panel-btn.active { border-color: #34d399; color: #bbf7d0; }
     .volume { min-width: 150px; flex: 1; display: flex; align-items: center; gap: 8px; border: 1px solid #475569; border-radius: 6px; background: #0f172a; padding: 7px 9px; }
     .volume input { min-height: 0; padding: 0; accent-color: #34d399; }
+    input[type=range] { touch-action: none; }
     .seekbar { min-width: 220px; flex: 3; display: flex; align-items: center; gap: 8px; border: 1px solid #475569; border-radius: 6px; background: #0f172a; padding: 7px 9px; }
     .seekbar input { min-height: 0; padding: 0; accent-color: #34d399; }
     .seekbar span { min-width: 84px; color: #cbd5e1; font-size: 12px; font-variant-numeric: tabular-nums; }
@@ -128,10 +129,10 @@ async function html(request: Request) {
     body.focus-mode .room-tabs:hover, body.focus-mode .meta:hover { opacity: 1; }
     .utility-control { display: inline-grid; place-items: center; }
     @media (max-width: 720px) {
-      .toolbar { gap: 4px; }
+      .toolbar { gap: 4px; flex-wrap: wrap; overflow-x: visible; }
       .volume { min-width: 112px; }
       .volume span, .seekbar span { display: none; }
-      .seekbar { min-width: 140px; }
+      .seekbar { min-width: 140px; flex-basis: calc(100% - 50px); }
     }
     @media (prefers-reduced-motion: reduce) {
       .activity-chrome { transition: none; }
