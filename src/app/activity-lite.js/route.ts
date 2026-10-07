@@ -1779,7 +1779,8 @@ if (youtube) {
     // Let controls keep their own mute/volume choices. A tap on the movie
     // explicitly enables sound; other clicks only resume an existing output.
     const target = event.target;
-    const onMovie = target === video || target === audio || target === enableSoundBtn;
+    const onMovie = target === video || target === audio || target === enableSoundBtn
+      || Boolean(target?.closest?.('.video-wrap'));
     unlockLocalAudio(onMovie);
   }, { passive: true });
 });

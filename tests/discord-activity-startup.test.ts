@@ -306,7 +306,8 @@ test('mobile movie tap and Enable sound explicitly unmute and retry playback', a
   assert.ok(documentEvents.has('click'));
   assert.ok(documentEvents.has('touchend'));
   assert.equal(documentEvents.has('pointerdown') && documentEvents.get('pointerdown')!.length>1,false);
-  for(const callback of documentEvents.get('touchend')!) callback({target:vm.runInContext('video',context)});
+  // The fullscreen movie container receives taps when video pointer events are disabled.
+  for(const callback of documentEvents.get('touchend')!) callback({target:{closest:(selector: string)=>selector==='.video-wrap' ? {} : null}});
   await Promise.resolve();
   assert.equal(vm.runInContext('media.muted',context),false);
   assert.equal(vm.runInContext('volumeInput.value',context),'85');
