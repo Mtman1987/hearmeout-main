@@ -1,3 +1,5 @@
+import { isTwitchMusicSession } from '@/lib/twitch-media-scope';
+import { isBotActionServiceRequest } from '@/lib/bot-action-service-auth';
 import { NextResponse } from 'next/server';
 import { controlWatchSession, getPublicWatchSession } from '@/lib/watch-request-service';
 
@@ -11,6 +13,7 @@ const ACTIONS = new Set(['play', 'pause', 'seek', 'next', 'jump', 'clear', 'mute
 
 export async function GET(request: Request, context: { params: Promise<{ sessionId: string }> }) {
   const { sessionId } = await context.params;
+  if (isTwitchMusicSession(sessionId) && !isBotActionServiceRequest(request)) return NextResponse.json({ error: 'Use this stream’s Twitch chat to request music' }, { status: 403 });
   const url = new URL(request.url);
   const action = String(url.searchParams.get('action') || '').toLowerCase();
   const positionParam = url.searchParams.get('position');

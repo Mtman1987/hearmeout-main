@@ -247,7 +247,7 @@ function DiscordActivityEmbedCard({ canPause = false }: { canPause?: boolean }) 
 
     const selectedLane = ACTIVITY_WATCH_LANES.find((lane) => lane.kind === selectedKind) || ACTIVITY_WATCH_LANES[0];
     const selectedState = states[selectedLane.sessionId] || null;
-    const selectedUrl = watchUrlForRoom(selectedState?.roomUrl || `/watch/${selectedLane.sessionId}`, canPause);
+    const selectedUrl = `/activity?sessionId=${encodeURIComponent(selectedLane.sessionId)}`;
 
     return (
         <Card>
@@ -282,20 +282,14 @@ function DiscordActivityEmbedCard({ canPause = false }: { canPause?: boolean }) 
             </CardHeader>
             <CardContent className="space-y-3">
                 <div className="aspect-video w-full overflow-hidden rounded-md border bg-black">
-                    {selectedState?.current ? (
-                        <iframe
+                    <iframe
                             src={selectedUrl}
                             title={`${selectedLane.label} Discord Activity playback`}
                             className="h-full w-full"
                             allow="autoplay; fullscreen; encrypted-media; picture-in-picture"
                             sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-presentation"
                         />
-                    ) : (
-                        <div className="flex h-full flex-col items-center justify-center gap-2 px-4 text-center text-sm text-muted-foreground">
-                            <Monitor className="h-7 w-7 text-muted-foreground/70" />
-                            <p>No {selectedLane.label.toLowerCase()} Activity media is loaded yet.</p>
-                        </div>
-                    )}
+
                 </div>
                 {selectedState?.current ? (
                     <div className="min-w-0">

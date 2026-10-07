@@ -1,4 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { twitchMusicSessionId, isTwitchMusicSession } from '@/lib/twitch-media-scope';
+import { twitchSourceUrl } from '@/lib/twitch-source-access';
 import { isBotActionServiceRequest } from '@/lib/bot-action-service-auth';
 import {
   controlWatchSession,
@@ -15,13 +17,14 @@ import {
   readVoiceBridgeForBotAction,
 } from '@/lib/bot-room-action-service';
 import { getDjWorkerUrl } from '@/lib/dj-worker-config';
-import { getDjWorkerRequestHeaders } from '@/lib/dj-worker-auth';
+import { getDjWorkerRequestHeaders, isDjWorkerRequest } from '@/lib/dj-worker-auth';
 import { loungeMediaAction } from '@/lib/lounge-worker';
 import { SPACEMOUNTAIN_LOUNGE_MUSIC_SESSION_ID, SPACEMOUNTAIN_LOUNGE_MOVIE_SESSION_ID } from '@/lib/spacemountain-lounge';
 
 export const dynamic = 'force-dynamic';
 
 type HearMeOutAction =
+  | 'hmo.media.source'
   | 'hmo.media.state.read'
   | 'hmo.media.request'
   | 'hmo.media.search'
@@ -32,6 +35,7 @@ type HearMeOutAction =
   | 'hmo.voice.bridge.control'
   | 'hmo.tts.speak';
 const ACTIONS = new Set<HearMeOutAction>([
+  'hmo.media.source',
   'hmo.media.state.read',
   'hmo.media.request',
   'hmo.media.search',
@@ -98,10 +102,19 @@ export async function POST(request: NextRequest) {
   const isSpaceMountainLoungeControl = !room
     && action === 'hmo.media.control'
     && isSpaceMountainLoungeSession(tenantId, sessionId);
-  if (!isPublicQueueRequest && !isSpaceMountainLoungeControl && !isBotActionServiceRequest(request)) {
+  const isTwitchWorkerRequest = body?.streamMode === 'twitch'
+    && ['hmo.media.request', 'hmo.media.control', 'hmo.media.state.read', 'hmo.media.source'].includes(action)
+    && isDjWorkerRequest(request);
+  if (!isPublicQueueRequest && !isSpaceMountainLoungeControl && !isBotActionServiceRequest(request) && !isTwitchWorkerRequest) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
+  if (body?.streamMode === 'twitch' || isTwitchMusicSession(sessionId) || action === 'hmo.media.source') {
+    if (!isBotActionServiceRequest(request) && !isTwitchWorkerRequest) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    if (!/^[a-z0-9_-]{1,100}$/.test(tenantId)) return NextResponse.json({ error: 'A valid Twitch tenant is required' }, { status: 400 });
+    if (sessionId !== twitchMusicSessionId(tenantId) || room || body?.lane === 'movie') return NextResponse.json({ error: 'Twitch streams support only their own music session' }, { status: 403 });
+    if (action === 'hmo.media.source') return NextResponse.json({ success: true, sourceUrl: twitchSourceUrl(tenantId, publicBaseUrl(request)) });
+  }
   try {
     const actor = {
       actorUserId: text(body?.actorUserId, 160),

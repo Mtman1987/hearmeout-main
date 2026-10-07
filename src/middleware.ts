@@ -37,6 +37,7 @@ const PUBLIC_PREFIXES = [
   // The source resolver verifies HMO_WORKER_SHARED_SECRET inside its handler.
   // The Lounge worker has no user browser session when it prepares a movie.
   '/api/watch/xtream/source/',
+  '/api/twitch-source/', // Narrow source credential is checked by the ended handler.
   '/overlay',
   '/embed',
   '/room-overlay',
@@ -105,6 +106,12 @@ function withRefresh(response: NextResponse, refreshed: RefreshedHmoSpmtSession 
 
 export async function middleware(request: NextRequest) {
   const pathname = request.nextUrl.pathname;
+  if (pathname.startsWith('/overlay/twitch-')) {
+    const response = NextResponse.next();
+    response.headers.set('Referrer-Policy', 'no-referrer');
+    response.headers.set('Cache-Control', 'no-store');
+    return response;
+  }
   if (isPublicActivityRequest(request.nextUrl, request.method)) {
     // Root URL mappings must reach the standalone player before the React
     // account shell mounts. Keep Discord's origin and all launch parameters.

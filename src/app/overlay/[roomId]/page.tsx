@@ -22,6 +22,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { usePopout } from '@/components/PopoutWidgets/PopoutProvider';
+import { twitchMusicSessionId } from '@/lib/twitch-media-scope';
 import { getRoomWatchSessionId } from '@/lib/watch-session';
 import { useCollection } from '@/hooks/use-db';
 
@@ -175,10 +176,12 @@ export default function OverlayPage() {
   const params = useParams<{ roomId: string }>();
   const searchParams = useSearchParams();
   const roomId = params.roomId;
+  const twitchTenant = roomId.startsWith('twitch-') ? roomId.slice(7) : '';
+  const sourceKey = searchParams.get('sourceKey') || '';
   const movieSessionId = getRoomWatchSessionId(roomId, 'movie');
-  const musicSessionId = getRoomWatchSessionId(roomId, 'music');
+  const musicSessionId = twitchTenant ? twitchMusicSessionId(twitchTenant) : getRoomWatchSessionId(roomId, 'music');
   const requestedLane = (searchParams.get('media') || searchParams.get('lane') || 'auto').toLowerCase();
-  const lane: MediaLane = requestedLane === 'music' || requestedLane === 'movie' ? requestedLane : 'auto';
+  const lane: MediaLane = twitchTenant ? 'music' : requestedLane === 'music' || requestedLane === 'movie' ? requestedLane : 'auto';
   const cleanMode = ['1', 'true', 'yes', 'on'].includes(String(searchParams.get('clean') || '').toLowerCase());
   const directLoungeMode = cleanMode && roomId === 'system-spacemountainlive-lounge' && searchParams.get('direct') === '1';
   const volumeParam = searchParams.get('volume');
@@ -200,6 +203,7 @@ export default function OverlayPage() {
     };
   }, []);
 
+  const activeRequestRef = useRef('');
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
   const hlsRef = useRef<any>(null);
@@ -493,7 +497,7 @@ export default function OverlayPage() {
         const directLounge = directLoungeMode;
         const [movie, music] = directLounge
           ? await api('/api/lounge-media/program').then((program) => [program.movie, program.music])
-          : await Promise.all([
+          : twitchTenant ? [null, await api(`/api/watch/sessions/${musicSessionId}/state`)] : await Promise.all([
               api(`/api/watch/sessions/${movieSessionId}/state`),
               api(`/api/watch/sessions/${musicSessionId}/state`),
             ]);
@@ -761,6 +765,7 @@ export default function OverlayPage() {
         setMediaStatus('Overlay media paused');
       } else if (code === 0) {
         setMediaStatus('Overlay media ended');
+        advanceRef.current(String(activeRequestRef.current || ''));
       } else if (code === 3) {
         setMediaStatus('Overlay media buffering');
       }
@@ -769,6 +774,14 @@ export default function OverlayPage() {
     return () => window.removeEventListener('message', onMessage);
   }, []);
 
+  const advanceRef = useRef<(id: string) => void>(() => {});
+  advanceRef.current = (id: string) => {
+    if (!twitchTenant || !sourceKey || !id) return;
+    void fetch(`/api/twitch-source/${encodeURIComponent(twitchTenant)}/ended`, {
+      method: 'POST', headers: { 'content-type': 'application/json', 'x-source-key': sourceKey },
+      body: JSON.stringify({ expectedRequestId: id }),
+    }).catch(error => console.warn('[Overlay] stream advance failed', error));
+  };
   const hasPopout = (source: string) => popouts.some((p) => p.type === 'chat' && p.customSettings?.source === source);
   const hasQueue = popouts.some((p) => p.type === 'queue');
   const hasAddSong = popouts.some((p) => p.type === 'addSong');
@@ -781,6 +794,7 @@ export default function OverlayPage() {
   };
 
   const mediaTitle = currentItem?.title || 'Waiting for media';
+  activeRequestRef.current = activeState?.current?.requestId || '';
   const mediaSubtitle = currentItem?.artist || currentItem?.source || activeBundle.sessionId;
   const mediaImage = currentItem?.thumbnail || currentItem?.poster || currentItem?.image;
   const queueLength = activeState?.queue?.length || 0;
@@ -877,6 +891,7 @@ export default function OverlayPage() {
             if (cleanMode && roomId === 'system-spacemountainlive-lounge'
               && activeBundle.lane === 'music' && requestId
               && activeState?.playback.status === 'playing') {
+              if (twitchTenant) { advanceRef.current(requestId); return; }
               const url = `/api/watch/sessions/${encodeURIComponent(activeBundle.sessionId)}/quick-control?action=next&expectedRequestId=${encodeURIComponent(requestId)}&platform=room&format=json`;
               void fetch(url, { cache: 'no-store' }).catch((error) => console.warn('[Overlay] song end advance failed', error));
             }

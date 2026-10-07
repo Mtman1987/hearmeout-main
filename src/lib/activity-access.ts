@@ -1,3 +1,4 @@
+import { isTwitchMusicSession } from './twitch-media-scope';
 import { GLOBAL_WATCH_SESSION_ID, MUSIC_WATCH_SESSION_ID, normalizeWatchSessionAlias } from './watch-session';
 import { SPACEMOUNTAIN_LOUNGE_MUSIC_SESSION_ID, SPACEMOUNTAIN_LOUNGE_MOVIE_SESSION_ID, SPACEMOUNTAIN_LOUNGE_ROOM_ID } from './spacemountain-lounge';
 
@@ -39,6 +40,7 @@ export function isPublicActivityRequest(url: URL, method: string) {
   const legacy = path.match(/^\/activity-(state|request|control)\/([^/]+)(?:\/(accept))?$/);
   const sessionRoute = canonical || (legacy ? [legacy[0], legacy[2], legacy[3] || legacy[1]] : null);
   if (sessionRoute) {
+    if (isTwitchMusicSession(sessionRoute[1])) return read && sessionRoute[2] === 'state';
     if (!isSharedSession(sessionRoute[1])) return false;
     return read || (method === 'POST' && ['request', 'accept', 'control'].includes(sessionRoute[2]));
   }

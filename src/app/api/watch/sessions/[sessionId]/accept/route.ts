@@ -1,3 +1,4 @@
+import { isTwitchMusicSession } from '@/lib/twitch-media-scope';
 import { NextRequest, NextResponse } from 'next/server';
 import { acceptWatchRecommendation, getPublicWatchSession } from '@/lib/watch-request-service';
 
@@ -9,6 +10,7 @@ const CORS_HEADERS = {
 
 export async function POST(request: NextRequest, context: { params: Promise<{ sessionId: string }> }) {
   const { sessionId } = await context.params;
+  if (isTwitchMusicSession(sessionId)) return NextResponse.json({ error: 'Movie requests are disabled for Twitch streams' }, { status: 403 });
   const body = await request.json();
   const result = acceptWatchRecommendation({
     sessionId,

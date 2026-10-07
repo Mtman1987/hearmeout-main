@@ -1,3 +1,5 @@
+import { isTwitchMusicSession } from '@/lib/twitch-media-scope';
+import { isBotActionServiceRequest } from '@/lib/bot-action-service-auth';
 import { NextResponse } from 'next/server';
 import { parseJsonRequest } from '@/lib/request-json';
 import { controlWatchSession, getPublicWatchSession } from '@/lib/watch-request-service';
@@ -11,6 +13,7 @@ const CORS_HEADERS = {
 export async function POST(request: Request, context: { params: Promise<{ sessionId: string }> }) {
   try {
     const { sessionId } = await context.params;
+  if (isTwitchMusicSession(sessionId) && !isBotActionServiceRequest(request)) return NextResponse.json({ error: 'Use this stream’s Twitch chat to request music' }, { status: 403 });
     const body = await parseJsonRequest<any>(request);
     const rawPosition = body?.position;
     const parsedPosition = rawPosition === undefined || rawPosition === null || rawPosition === ''

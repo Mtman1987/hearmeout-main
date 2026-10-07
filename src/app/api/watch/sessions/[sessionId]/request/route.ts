@@ -1,3 +1,5 @@
+import { isTwitchMusicSession } from '@/lib/twitch-media-scope';
+import { isBotActionServiceRequest } from '@/lib/bot-action-service-auth';
 import { NextRequest, NextResponse } from 'next/server';
 import { announceWatchRequestToDiscord, getPublicWatchSession, requestWatchItem, requestWatchMusicItem, requestWatchTtsItem } from '@/lib/watch-request-service';
 
@@ -45,6 +47,7 @@ function softMissStatus(payload: ReturnType<typeof watchRequestErrorPayload>, pl
 
 export async function POST(request: NextRequest, context: { params: Promise<{ sessionId: string }> }) {
   const { sessionId } = await context.params;
+  if (isTwitchMusicSession(sessionId) && !isBotActionServiceRequest(request)) return NextResponse.json({ error: 'Use this stream’s Twitch chat to request music' }, { status: 403 });
   const body = await request.json();
   const requestKind = body.mediaType || body.type || body.kind;
   const result = isTtsRequest(requestKind) ? await requestWatchTtsItem({
@@ -100,6 +103,7 @@ export async function POST(request: NextRequest, context: { params: Promise<{ se
 
 export async function GET(request: NextRequest, context: { params: Promise<{ sessionId: string }> }) {
   const { sessionId } = await context.params;
+  if (isTwitchMusicSession(sessionId) && !isBotActionServiceRequest(request)) return NextResponse.json({ error: 'Use this stream’s Twitch chat to request music' }, { status: 403 });
   const requestKind = request.nextUrl.searchParams.get('mediaType') || request.nextUrl.searchParams.get('type') || request.nextUrl.searchParams.get('kind');
   const platform = request.nextUrl.searchParams.get('platform') || undefined;
   const result = isTtsRequest(requestKind) ? await requestWatchTtsItem({
