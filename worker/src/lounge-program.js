@@ -18,6 +18,7 @@ let prefetchedRadio = null;
 let radioPrefetch = null;
 let currentMusicPreparation = null;
 let awaitingMusicSource = null;
+const MOVIE_CHECKPOINT_INTERVAL_MS = 60_000;
 // Clear invalidates requests that were still resolving when the lane was cleared.
 const requestEpoch = { music: 0, movie: 0 };
 let musicSource = { prepare: async () => true, stop: () => {}, duration: () => 0 };
@@ -590,6 +591,17 @@ async function radio(body) {
 
 async function tick(now = Date.now()) {
   const stored = readState();
+  const movieLane = stored.movie;
+  if (movieLane.current && movieLane.playback.status === 'playing') {
+    const updatedAt = Number(movieLane.playback.updatedAt || now);
+    if (now - updatedAt >= MOVIE_CHECKPOINT_INTERVAL_MS) {
+      const live = livePlayback(movieLane.playback, now);
+      movieLane.playback.position = Math.max(Number(movieLane.playback.position || 0), Number(live.position || 0));
+      movieLane.playback.updatedAt = now;
+      save();
+      console.log(`[Lounge] Movie checkpoint request=${movieLane.current.requestId} position=${movieLane.playback.position.toFixed(1)}`);
+    }
+  }
   const lane = stored.music;
   if (stored.movie.current && stored.movie.playback.status === 'playing' && lane.current?.requestedBy?.userId === 'auto-radio') {
     const previousId = lane.current.item?.metadata?.videoId;

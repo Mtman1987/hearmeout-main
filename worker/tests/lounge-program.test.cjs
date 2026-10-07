@@ -428,3 +428,33 @@ test('direct Lounge generation keys identify one immutable HLS timeline', () => 
   assert.equal(internalSegmentName('movie-request-generation-a-segment_000007.ts', 'movie-request', 'generation-a'), 'segment_000007.ts');
   assert.equal(internalSegmentName('movie-request-generation-a-segment_000007.ts', 'movie-request', 'generation-b'), null);
 });
+
+
+test('movie playback checkpoints persist the live cursor without moving backward', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'hmo-movie-checkpoint-'));
+  const previous = { ...process.env };
+  const originalFetch = global.fetch;
+  try {
+    process.env.LOUNGE_STATE_FILE = join(root, 'program.json');
+    process.env.XTREAM_BASE_URL = 'https://provider.example';
+    process.env.XTREAM_USERNAME = 'demo';
+    process.env.XTREAM_PASSWORD = 'private';
+    process.env.XTREAM_ENABLE_SERIES = 'false';
+    global.fetch = async () => ({ ok: true, json: async () => [{ stream_id: 77, name: 'Checkpoint Movie', container_extension: 'mp4' }] });
+    delete require.cache[require.resolve('../src/lounge-program')];
+    const program = require('../src/lounge-program');
+    await program.request({ lane: 'movie', query: 'checkpoint movie', actorName: 'viewer' });
+    const savedBefore = JSON.parse(readFileSync(process.env.LOUNGE_STATE_FILE));
+    const start = Number(savedBefore.movie.playback.updatedAt);
+    await program.tick(start + 61_000);
+    const savedAfter = JSON.parse(readFileSync(process.env.LOUNGE_STATE_FILE));
+    assert.ok(savedAfter.movie.playback.position >= 60);
+    assert.equal(savedAfter.movie.playback.updatedAt, start + 61_000);
+  } finally {
+    global.fetch = originalFetch;
+    delete require.cache[require.resolve('../src/lounge-program')];
+    Object.keys(process.env).forEach(key => { if (!(key in previous)) delete process.env[key]; });
+    Object.assign(process.env, previous);
+    rmSync(root, { recursive: true, force: true });
+  }
+});
