@@ -134,25 +134,75 @@ let localAudioGain = null;
 const localAudioSources = new Map();
 let streamEndRecoveryTimer = null;
 
+function audioOutputBlocked() {
+  return Boolean(localAudioContext && localAudioSources.has(media) && localAudioContext.state !== 'running');
+}
+
+function updateSoundPrompt() {
+  if (enableSoundBtn) enableSoundBtn.hidden = !(autoplayBlocked || audioOutputBlocked());
+}
+
 function enableLocalAudioGain() {
   try {
     const AudioContext = window.AudioContext || window.webkitAudioContext;
-    if (!AudioContext) return;
+    if (!AudioContext) return Promise.resolve(false);
     if (!localAudioContext) {
       localAudioContext = new AudioContext();
       localAudioGain = localAudioContext.createGain();
       localAudioGain.connect(localAudioContext.destination);
+      localAudioContext.addEventListener?.('statechange', updateSoundPrompt);
     }
-    for (const element of [video, audio]) {
-      if (!element || localAudioSources.has(element)) continue;
-      const source = localAudioContext.createMediaElementSource(element);
-      source.connect(localAudioGain);
-      localAudioSources.set(element, source);
-    }
-    localAudioContext.resume().catch(() => {});
+    // Keep native audio connected until Web Audio is actually running.
+    // Attaching a media element to a suspended context silences its output.
+    const attach = () => {
+      if (localAudioContext.state !== 'running') {
+        updateSoundPrompt();
+        return false;
+      }
+      for (const element of [video, audio]) {
+        if (!element || localAudioSources.has(element)) continue;
+        const source = localAudioContext.createMediaElementSource(element);
+        source.connect(localAudioGain);
+        localAudioSources.set(element, source);
+      }
+      applyVolume();
+      updateSoundPrompt();
+      return true;
+    };
+    const resumed = localAudioContext.resume();
+    if (localAudioContext.state === 'running') attach();
+    return Promise.resolve(resumed).then(attach).catch((err) => {
+      console.warn('Local audio gain resume failed', err);
+      updateSoundPrompt();
+      return false;
+    });
   } catch (err) {
     console.warn('Local audio gain unavailable', err);
+    return Promise.resolve(false);
   }
+}
+
+function unlockLocalAudio(forceSound) {
+  if (forceSound) {
+    muted = false;
+    if (Number(volumeInput.value || 0) <= 0) volumeInput.value = '85';
+  }
+  // Both resume() and play() must be called directly inside the tap event.
+  if (localAudioContext) enableLocalAudioGain();
+  applyVolume();
+  if (state?.current && (forceSound || state.playback?.status === 'playing')) {
+    return startVideoPlayback().then((started) => {
+      updateSoundPrompt();
+      reportActivityMedia('audio unlock', JSON.stringify({
+        started, muted: media.muted, context: localAudioContext?.state || 'native',
+        routedThroughGain: localAudioSources.has(media), readyState: media.readyState,
+        tracks: hls?.audioTracks?.length || 0, audioTrack: hls?.audioTrack,
+      }));
+      return started;
+    });
+  }
+  updateSoundPrompt();
+  return Promise.resolve(false);
 }
 
 function updateHlsAudioTracks() {
@@ -853,14 +903,14 @@ function startVideoPlayback() {
     .then(() => {
       pendingPlay = false;
       autoplayBlocked = false;
-      if (enableSoundBtn) enableSoundBtn.hidden = true;
+      updateSoundPrompt();
       mediaEl.textContent = 'Media: playing';
       return true;
     })
     .catch((err) => {
       pendingPlay = false;
       autoplayBlocked = err && err.name === 'NotAllowedError';
-      if (enableSoundBtn) enableSoundBtn.hidden = !autoplayBlocked;
+      updateSoundPrompt();
       mediaEl.textContent = autoplayBlocked ? 'Tap to start with sound' : 'Media: playback could not start';
       console.warn(err);
       return false;
@@ -1389,9 +1439,9 @@ downloadLink.addEventListener('click', () => {
 });
 
 muteBtn.addEventListener('click', () => {
-  enableLocalAudioGain();
   muted = !muted;
   applyVolume();
+  if (!muted) unlockLocalAudio(false);
   mediaEl.textContent = muted ? 'Media: muted locally' : 'Media: unmuted locally';
 });
 
@@ -1724,18 +1774,18 @@ if (youtube) {
 ['pointermove', 'pointerdown', 'touchstart', 'keydown', 'focusin'].forEach((eventName) => {
   document.addEventListener(eventName, wakeControls, { passive: eventName !== 'keydown' });
 });
-['pointerdown', 'touchstart', 'keydown'].forEach((eventName) => {
-  document.addEventListener(eventName, () => {
-    enableLocalAudioGain();
-    applyVolume();
-    if (autoplayBlocked) startVideoPlayback();
+['click', 'touchend', 'keydown'].forEach((eventName) => {
+  document.addEventListener(eventName, (event) => {
+    // Let controls keep their own mute/volume choices. A tap on the movie
+    // explicitly enables sound; other clicks only resume an existing output.
+    const target = event.target;
+    const onMovie = target === video || target === audio || target === enableSoundBtn;
+    unlockLocalAudio(onMovie);
   }, { passive: true });
 });
 
 if (enableSoundBtn) enableSoundBtn.addEventListener('click', () => {
-  enableLocalAudioGain();
-  applyVolume();
-  startVideoPlayback();
+  unlockLocalAudio(true);
 });
 try {
   applyVolume();

@@ -64,18 +64,19 @@ function playerContext(href = 'https://1279582181768957963.discordsays.com/activ
   const element: any = { value: '100', dataset: {}, textContent: '', style: {}, classList: { toggle() {}, remove() {}, contains() { return false; } },
     addEventListener() {}, setAttribute() {}, querySelectorAll() { return []; } };
   const messages: any[] = [];
+  const documentEvents = new Map<string, Function[]>();
   const location = new URL(href);
   const context = vm.createContext({ URL, URLSearchParams, AbortSignal, console,
     location, navigator: { userAgent: 'test' },
     window: { location, parent: { postMessage(...args: any[]) { messages.push(args); } }, addEventListener() {} },
     document: { referrer: 'https://discord.com/channels/123/456', getElementById() { return { ...element }; },
-      querySelectorAll() { return []; }, addEventListener() {}, body: element },
+      querySelectorAll() { return []; }, addEventListener(name: string, callback: Function) { documentEvents.set(name, [...(documentEvents.get(name) || []), callback]); }, body: element },
     localStorage: { getItem() { return null; }, setItem() {} },
     setTimeout() { return 1; }, clearTimeout() {}, setInterval() {},
     fetch() { return new Promise(() => {}); },
   });
   vm.runInContext(js, context);
-  return { context, messages };
+  return { context, messages, documentEvents };
 }
 
 test('generated player starts Discord handshake and uses shared same-origin playback', () => {
@@ -137,11 +138,12 @@ test('idle controls hide after a tap despite the button retaining focus', () => 
   assert.deepEqual(added, ['controls-hidden']);
 });
 
-test('mobile volume uses local gain and changes without affecting shared playback', () => {
+test('mobile volume uses local gain and changes without affecting shared playback', async () => {
   const { context } = playerContext();
   const gain = { value: 1 };
   let sources = 0;
   context.window.AudioContext = class {
+    state = 'running';
     destination = {};
     createGain() { return { gain, connect() {} }; }
     createMediaElementSource() { sources++; return { connect() {} }; }
@@ -274,5 +276,53 @@ test('source failures are not reported as an autoplay permission block', async (
   context.failPlay=()=>Promise.reject(Object.assign(new Error('source failed'),{name:'NotSupportedError'}));
   vm.runInContext("state={current:{requestId:'movie'}};media.readyState=4;media.play=failPlay",context);
   await vm.runInContext('startVideoPlayback()',context);
+  assert.equal(vm.runInContext('enableSoundBtn.hidden',context),true);
+});
+
+test('suspended volume processor never takes audio away from the native player', async () => {
+  const {context}=playerContext();
+  let sources=0;
+  let release: Function = () => {};
+  context.window.AudioContext=class {
+    state='suspended';
+    destination={};
+    createGain(){return {gain:{value:1},connect(){}};}
+    createMediaElementSource(){sources++;return {connect(){}};}
+    resume(){return new Promise(resolve=>{release=()=>{this.state='running';resolve(undefined);};});}
+  };
+  const pending=vm.runInContext('enableLocalAudioGain()',context);
+  assert.equal(sources,0);
+  assert.equal(vm.runInContext('localAudioSources.has(media)',context),false);
+  release();
+  await pending;
+  assert.equal(sources,2);
+});
+
+test('mobile movie tap and Enable sound explicitly unmute and retry playback', async () => {
+  const {context,documentEvents}=playerContext();
+  let plays=0;
+  context.playNow=()=>{plays++;return Promise.resolve();};
+  vm.runInContext("state={current:{requestId:'same'},playback:{status:'playing'}};media.readyState=4;media.play=playNow;muted=true;volumeInput.value='0'",context);
+  assert.ok(documentEvents.has('click'));
+  assert.ok(documentEvents.has('touchend'));
+  assert.equal(documentEvents.has('pointerdown') && documentEvents.get('pointerdown')!.length>1,false);
+  for(const callback of documentEvents.get('touchend')!) callback({target:vm.runInContext('video',context)});
+  await Promise.resolve();
+  assert.equal(vm.runInContext('media.muted',context),false);
+  assert.equal(vm.runInContext('volumeInput.value',context),'85');
+  assert.equal(plays,1);
+  assert.equal(vm.runInContext('state.current.requestId',context),'same');
+  vm.runInContext("muted=true",context);
+  await vm.runInContext('unlockLocalAudio(true)',context);
+  assert.equal(vm.runInContext('media.muted',context),false);
+});
+
+test('playing video keeps the sound prompt when its connected output is suspended', async () => {
+  const {context}=playerContext();
+  context.playNow=()=>Promise.resolve();
+  vm.runInContext("state={current:{requestId:'same'}};media.readyState=4;media.play=playNow;localAudioContext={state:'suspended'};localAudioSources.set(media,{});localAudioGain={gain:{value:1}}",context);
+  await vm.runInContext('startVideoPlayback()',context);
+  assert.equal(vm.runInContext('enableSoundBtn.hidden',context),false);
+  vm.runInContext("localAudioContext.state='running';updateSoundPrompt()",context);
   assert.equal(vm.runInContext('enableSoundBtn.hidden',context),true);
 });
