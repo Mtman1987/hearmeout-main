@@ -143,7 +143,8 @@ function movieIdentity(title) {
 }
 
 const movieProbeCache = new Map();
-async function movieSourcePlayable(item) {
+async function movieSourcePlayable(item, deadline) {
+  if (Date.now() >= deadline) return false;
   const key = item.metadata.kind + ':' + item.metadata.streamId + ':' + item.metadata.extension;
   const cached = movieProbeCache.get(key);
   if (cached && Date.now() - cached.at < 5 * 60_000) return cached.playable;
@@ -153,7 +154,7 @@ async function movieSourcePlayable(item) {
     const { stdout } = await run('ffprobe', [
       '-v', 'error', '-user_agent', 'DiscordStreamHub/1.0',
       '-show_entries', 'stream=codec_type', '-of', 'json', url,
-    ], { timeout: 15000, maxBuffer: 1024 * 1024 });
+    ], { timeout: Math.max(1, Math.min(15000, deadline - Date.now())), killSignal: 'SIGKILL', maxBuffer: 1024 * 1024 });
     playable = JSON.parse(stdout).streams?.some(stream => stream.codec_type === 'video') === true;
   } catch {
     // Provider URLs include credentials. Never surface the child-process error.
@@ -164,12 +165,23 @@ async function movieSourcePlayable(item) {
 }
 
 async function movieItem(query, itemId) {
-  const selectedId = itemId || (await search(query))[0]?.id;
-  const item = selectedId ? (await movies()).find(entry => entry.id === selectedId) : null;
+  // Include catalog lookup and all probes in one budget below the caller's 45s timeout.
+  const deadline = Date.now() + 35000;
+  async function withinDeadline(promise) {
+    let timer;
+    try {
+      return await Promise.race([promise, new Promise((_, reject) => {
+        timer = setTimeout(() => reject(Error('Movie provider timed out; please try again.')), Math.max(1, deadline - Date.now()));
+      })]);
+    } finally { clearTimeout(timer); }
+  }
+  const selectedId = itemId || (await withinDeadline(search(query)))[0]?.id;
+  const items = await withinDeadline(movies());
+  const item = selectedId ? items.find(entry => entry.id === selectedId) : null;
   if (!item) throw Error('No playable movie found');
   let selected = item;
   if (item.kind === 'series') {
-    const info = await providerJson('get_series_info', { series_id: item.streamId });
+    const info = await withinDeadline(providerJson('get_series_info', { series_id: item.streamId }));
     const groups = info?.episodes && typeof info.episodes === 'object' ? Object.values(info.episodes) : [];
     const first = groups.flat().find(entry => /^\d+$/.test(String(entry?.id || entry?.stream_id || '')));
     if (!first) throw Error('Series has no playable episode');
@@ -177,7 +189,8 @@ async function movieItem(query, itemId) {
   }
   const pathKind = selected.kind === 'series' ? 'series' : 'movie';
   const alternates = selected.kind === 'vod'
-    ? (await movies()).filter(entry => entry.kind === 'vod' && entry.id !== selected.id
+    ? items.filter(entry => entry.kind === 'vod' && entry.id !== selected.id
+        && entry.year === selected.year
         && movieIdentity(entry.title) === movieIdentity(selected.title))
     : [];
   for (const candidate of [selected, ...alternates].slice(0, 5)) {
@@ -185,7 +198,7 @@ async function movieItem(query, itemId) {
       playbackUrl: `/api/watch/xtream/hls/${candidate.kind}-${candidate.streamId}/index.m3u8`,
       metadata: { provider: 'xtream', kind: candidate.kind, streamId: candidate.streamId,
         extension: candidate.extension, pathKind } };
-    if (await movieSourcePlayable(playableItem)) return playableItem;
+    if (await movieSourcePlayable(playableItem, deadline) && Date.now() < deadline) return playableItem;
   }
   throw Error(`"${selected.title}" is currently unavailable from the movie provider. No playable source was found; please choose another title.`);
 }
@@ -808,3 +821,4 @@ function source(movie) {
 }
 
 module.exports = { program, search, request, control, radio, tick, checkpoint, source, configureMusicSource };
+
