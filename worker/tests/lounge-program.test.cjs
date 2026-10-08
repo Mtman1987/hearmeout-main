@@ -4,6 +4,39 @@ const { mkdtempSync, writeFileSync, mkdirSync, readFileSync, rmSync } = require(
 const { tmpdir } = require('node:os');
 const { join } = require('node:path');
 
+test('all source probes share a 35-second budget and cannot enqueue after it expires', async () => {
+  const vm = require('node:vm');
+  const root = mkdtempSync(join(tmpdir(), 'hmo-movie-deadline-'));
+  let now = 1000;
+  const timeouts = [];
+  const context = vm.createContext({
+    module: { exports: {} },
+    require(name) {
+      if (name === 'node:child_process') return { execFile(command, args, options, callback) {
+        timeouts.push(options.timeout);
+        now += options.timeout;
+        callback(new Error('timed out'));
+      } };
+      return require(name);
+    },
+    process: { env: { LOUNGE_STATE_FILE: join(root, 'program.json'), XTREAM_BASE_URL: 'https://provider.example',
+      XTREAM_USERNAME: 'demo', XTREAM_PASSWORD: 'private', XTREAM_ENABLE_SERIES: 'false' }, pid: process.pid },
+    Date: class extends Date { static now() { return now; } },
+    fetch: async () => ({ ok: true, json: async () => Array.from({ length: 5 }, (_, i) =>
+      ({ stream_id: i + 1, name: 'Moana - 2016', container_extension: 'mp4' })) }),
+    URL, AbortSignal, setTimeout, clearTimeout, console,
+  });
+  try {
+    vm.runInContext(readFileSync(join(__dirname, '../src/lounge-program.js'), 'utf8'), context);
+    const program = context.module.exports;
+    await assert.rejects(program.request({ lane: 'movie', itemId: 'xtream-vod-1' }), /currently unavailable/);
+    assert.deepEqual(timeouts, [15000, 15000, 5000]);
+    assert.equal(program.program().movie.current, null);
+    assert.equal(now, 36000);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+
 test('an unplayable song searches five matching uploads before replying to chat', async () => {
   const root = mkdtempSync(join(tmpdir(), 'hmo-song-alternates-'));
   const previous = { ...process.env };
@@ -50,6 +83,7 @@ test('Lounge worker owns movie and music state, including queue handoff', async 
     const bin = join(root, 'bin');
     mkdirSync(bin);
     writeFileSync(join(bin, 'yt-dlp'), '#!/bin/sh\ncase "$*" in *--flat-playlist*) echo \'{"entries":[{"id":"M7lc1UVf-VE","title":"Playlist Song","duration":120},{"id":"XXXXXXXXXXX","title":"Different Song","duration":120}]}\';; *) echo \'{"id":"dQw4w9WgXcQ","title":"Test Song","uploader":"Test Artist","duration":180}\';; esac\n', { mode: 0o755 });
+    writeFileSync(join(bin, 'ffprobe'), '#!/bin/sh\necho \'{"streams":[{"codec_type":"video"}]}\'\n', { mode: 0o755 });
     process.env.PATH = `${bin}:${previous.PATH}`;
     global.fetch = async url => {
       assert.equal(new URL(url).searchParams.get('action'), 'get_vod_streams');
@@ -428,3 +462,60 @@ test('direct Lounge generation keys identify one immutable HLS timeline', () => 
   assert.equal(internalSegmentName('movie-request-generation-a-segment_000007.ts', 'movie-request', 'generation-a'), 'segment_000007.ts');
   assert.equal(internalSegmentName('movie-request-generation-a-segment_000007.ts', 'movie-request', 'generation-b'), null);
 });
+
+test('movie requests reject broken sources and fallback only within the same title and year', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'hmo-movie-source-'));
+  const previous = { ...process.env };
+  const originalFetch = global.fetch;
+  try {
+    process.env.LOUNGE_STATE_FILE = join(root, 'program.json');
+    process.env.XTREAM_BASE_URL = 'https://provider.example';
+    process.env.XTREAM_USERNAME = 'demo';
+    process.env.XTREAM_PASSWORD = 'private';
+    process.env.XTREAM_ENABLE_SERIES = 'false';
+    const bin = join(root, 'bin');
+    mkdirSync(bin);
+    const probes = join(root, 'probes');
+    writeFileSync(join(bin, 'ffprobe'), `#!/bin/sh
+echo "$*" >> '${probes}'
+case "$*" in
+  *42.mp4*|*45.mp4*|*46.mp4*) echo 'moov atom not found' >&2; exit 1 ;;
+  *) echo '{"streams":[{"codec_type":"video"},{"codec_type":"audio"}]}' ;;
+esac
+`, { mode: 0o755 });
+    process.env.PATH = `${bin}:${previous.PATH}`;
+    global.fetch = async () => ({ ok: true, json: async () => [
+      { stream_id: 42, name: 'Moana - 2016', container_extension: 'mp4' },
+      { stream_id: 43, name: 'Moana (2016)', container_extension: 'mkv' },
+      { stream_id: 44, name: 'Moana 2 - 2024', container_extension: 'mp4' },
+      { stream_id: 45, name: 'Moana (2026)', container_extension: 'mp4' },
+      { stream_id: 46, name: 'Moana', year: '2016', container_extension: 'mp4' },
+      { stream_id: 47, name: 'Moana', year: '2026', container_extension: 'mp4' },
+      { stream_id: 48, name: 'Moana', year: '2016', container_extension: 'mkv' },
+    ] });
+    delete require.cache[require.resolve('../src/lounge-program')];
+    const program = require('../src/lounge-program');
+    const found = await program.request({ lane: 'movie', itemId: 'xtream-vod-42', actorName: 'viewer' });
+    assert.equal(found.request.item.metadata.streamId, '43');
+    assert.equal(found.request.item.metadata.extension, 'mkv');
+    const firstId = program.program().movie.current.requestId;
+    await assert.rejects(program.request({ lane: 'movie', itemId: 'xtream-vod-45' }),
+      /Moana.*2026.*currently unavailable/);
+    assert.equal(program.program().movie.current.requestId, firstId);
+    assert.equal(program.program().movie.queueCount, 0);
+    await program.request({ lane: 'movie', itemId: 'xtream-vod-42' });
+    const attempted = readFileSync(probes, 'utf8').trim().split('\n');
+    assert.equal(attempted.length, 3, 'probe results are cached per source');
+    assert.ok(!attempted.some(line => line.includes('44.mp4')), 'never substitutes a sequel');
+    const structuredYear = await program.request({ lane: 'movie', itemId: 'xtream-vod-46' });
+    assert.equal(structuredYear.request.item.metadata.streamId, '48');
+    assert.ok(!readFileSync(probes, 'utf8').includes('47.mp4'), 'never substitutes a different structured year');
+  } finally {
+    delete require.cache[require.resolve('../src/lounge-program')];
+    global.fetch = originalFetch;
+    Object.keys(process.env).forEach(key => { if (!(key in previous)) delete process.env[key]; });
+    Object.assign(process.env, previous);
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+

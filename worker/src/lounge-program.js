@@ -136,21 +136,71 @@ async function search(query) {
     .slice(0, 3).map(({ item }) => ({ id: item.id, title: item.title, year: item.year }));
 }
 
+// Match only the same title and year; a fallback must never select a sequel
+// or remake merely because the search words overlap.
+function movieIdentity(title) {
+  return String(title || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+}
+
+const movieProbeCache = new Map();
+async function movieSourcePlayable(item, deadline) {
+  if (Date.now() >= deadline) return false;
+  const key = item.metadata.kind + ':' + item.metadata.streamId + ':' + item.metadata.extension;
+  const cached = movieProbeCache.get(key);
+  if (cached && Date.now() - cached.at < 5 * 60_000) return cached.playable;
+  let playable = false;
+  try {
+    const url = source({ current: { item } });
+    const { stdout } = await run('ffprobe', [
+      '-v', 'error', '-user_agent', 'DiscordStreamHub/1.0',
+      '-show_entries', 'stream=codec_type', '-of', 'json', url,
+    ], { timeout: Math.max(1, Math.min(15000, deadline - Date.now())), killSignal: 'SIGKILL', maxBuffer: 1024 * 1024 });
+    playable = JSON.parse(stdout).streams?.some(stream => stream.codec_type === 'video') === true;
+  } catch {
+    // Provider URLs include credentials. Never surface the child-process error.
+  }
+  if (movieProbeCache.size >= 1000) movieProbeCache.clear();
+  movieProbeCache.set(key, { at: Date.now(), playable });
+  return playable;
+}
+
 async function movieItem(query, itemId) {
-  const selectedId = itemId || (await search(query))[0]?.id;
-  const item = selectedId ? (await movies()).find(entry => entry.id === selectedId) : null;
+  // Include catalog lookup and all probes in one budget below the caller's 45s timeout.
+  const deadline = Date.now() + 35000;
+  async function withinDeadline(promise) {
+    let timer;
+    try {
+      return await Promise.race([promise, new Promise((_, reject) => {
+        timer = setTimeout(() => reject(Error('Movie provider timed out; please try again.')), Math.max(1, deadline - Date.now()));
+      })]);
+    } finally { clearTimeout(timer); }
+  }
+  const selectedId = itemId || (await withinDeadline(search(query)))[0]?.id;
+  const items = await withinDeadline(movies());
+  const item = selectedId ? items.find(entry => entry.id === selectedId) : null;
   if (!item) throw Error('No playable movie found');
   let selected = item;
   if (item.kind === 'series') {
-    const info = await providerJson('get_series_info', { series_id: item.streamId });
+    const info = await withinDeadline(providerJson('get_series_info', { series_id: item.streamId }));
     const groups = info?.episodes && typeof info.episodes === 'object' ? Object.values(info.episodes) : [];
     const first = groups.flat().find(entry => /^\d+$/.test(String(entry?.id || entry?.stream_id || '')));
     if (!first) throw Error('Series has no playable episode');
     selected = { ...item, kind: 'series', streamId: String(first.id || first.stream_id), extension: String(first.container_extension || 'mp4').toLowerCase(), title: `${item.title} - ${first.title || 'Episode 1'}` };
   }
   const pathKind = selected.kind === 'series' ? 'series' : 'movie';
-  return { type: 'movie', title: selected.title, playbackUrl: `/api/watch/xtream/hls/${selected.kind}-${selected.streamId}/index.m3u8`,
-    metadata: { provider: 'xtream', kind: selected.kind, streamId: selected.streamId, extension: selected.extension, pathKind } };
+  const alternates = selected.kind === 'vod'
+    ? items.filter(entry => entry.kind === 'vod' && entry.id !== selected.id
+        && entry.year === selected.year
+        && movieIdentity(entry.title) === movieIdentity(selected.title))
+    : [];
+  for (const candidate of [selected, ...alternates].slice(0, 5)) {
+    const playableItem = { type: 'movie', title: selected.title,
+      playbackUrl: `/api/watch/xtream/hls/${candidate.kind}-${candidate.streamId}/index.m3u8`,
+      metadata: { provider: 'xtream', kind: candidate.kind, streamId: candidate.streamId,
+        extension: candidate.extension, pathKind } };
+    if (await movieSourcePlayable(playableItem, deadline) && Date.now() < deadline) return playableItem;
+  }
+  throw Error(`"${selected.title}" is currently unavailable from the movie provider. No playable source was found; please choose another title.`);
 }
 
 let youtubeSearchClientPromise = null;
@@ -771,3 +821,4 @@ function source(movie) {
 }
 
 module.exports = { program, search, request, control, radio, tick, checkpoint, source, configureMusicSource };
+
