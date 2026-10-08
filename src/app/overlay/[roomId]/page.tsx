@@ -22,6 +22,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { usePopout } from '@/components/PopoutWidgets/PopoutProvider';
+import { createOverlayCompletionTracker, overlayEndTarget } from '@/lib/overlay-media-end';
 import { twitchMusicSessionId } from '@/lib/twitch-media-scope';
 import { getRoomWatchSessionId } from '@/lib/watch-session';
 import { useCollection } from '@/hooks/use-db';
@@ -204,6 +205,7 @@ export default function OverlayPage() {
   }, []);
 
   const activeRequestRef = useRef('');
+  const completionRef = useRef(createOverlayCompletionTracker());
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
   const hlsRef = useRef<any>(null);
@@ -384,6 +386,10 @@ export default function OverlayPage() {
 
   const applyPlaybackState = useCallback((nextState = activeState) => {
     if (!nextState?.current) return;
+    if (completionRef.current.hasEnded(nextState.current.requestId)) {
+      advanceRef.current(nextState.current.requestId);
+      return; // A poll must not play a completed item again.
+    }
 
     if (embeddedMode) {
       const remotePosition = playbackPosition(nextState.playback);
@@ -470,6 +476,10 @@ export default function OverlayPage() {
   ]);
 
   const startOverlayAudio = useCallback(async () => {
+    if (activeState?.current && completionRef.current.hasEnded(activeState.current.requestId)) {
+      advanceRef.current(activeState.current.requestId);
+      return;
+    }
     mutedRef.current = false;
     setIsMuted(false);
     applyVolume();
@@ -489,7 +499,7 @@ export default function OverlayPage() {
     await video.play();
     setAudioReady(true);
     setMediaStatus('Overlay media unlocked');
-  }, [applyVolume, embeddedMode, youtubeCommand]);
+  }, [activeState, applyVolume, embeddedMode, youtubeCommand]);
 
   useEffect(() => {
     const refresh = async () => {
@@ -765,7 +775,9 @@ export default function OverlayPage() {
         setMediaStatus('Overlay media paused');
       } else if (code === 0) {
         setMediaStatus('Overlay media ended');
-        advanceRef.current(String(activeRequestRef.current || ''));
+        const id = String(activeRequestRef.current || '');
+        completionRef.current.markEnded(id);
+        advanceRef.current(id);
       } else if (code === 3) {
         setMediaStatus('Overlay media buffering');
       }
@@ -776,11 +788,22 @@ export default function OverlayPage() {
 
   const advanceRef = useRef<(id: string) => void>(() => {});
   advanceRef.current = (id: string) => {
-    if (!twitchTenant || !sourceKey || !id) return;
-    void fetch(`/api/twitch-source/${encodeURIComponent(twitchTenant)}/ended`, {
-      method: 'POST', headers: { 'content-type': 'application/json', 'x-source-key': sourceKey },
-      body: JSON.stringify({ expectedRequestId: id }),
-    }).catch(error => console.warn('[Overlay] stream advance failed', error));
+    const target = overlayEndTarget({
+      clean: cleanMode, lane: activeBundle.lane, roomId, twitchTenant, sourceKey,
+      sessionId: activeBundle.sessionId, requestId: id,
+    });
+    if (!target) return;
+    void completionRef.current.report(id, async () => {
+      const response = await fetch(target.url, target.init);
+      if (!response.ok) throw new Error('Queue advance failed: ' + response.status);
+      const next = await response.json();
+      // Ignore a late acknowledgment for an item the user already changed.
+      if (activeRequestRef.current === id && next?.id === activeBundle.sessionId
+        && Object.prototype.hasOwnProperty.call(next, 'current')) setMusicState(next);
+    }).catch(error => {
+      setMediaStatus('Song finished; retrying queue advance');
+      console.warn('[Overlay] stream advance failed', error);
+    });
   };
   const hasPopout = (source: string) => popouts.some((p) => p.type === 'chat' && p.customSettings?.source === source);
   const hasQueue = popouts.some((p) => p.type === 'queue');
@@ -795,6 +818,7 @@ export default function OverlayPage() {
 
   const mediaTitle = currentItem?.title || 'Waiting for media';
   activeRequestRef.current = activeState?.current?.requestId || '';
+  completionRef.current.retain(activeRequestRef.current);
   const mediaSubtitle = currentItem?.artist || currentItem?.source || activeBundle.sessionId;
   const mediaImage = currentItem?.thumbnail || currentItem?.poster || currentItem?.image;
   const queueLength = activeState?.queue?.length || 0;
@@ -879,21 +903,17 @@ export default function OverlayPage() {
             nativeProgressBaselineRef.current = null;
             setRenderingHealthy(false);
             const expectedDuration = mediaRuntimeSeconds(currentItem?.runtime);
-            if (currentItem?.type === 'music' && expectedDuration > 0
+            if (currentItem?.type === 'music' && musicPlaybackMode === 'video'
+              && musicModeOptions(currentItem).audio && expectedDuration > 0
               && Number(video?.currentTime || 0) < expectedDuration - 3) {
               setMediaStatus('Song video ended early; trying the saved audio');
               if (musicPlaybackMode === 'video' && musicModeOptions(currentItem).audio) setMusicPlaybackMode('audio');
               return;
             }
             setMediaStatus('Overlay media ended');
-            // The dedicated clean Lounge source reports an actual end. Other
-            // room windows remain passive, and the request ID guards races.
-            if (cleanMode && roomId === 'system-spacemountainlive-lounge'
-              && activeBundle.lane === 'music' && requestId
-              && activeState?.playback.status === 'playing') {
-              if (twitchTenant) { advanceRef.current(requestId); return; }
-              const url = `/api/watch/sessions/${encodeURIComponent(activeBundle.sessionId)}/quick-control?action=next&expectedRequestId=${encodeURIComponent(requestId)}&platform=room&format=json`;
-              void fetch(url, { cache: 'no-store' }).catch((error) => console.warn('[Overlay] song end advance failed', error));
+            if (requestId && activeState?.playback.status === 'playing') {
+              completionRef.current.markEnded(requestId);
+              advanceRef.current(requestId);
             }
           }}
           onError={() => {
