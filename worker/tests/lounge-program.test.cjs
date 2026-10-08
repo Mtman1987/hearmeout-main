@@ -50,6 +50,7 @@ test('Lounge worker owns movie and music state, including queue handoff', async 
     const bin = join(root, 'bin');
     mkdirSync(bin);
     writeFileSync(join(bin, 'yt-dlp'), '#!/bin/sh\ncase "$*" in *--flat-playlist*) echo \'{"entries":[{"id":"M7lc1UVf-VE","title":"Playlist Song","duration":120},{"id":"XXXXXXXXXXX","title":"Different Song","duration":120}]}\';; *) echo \'{"id":"dQw4w9WgXcQ","title":"Test Song","uploader":"Test Artist","duration":180}\';; esac\n', { mode: 0o755 });
+    writeFileSync(join(bin, 'ffprobe'), '#!/bin/sh\necho \'{"streams":[{"codec_type":"video"}]}\'\n', { mode: 0o755 });
     process.env.PATH = `${bin}:${previous.PATH}`;
     global.fetch = async url => {
       assert.equal(new URL(url).searchParams.get('action'), 'get_vod_streams');
@@ -427,4 +428,54 @@ test('direct Lounge generation keys identify one immutable HLS timeline', () => 
   assert.match(manifest, /movie-request-generation-a-segment_000007\.ts/);
   assert.equal(internalSegmentName('movie-request-generation-a-segment_000007.ts', 'movie-request', 'generation-a'), 'segment_000007.ts');
   assert.equal(internalSegmentName('movie-request-generation-a-segment_000007.ts', 'movie-request', 'generation-b'), null);
+});
+
+test('movie requests reject broken sources and fallback only within the same title and year', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'hmo-movie-source-'));
+  const previous = { ...process.env };
+  const originalFetch = global.fetch;
+  try {
+    process.env.LOUNGE_STATE_FILE = join(root, 'program.json');
+    process.env.XTREAM_BASE_URL = 'https://provider.example';
+    process.env.XTREAM_USERNAME = 'demo';
+    process.env.XTREAM_PASSWORD = 'private';
+    process.env.XTREAM_ENABLE_SERIES = 'false';
+    const bin = join(root, 'bin');
+    mkdirSync(bin);
+    const probes = join(root, 'probes');
+    writeFileSync(join(bin, 'ffprobe'), `#!/bin/sh
+echo "$*" >> '${probes}'
+case "$*" in
+  *42.mp4*|*45.mp4*) echo 'moov atom not found' >&2; exit 1 ;;
+  *) echo '{"streams":[{"codec_type":"video"},{"codec_type":"audio"}]}' ;;
+esac
+`, { mode: 0o755 });
+    process.env.PATH = `${bin}:${previous.PATH}`;
+    global.fetch = async () => ({ ok: true, json: async () => [
+      { stream_id: 42, name: 'Moana - 2016', container_extension: 'mp4' },
+      { stream_id: 43, name: 'Moana (2016)', container_extension: 'mkv' },
+      { stream_id: 44, name: 'Moana 2 - 2024', container_extension: 'mp4' },
+      { stream_id: 45, name: 'Moana (2026)', container_extension: 'mp4' },
+    ] });
+    delete require.cache[require.resolve('../src/lounge-program')];
+    const program = require('../src/lounge-program');
+    const found = await program.request({ lane: 'movie', itemId: 'xtream-vod-42', actorName: 'viewer' });
+    assert.equal(found.request.item.metadata.streamId, '43');
+    assert.equal(found.request.item.metadata.extension, 'mkv');
+    const firstId = program.program().movie.current.requestId;
+    await assert.rejects(program.request({ lane: 'movie', itemId: 'xtream-vod-45' }),
+      /Moana.*2026.*currently unavailable/);
+    assert.equal(program.program().movie.current.requestId, firstId);
+    assert.equal(program.program().movie.queueCount, 0);
+    await program.request({ lane: 'movie', itemId: 'xtream-vod-42' });
+    const attempted = readFileSync(probes, 'utf8').trim().split('\n');
+    assert.equal(attempted.length, 3, 'probe results are cached per source');
+    assert.ok(!attempted.some(line => line.includes('44.mp4')), 'never substitutes a sequel');
+  } finally {
+    delete require.cache[require.resolve('../src/lounge-program')];
+    global.fetch = originalFetch;
+    Object.keys(process.env).forEach(key => { if (!(key in previous)) delete process.env[key]; });
+    Object.assign(process.env, previous);
+    rmSync(root, { recursive: true, force: true });
+  }
 });
