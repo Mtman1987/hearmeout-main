@@ -139,7 +139,9 @@ async function search(query) {
 // Match only the same title and year; a fallback must never select a sequel
 // or remake merely because the search words overlap.
 function movieIdentity(title) {
-  return String(title || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+  // Only remove recognized trailing language labels, never arbitrary title text.
+  return String(title || '').replace(/\s*\[(?:ENG|HIN|TAM|TEL|MAL|KAN|BEN|MAR|PUN|SPA|FRE|GER|ITA|JPN|KOR|CHI)(?:\s*\+\s*(?:ENG|HIN|TAM|TEL|MAL|KAN|BEN|MAR|PUN|SPA|FRE|GER|ITA|JPN|KOR|CHI))*\]\s*$/i, '')
+    .toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
 }
 
 const movieProbeCache = new Map();
@@ -160,7 +162,8 @@ async function movieSourcePlayable(item, deadline) {
     // Provider URLs include credentials. Never surface the child-process error.
   }
   if (movieProbeCache.size >= 1000) movieProbeCache.clear();
-  movieProbeCache.set(key, { at: Date.now(), playable });
+  // Network/provider failures can be transient. A new request must recheck them.
+  if (playable) movieProbeCache.set(key, { at: Date.now(), playable });
   return playable;
 }
 
