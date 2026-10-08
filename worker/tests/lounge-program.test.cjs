@@ -505,7 +505,7 @@ esac
     assert.equal(program.program().movie.queueCount, 0);
     await program.request({ lane: 'movie', itemId: 'xtream-vod-42' });
     const attempted = readFileSync(probes, 'utf8').trim().split('\n');
-    assert.equal(attempted.length, 3, 'probe results are cached per source');
+    assert.equal(attempted.length, 4, 'successful probes are cached; failed sources are rechecked');
     assert.ok(!attempted.some(line => line.includes('44.mp4')), 'never substitutes a sequel');
     const structuredYear = await program.request({ lane: 'movie', itemId: 'xtream-vod-46' });
     assert.equal(structuredYear.request.item.metadata.streamId, '48');
@@ -519,3 +519,45 @@ esac
   }
 });
 
+
+test('transient movie probe failures recover on the next request and language copies match safely', async () => {
+  const vm = require('node:vm');
+  const root = mkdtempSync(join(tmpdir(), 'hmo-movie-recovery-'));
+  let healthy = false;
+  const probes = [];
+  const context = vm.createContext({
+    module: { exports: {} },
+    require(name) {
+      if (name === 'node:child_process') return { execFile(command, args, options, callback) {
+        const id = new URL(args.at(-1)).pathname.split('/').at(-1);
+        probes.push(id);
+        if (!healthy && id === '1.mp4') callback(new Error('temporary provider failure'));
+        else callback(null, { stdout: '{"streams":[{"codec_type":"video"},{"codec_type":"audio"}]}' });
+      } };
+      return require(name);
+    },
+    process: { env: { LOUNGE_STATE_FILE: join(root, 'program.json'), XTREAM_BASE_URL: 'https://provider.example',
+      XTREAM_USERNAME: 'demo', XTREAM_PASSWORD: 'private', XTREAM_ENABLE_SERIES: 'false' }, pid: process.pid },
+    fetch: async () => ({ ok: true, json: async () => [
+      { stream_id: 1, name: 'One Night Only - 2026', container_extension: 'mp4' },
+      { stream_id: 2, name: 'One Night Only (2026) [HIN+ENG]', container_extension: 'mp4' },
+      { stream_id: 3, name: 'One Night Only (2025) [ENG]', container_extension: 'mp4' },
+      { stream_id: 4, name: 'One Night Only (2026) [Part Two]', container_extension: 'mp4' },
+      { stream_id: 5, name: 'Transient Movie (2026)', container_extension: 'mp4' },
+    ] }),
+    URL, AbortSignal, setTimeout, clearTimeout, console,
+  });
+  try {
+    vm.runInContext(readFileSync(join(__dirname, '../src/lounge-program.js'), 'utf8'), context);
+    const program = context.module.exports;
+    const fallback = await program.request({ lane: 'movie', itemId: 'xtream-vod-1' });
+    assert.equal(fallback.request.item.metadata.streamId, '2');
+    assert.deepEqual(probes, ['1.mp4', '2.mp4']);
+    healthy = true;
+    const recovered = await program.request({ lane: 'movie', itemId: 'xtream-vod-1' });
+    assert.equal(recovered.request.item.metadata.streamId, '1');
+    assert.deepEqual(probes, ['1.mp4', '2.mp4', '1.mp4']);
+    await program.request({ lane: 'movie', itemId: 'xtream-vod-1' });
+    assert.equal(probes.length, 3, 'successful recheck remains cached');
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
