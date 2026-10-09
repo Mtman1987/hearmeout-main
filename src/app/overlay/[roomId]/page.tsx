@@ -349,6 +349,21 @@ export default function OverlayPage() {
   const embeddedMode = Boolean(effectivePlaybackUrl && isEmbeddedVideoUrl(effectivePlaybackUrl));
   const cleanIdle = cleanMode && !effectivePlaybackUrl;
 
+  useEffect(() => {
+    if (!hideIdle) return;
+    const report = () => window.parent.postMessage({
+      type: 'hmo.overlay.playback',
+      playing: renderingHealthy && activeState?.playback?.status === 'playing',
+    }, 'https://spmt.live');
+    report();
+    const timer = window.setInterval(report, 1000);
+    return () => {
+      window.clearInterval(timer);
+      window.parent.postMessage({ type: 'hmo.overlay.playback', playing: false }, 'https://spmt.live');
+    };
+  }, [hideIdle, renderingHealthy, activeState?.playback?.status]);
+
+
   const youtubeCommand = useCallback((func: string, args: unknown[] = []) => {
     const frame = iframeRef.current;
     if (!frame?.contentWindow) return false;
