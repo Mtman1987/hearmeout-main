@@ -184,6 +184,7 @@ export default function OverlayPage() {
   const requestedLane = (searchParams.get('media') || searchParams.get('lane') || 'auto').toLowerCase();
   const lane: MediaLane = twitchTenant ? 'music' : requestedLane === 'music' || requestedLane === 'movie' ? requestedLane : 'auto';
   const cleanMode = ['1', 'true', 'yes', 'on'].includes(String(searchParams.get('clean') || '').toLowerCase());
+  const hideIdle = cleanMode && searchParams.get('hideIdle') === '1';
   const directLoungeMode = cleanMode && roomId === 'system-spacemountainlive-lounge' && searchParams.get('direct') === '1';
   const volumeParam = searchParams.get('volume');
   const requestedVolume = Number(volumeParam);
@@ -848,6 +849,7 @@ export default function OverlayPage() {
         data-media-title={currentItem?.title || ''}
         data-player-mode={embeddedMode ? 'youtube-embed' : isHlsPlaybackUrl(effectivePlaybackUrl) ? 'proxy-hls' : effectivePlaybackUrl ? 'direct-media' : 'idle'}
         data-media-healthy={renderingHealthy ? 'true' : 'false'}
+        style={{ opacity: hideIdle && (!renderingHealthy || activeState?.playback?.status !== 'playing') ? 0 : 1 }}
       >
       <div className="absolute inset-0 bg-transparent">
         {embeddedMode && currentPlaybackUrl && (
