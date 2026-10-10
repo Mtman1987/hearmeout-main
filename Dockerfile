@@ -11,6 +11,10 @@ RUN npm ci --legacy-peer-deps
 
 COPY . .
 
+# YouTube sometimes omits browseEndpoint on music search results.
+RUN node scripts/patch-youtube-search.cjs && \
+    node --test tests/youtube-search-parser.test.cjs
+
 # Copy sql.js WASM file to the build output location
 RUN mkdir -p /app/public && \
     cp node_modules/sql.js/dist/sql-wasm.wasm /app/public/ || true
