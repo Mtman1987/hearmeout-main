@@ -32,6 +32,7 @@ type WatchPlayback = {
   position: number;
   updatedAt: number | string;
   muted?: boolean;
+  volume?: number;
 };
 
 type WatchRequest = {
@@ -326,6 +327,22 @@ export default function OverlayPage() {
   }, [cleanMode, lane, movieSessionId, movieState, musicSessionId, musicState]);
 
   const activeState = activeBundle.state;
+
+  // Tenant broadcast sources follow their own queue's chat-controlled mix.
+  // Personal and Lounge observers keep their existing local volume behavior.
+  useEffect(() => {
+    if (!twitchTenant || !cleanMode || !activeState?.playback) return;
+    const remoteVolume = activeState.playback.volume;
+    if (typeof remoteVolume === 'number' && Number.isFinite(remoteVolume)) {
+      const nextVolume = Math.max(0, Math.min(1, remoteVolume / 100));
+      volumeRef.current = nextVolume;
+      setVolume(nextVolume);
+    }
+    if (typeof activeState.playback.muted === 'boolean') {
+      mutedRef.current = activeState.playback.muted;
+      setIsMuted(activeState.playback.muted);
+    }
+  }, [twitchTenant, cleanMode, activeState?.playback?.volume, activeState?.playback?.muted]);
   const currentItem = activeState?.current?.item || null;
   const currentPlaybackUrl = currentItem
     ? hlsFallbackUrlFor(
