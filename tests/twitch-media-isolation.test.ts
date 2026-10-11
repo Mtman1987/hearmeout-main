@@ -60,3 +60,20 @@ test('existing worker authority accepts only tenant music and source actions wit
   assert.equal((await POST(request({ action: 'hmo.bot.control' }))).status, 401);
   delete process.env.HMO_WORKER_SHARED_SECRET;
 });
+
+test('mix controls preserve the playback clock; explicit seeks still change position', async () => {
+  const { getWatchSession, controlWatchSession } = await import('../src/lib/watch-request-service');
+  const session = getWatchSession(twitchMusicSessionId('clock-test'));
+  session.current = { requestId: 'clock-song', item: { id: 'clock', title: 'Clock', type: 'music' } } as any;
+  session.playback = { status: 'playing', position: 12, updatedAt: Date.now() - 30000, muted: false, volume: 50 };
+  const clock = { position: session.playback.position, updatedAt: session.playback.updatedAt };
+  for (const [action, value] of [['volume', 10], ['mute', undefined], ['unmute', undefined]] as const) {
+    await controlWatchSession(session.id, action, value);
+    assert.equal(session.playback.position, clock.position);
+    assert.equal(session.playback.updatedAt, clock.updatedAt);
+  }
+  assert.equal(session.playback.volume, 10);
+  await controlWatchSession(session.id, 'seek', 60);
+  assert.equal(session.playback.position, 60);
+  assert(session.playback.updatedAt > clock.updatedAt);
+});

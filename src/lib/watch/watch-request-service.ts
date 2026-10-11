@@ -1273,22 +1273,18 @@ export async function controlWatchSession(sessionId: string, action: string, pos
   }
 
   if (action === 'mute' || action === 'unmute') {
-    const now = Date.now();
-    session.playback.position = getEffectivePlaybackPosition(session, now);
+    // A mix change must not look like a seek to passive broadcast players.
     session.playback.muted = action === 'mute';
-    session.playback.updatedAt = now;
     addEvent(session, `${action === 'mute' ? 'Muted' : 'Unmuted'} ${session.current?.item.title || 'session'}`);
     saveWatchStateToDisk();
     return session;
   }
 
   if (action === 'volume') {
-    const now = Date.now();
     const volume = Math.max(0, Math.min(100, Math.round(Number(position ?? session.playback.volume ?? 85))));
-    session.playback.position = getEffectivePlaybackPosition(session, now);
+    // Keep the existing playback clock while changing only the mix.
     session.playback.volume = volume;
     session.playback.muted = volume <= 0 ? true : false;
-    session.playback.updatedAt = now;
     addEvent(session, `Set volume to ${volume}% for ${session.current?.item.title || 'session'}`);
     saveWatchStateToDisk();
     return session;
