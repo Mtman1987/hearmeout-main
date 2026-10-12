@@ -3,6 +3,8 @@ import { getSession } from '@/lib/auth';
 import { DiscordChatService } from '@/lib/discord-chat-service';
 import { config } from '@/lib/config';
 
+export const dynamic = 'force-dynamic';
+
 // Lists the Discord servers (guilds) the bot is a member of, so a room owner
 // can pick which server's voice channel the bridge should join.
 export async function GET() {
@@ -15,7 +17,7 @@ export async function GET() {
   try {
     DiscordChatService.initialize(botToken);
     const guilds = await DiscordChatService.getGuilds();
-    return NextResponse.json(guilds);
+    return NextResponse.json(guilds, { headers: { 'Cache-Control': 'no-store' } });
   } catch (error) {
     console.error('[Discord Guilds API] Error:', error);
     return NextResponse.json({ error: 'Failed to fetch guilds' }, { status: 500 });

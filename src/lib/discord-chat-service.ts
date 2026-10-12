@@ -46,6 +46,7 @@ export class DiscordChatService {
     try {
       const response = await fetch(`${DISCORD_API}/users/@me/guilds`, {
         headers: { Authorization: `Bot ${this.botToken}` },
+        cache: 'no-store',
       });
 
       if (!response.ok) {
@@ -73,6 +74,7 @@ export class DiscordChatService {
     try {
       const response = await fetch(`${DISCORD_API}/guilds/${guildId}/channels`, {
         headers: { Authorization: `Bot ${this.botToken}` },
+        cache: 'no-store',
       });
 
       if (!response.ok) {
@@ -108,6 +110,7 @@ export class DiscordChatService {
         `${DISCORD_API}/channels/${channelId}/messages?limit=${Math.min(limit, 100)}`,
         {
           headers: { Authorization: `Bot ${this.botToken}` },
+        cache: 'no-store',
         }
       );
 
@@ -183,6 +186,7 @@ export class DiscordChatService {
 
         const response = await fetch(url, {
           headers: { Authorization: `Bot ${this.botToken}` },
+        cache: 'no-store',
         });
 
         if (!response.ok) throw new Error(`Discord API error: ${response.statusText}`);

@@ -5,6 +5,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Switch } from '@/components/ui/switch';
 import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
 import {
   Select,
   SelectContent,
@@ -76,7 +77,7 @@ export function VoiceBridgeCard({ roomId }: { roomId: string }) {
     if (!gid) { setChannels([]); return; }
     setLoadingChannels(true);
     try {
-      const res = await fetch(`/api/discord/channels?guildId=${encodeURIComponent(gid)}`);
+      const res = await fetch(`/api/discord/channels?guildId=${encodeURIComponent(gid)}`, { cache: 'no-store' });
       const data = await res.json();
       const list: Channel[] = Array.isArray(data) ? data : [];
       setChannels(list.filter((c) => VOICE_CHANNEL_TYPES.has(c.type)));
@@ -93,7 +94,7 @@ export function VoiceBridgeCard({ roomId }: { roomId: string }) {
       try {
         const [stateRes, guildsRes] = await Promise.all([
           fetch(`/api/discord/voice-bridge?roomId=${encodeURIComponent(roomId)}`),
-          fetch('/api/discord/guilds'),
+          fetch('/api/discord/guilds', { cache: 'no-store' }),
         ]);
         const state: BridgeState = await stateRes.json().catch(() => ({} as BridgeState));
         const guildList = await guildsRes.json().catch(() => []);
@@ -129,6 +130,23 @@ export function VoiceBridgeCard({ roomId }: { roomId: string }) {
     }, 3000);
     return () => window.clearInterval(interval);
   }, [roomId, running, applyWorkerState]);
+
+  const refreshServers = React.useCallback(async () => {
+    try {
+      const response = await fetch('/api/discord/guilds', { cache: 'no-store' });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'Unable to refresh Discord servers');
+      setGuilds(Array.isArray(data) ? data : []);
+      if (guildId) await loadChannels(guildId);
+    } catch (error) {
+      toast({ variant: 'destructive', title: 'Discord servers unavailable', description: error instanceof Error ? error.message : 'Try again shortly.' });
+    }
+  }, [guildId, loadChannels, toast]);
+  React.useEffect(() => {
+    const focused = () => { void refreshServers(); };
+    window.addEventListener('focus', focused);
+    return () => window.removeEventListener('focus', focused);
+  }, [refreshServers]);
 
   const onGuildChange = (value: string) => {
     setGuildId(value);
@@ -226,6 +244,10 @@ export function VoiceBridgeCard({ roomId }: { roomId: string }) {
           to hear Discord without sending this room&apos;s conversation back.
         </p>
 
+        <div className="flex flex-wrap gap-2">
+          <Button variant="outline" asChild><a href="/api/discord/bot-invite" target="_blank" rel="noopener noreferrer">Add SPMT to a server</a></Button>
+          <Button variant="outline" onClick={refreshServers}>Refresh servers</Button>
+        </div>
         <div className="grid gap-3 sm:grid-cols-2">
           <div className="space-y-1.5">
             <Label>Server</Label>
