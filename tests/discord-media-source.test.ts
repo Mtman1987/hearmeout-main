@@ -10,7 +10,7 @@ test('missing or AAC cached media uses Opus through the selected Activity worker
   const exports:any={},calls:any[]=[];
   vm.runInNewContext(compiled,{exports,URL,URLSearchParams,Headers,Request,Response,AbortSignal,console,fetch:async(url:any,options:any)=>{
     calls.push({url:String(url),options});
-    if(String(url).includes('/extract/discord-audio')) return Response.json({url:'https://media.test/audio',mimeType:'audio/webm; codecs="opus"'});
+
     assert.equal(options.headers.get('range'),'bytes=0-3');
     return new Response(new Uint8Array([0x1a,0x45,0xdf,0xa3]),{status:206,headers:{'content-type':'audio/webm','content-range':'bytes 0-3/100','content-length':'4'}});
   },require:(name:string)=>{
@@ -30,7 +30,7 @@ test('missing or AAC cached media uses Opus through the selected Activity worker
   const response=await exports.GET(new Request('https://hmo.test/api/watch/sessions/discord-music-room/state?mediaVideoId=abcdefghijk&mediaFile=source.webm&lane=activity',{headers:{range:'bytes=0-3'}}),{params:Promise.resolve({sessionId:'discord-music-room'})});
   assert.equal(response.status,206);assert.equal(response.headers.get('content-type'),'audio/webm');
   assert.equal(response.headers.get('content-range'),'bytes 0-3/100');
-  assert.equal(calls.length,2);assert.match(calls[0].url,/worker.test:4446\/extract\/discord-audio/);
+  assert.equal(calls.length,1);assert.match(calls[0].url,/worker.test:4446\/watch\/youtube\/discord-audio\/abcdefghijk\/stream/);
   assert.deepEqual(Array.from(new Uint8Array(await response.arrayBuffer())),[0x1a,0x45,0xdf,0xa3]);
  }
 });

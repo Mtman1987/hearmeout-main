@@ -970,6 +970,32 @@ app.get('/watch/youtube/playlist', authorizeWorker, async (req, res) => {
   try { res.json(await readPlaylist(String(req.query.url || ''), ytDlpCookieArgs())); }
   catch (error) { res.status(400).json({ error: 'Playlist unavailable. Use a public or unlisted YouTube playlist.' }); }
 });
+app.get('/watch/youtube/discord-audio/:videoId/stream', authorizeWorker, async (req, res) => {
+  const controller = new AbortController();
+  req.on('aborted', () => controller.abort());
+  try {
+    const headers = {};
+    if (req.headers.range) headers.range = req.headers.range;
+    let info = await extractDiscordAudio(String(req.params.videoId || ''));
+    let upstream = await fetch(info.url, { headers, signal: controller.signal });
+    if ([401, 403].includes(upstream.status)) {
+      void upstream.body?.cancel().catch(() => {});
+      info = await extractDiscordAudio(String(req.params.videoId || ''), true);
+      upstream = await fetch(info.url, { headers, signal: controller.signal });
+    }
+    if (!upstream.ok) { void upstream.body?.cancel().catch(() => {}); return res.status(503).json({ error: 'Discord audio source unavailable' }); }
+    for (const header of ['content-type', 'content-length', 'content-range', 'accept-ranges']) {
+      const value = upstream.headers.get(header);
+      if (value) res.setHeader(header, value);
+    }
+    res.setHeader('Cache-Control', 'no-store');
+    res.status(upstream.status);
+    require('node:stream').Readable.fromWeb(upstream.body).on('error', () => res.destroy()).pipe(res);
+  } catch (error) {
+    if (!res.headersSent) res.status(503).json({ error: 'Discord audio source unavailable' });
+    else res.destroy();
+  }
+});
 app.get('/extract/discord-audio', authorizeWorker, async (req, res) => {
   try { res.json(await extractDiscordAudio(String(req.query.videoId || ''), req.query.refresh === '1')); }
   catch (error) { res.status(503).json({ error: error.message }); }

@@ -40,7 +40,11 @@ jobs:
             changed=$(git diff --name-only "$DEPLOY_BEFORE" "$DEPLOY_AFTER" -- worker/)
             if [ "$changed" = "worker/src/spotlight-hls.js" ]; then target=spotlight; fi
             if [ "$changed" = "worker/src/lounge-direct.js" ]; then target=lounge; fi
-            if [ "$changed" = "$(printf 'worker/src/server.js\nworker/src/youtube-request-media.js')" ]; then
+            if [ "$changed" = "worker/src/server.js" ]; then
+              diff=$(git diff "$DEPLOY_BEFORE" "$DEPLOY_AFTER" -- worker/src/server.js)
+              if printf '%s\n' "$diff" | grep -q "^+app.get('/watch/youtube/discord-audio/" && ! printf '%s\n' "$diff" | grep -qE '^-[^-]'; then target=media; fi
+            fi
+            if [ "$(printf '%s\n' "$changed" | grep -v '^worker/tests/')" = "$(printf 'worker/src/server.js\nworker/src/youtube-request-media.js')" ]; then
               # Only additive endpoints used by DJ and Activity; retain live Lounge/Spotlight.
               if ! git diff "$DEPLOY_BEFORE" "$DEPLOY_AFTER" -- worker/src/server.js | grep -qE '^-[^-]'; then target=media; fi
             fi

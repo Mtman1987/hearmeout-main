@@ -41,57 +41,21 @@ function copyMediaHeaders(source: Headers) {
   return headers;
 }
 
-async function extractYoutubeAudio(request: Request, videoId: string, refresh = false) {
+async function proxyDiscordYoutubeAudio(request: Request, videoId: string) {
   const workerUrl = getMediaWorkerUrl(request);
   if (!workerUrl || !isValidVideoId(videoId)) return null;
-
-  const url = new URL(`${workerUrl}/extract/discord-audio`);
-  url.searchParams.set('videoId', videoId);
-  url.searchParams.set('mode', 'audio');
-  if (refresh) url.searchParams.set('refresh', '1');
-
-  const response = await fetch(url, {
-    headers: getDjWorkerRequestHeaders({ 'user-agent': 'HearMeOut/1.0' }),
-    cache: 'no-store',
-    signal: AbortSignal.timeout(45000),
+  // YouTube URLs are tied to the extractor's network address. The worker that
+  // resolves the source must also stream it; the web app forwards only bytes.
+  const headers = getDjWorkerRequestHeaders({ 'user-agent': 'HearMeOut/1.0' });
+  const range = request.headers.get('range');
+  if (range) headers.set('range', range);
+  const response = await fetch(workerUrl + '/watch/youtube/discord-audio/' + encodeURIComponent(videoId) + '/stream', {
+    headers, cache: 'no-store', signal: AbortSignal.timeout(45000),
   }).catch(() => null);
-  if (!response?.ok) return null;
-
-  const payload = await response.json().catch(() => null) as { url?: string; mimeType?: string } | null;
-  if (!payload?.url || !/^https:\/\//i.test(payload.url)) return null;
-  return payload;
-}
-
-async function proxyDiscordYoutubeAudio(request: Request, videoId: string) {
-  let extracted = await extractYoutubeAudio(request, videoId, false);
-  if (!extracted) return null;
-
-  const fetchMedia = async (url: string) => {
-    const headers = new Headers({
-      'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-      referer: 'https://www.youtube.com/',
-      origin: 'https://www.youtube.com',
-      accept: '*/*',
-    });
-    const range = request.headers.get('range');
-    if (range) headers.set('range', range);
-    return fetch(url, { headers, redirect: 'follow', cache: 'no-store' }).catch(() => null);
-  };
-
-  let mediaResponse = await fetchMedia(extracted.url!);
-  if (mediaResponse && (mediaResponse.status === 401 || mediaResponse.status === 403)) {
-    extracted = await extractYoutubeAudio(request, videoId, true);
-    if (extracted?.url) mediaResponse = await fetchMedia(extracted.url);
-  }
-  if (!mediaResponse?.ok && mediaResponse?.status !== 206) return null;
-
-  const headers = copyMediaHeaders(mediaResponse.headers);
-  if (!headers.get('content-type') && extracted?.mimeType) headers.set('content-type', extracted.mimeType);
-  headers.set('cache-control', 'no-store');
-  return new NextResponse(mediaResponse.body, {
-    status: mediaResponse.status,
-    headers,
-  });
+  if (!response?.ok) { void response?.body?.cancel().catch(() => {}); return null; }
+  const mediaHeaders = copyMediaHeaders(response.headers);
+  mediaHeaders.set('cache-control', 'no-store');
+  return new NextResponse(response.body, { status: response.status, headers: mediaHeaders });
 }
 
 export async function GET(request: Request, context: { params: Promise<{ sessionId: string }> }) {
