@@ -75,7 +75,8 @@ export async function GET(request: Request, context: { params: Promise<{ session
 
     if (mediaFile === 'index.m3u8' && mediaResponse.ok) {
       const manifest = await mediaResponse.text();
-      const statePath = `/api/watch/sessions/${encodeURIComponent(sessionId)}/state`;
+      // Relative URLs retain Discord's /.proxy prefix for every segment.
+      const statePath = 'state';
       const rewritten = manifest
         .split('\n')
         .map((line) => {

@@ -86,7 +86,8 @@ test('generated player starts Discord handshake and uses shared same-origin play
   assert.equal(messages[0][0][1].frame_id, 'frame-123');
   assert.equal(messages[0][1], 'https://discord.com');
   const media = vm.runInContext("appUrl('/api/watch/youtube/hls/abcdefghijk/index.m3u8')", context);
-  assert.equal(media, '/.proxy/api/watch/sessions/discord-music-room/state?mediaVideoId=abcdefghijk&mediaFile=source.webm&lane=activity');
+  assert.equal(media, '/.proxy/api/watch/sessions/discord-music-room/state?mediaVideoId=abcdefghijk&mediaFile=index.m3u8&lane=activity');
+  assert.equal(vm.runInContext(`isHlsPlaybackUrl(${JSON.stringify(media)})`, context), true);
   assert.equal(vm.runInContext("JSON.stringify(apiUrls('/api/watch/sessions/discord-music-room/state'))", context),
     '["/.proxy/api/watch/sessions/discord-music-room/state"]');
   assert.equal(vm.runInContext("shouldResolveYoutubeInBrowser({id:'youtube-abcdefghijk', metadata:{playbackStrategy:'proxy'}})", context), false);

@@ -715,6 +715,7 @@ function isHlsPlaybackUrl(value) {
   try {
     const parsed = new URL(appUrl(value), window.location.href);
     const proxied = parsed.searchParams.get('url');
+    if (parsed.searchParams.get('mediaFile') === 'index.m3u8') return true;
     return Boolean(proxied && proxied.split('?')[0].endsWith('.m3u8'));
   } catch (err) {
     return false;
