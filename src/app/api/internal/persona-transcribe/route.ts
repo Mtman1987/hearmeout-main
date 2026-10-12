@@ -4,7 +4,7 @@ const STREAMWEAVER_BASE_URL = String(
   process.env.STREAMWEAVER_BASE_URL || 'https://streamweaver-new.fly.dev',
 ).replace(/\/$/, '');
 
-const MAX_AUDIO_BASE64_LENGTH = 16_000_000;
+const MAX_AUDIO_BASE64_LENGTH = 700_000;
 
 export async function POST(request: NextRequest) {
   const body = await request.json().catch(() => null) as any;
@@ -22,7 +22,7 @@ export async function POST(request: NextRequest) {
   const upstream = await fetch(`${STREAMWEAVER_BASE_URL}/api/speech/transcribe`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-    body: JSON.stringify({ base64Audio }),
+    body: JSON.stringify({ base64Audio, freeOnly: true }),
     cache: 'no-store',
     signal: typeof AbortSignal.timeout === 'function' ? AbortSignal.timeout(45000) : undefined,
   }).catch(() => null);

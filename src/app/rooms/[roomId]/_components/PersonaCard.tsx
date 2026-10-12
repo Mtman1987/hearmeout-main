@@ -1,5 +1,7 @@
 'use client';
 
+import { captureMicrophone } from '@/lib/microphone-capture';
+
 import React from 'react';
 import type { Participant, RemoteParticipant } from 'livekit-client';
 import { Bot, LoaderCircle, Mic, MicOff, Radio, ShieldOff, Square, UserX, Volume2, VolumeX } from 'lucide-react';
@@ -61,9 +63,8 @@ export default function PersonaCard({ participant, roomId, isHost = false }: { p
   const [talkReply, setTalkReply] = React.useState('');
   const [talkError, setTalkError] = React.useState('');
   const lastVolume = React.useRef(1);
-  const recorderRef = React.useRef<MediaRecorder | null>(null);
-  const recorderStreamRef = React.useRef<MediaStream | null>(null);
-  const recorderTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+  const recorderRef = React.useRef<ReturnType<typeof captureMicrophone> | null>(null);
+  const mountedRef = React.useRef(true);
 
   React.useEffect(() => {
     const remote = participant as RemoteParticipant;
@@ -71,12 +72,9 @@ export default function PersonaCard({ participant, roomId, isHost = false }: { p
     if (typeof remote.setVolume === 'function') remote.setVolume(volume);
   }, [participant, volume]);
 
-  React.useEffect(() => () => {
-    if (recorderTimerRef.current) clearTimeout(recorderTimerRef.current);
-    try {
-      if (recorderRef.current?.state === 'recording') recorderRef.current.stop();
-    } catch {}
-    recorderStreamRef.current?.getTracks().forEach((track) => track.stop());
+  React.useEffect(() => {
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; recorderRef.current?.cancel(); };
   }, []);
 
   const personaTargetId = metadata.ownerTenantId || metadata.personaId || participant.identity.replace(/^persona:/, '');
@@ -95,65 +93,27 @@ export default function PersonaCard({ participant, roomId, isHost = false }: { p
     setTalkStatus('done');
   }, [displayName, personaTargetId, roomId]);
 
-  const finishRecording = React.useCallback(async (chunks: Blob[], stream: MediaStream, mimeType: string) => {
-    if (recorderTimerRef.current) {
-      clearTimeout(recorderTimerRef.current);
-      recorderTimerRef.current = null;
-    }
-    stream.getTracks().forEach((track) => track.stop());
-    recorderStreamRef.current = null;
-    recorderRef.current = null;
-
+  const startTalkRecording = React.useCallback(async () => {
+    if (recorderRef.current) { recorderRef.current.stop(); return; }
+    if (talkStatus === 'transcribing' || talkStatus === 'sending') return;
+    setTalkTranscript(''); setTalkReply(''); setTalkError('');
+    const recording = captureMicrophone({ ready: () => setTalkStatus('recording') });
+    recorderRef.current = recording;
     try {
+      const audioBlob = await recording.finished;
+      recorderRef.current = null;
+      if (!mountedRef.current) return;
       setTalkStatus('transcribing');
-      const audioBlob = new Blob(chunks, { type: mimeType || 'audio/webm' });
       const transcription = await transcribeRoomPersonaAudio(audioBlob);
-      if (!transcription) throw new Error('I did not hear any words. Try again and speak after the button turns red.');
-
+      if (!mountedRef.current) return;
+      if (!transcription) throw new Error('No spoken words were found. Speak after the microphone is ready, then tap Finish.');
       setTalkTranscript(transcription);
       await sendTranscript(transcription);
     } catch (error) {
       setTalkStatus('error');
       setTalkError(error instanceof Error ? error.message : String(error));
-    }
-  }, [sendTranscript]);
-
-  const startTalkRecording = React.useCallback(async () => {
-    if (talkStatus === 'recording') {
-      try { recorderRef.current?.stop(); } catch {}
-      return;
-    }
-    if (talkStatus === 'transcribing' || talkStatus === 'sending') return;
-
-    setTalkTranscript('');
-    setTalkReply('');
-    setTalkError('');
-
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
-      });
-      const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
-        ? 'audio/webm;codecs=opus'
-        : 'audio/webm';
-      const recorder = new MediaRecorder(stream, { mimeType });
-      const chunks: Blob[] = [];
-      recorderRef.current = recorder;
-      recorderStreamRef.current = stream;
-      recorder.ondataavailable = (event) => {
-        if (event.data.size > 0) chunks.push(event.data);
-      };
-      recorder.onstop = () => void finishRecording(chunks, stream, mimeType);
-      recorder.start();
-      setTalkStatus('recording');
-      recorderTimerRef.current = setTimeout(() => {
-        if (recorder.state === 'recording') recorder.stop();
-      }, 8000);
-    } catch (error) {
-      setTalkStatus('error');
-      setTalkError(error instanceof Error ? error.message : String(error));
-    }
-  }, [finishRecording, talkStatus]);
+    } finally { recorderRef.current = null; }
+  }, [sendTranscript, talkStatus]);
 
   const isServerMuted = !participant.isMicrophoneEnabled;
   const adminAction = async (action: 'mute' | 'unmute' | 'kick' | 'ban') => {
