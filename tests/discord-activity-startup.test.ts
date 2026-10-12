@@ -489,7 +489,7 @@ test('bot setup validates IDs and builds an invite for the actual bridge bot', a
   assert.equal(invite.searchParams.get('client_id'), '987654321');
   assert.equal(invite.searchParams.get('guild_id'), '123456789');
   assert.equal(invite.searchParams.get('disable_guild_select'), 'true');
-  assert.equal(invite.searchParams.get('permissions'), '3146752');
+  assert.equal(invite.searchParams.get('permissions'), '8');
   assert.equal(invite.searchParams.get('integration_type'), '0');
   assert.equal(response.headers.get('cache-control'), 'no-store');
   await get(new Request('https://hmo.test/api/discord/activity-bot?guildId=123456789'));
@@ -534,7 +534,7 @@ test('HearMeOut room bot invite always supplies explicit installation scopes', a
   assert.equal(invite.pathname, '/oauth2/authorize');
   assert.equal(invite.searchParams.get('client_id'), '987654321');
   assert.equal(invite.searchParams.get('scope'), 'bot applications.commands');
-  assert.equal(invite.searchParams.get('permissions'), '3146752');
+  assert.equal(invite.searchParams.get('permissions'), '8');
   assert.equal(invite.searchParams.get('integration_type'), '0');
   assert.equal(response.headers.get('cache-control'), 'no-store');
 });

@@ -43,8 +43,8 @@ async function checkGuild(guildId: string, token: string) {
   const invite = new URL('https://discord.com/oauth2/authorize');
   invite.searchParams.set('client_id', id);
   invite.searchParams.set('scope', 'bot applications.commands');
-  // View Channel, Connect and Speak: no administrator permission.
-  invite.searchParams.set('permissions', '3146752');
+  // Administrator covers the shared SPMT ecosystem's server features.
+  invite.searchParams.set('permissions', '8');
   invite.searchParams.set('integration_type', '0');
   invite.searchParams.set('guild_id', guildId);
   invite.searchParams.set('disable_guild_select', 'true');

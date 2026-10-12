@@ -10,7 +10,7 @@ export async function GET() {
     const bot = await response.json();
     if (!response.ok || !bot.id) throw new Error('Unable to resolve the Discord bot. Retry shortly.');
     const url = new URL('https://discord.com/oauth2/authorize');
-    url.search = new URLSearchParams({ client_id: bot.id, integration_type: '0', scope: 'bot applications.commands', permissions: '3146752' }).toString();
+    url.search = new URLSearchParams({ client_id: bot.id, integration_type: '0', scope: 'bot applications.commands', permissions: '8' }).toString();
     const redirect = NextResponse.redirect(url);
     redirect.headers.set('Cache-Control', 'no-store');
     return redirect;
