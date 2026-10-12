@@ -31,6 +31,7 @@ interface Room {
     name: string;
     ownerId: string;
     isPrivate?: boolean;
+    hidden?: boolean;
     password?: string;
     occupantCount?: number;
     expiresAt?: string;
@@ -54,7 +55,7 @@ export default function Home() {
   // Show ALL rooms — both public and private are visible
   const { data: allRooms, isLoading: roomsLoading } = useCollection<Room>('rooms');
   const roomsWithActivity = React.useMemo(() => {
-    const rooms = allRooms || [];
+    const rooms = (allRooms || []).filter(room => !room.hidden);
     if (rooms.some((room) => room.id === ACTIVITY_ROOM_ID)) return rooms;
     return [{
       id: ACTIVITY_ROOM_ID,
@@ -165,3 +166,4 @@ export default function Home() {
     </SidebarProvider>
   );
 }
+

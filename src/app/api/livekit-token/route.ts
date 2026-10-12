@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { AccessToken } from 'livekit-server-sdk';
+import { requireRoomVoiceAccess } from '@/lib/room-voice-access';
 import { getSession } from '@/lib/auth';
 import { db, ensureDb } from '@/lib/db';
 import { config } from '@/lib/config';
@@ -134,6 +135,8 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ token: bridgeToken });
     }
 
+    if (session && !fromDjWorker) await requireRoomVoiceAccess(roomId);
+
     // Bind user-browser tokens to the verified session uid. The headless DJ
     // worker has no browser session, so it sends the internal worker marker.
     const uid = session?.uid || 'dj-worker';
@@ -200,3 +203,4 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'Failed to generate token' }, { status: 500 });
   }
 }
+

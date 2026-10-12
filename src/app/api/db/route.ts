@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db, ensureDb } from '@/lib/db';
+import { requireRoomVoiceAccess } from '@/lib/room-voice-access';
 import { getSession } from '@/lib/auth';
 import { isDjWorkerRequest } from '@/lib/dj-worker-auth';
 
@@ -52,6 +53,12 @@ export async function GET(request: NextRequest) {
   const filtersParam = searchParams.get('filters');
   const session = await getSession();
   const fromDjWorker = isDjWorkerRequest(request);
+  const safeRoom = (data: any) => {
+    if (!data) return data;
+    const safe = { ...data, passwordRequired: Boolean(data.isPrivate && data.password) };
+    if (!fromDjWorker && data.ownerId !== session?.uid && !session?.user?.isAdmin) delete safe.password;
+    return safe;
+  };
 
   await ensureDb();
 
@@ -61,7 +68,7 @@ export async function GET(request: NextRequest) {
       if (collection === 'rooms') {
         const data = db.get(collection, id);
         if (data && data.isPrivate === false) {
-          return NextResponse.json({ exists: true, data, id });
+          return NextResponse.json({ exists: true, data: safeRoom(data), id });
         }
       }
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
@@ -73,7 +80,7 @@ export async function GET(request: NextRequest) {
     if (access === 'denied') return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
     if (access === 'admin' && (!session || !(await isAdmin(session.uid)))) return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
     const data = db.get(collection, id);
-    return NextResponse.json({ exists: !!data, data, id });
+    return NextResponse.json({ exists: !!data, data: collection === 'rooms' ? safeRoom(data) : data, id });
   }
 
   // Filtered queries: allow unauthenticated for public rooms only
@@ -89,7 +96,7 @@ export async function GET(request: NextRequest) {
     try {
       const filters = JSON.parse(filtersParam);
       const docs = db.query(collection, filters);
-      return NextResponse.json(docs);
+      return NextResponse.json(collection === 'rooms' ? docs.filter(d => !d.data.hidden).map(d => ({ ...d, data: safeRoom(d.data) })) : docs);
     } catch {
       return NextResponse.json({ error: 'Invalid filters JSON' }, { status: 400 });
     }
@@ -103,7 +110,7 @@ export async function GET(request: NextRequest) {
     if (access === 'denied') return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
     if (access === 'admin' && !(await isAdmin(session.uid))) return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
     const docs = db.list(collection);
-    return NextResponse.json(docs);
+    return NextResponse.json(collection === 'rooms' ? docs.filter(d => !d.data.hidden).map(d => ({ ...d, data: safeRoom(d.data) })) : docs);
   }
 
   return NextResponse.json({ exists: false });
@@ -129,6 +136,10 @@ export async function POST(request: NextRequest) {
   if (access === 'admin' && (!session || !(await isAdmin(session.uid)))) return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
   if (!session && access !== 'allowed') return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
+  if (collection === 'rooms' && id && (db.get('rooms', id)?.streamVoiceEnabled || data.streamVoiceEnabled)) {
+    const room = db.get('rooms', id);
+    if (!session || (room?.ownerId && room.ownerId !== session.uid && !session.user?.isAdmin)) return NextResponse.json({ error: 'Room owner required' }, { status: 403 });
+  }
   const safeData = sanitizeUserWrite(collection, data);
   if (id) {
     db.set(collection, id, safeData, { merge: !!merge });
@@ -163,6 +174,13 @@ export async function PATCH(request: NextRequest) {
   if (access === 'denied') return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
   if (access === 'admin' && (!session || !(await isAdmin(session.uid)))) return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
 
+  if (collection === 'rooms' && db.get('rooms', id)?.streamVoiceEnabled && !fromDjWorker) {
+    const room = db.get('rooms', id);
+    const onlyPresence = Object.keys(data).every(key => key === 'occupantCount');
+    if (onlyPresence) {
+      try { await requireRoomVoiceAccess(id); } catch { return NextResponse.json({ error: 'Room access required' }, { status: 403 }); }
+    } else if (!session || (room.ownerId !== session.uid && !session.user?.isAdmin)) return NextResponse.json({ error: 'Room owner required' }, { status: 403 });
+  }
   db.update(collection, id, sanitizeUserWrite(collection, data));
   return NextResponse.json({ success: true });
 }
@@ -181,6 +199,11 @@ export async function DELETE(request: NextRequest) {
   if (access === 'denied') return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
   if (access === 'admin' && !(await isAdmin(session.uid))) return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
 
+  if (collection === 'rooms') {
+    const room = db.get('rooms', id);
+    if (room?.streamVoiceEnabled && room.ownerId !== session.uid && !session.user?.isAdmin) return NextResponse.json({ error: 'Room owner required' }, { status: 403 });
+  }
   db.delete(collection, id);
   return NextResponse.json({ success: true });
 }
+

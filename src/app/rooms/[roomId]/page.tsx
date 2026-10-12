@@ -43,6 +43,8 @@ interface RoomData {
   peerFallback?: boolean;
   isPrivate?: boolean;
   password?: string;
+  passwordRequired?: boolean;
+  streamVoiceEnabled?: boolean;
   createdAt?: string;
   expiresAt?: string;
 }
@@ -645,6 +647,7 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
     }, [roomId, userDisplayName, userId, userPhotoURL]);
 
     const startPeerVoiceFallback = useCallback(async (reason: unknown) => {
+        if (room.streamVoiceEnabled) { setVoiceFailureMessage('Stream voice connection failed. Retry voice to reconnect.'); setVoiceFallbackFailed(true); return; }
         if (!userId || !roomId || peerVoiceRef.current?.active || peerVoiceStartingRef.current) return;
         peerVoiceStartingRef.current = true;
         voiceFallbackActiveRef.current = true;
@@ -1057,6 +1060,13 @@ function RoomPageContent() {
     const [passwordInput, setPasswordInput] = React.useState('');
     const [passwordUnlocked, setPasswordUnlocked] = React.useState(false);
     const [passwordError, setPasswordError] = React.useState(false);
+    const unlockPassword = async () => {
+      try {
+        const r = await fetch('/api/voice/room-access', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ roomId: params.roomId, password: passwordInput }) });
+        if (r.ok) setPasswordUnlocked(true); else setPasswordError(true);
+      } catch { setPasswordError(true); }
+    };
+    React.useEffect(() => { setPasswordUnlocked(false); setPasswordInput(''); }, [params.roomId]);
     const isActivityRoom = isActivityRoomId(params.roomId);
 
     React.useEffect(() => {
@@ -1106,7 +1116,7 @@ function RoomPageContent() {
 
     // Password gate for private rooms
     const isOwner = canManageRoom(user as any, effectiveRoom.ownerId);
-    if (effectiveRoom.isPrivate && effectiveRoom.password && !passwordUnlocked && !isOwner) {
+    if (effectiveRoom.isPrivate && (effectiveRoom.passwordRequired || effectiveRoom.password) && !passwordUnlocked && !isOwner) {
         return (
             <div className="flex flex-col h-screen">
                 <LeftSidebar roomId={params.roomId} />
@@ -1120,9 +1130,9 @@ function RoomPageContent() {
                             placeholder="Enter password"
                             value={passwordInput}
                             onChange={(e) => { setPasswordInput(e.target.value); setPasswordError(false); }}
-                            onKeyDown={(e) => { if (e.key === 'Enter') { if (passwordInput === effectiveRoom.password) setPasswordUnlocked(true); else setPasswordError(true); } }}
+                            onKeyDown={(e) => { if (e.key === 'Enter') void unlockPassword(); }}
                         />
-                        <Button onClick={() => { if (passwordInput === effectiveRoom.password) setPasswordUnlocked(true); else setPasswordError(true); }}>Join</Button>
+                        <Button onClick={() => void unlockPassword()}>Join</Button>
                     </div>
                     {passwordError && <p className="text-sm text-destructive">Incorrect password</p>}
                     <Button variant="ghost" asChild><a href="/">Back to Dashboard</a></Button>
@@ -1134,6 +1144,7 @@ function RoomPageContent() {
     return (
         <>
             <LeftSidebar roomId={params.roomId} />
+            {effectiveRoom.streamVoiceEnabled && <div className="p-3 text-center bg-red-950 text-white" role="status">This room is live on stream. Your unmuted microphone will be broadcast.</div>}
             <RoomContent room={effectiveRoom} roomId={params.roomId} />
         </>
     );
@@ -1142,3 +1153,4 @@ function RoomPageContent() {
 export default function RoomPage() {
     return <SidebarProvider><RoomPageContent /></SidebarProvider>;
 }
+

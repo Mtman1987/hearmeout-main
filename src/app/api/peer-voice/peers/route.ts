@@ -1,3 +1,5 @@
+import { requireRoomVoiceAccess } from '@/lib/room-voice-access';
+import { db } from '@/lib/db';
 import { NextRequest, NextResponse } from 'next/server';
 
 declare global {
@@ -14,6 +16,7 @@ export async function GET(request: NextRequest) {
   const roomId = request.nextUrl.searchParams.get('roomId');
   if (!roomId) return NextResponse.json({ error: 'Missing roomId' }, { status: 400 });
 
+  try { await requireRoomVoiceAccess(roomId); } catch { return NextResponse.json({ error: 'Room access required' }, { status: 403 }); }
   const room = registry.get(roomId);
   if (!room) return NextResponse.json({ peers: [] });
 
@@ -26,3 +29,4 @@ export async function GET(request: NextRequest) {
 
   return NextResponse.json({ peers });
 }
+

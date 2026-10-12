@@ -1,3 +1,5 @@
+import { requireRoomVoiceAccess } from '@/lib/room-voice-access';
+import { db } from '@/lib/db';
 import { NextRequest, NextResponse } from 'next/server';
 
 // In-memory peer registry (per-process, resets on deploy — fine for signaling)
@@ -26,6 +28,9 @@ export async function POST(request: NextRequest) {
   const { roomId, peerId } = await request.json();
   if (!roomId || !peerId) return NextResponse.json({ error: 'Missing roomId or peerId' }, { status: 400 });
 
+  try { await requireRoomVoiceAccess(roomId); } catch { return NextResponse.json({ error: 'Room access required' }, { status: 403 }); }
+  if (db.get('rooms', roomId)?.streamVoiceEnabled) return NextResponse.json({ error: 'Streaming rooms use LiveKit voice' }, { status: 409 });
+
   if (!registry.has(roomId)) registry.set(roomId, new Map());
   registry.get(roomId)!.set(peerId, Date.now());
   cleanRoom(roomId);
@@ -43,3 +48,4 @@ export async function DELETE(request: NextRequest) {
 
   return NextResponse.json({ ok: true });
 }
+

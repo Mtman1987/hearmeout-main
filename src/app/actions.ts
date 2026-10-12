@@ -4,6 +4,7 @@ import { moderateContent } from "@/ai/flows/sentiment-based-moderation";
 import type { ModerateContentOutput } from "@/ai/flows/sentiment-based-moderation";
 import { getYoutubeInfo as getYoutubeInfoFlow } from "@/ai/flows/get-youtube-info-flow";
 import type { PlaylistItem } from "@/types/playlist";
+import { requireRoomVoiceAccess } from '@/lib/room-voice-access';
 import { AccessToken } from 'livekit-server-sdk';
 import { sendControlEmbed } from '@/lib/discord-embed';
 
@@ -35,6 +36,8 @@ export async function getYoutubeInfo(query: string): Promise<PlaylistItem[] | nu
 
 export async function generateLiveKitToken(roomName: string, participantIdentity: string, participantName: string, participantMetadata: string) {
   try {
+    const session = await requireRoomVoiceAccess(roomName);
+    if (participantIdentity !== session.uid) throw new Error('Voice identity must match your session');
     // Check environment variables
     const apiKey = process.env.LIVEKIT_API_KEY;
     const apiSecret = process.env.LIVEKIT_API_SECRET;
@@ -94,3 +97,4 @@ export async function postToDiscord(
     }
     await sendControlEmbed(channelId, roomId, roomName, description, link1Label, link1Url, link2Label, link2Url);
 }
+
