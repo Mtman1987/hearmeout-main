@@ -37,6 +37,7 @@ const PUBLIC_PREFIXES = [
   // The source resolver verifies HMO_WORKER_SHARED_SECRET inside its handler.
   // The Lounge worker has no user browser session when it prepares a movie.
   '/api/watch/xtream/source/',
+  '/api/voice/stream-source', // Checks room-scoped listener keys or owner/service auth inside its handler.
   '/api/twitch-source/', // Narrow source credential is checked by the ended handler.
   '/overlay',
   '/embed',
@@ -106,7 +107,7 @@ function withRefresh(response: NextResponse, refreshed: RefreshedHmoSpmtSession 
 
 export async function middleware(request: NextRequest) {
   const pathname = request.nextUrl.pathname;
-  if (pathname.startsWith('/overlay/twitch-')) {
+  if (pathname.startsWith('/overlay/twitch-') || pathname.startsWith('/overlay/voices/')) {
     const response = NextResponse.next();
     response.headers.set('Referrer-Policy', 'no-referrer');
     response.headers.set('Cache-Control', 'no-store');
