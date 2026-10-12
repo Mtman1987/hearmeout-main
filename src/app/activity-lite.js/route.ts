@@ -1595,6 +1595,7 @@ volumeInput.addEventListener('input', () => {
   if (shouldUnmute) muted = false;
   applyVolume();
   mediaEl.textContent = 'Media: volume ' + volumeLabel.textContent;
+  if (autoplayBlocked && Number(volumeInput.value || 0) > 0) startVideoPlayback(true);
 });
 audioTrackSelect?.addEventListener('change', () => {
   if (!hls) return;

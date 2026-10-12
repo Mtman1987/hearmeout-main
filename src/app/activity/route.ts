@@ -79,6 +79,7 @@ async function html(request: Request) {
 @media(prefers-reduced-motion:reduce) { .loading-orbit { animation:none; } }
 
     * { box-sizing: border-box; }
+    [hidden] { display: none !important; }
     html, body { width: 100%; height: 100%; margin: 0; background: #000; color: #e5edf5; font-family: Arial, system-ui, sans-serif; }
     body { overflow: hidden; }
     main { width: 100vw; height: 100vh; background: #000; }
@@ -103,7 +104,7 @@ async function html(request: Request) {
     .room-tabs { position: fixed; left: 10px; top: 10px; z-index: 11; display: flex; flex-wrap: wrap; gap: 6px; max-width: calc(100vw - 20px); padding: 6px; border: 1px solid rgba(148,163,184,.35); border-radius: 8px; background: rgba(2,6,23,.76); backdrop-filter: blur(8px); }
     .room-tab { min-height: 34px; border-color: transparent; background: transparent; padding: 6px 10px; }
     .room-tab.active { border-color: rgba(52,211,153,.85); background: rgba(16,185,129,.18); color: #bbf7d0; }
-    .toolbar { position: fixed; left: 50%; bottom: 10px; z-index: 11; display: flex; width: min(980px, calc(100vw - 20px)); align-items: center; gap: 6px; overflow-x: auto; padding: 8px; border: 1px solid rgba(148,163,184,.35); border-radius: 8px; background: rgba(2,6,23,.82); backdrop-filter: blur(8px); transform: translateX(-50%); }
+    .toolbar { position: fixed; left: 50%; bottom: 10px; z-index: 11; display: flex; width: min(360px, calc(100vw - 20px)); align-items: center; gap: 6px; overflow-x: auto; padding: 8px; border: 1px solid rgba(148,163,184,.35); border-radius: 8px; background: rgba(2,6,23,.82); backdrop-filter: blur(8px); transform: translateX(-50%); }
     body.controls-hidden .toolbar { transform: translate(-50%, 8px); }
     button, input, select { min-height: 38px; border-radius: 6px; border: 1px solid #475569; background: #172033; color: #e5edf5; padding: 8px 10px; font: inherit; }
     button { cursor: pointer; }
@@ -172,7 +173,13 @@ async function html(request: Request) {
         <button class="room-tab panel-btn" data-panel="queue" type="button">Queue</button>
         <button class="room-tab panel-btn" data-panel="events" type="button">Activity</button>
       </nav>
-      <div class="toolbar activity-chrome" aria-label="Shared media controls">
+      <div class="toolbar activity-chrome" aria-label="Playback volume">
+        <div class="volume" title="Volume">
+          <input id="volume" type="range" min="0" max="100" value="85" aria-label="Volume" />
+          <span id="volume-label">85%</span>
+        </div>
+      </div>
+      <div id="player-hooks" hidden inert aria-hidden="true">
         <button class="icon-btn" id="play-pause" data-action="play-pause" title="Play" aria-label="Play">▶</button>
         <div class="seekbar" title="Seek">
           <span id="position-label">0:00 / --:--</span>
@@ -185,12 +192,10 @@ async function html(request: Request) {
         <select id="audio-track" hidden aria-label="Movie audio language" title="Audio language"></select>
         <button id="enable-sound" type="button">Enable sound</button>
         <button class="icon-btn" id="mute" type="button" title="Mute" aria-label="Mute">🔊</button>
-        <div class="volume" title="Volume">
-          <input id="volume" type="range" min="0" max="100" value="85" aria-label="Video volume" />
-          <span id="volume-label">85%</span>
-        </div>
+
         <button class="utility-control panel-btn" id="tts-toggle" type="button" title="Play all room TTS on this Discord Activity">TTS Off</button>
         <button class="utility-control" id="download" type="button" disabled title="Download" aria-label="Download">⇩</button>
+
       </div>
       <div class="meta activity-chrome">
         <strong id="title">${escapeHtml(title)}</strong>
