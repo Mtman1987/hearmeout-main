@@ -620,9 +620,8 @@ function appUrl(path) {
     if (youtubeHlsMatch) {
       const params = new URLSearchParams({
         mediaVideoId: youtubeHlsMatch[1],
-        // Discord's Electron build rejects the AAC MPEG-TS rendition even
-        // after the proxy succeeds. Play the cached WebM/Opus source directly.
-        mediaFile: 'source.webm',
+        // Use the same prepared video/audio source as the normal music player.
+        mediaFile: 'index.m3u8',
         lane: 'activity',
       });
       return '/.proxy/api/watch/sessions/' + encodeURIComponent(sessionId) + '/state?' + params.toString();
@@ -639,7 +638,7 @@ function appUrl(path) {
     return '/.proxy' + nextPath;
   }
   if (youtubeHlsMatch) {
-    nextPath = '/api/watch/youtube/hls/' + encodeURIComponent(youtubeHlsMatch[1]) + '/source.webm';
+    nextPath = '/api/watch/youtube/hls/' + encodeURIComponent(youtubeHlsMatch[1]) + '/index.m3u8';
   }
   if (nextPath.startsWith('/api/watch/xtream/hls/')) nextPath = nextPath.replace('/api/watch/xtream/hls/', '/activity-provider/xtream/hls/');
   if (nextPath.startsWith('/api/watch/youtube/hls/')) nextPath = nextPath.replace('/api/watch/youtube/hls/', '/activity-provider/youtube/hls/');
