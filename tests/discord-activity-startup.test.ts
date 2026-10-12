@@ -332,18 +332,35 @@ test('playing video keeps the sound prompt when its connected output is suspende
   assert.equal(vm.runInContext('enableSoundBtn.hidden',context),false);
 });
 
-test('Discord volume stays on native output and sound button invokes play while loading', async () => {
+test('Discord volume uses persistent gain when native volume is ignored', async () => {
   const {context,elements}=playerContext();
-  let contexts=0, plays=0;
-  context.window.AudioContext=class { constructor(){contexts++;} };
-  context.playNow=()=>{plays++;return Promise.resolve();};
-  vm.runInContext("state={current:{requestId:'same'},playback:{status:'playing'}};media.readyState=0;media.play=playNow;volumeInput.value='85';muted=true",context);
+  const gain={value:1};
+  let sources=0;
+  context.window.AudioContext=class {
+    state='running';
+    destination={};
+    createGain(){return {gain,connect(){}};}
+    createMediaElementSource(){sources++;return {connect(){}};}
+    resume(){return Promise.resolve();}
+  };
+  vm.runInContext(`
+    state={current:{requestId:'same',item:{type:'music'}},playback:{status:'playing',position:0,updatedAt:Date.now(),volume:100}};
+    media.readyState=4;media.currentTime=0;media.duration=171;media.paused=false;media.playbackRate=1;mediaIsBuffering=false;
+    Object.defineProperty(media,'volume',{get:()=>1,set:()=>{},configurable:true});
+    volumeInput.value='1';muted=false;
+  `,context);
   elements.get('volume').handlers.get('input')();
-  assert.equal(contexts,0);
-  elements.get('enable-sound').handlers.get('click')();
-  assert.equal(plays,1);
-  assert.equal(vm.runInContext('media.muted',context),false);
   await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(gain.value,0.01);
+  assert.equal(vm.runInContext('media.volume',context),1);
+  elements.get('volume').handlers.get('change')();
+  vm.runInContext('applyPlayback();applyVolume();onMediaPlaying({currentTarget:media});applyVolume()',context);
+  assert.equal(gain.value,0.01);
+  assert.equal(sources,2);
+  assert.equal(vm.runInContext('state.playback.volume',context),100);
+  vm.runInContext("volumeInput.value='0';applyVolume()",context);
+  assert.equal(gain.value,0);
+  assert.equal(vm.runInContext('media.muted',context),true);
 });
 
 test('audio diagnostics pass middleware only for POST in public shared sessions', async () => {

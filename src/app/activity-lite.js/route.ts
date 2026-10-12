@@ -173,15 +173,15 @@ function updateSoundPrompt() {
 }
 
 function enableLocalAudioGain() {
-  // Discord owns the output device. Keep its media on the native output path;
-  // MediaElementAudioSource permanently redirects it into a second audio graph.
-  if (IS_DISCORD_ACTIVITY) return Promise.resolve(false);
+  // Mobile Discord browsers can ignore media.volume. Create the gain graph
+  // only from a volume gesture, and attach media after the context is running.
   try {
     const AudioContext = window.AudioContext || window.webkitAudioContext;
     if (!AudioContext) return Promise.resolve(false);
     if (!localAudioContext) {
       localAudioContext = new AudioContext();
       localAudioGain = localAudioContext.createGain();
+      localAudioGain.gain.value = muted ? 0 : Math.max(0, Math.min(100, Number(volumeInput.value || 0))) / 100;
       localAudioGain.connect(localAudioContext.destination);
       localAudioContext.addEventListener?.('statechange', updateSoundPrompt);
     }
