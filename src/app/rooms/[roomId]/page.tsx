@@ -1115,7 +1115,7 @@ function RoomPageContent() {
     }
 
     // Password gate for private rooms
-    const isOwner = canManageRoom(user as any, effectiveRoom.ownerId);
+    const isOwner = effectiveRoom.ownerId === user?.uid || Boolean((user as any)?.isAdmin);
     if (effectiveRoom.isPrivate && (effectiveRoom.passwordRequired || effectiveRoom.password) && !passwordUnlocked && !isOwner) {
         return (
             <div className="flex flex-col h-screen">
