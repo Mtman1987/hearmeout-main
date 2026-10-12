@@ -835,7 +835,7 @@ function playbackSyncPolicy(item) {
 }
 
 function driftPlaybackRate(signedDrift, item, currentRate) {
-  if (item?.type === 'movie') return 1;
+  if (item?.type === 'movie' || item?.type === 'music') return 1;
   const policy = playbackSyncPolicy(item);
   const correcting = Math.abs(Number(currentRate || 1) - 1) > 0.001;
   const threshold = correcting ? policy.release : policy.deadband;
@@ -898,7 +898,11 @@ function applyPlayback() {
     updateSeekUi();
     return;
   }
-  const remote = position(state.playback);
+  // A requested song uses confirmed controls and its media clock. Buffering
+  // time is not playback time and must never seek the song ahead at startup.
+  const remote = state.current.item.type === 'music'
+    ? Number(state.playback.position || 0)
+    : position(state.playback);
   const drift = Math.abs((media.currentTime || 0) - remote);
   applying = true;
   const isLive = state.current.item.type === 'live' || state.current.item.runtime === 'live';
@@ -1732,6 +1736,7 @@ function onMediaEnded(event) {
   const remote = state?.playback ? position(state.playback) : 0;
   const endedBeforeSharedTimeline = Boolean(
     requestId
+    && state?.current?.item?.type !== 'music'
     && state?.playback?.status === 'playing'
     && Number.isFinite(duration)
     && duration > 0

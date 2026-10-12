@@ -412,3 +412,16 @@ test('Activity playlist URLs carry lane without moving normal browser playback',
   const {context}=playerContext();
   assert.equal(vm.runInContext("appUrl('/api/watch/xtream/hls/vod-123/index.m3u8?machine=old')",context),'/.proxy/api/watch/xtream/hls/vod-123/index.m3u8?machine=old&lane=activity');
 });
+
+test('a song starts at the confirmed position and never chases buffering time', () => {
+  const { context } = playerContext();
+  vm.runInContext(`
+    state={current:{requestId:'song',item:{type:'music'}},playback:{status:'playing',position:0,updatedAt:Date.now()-300000}};
+    media.currentTime=0;media.duration=171;media.readyState=4;media.paused=false;media.playbackRate=1;mediaIsBuffering=false;
+    applyPlayback();
+  `,context);
+  assert.equal(vm.runInContext('media.currentTime',context),0);
+  assert.equal(vm.runInContext("driftPlaybackRate(300,{type:'music'},1.02)",context),1);
+  vm.runInContext('state.playback.position=42;state.playback.updatedAt=Date.now();applyPlayback()',context);
+  assert.equal(vm.runInContext('media.currentTime',context),42);
+});
