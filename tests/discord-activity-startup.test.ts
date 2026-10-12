@@ -514,3 +514,27 @@ test('bot setup is reachable without a website cookie but bridge controls keep t
   const source = readFileSync(new URL('../src/app/api/discord/voice-bridge/route.ts', import.meta.url), 'utf8');
   assert.match(source, /if \(!session\) return NextResponse.json\(\{ error: 'Unauthorized' \}/);
 });
+
+test('HearMeOut room bot invite always supplies explicit installation scopes', async () => {
+  const source = readFileSync(new URL('../src/app/api/discord/bot-invite/route.ts', import.meta.url), 'utf8');
+  const compiled = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText;
+  const exports: any = {};
+  vm.runInNewContext(compiled, {
+    exports, URL, URLSearchParams, AbortSignal,
+    process: { env: { DISCORD_BOT_TOKEN: 'test-token' } },
+    fetch: async () => Response.json({ id: '987654321', bot: true }),
+    require(name: string) {
+      if (name === 'next/server') return { NextResponse: { json: Response.json, redirect: (url: URL) => new Response(null, { status: 307, headers: { location: url.toString() } }) } };
+      throw new Error(name);
+    },
+  });
+  const response = await exports.GET();
+  const invite = new URL(response.headers.get('location'));
+  assert.equal(invite.origin, 'https://discord.com');
+  assert.equal(invite.pathname, '/oauth2/authorize');
+  assert.equal(invite.searchParams.get('client_id'), '987654321');
+  assert.equal(invite.searchParams.get('scope'), 'bot applications.commands');
+  assert.equal(invite.searchParams.get('permissions'), '3146752');
+  assert.equal(invite.searchParams.get('integration_type'), '0');
+  assert.equal(response.headers.get('cache-control'), 'no-store');
+});
