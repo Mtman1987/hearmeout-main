@@ -1,3 +1,5 @@
+import { getDjWorkerUrl } from './dj-worker-config';
+import { getDjWorkerRequestHeaders } from './dj-worker-auth';
 export type BackupPlaylistEntry = { id: string; title: string; duration: number; artist: string; thumbnail: string };
 export type BackupPlaylist = { enabled: boolean; url: string; title: string; entries: BackupPlaylistEntry[]; cursor: number };
 
@@ -10,7 +12,13 @@ export function publicPlaylistUrl(value: string) {
 export async function importBackupPlaylist(value: string): Promise<BackupPlaylist> {
   const url = publicPlaylistUrl(value);
   const { default: YouTube } = await import('youtube-sr');
-  const playlist = await YouTube.getPlaylist(url, { limit: 1000, fetchAll: true, requestOptions: { signal: AbortSignal.timeout(30000) } });
+  const playlist = await YouTube.getPlaylist(url, { limit: 1000, fetchAll: true, requestOptions: { signal: AbortSignal.timeout(15000) } }).catch(() => null);
+  if (!playlist?.videos?.length) {
+    const response = await fetch(getDjWorkerUrl() + '/watch/youtube/playlist?url=' + encodeURIComponent(url), { headers: getDjWorkerRequestHeaders(), signal: AbortSignal.timeout(65000), cache: 'no-store' });
+    const data = await response.json();
+    if (!response.ok || !data.entries?.length) throw new Error(data.error || 'No public playlist videos found.');
+    return { enabled: true, url, title: data.title || 'Backup music', entries: data.entries, cursor: 0 };
+  }
   const seen = new Set<string>();
   const entries = playlist.videos.filter(video => /^[A-Za-z0-9_-]{11}$/.test(video.id || '') && !seen.has(video.id!) && Boolean(seen.add(video.id!))).map(video => ({
     id: video.id!, title: video.title || 'Playlist song', duration: video.duration || 0,

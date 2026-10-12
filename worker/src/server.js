@@ -965,6 +965,16 @@ app.get('/music/:videoId', authorizeWorker, (req, res) => {
   return res.status(410).send('Legacy music endpoint disabled');
 });
 
+const { readPlaylist, extractDiscordAudio } = require('./youtube-request-media');
+app.get('/watch/youtube/playlist', authorizeWorker, async (req, res) => {
+  try { res.json(await readPlaylist(String(req.query.url || ''), ytDlpCookieArgs())); }
+  catch (error) { res.status(400).json({ error: 'Playlist unavailable. Use a public or unlisted YouTube playlist.' }); }
+});
+app.get('/extract/discord-audio', authorizeWorker, async (req, res) => {
+  try { res.json(await extractDiscordAudio(String(req.query.videoId || ''), req.query.refresh === '1')); }
+  catch (error) { res.status(503).json({ error: error.message }); }
+});
+
 app.get('/extract', authorizeWorker, async (req, res) => {
   const { videoId } = req.query;
   const mode = String(req.query.mode || 'audio').toLowerCase() === 'video' ? 'video' : 'audio';

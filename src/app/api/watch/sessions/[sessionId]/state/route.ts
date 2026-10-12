@@ -20,6 +20,10 @@ function getRequestBaseUrl(request: Request) {
   return `${proto}://${host}`;
 }
 
+function isActivitySourceTypeUnsupported(type: string | null) {
+  return Boolean(type && /(?:audio|video)\/mp4/i.test(type));
+}
+
 function copyMediaHeaders(source: Headers) {
   const headers = new Headers(CORS_HEADERS);
   for (const header of [
@@ -41,7 +45,7 @@ async function extractYoutubeAudio(request: Request, videoId: string, refresh = 
   const workerUrl = getMediaWorkerUrl(request);
   if (!workerUrl || !isValidVideoId(videoId)) return null;
 
-  const url = new URL(`${workerUrl}/extract`);
+  const url = new URL(`${workerUrl}/extract/discord-audio`);
   url.searchParams.set('videoId', videoId);
   url.searchParams.set('mode', 'audio');
   if (refresh) url.searchParams.set('refresh', '1');
@@ -49,6 +53,7 @@ async function extractYoutubeAudio(request: Request, videoId: string, refresh = 
   const response = await fetch(url, {
     headers: getDjWorkerRequestHeaders({ 'user-agent': 'HearMeOut/1.0' }),
     cache: 'no-store',
+    signal: AbortSignal.timeout(45000),
   }).catch(() => null);
   if (!response?.ok) return null;
 
@@ -109,9 +114,11 @@ export async function GET(request: Request, context: { params: Promise<{ session
     // Electron media stack rejects the AAC MPEG-TS rendition. Do not turn that
     // cache miss into a dead Activity: resolve the same song's audio stream and
     // proxy it through this allowed same-origin route instead.
-    if (mediaFile === 'source.webm' && !mediaResponse.ok && [404, 502, 503].includes(mediaResponse.status)) {
+    if (mediaFile === 'source.webm' && (isActivitySourceTypeUnsupported(mediaResponse.headers.get('content-type')) || (!mediaResponse.ok && [404, 502, 503].includes(mediaResponse.status)))) {
+      await mediaResponse.body?.cancel();
       const fallback = await proxyDiscordYoutubeAudio(request, mediaVideoId);
       if (fallback) return fallback;
+      return NextResponse.json({ error: 'This song could not be prepared for Discord. Try Next or another song.' }, { status: 503, headers: CORS_HEADERS });
     }
 
     if (mediaFile === 'index.m3u8' && mediaResponse.ok) {
