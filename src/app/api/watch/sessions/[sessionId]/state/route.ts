@@ -115,7 +115,9 @@ export async function GET(request: Request, context: { params: Promise<{ session
     // cache miss into a dead Activity: resolve the same song's audio stream and
     // proxy it through this allowed same-origin route instead.
     if (mediaFile === 'source.webm' && (isActivitySourceTypeUnsupported(mediaResponse.headers.get('content-type')) || (!mediaResponse.ok && [404, 502, 503].includes(mediaResponse.status)))) {
-      await mediaResponse.body?.cancel();
+      // Next may tee an upstream body; awaiting cancellation can wait forever
+      // for its other branch. Release it without blocking the fallback stream.
+      void mediaResponse.body?.cancel().catch(() => {});
       const fallback = await proxyDiscordYoutubeAudio(request, mediaVideoId);
       if (fallback) return fallback;
       return NextResponse.json({ error: 'This song could not be prepared for Discord. Try Next or another song.' }, { status: 503, headers: CORS_HEADERS });
