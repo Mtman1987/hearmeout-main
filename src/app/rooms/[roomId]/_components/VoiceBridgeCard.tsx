@@ -58,6 +58,9 @@ export function VoiceBridgeCard({ roomId }: { roomId: string }) {
   const [guildId, setGuildId] = React.useState('');
   const [voiceChannelId, setVoiceChannelId] = React.useState('');
   const [running, setRunning] = React.useState(false);
+  const channelRequest = React.useRef(0);
+  const serverSelectId = React.useId();
+  const channelSelectId = React.useId();
   const [roomVoiceOutboundEnabled, setRoomVoiceOutboundEnabled] = React.useState(true);
   const [audioProfile, setAudioProfile] = React.useState<'low-latency' | 'balanced' | 'resilient'>('balanced');
   const [status, setStatus] = React.useState<BridgeState['worker']>();
@@ -74,19 +77,27 @@ export function VoiceBridgeCard({ roomId }: { roomId: string }) {
   }, []);
 
   const loadChannels = React.useCallback(async (gid: string) => {
-    if (!gid) { setChannels([]); return; }
+    const request = ++channelRequest.current;
+    if (!gid) { setChannels([]); setLoadingChannels(false); return; }
     setLoadingChannels(true);
+    setChannels([]);
     try {
-      const res = await fetch(`/api/discord/channels?guildId=${encodeURIComponent(gid)}`, { cache: 'no-store' });
+      const res = await fetch(`/api/discord/channels?guildId=${encodeURIComponent(gid)}`, {
+        cache: 'no-store', signal: AbortSignal.timeout(10_000),
+      });
       const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Unable to load voice channels');
       const list: Channel[] = Array.isArray(data) ? data : [];
-      setChannels(list.filter((c) => VOICE_CHANNEL_TYPES.has(c.type)));
-    } catch {
-      setChannels([]);
+      if (request === channelRequest.current) setChannels(list.filter((c) => VOICE_CHANNEL_TYPES.has(Number(c.type))));
+    } catch (error) {
+      if (request === channelRequest.current) {
+        setChannels([]);
+        toast({ title: 'Voice channels unavailable', description: error instanceof Error ? error.message : 'Try Refresh servers.', variant: 'destructive' });
+      }
     } finally {
-      setLoadingChannels(false);
+      if (request === channelRequest.current) setLoadingChannels(false);
     }
-  }, []);
+  }, [toast]);
 
   React.useEffect(() => {
     let alive = true;
@@ -105,7 +116,7 @@ export function VoiceBridgeCard({ roomId }: { roomId: string }) {
         if (cfg) {
           setGuildId(cfg.guildId || '');
           setVoiceChannelId(cfg.voiceChannelId || '');
-          setRunning(Boolean(state?.worker?.running || cfg.enabled));
+          setRunning(state?.worker?.running ?? Boolean(cfg.enabled));
           setRoomVoiceOutboundEnabled(
             state?.worker?.roomVoiceOutboundEnabled ?? cfg.roomVoiceOutboundEnabled ?? true,
           );
@@ -250,18 +261,20 @@ export function VoiceBridgeCard({ roomId }: { roomId: string }) {
         </div>
         <div className="grid gap-3 sm:grid-cols-2">
           <div className="space-y-1.5">
-            <Label>Server</Label>
-            <Select value={guildId} onValueChange={onGuildChange} disabled={running || busy}>
-              <SelectTrigger><SelectValue placeholder="Select a server" /></SelectTrigger>
-              <SelectContent>{guilds.map((g) => <SelectItem key={g.id} value={g.id}>{g.name}</SelectItem>)}</SelectContent>
-            </Select>
+            <Label htmlFor={serverSelectId}>Server</Label>
+            <select id={serverSelectId} value={guildId} onChange={(event) => onGuildChange(event.target.value)} disabled={running || busy}
+              className="h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring disabled:cursor-not-allowed disabled:opacity-50">
+              <option value="">Select a server</option>
+              {guilds.map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}
+            </select>
           </div>
           <div className="space-y-1.5">
-            <Label>Voice channel</Label>
-            <Select value={voiceChannelId} onValueChange={setVoiceChannelId} disabled={running || busy || !guildId || loadingChannels}>
-              <SelectTrigger><SelectValue placeholder={loadingChannels ? 'Loading…' : 'Select a voice channel'} /></SelectTrigger>
-              <SelectContent>{channels.map((c) => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}</SelectContent>
-            </Select>
+            <Label htmlFor={channelSelectId}>Voice channel</Label>
+            <select id={channelSelectId} value={voiceChannelId} onChange={(event) => setVoiceChannelId(event.target.value)} disabled={running || busy || !guildId || loadingChannels}
+              className="h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring disabled:cursor-not-allowed disabled:opacity-50">
+              <option value="">{loadingChannels ? 'Loading…' : !guildId ? 'Select a server first' : channels.length ? 'Select a voice channel' : 'No voice channels found'}</option>
+              {channels.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+            </select>
           </div>
         </div>
 
