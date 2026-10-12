@@ -1,3 +1,5 @@
+import { isTwitchMusicSession } from '@/lib/twitch-media-scope';
+import { importBackupPlaylist, nextBackupEntry, backupPlaylistSummary, type BackupPlaylist } from '@/lib/twitch-backup-playlist';
 import {
   findXtreamCatalogItemById,
   findXtreamSeriesEpisode,
@@ -84,6 +86,7 @@ type WatchSession = {
   ttsQueue?: WatchRequest[];
   current: WatchRequest | null;
   autoRadio?: boolean;
+  backupPlaylist?: BackupPlaylist;
   playback: {
     status: 'idle' | 'paused' | 'playing';
     position: number;
@@ -535,7 +538,7 @@ function enqueue(session: WatchSession, item: WatchCatalogItem, requestedBy: Wat
     item,
   };
 
-  if (!session.current || replaceCurrent) {
+  if (!session.current || replaceCurrent || (isTwitchMusicSession(session.id) && session.current.requestedBy.userId === 'backup-playlist')) {
     session.current = request;
     session.playback = { status: 'playing', position: 0, updatedAt: Date.now(), muted: session.playback.muted ?? true, volume: session.playback.volume ?? 85 };
     addEvent(session, `${requestedBy.username} loaded ${item.title}`);
@@ -1045,6 +1048,9 @@ export async function requestWatchMusicItem(params: {
     return { error: 'No matching music item' as const, result: resolved };
   }
 
+  if (resolved.track.source !== 'offline' && !/^[A-Za-z0-9_-]{11}$/.test(resolved.track.id)) {
+    return { error: 'Invalid music video' as const, result: { success: false, message: 'Use a single YouTube video, or !playlist <YouTube playlist URL> for backup music.' } };
+  }
   const item = musicTrackToWatchItem(resolved.track);
   const session = getWatchSession(params.sessionId, params.guildId, params.channelId, 'music');
   if (params.sessionId === getMusicWatchSessionId() || params.sessionId === SPACEMOUNTAIN_LOUNGE_SESSION_ID) {
@@ -1196,6 +1202,56 @@ async function getAutoRadioRequest(sessionId: string): Promise<WatchRequest | nu
   };
 }
 
+function getBackupPlaylistRequest(session: WatchSession): WatchRequest | null {
+  if (!isTwitchMusicSession(session.id)) return null;
+  const entry = nextBackupEntry(session.backupPlaylist);
+  if (!entry) return null;
+  return {
+    requestId: 'backup-' + Date.now() + '-' + Math.random().toString(16).slice(2),
+    requestedBy: { userId: 'backup-playlist', username: 'Backup playlist' },
+    addedAt: new Date().toISOString(),
+    item: musicTrackToWatchItem({ ...entry, artId: entry.id,
+      url: 'https://www.youtube.com/watch?v=' + entry.id,
+      addedBy: 'Backup playlist', addedAt: new Date(), plays: 0, source: 'twitch' }),
+  };
+}
+
+export async function controlTwitchBackupPlaylist(sessionId: string, control: string, query?: string) {
+  if (!isTwitchMusicSession(sessionId)) throw new Error('Backup playlists belong to a Twitch music stream.');
+  // Fetch only playlist references. Media is resolved when a song actually plays.
+  const imported = control === 'set' ? await importBackupPlaylist(query || '') : undefined;
+  const session = getWatchSession(sessionId, undefined, undefined, 'music');
+  if (imported) {
+    session.backupPlaylist = imported;
+    // Older song parsing stored the literal word "playlist" as a video ID.
+    // Replace only that invalid item; retain every real requested song.
+    if (session.current?.item.metadata?.videoId === 'playlist') {
+      session.current = session.queue.shift() || null;
+      session.playback = { ...session.playback, status: session.current ? 'playing' : 'idle', position: 0, updatedAt: Date.now() };
+    }
+  }
+  else if (control === 'clear') session.backupPlaylist = undefined;
+  else if (control === 'on') {
+    if (!session.backupPlaylist?.entries.length) throw new Error('Set a playlist first with !playlist <YouTube playlist URL>.');
+    session.backupPlaylist.enabled = true;
+  } else if (control === 'off' && session.backupPlaylist) session.backupPlaylist.enabled = false;
+  else if (!['status', 'off'].includes(control)) throw new Error('Unsupported playlist control.');
+  if (control !== 'status') {
+    if ((!session.backupPlaylist?.enabled) && session.current?.requestedBy.userId === 'backup-playlist') {
+      session.current = session.queue.shift() || null;
+      session.playback = { ...session.playback, status: session.current ? 'playing' : 'idle', position: 0, updatedAt: Date.now() };
+    }
+    if (!session.current && !session.queue.length) {
+      session.current = getBackupPlaylistRequest(session);
+      if (session.current) session.playback = { ...session.playback, status: 'playing', position: 0, updatedAt: Date.now() };
+    }
+    if (session.current) maybePrepareSharedHls(session.current.item);
+    addEvent(session, 'Backup playlist ' + control);
+    saveWatchStateToDisk();
+  }
+  return { playlist: backupPlaylistSummary(session.backupPlaylist), session };
+}
+
 function runtimeSeconds(value: unknown): number | null {
   const runtime = String(value || '').trim().toLowerCase();
   if (!runtime) return null;
@@ -1300,7 +1356,9 @@ export async function controlWatchSession(sessionId: string, action: string, pos
 
   if (action === 'next') {
     if (actor?.expectedRequestId && session.current?.requestId !== actor.expectedRequestId) return session;
-    session.current = session.queue.shift() || await getAutoNextEpisodeRequest(session);
+    session.current = isTwitchMusicSession(session.id)
+      ? session.queue.shift() || getBackupPlaylistRequest(session)
+      : session.queue.shift() || await getAutoNextEpisodeRequest(session);
     if (!session.current && session.autoRadio && (sessionId === getMusicWatchSessionId() || sessionId === SPACEMOUNTAIN_LOUNGE_SESSION_ID)) {
       session.current = await getAutoRadioRequest(sessionId);
     }

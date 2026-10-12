@@ -4,6 +4,7 @@ import { twitchSourceUrl } from '@/lib/twitch-source-access';
 import { isBotActionServiceRequest } from '@/lib/bot-action-service-auth';
 import {
   controlWatchSession,
+  controlTwitchBackupPlaylist,
   getPublicWatchSession,
   getWatchSession,
   requestWatchItem,
@@ -24,6 +25,7 @@ import { SPACEMOUNTAIN_LOUNGE_MUSIC_SESSION_ID, SPACEMOUNTAIN_LOUNGE_MOVIE_SESSI
 export const dynamic = 'force-dynamic';
 
 type HearMeOutAction =
+  | 'hmo.media.playlist'
   | 'hmo.media.source'
   | 'hmo.media.state.read'
   | 'hmo.media.request'
@@ -35,6 +37,7 @@ type HearMeOutAction =
   | 'hmo.voice.bridge.control'
   | 'hmo.tts.speak';
 const ACTIONS = new Set<HearMeOutAction>([
+  'hmo.media.playlist',
   'hmo.media.source',
   'hmo.media.state.read',
   'hmo.media.request',
@@ -103,7 +106,7 @@ export async function POST(request: NextRequest) {
     && action === 'hmo.media.control'
     && isSpaceMountainLoungeSession(tenantId, sessionId);
   const isTwitchWorkerRequest = body?.streamMode === 'twitch'
-    && ['hmo.media.request', 'hmo.media.control', 'hmo.media.state.read', 'hmo.media.source'].includes(action)
+    && ['hmo.media.request', 'hmo.media.control', 'hmo.media.state.read', 'hmo.media.source', 'hmo.media.playlist'].includes(action)
     && isDjWorkerRequest(request);
   if (!isPublicQueueRequest && !isSpaceMountainLoungeControl && !isBotActionServiceRequest(request) && !isTwitchWorkerRequest) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
@@ -121,6 +124,11 @@ export async function POST(request: NextRequest) {
       tenantId,
       actorRole,
     };
+
+    if (action === 'hmo.media.playlist') {
+      const result = await controlTwitchBackupPlaylist(sessionId, text(body?.control, 20).toLowerCase(), text(body?.query, 1000));
+      return NextResponse.json({ success: true, action, playlist: result.playlist, session: getPublicWatchSession(result.session, publicBaseUrl(request)) });
+    }
 
     if (action === 'hmo.tts.speak') {
       const targetRoomId = room || ACTIVITY_ROOM_ID;
