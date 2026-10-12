@@ -7,13 +7,12 @@ function source(relative: string) {
   return fs.readFileSync(path.join(process.cwd(), relative), 'utf8');
 }
 
-test('persona card keeps the working manual recorder as a fallback but shares the canonical STT and bot client', () => {
+test('persona Talk uses bounded portable microphone capture and the canonical STT and bot client', () => {
   const card = source('src/app/rooms/[roomId]/_components/PersonaCard.tsx');
   const client = source('src/lib/room-persona-client.ts');
 
-  assert.match(card, /navigator\.mediaDevices\.getUserMedia/);
-  assert.match(card, /new MediaRecorder/);
-  assert.match(card, /audio\/webm;codecs=opus/);
+  assert.match(card, /captureMicrophone/);
+  assert.doesNotMatch(card, /new MediaRecorder|audio\/webm/);
   assert.match(card, /transcribeRoomPersonaAudio/);
   assert.match(card, /sendRoomPersonaCommand/);
   assert.match(card, /You said/);
