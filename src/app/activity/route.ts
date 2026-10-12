@@ -102,6 +102,9 @@ async function html(request: Request) {
     body.controls-hidden .toolbar, body.controls-hidden .meta { transform: translateY(8px); }
     body.controls-hidden .video-wrap { cursor: none; }
     .room-tabs { position: fixed; left: 10px; top: 10px; z-index: 11; display: flex; flex-wrap: wrap; gap: 6px; max-width: calc(100vw - 20px); padding: 6px; border: 1px solid rgba(148,163,184,.35); border-radius: 8px; background: rgba(2,6,23,.76); backdrop-filter: blur(8px); }
+    .bridge-bot-invite { position: fixed; left: 10px; top: 64px; z-index: 12; max-width: calc(100vw - 20px); padding: 10px; border: 1px solid #475569; border-radius: 8px; background: rgba(2,6,23,.94); font-size: 13px; }
+    .bridge-bot-invite[hidden] { display: none; }
+    .bridge-bot-invite a { color: #93c5fd; }
     .room-tab { min-height: 34px; border-color: transparent; background: transparent; padding: 6px 10px; }
     .room-tab.active { border-color: rgba(52,211,153,.85); background: rgba(16,185,129,.18); color: #bbf7d0; }
     .toolbar { position: fixed; left: 50%; bottom: 10px; z-index: 11; display: flex; width: min(360px, calc(100vw - 20px)); align-items: center; gap: 6px; overflow-x: auto; padding: 8px; border: 1px solid rgba(148,163,184,.35); border-radius: 8px; background: rgba(2,6,23,.82); backdrop-filter: blur(8px); transform: translateX(-50%); }
@@ -173,6 +176,12 @@ async function html(request: Request) {
         <button class="room-tab panel-btn" data-panel="queue" type="button">Queue</button>
         <button class="room-tab panel-btn" data-panel="events" type="button">Activity</button>
       </nav>
+      <div id="bridge-bot-invite" class="bridge-bot-invite" hidden role="status">
+        Voice bridge bot is missing from this server.
+        <a id="bridge-bot-add" target="_blank" rel="noopener noreferrer">Add bot to this server</a>
+        <button id="bridge-bot-copy" type="button">Copy invite link</button>
+        <p class="muted">A server manager can use this link. After adding it, retry your bridge connection.</p>
+      </div>
       <div class="toolbar activity-chrome" aria-label="Playback volume">
         <div class="volume" title="Volume">
           <input id="volume" type="range" min="0" max="100" value="85" aria-label="Volume" />

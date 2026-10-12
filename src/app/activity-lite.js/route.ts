@@ -749,6 +749,50 @@ document.getElementById('room').textContent = 'Room ' + sessionId;
 setActiveSessionTab();
 statusEl.textContent = 'Connecting';
 
+
+const bridgeBotNotice = document.getElementById('bridge-bot-invite');
+const bridgeBotAdd = document.getElementById('bridge-bot-add');
+const bridgeBotCopy = document.getElementById('bridge-bot-copy');
+let bridgeBotInviteUrl = '';
+let bridgeBotCheckBusy = false;
+async function checkActivityBridgeBot() {
+  const guildId = params.get('guild_id');
+  if (!IS_DISCORD_ACTIVITY || !/^\\d{5,30}$/.test(guildId || '') || bridgeBotCheckBusy) return;
+  bridgeBotCheckBusy = true;
+  try {
+    const result = await api('/api/discord/activity-bot?guildId=' + encodeURIComponent(guildId));
+    bridgeBotInviteUrl = result.present === false ? String(result.inviteUrl || '') : '';
+    if (bridgeBotAdd) bridgeBotAdd.href = bridgeBotInviteUrl;
+    if (bridgeBotNotice) bridgeBotNotice.hidden = !bridgeBotInviteUrl;
+  } catch (err) {
+    console.warn('Activity bot setup check unavailable', err);
+  } finally {
+    bridgeBotCheckBusy = false;
+  }
+}
+if (bridgeBotAdd) bridgeBotAdd.addEventListener('click', (event) => {
+  if (!bridgeBotInviteUrl || !params.get('frame_id')) return;
+  event.preventDefault();
+  let origin = 'https://discord.com';
+  try {
+    const referrer = new URL(document.referrer).origin;
+    if (new URL(referrer).hostname === 'discord.com' || new URL(referrer).hostname.endsWith('.discord.com')) origin = referrer;
+  } catch {}
+  window.parent.postMessage([1, {
+    cmd: 'OPEN_EXTERNAL_LINK', args: { url: bridgeBotInviteUrl },
+    nonce: 'bot-invite-' + Date.now() + '-' + Math.random().toString(36).slice(2),
+  }], origin);
+});
+if (bridgeBotCopy) bridgeBotCopy.addEventListener('click', async () => {
+  if (!bridgeBotInviteUrl) return;
+  try {
+    await navigator.clipboard.writeText(bridgeBotInviteUrl);
+    bridgeBotCopy.textContent = 'Invite copied';
+  } catch {
+    window.prompt('Copy this bot invite link:', bridgeBotInviteUrl);
+  }
+});
+
 function discordHandshake() {
   const frameId = params.get('frame_id');
   if (!frameId || !CLIENT_ID) {
@@ -1871,6 +1915,8 @@ try {
   updateSoundPrompt();
   scheduleControlsHide();
   discordHandshake();
+  checkActivityBridgeBot();
+  if (IS_DISCORD_ACTIVITY && params.get('guild_id')) setInterval(checkActivityBridgeBot, 30000);
   refresh();
   setInterval(refresh, 1000);
 } catch (err) {

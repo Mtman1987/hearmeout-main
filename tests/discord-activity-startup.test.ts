@@ -442,3 +442,75 @@ test('a song starts at the confirmed position and never chases buffering time', 
   vm.runInContext('state.playback.position=42;state.playback.updatedAt=Date.now();applyPlayback()',context);
   assert.equal(vm.runInContext('media.currentTime',context),42);
 });
+
+test('Activity offers the server bot invite and opens it through Discord', async () => {
+  const { context, elements, messages } = playerContext('https://1279582181768957963.discordsays.com/activity?frame_id=f&guild_id=123456789');
+  vm.runInContext('bridgeBotCheckBusy = false', context);
+  context.fetch = async () => Response.json({ present: false, inviteUrl: 'https://discord.com/oauth2/authorize?client_id=987654321&guild_id=123456789' });
+  await vm.runInContext('checkActivityBridgeBot()', context);
+  assert.equal(elements.get('bridge-bot-invite').hidden, false);
+  assert.match(elements.get('bridge-bot-add').href, /client_id=987654321/);
+  let prevented = false;
+  elements.get('bridge-bot-add').handlers.get('click')({ preventDefault() { prevented = true; } });
+  assert.equal(prevented, true);
+  assert.equal(messages.at(-1)[0][1].cmd, 'OPEN_EXTERNAL_LINK');
+  assert.equal(messages.at(-1)[0][1].args.url, elements.get('bridge-bot-add').href);
+  context.fetch = async () => Response.json({ present: true });
+  await vm.runInContext('checkActivityBridgeBot()', context);
+  assert.equal(elements.get('bridge-bot-invite').hidden, true);
+});
+
+function botSetupRoute(fetcher: typeof fetch) {
+  const source = readFileSync(new URL('../src/app/api/discord/activity-bot/route.ts', import.meta.url), 'utf8');
+  const compiled = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText;
+  const exports: any = {};
+  vm.runInNewContext(compiled, { exports, URL, AbortSignal, Date, fetch: fetcher, require(name: string) {
+    if (name === 'next/server') return { NextResponse: Response };
+    if (name === '@/lib/config') return { config: { discordBotToken: 'test-token' } };
+    throw new Error(name);
+  } });
+  return exports.GET;
+}
+
+test('bot setup validates IDs and builds an invite for the actual bridge bot', async () => {
+  const calls: string[] = [];
+  const get = botSetupRoute(async (url: any) => {
+    calls.push(String(url));
+    return String(url).endsWith('/users/@me')
+      ? Response.json({ id: '987654321', bot: true })
+      : Response.json({ code: 10004 }, { status: 404 });
+  });
+  assert.equal((await get(new Request('https://hmo.test/api/discord/activity-bot?guildId=bad'))).status, 400);
+  assert.equal(calls.length, 0);
+  const response = await get(new Request('https://hmo.test/api/discord/activity-bot?guildId=123456789'));
+  const result = await response.json();
+  assert.equal(result.present, false);
+  const invite = new URL(result.inviteUrl);
+  assert.equal(invite.searchParams.get('client_id'), '987654321');
+  assert.equal(invite.searchParams.get('guild_id'), '123456789');
+  assert.equal(invite.searchParams.get('disable_guild_select'), 'true');
+  assert.equal(invite.searchParams.get('permissions'), '3146752');
+  assert.equal(invite.searchParams.get('integration_type'), '0');
+  assert.equal(response.headers.get('cache-control'), 'no-store');
+  await get(new Request('https://hmo.test/api/discord/activity-bot?guildId=123456789'));
+  assert.equal(calls.length, 2);
+});
+
+test('installed bots and temporary Discord failures never produce an install link', async () => {
+  for (const status of [200, 401, 429, 500]) {
+    const get = botSetupRoute(async () => Response.json(status === 200 ? { id: '123456789', name: 'private server' } : { code: 0 }, { status }));
+    const response = await get(new Request('https://hmo.test/api/discord/activity-bot?guildId=123456789'));
+    const body = await response.json();
+    assert.equal(response.status, status === 200 ? 200 : 503);
+    assert.equal(body.inviteUrl, undefined);
+    assert.equal(body.name, undefined);
+    if (status === 200) assert.equal(body.present, true);
+  }
+});
+
+test('bot setup is reachable without a website cookie but bridge controls keep their own auth', async () => {
+  const response = await middleware(new NextRequest('https://hmo.test/api/discord/activity-bot?guildId=123456789'));
+  assert.equal(response.headers.get('x-middleware-next'), '1');
+  const source = readFileSync(new URL('../src/app/api/discord/voice-bridge/route.ts', import.meta.url), 'utf8');
+  assert.match(source, /if \(!session\) return NextResponse.json\(\{ error: 'Unauthorized' \}/);
+});
