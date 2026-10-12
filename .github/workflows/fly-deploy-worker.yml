@@ -60,6 +60,10 @@ jobs:
               )
             fi
           fi
+          # These files only affect direct Activity audio and its DJ endpoint.
+          if [ -n "${changed:-}" ] && ! printf '%s\n' "$changed" | grep -qvE '^worker/(src/(discord-audio-stream.js|youtube-request-media.js|server.js)|tests/(discord-audio-stream.test.cjs|youtube-request-media.test.cjs))$'; then
+            target=media
+          fi
           # A new on-demand Activity role must not restart the live Lounge/DJ.
           if [ -n "${changed:-}" ] && ! echo "$changed" | grep -qvE '^worker/(fly.toml|scripts/run-role.sh)$'; then
             if git diff "$DEPLOY_BEFORE" "$DEPLOY_AFTER" -- worker/fly.toml | grep -q '^+.*activity'; then target=activity; fi
@@ -68,7 +72,7 @@ jobs:
       - name: Check Lounge state and routing
         run: |
           node --check worker/src/server.js
-          node --test worker/tests/youtube-request-media.test.cjs
+          node --test worker/tests/youtube-request-media.test.cjs worker/tests/discord-audio-stream.test.cjs
           node --test worker/tests/lounge-program.test.cjs
           node --check worker/src/spotlight-hls.js
           node --test tests/spotlight-stall.test.cjs tests/spotlight-source-contract.test.cjs

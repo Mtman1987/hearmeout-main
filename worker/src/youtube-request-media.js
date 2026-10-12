@@ -32,14 +32,16 @@ async function extractDiscordAudio(videoId, refresh = false) {
   if (cached && cached.expires>Date.now()) return cached.value;
   if (pending.has(videoId)) return pending.get(videoId);
   const job=(async()=>{
-    const { Innertube, ClientType }=await import('youtubei.js');
+    const { Innertube, ClientType, Platform }=await import('youtubei.js');
+    Platform.shim.eval = async data => new (require('node:vm').Script)('(function(){' + data.output + '\n})()')
+      .runInNewContext(Object.create(null), { timeout: 1000 });
     for (const client of ['ANDROID_VR','ANDROID','WEB','MWEB']) {
       try {
-        const yt=await Innertube.create({client_type:ClientType?.[client] || client});
+        const yt=await Innertube.create({client_type:ClientType?.[client] || client, fetch: (url, options = {}) => fetch(url, { ...options, signal: AbortSignal.timeout(10000) })});
         const info=await yt.getBasicInfo(videoId);
         const formats=(info.streaming_data?.adaptive_formats || []).filter(opusFormat).sort((a,b)=>(Number(b.bitrate)||0)-(Number(a.bitrate)||0));
         for(const format of formats) {
-          const url=format.url || (typeof format.decipher==='function' ? await format.decipher(yt.session.player).catch(()=>null):null);
+          const url=typeof format.decipher==='function' ? await format.decipher(yt.session.player).catch(()=>null) : format.url;
           if (!url) continue;
           const response=await fetch(url,{headers:{range:'bytes=0-31'},signal:AbortSignal.timeout(10000)});
           await response.body?.cancel();

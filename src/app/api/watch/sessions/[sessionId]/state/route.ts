@@ -20,10 +20,6 @@ function getRequestBaseUrl(request: Request) {
   return `${proto}://${host}`;
 }
 
-function isActivitySourceTypeUnsupported(type: string | null) {
-  return Boolean(type && /(?:audio|video)\/mp4/i.test(type));
-}
-
 function copyMediaHeaders(source: Headers) {
   const headers = new Headers(CORS_HEADERS);
   for (const header of [
@@ -68,24 +64,14 @@ export async function GET(request: Request, context: { params: Promise<{ session
   // own 404 for the dedicated HLS routes. Tunnel Activity media through this
   // proven same-origin route and keep every segment on it as well.
   if (mediaVideoId && mediaFile) {
+    if (mediaFile === 'source.webm') {
+      if (!isValidVideoId(mediaVideoId)) return NextResponse.json({ error: 'Invalid video id' }, { status: 400, headers: CORS_HEADERS });
+      const stream = await proxyDiscordYoutubeAudio(request, mediaVideoId);
+      return stream || NextResponse.json({ error: 'Song audio unavailable. Try Next or another song.' }, { status: 503, headers: CORS_HEADERS });
+    }
     const mediaResponse = await getYoutubeHls(request, {
       params: Promise.resolve({ videoId: mediaVideoId, file: mediaFile }),
     });
-
-    // The HearMeOut web player can already be playing from the prepared HLS
-    // stream while the separately cached audio file does not exist yet. The
-    // Discord Activity intentionally asks for source.webm because Discord's
-    // Electron media stack rejects the AAC MPEG-TS rendition. Do not turn that
-    // cache miss into a dead Activity: resolve the same song's audio stream and
-    // proxy it through this allowed same-origin route instead.
-    if (mediaFile === 'source.webm' && (isActivitySourceTypeUnsupported(mediaResponse.headers.get('content-type')) || (!mediaResponse.ok && [404, 502, 503].includes(mediaResponse.status)))) {
-      // Next may tee an upstream body; awaiting cancellation can wait forever
-      // for its other branch. Release it without blocking the fallback stream.
-      void mediaResponse.body?.cancel().catch(() => {});
-      const fallback = await proxyDiscordYoutubeAudio(request, mediaVideoId);
-      if (fallback) return fallback;
-      return NextResponse.json({ error: 'This song could not be prepared for Discord. Try Next or another song.' }, { status: 503, headers: CORS_HEADERS });
-    }
 
     if (mediaFile === 'index.m3u8' && mediaResponse.ok) {
       const manifest = await mediaResponse.text();

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import ts from 'typescript';
 import vm from 'node:vm';
-test('missing or AAC cached media uses Opus through the selected Activity worker with byte ranges', async () => {
+test('Activity streams original Opus without consulting cache or HLS', async () => {
  for (const type of ['missing','audio/mp4']) {
   const source=readFileSync('src/app/api/watch/sessions/[sessionId]/state/route.ts','utf8');
   const compiled=ts.transpileModule(source,{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText;
@@ -19,12 +19,7 @@ test('missing or AAC cached media uses Opus through the selected Activity worker
     if(name==='@/lib/dj-worker-config')return {getMediaWorkerUrl:()=> 'https://worker.test:4446'};
     if(name==='@/lib/dj-worker-auth')return {getDjWorkerRequestHeaders:(headers:any)=>new Headers(headers)};
     if(name==='@/lib/validate-video-id')return {isValidVideoId:()=>true};
-    if(name.includes('youtube/hls'))return {GET:async()=>{
-      const response=new Response('fixture',{status:type==='missing'?404:200,headers:{'content-type':type==='missing'?'text/plain':type}});
-      // Reproduce Next's teed response cancellation waiting on an unread branch.
-      response.body!.cancel=()=>new Promise(()=>{});
-      return response;
-    }};
+    if(name.includes('youtube/hls'))return {GET:async()=>{throw Error('Activity audio must bypass HLS and cache');}};
     throw Error(name);
   }});
   const response=await exports.GET(new Request('https://hmo.test/api/watch/sessions/discord-music-room/state?mediaVideoId=abcdefghijk&mediaFile=source.webm&lane=activity',{headers:{range:'bytes=0-3'}}),{params:Promise.resolve({sessionId:'discord-music-room'})});
