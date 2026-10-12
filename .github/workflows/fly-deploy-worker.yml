@@ -39,6 +39,7 @@ jobs:
           if [ -n "$DEPLOY_BEFORE" ] && git cat-file -e "$DEPLOY_BEFORE^{commit}" 2>/dev/null; then
             changed=$(git diff --name-only "$DEPLOY_BEFORE" "$DEPLOY_AFTER" -- worker/)
             if [ "$changed" = "worker/src/spotlight-hls.js" ]; then target=spotlight; fi
+            if [ "$changed" = "worker/src/lounge-direct.js" ]; then target=lounge; fi
             if [ "$changed" = "worker/fly.toml" ]; then
               target=$(node <<'NODE'
           const fs=require('fs'),{execFileSync}=require('child_process');

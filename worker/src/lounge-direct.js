@@ -123,7 +123,7 @@ function createDirectLounge({ program, sourceForMovie, root, onMovieEnded, onMov
       '-user_agent', 'DiscordStreamHub/1.0', '-reconnect', '1', '-reconnect_streamed', '1',
       '-reconnect_delay_max', '5', ...(startPosition > 1 ? ['-ss', startPosition.toFixed(3)] : []), '-i', source.url,
       '-map', '0:v:0', '-map', audioIndex,
-      ...(videoCodec === 'h264' ? ['-c:v', 'copy'] : ['-vf', 'scale=854:480:force_original_aspect_ratio=decrease:flags=fast_bilinear,pad=854:480:(ow-iw)/2:(oh-ih)/2', '-c:v', 'libx264', '-threads', '2', '-preset', 'ultrafast', '-crf', '27', '-pix_fmt', 'yuv420p']),
+      ...(videoCodec === 'h264' ? ['-c:v', 'copy', '-bsf:v', 'h264_mp4toannexb'] : ['-vf', 'scale=854:480:force_original_aspect_ratio=decrease:flags=fast_bilinear,pad=854:480:(ow-iw)/2:(oh-ih)/2', '-c:v', 'libx264', '-threads', '2', '-preset', 'ultrafast', '-crf', '27', '-pix_fmt', 'yuv420p']),
       ...(audioCodec === 'aac' ? ['-c:a', 'copy'] : ['-c:a', 'aac', '-b:a', '160k', '-ac', '2']),
       '-f', 'hls', '-hls_time', '4', '-hls_list_size', '12', '-hls_delete_threshold', '3',
       '-hls_flags', 'independent_segments+temp_file+delete_segments+program_date_time',
