@@ -24,7 +24,7 @@ test('Activity rendition routing includes both audio and video and ignores the o
       if(name==='@/lib/dj-worker-config')return config;
       if(name==='@/lib/dj-worker-auth')return {getDjWorkerRequestHeaders:(value:any)=>new Headers(value)};
       if(name==='@/lib/validate-video-id')return {isValidVideoId:()=>true};
-      if(name==='@/app/api/watch/youtube/resolve/route')return {getResolvedYoutubeUrls:()=>null};
+      if(name==='@/lib/youtube-resolved-urls')return {getResolvedYoutubeUrls:()=>null};
       if(name==='@/lib/watch/xtream-provider')return {getResolvedXtreamStreamUrl:async()=>new URL('https://fixture.test/movie')};
       if(name==='@/lib/watch/xtream-hls')return {};
       throw new Error(name);

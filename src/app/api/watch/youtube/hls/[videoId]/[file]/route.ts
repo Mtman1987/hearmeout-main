@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { getMediaWorkerUrl, isActivityMediaRequest, activityMediaManifest } from '@/lib/dj-worker-config';
 import { isValidVideoId } from '@/lib/validate-video-id';
-import { getResolvedYoutubeUrls } from '@/app/api/watch/youtube/resolve/route';
+import { getResolvedYoutubeUrls } from '@/lib/youtube-resolved-urls';
 import { getDjWorkerRequestHeaders } from '@/lib/dj-worker-auth';
 
 export const runtime = 'nodejs';

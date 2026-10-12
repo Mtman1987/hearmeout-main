@@ -1,3 +1,4 @@
+import { resolvedUrls, MAX_AGE_MS } from '@/lib/youtube-resolved-urls';
 import { NextResponse } from 'next/server';
 import { getDjWorkerUrl } from '@/lib/dj-worker-config';
 import { isValidVideoId } from '@/lib/validate-video-id';
@@ -6,14 +7,6 @@ import { getDjWorkerRequestHeaders } from '@/lib/dj-worker-auth';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-declare global {
-  var __youtubeResolvedUrls: Map<string, { videoUrl: string; audioUrl: string; resolvedAt: number }> | undefined;
-}
-
-const resolvedUrls = globalThis.__youtubeResolvedUrls || new Map();
-globalThis.__youtubeResolvedUrls = resolvedUrls;
-
-const MAX_AGE_MS = 5 * 60 * 60 * 1000; // 5 hours (YouTube URLs expire ~6h)
 const ALLOWED_YOUTUBE_MEDIA_HOSTS = ['googlevideo.com', 'youtube.com', 'ytimg.com'];
 
 function isAllowedYoutubeMediaUrl(raw: string): boolean {
@@ -25,16 +18,6 @@ function isAllowedYoutubeMediaUrl(raw: string): boolean {
   } catch {
     return false;
   }
-}
-
-export function getResolvedYoutubeUrls(videoId: string) {
-  const entry = resolvedUrls.get(videoId);
-  if (!entry) return null;
-  if (Date.now() - entry.resolvedAt > MAX_AGE_MS) {
-    resolvedUrls.delete(videoId);
-    return null;
-  }
-  return entry;
 }
 
 export async function POST(request: Request) {
