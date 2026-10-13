@@ -3216,9 +3216,12 @@ process.on('unhandledRejection', (reason) => {
 });
 
 // ── Start ───────────────────────────────────────────────────────────────
-// Fly process DNS resolves to a private IPv6 address. Bind both IPv6 and IPv4.
-app.listen(PORT, '::', () => {
+// Bind explicitly on IPv4 so Fly's HTTP health probe cannot race an IPv6-only
+// listener; operators can override this for local dual-stack environments.
+const BIND_HOST = process.env.HMO_BIND_HOST || '0.0.0.0';
+app.listen(PORT, BIND_HOST, () => {
   console.log(`[DJ Worker] Server running on port ${PORT}`);
+  console.log(`[DJ Worker] Bind host: ${BIND_HOST}`);
   console.log(`[DJ Worker] App URL: ${APP_URL}`);
   console.log(`[DJ Worker] Cache dir: ${CACHE_DIR}`);
   console.log('[DJ Worker] Legacy audio extraction: disabled');
