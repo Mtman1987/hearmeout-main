@@ -28,6 +28,7 @@ jobs:
       - name: Test persistent wake-word and persona lifecycle
         run: |
           node --test tests/persona-runtime.test.cjs
+          node --test tests/stella-wake-buffer.test.cjs
           node --import tsx --test tests/livekit-persona-audio.test.ts
       - name: Test Discord receive gain, jitter and privacy contracts
         run: |
