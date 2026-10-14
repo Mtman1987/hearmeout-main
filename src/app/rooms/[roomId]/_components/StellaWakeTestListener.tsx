@@ -124,17 +124,17 @@ export default function StellaWakeTestListener({ roomId, remoteParticipants }: {
           .slice(-MAX_SEGMENTS);
         setLastTranscript(text);
 
-        if (!final || !/\\bstella\\b/i.test(text) || handledIndicesRef.current.has(index)) continue;
+        if (!final || !/\bstella\b/i.test(text) || handledIndicesRef.current.has(index)) continue;
         handledIndicesRef.current.add(index);
         const contextSegments = segmentsRef.current
           .filter((item) => now - item.at <= BUFFER_MS)
           .map((item) => item.text);
-        const latestRequest = text.replace(/\\bstella\\b[:,]?/ig, '').trim() || text;
+        const latestRequest = text.replace(/\bstella\b[:,]?/ig, '').trim() || text;
         const context = [
           'Recent speech context (captured in memory during the last 30 seconds):',
           ...contextSegments,
           `Latest request: ${latestRequest}`,
-        ].join('\\n');
+        ].join('\n');
         const invocation = resolveBotInvocation(latestRequest, targetsRef.current);
         const target = invocation?.targetTenantId
           ? invocation
