@@ -179,6 +179,8 @@ export default function StellaWakeTestListener({ roomId, remoteParticipants }: {
       if (!enabledRef.current) return;
       const message = String(event?.error || 'speech recognition error');
       if (message === 'no-speech' || message === 'aborted') return;
+      enabledRef.current = false;
+      setEnabled(false);
       setError(`Browser speech recognition error: ${message}. No cloud fallback is added by HearMeOut.`);
       setStatus('Recognition error');
     };
