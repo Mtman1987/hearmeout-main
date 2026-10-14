@@ -27,7 +27,7 @@ export default function VoiceStreamSetup() {
   };
   return <main style={{ maxWidth: 520, margin: '40px auto', padding: 24 }}>
     <h1 style={{ fontSize: 26, marginBottom: 16 }}>HearMeOut Voices</h1>
-    <p>Choose a room for this stream, or create a password-protected room. Unmuted people, AI voices and the room’s Discord bridge will be heard on stream.</p>
+    <p>Choose a room for this stream, or create a password-protected room. Unmuted people, AI voices and the room’s Discord bridge will be heard on stream. Stream audio is captured by its own hidden, receive-only listener URL; it is separate from the Discord bridge controls and does not create or toggle the Discord bot connection.</p>
     {login ? <a href="/api/auth/spmt/login?next=%2Fvoice-stream%2Fsetup">Sign in with SPMT</a> : <>
       <label style={{ display: 'block', marginTop: 20 }}>Room<select value={roomId} onChange={e => { setRoomId(e.target.value); setPassword(rooms.find(r => r.id === e.target.value)?.password || ''); }} style={{ display: 'block', width: '100%', padding: 10, color: '#111' }}><option value="">Create a new room</option>{rooms.map(r => <option key={r.id} value={r.id}>{r.name}{r.broadcasting ? ' · on stream' : ''}</option>)}</select></label>
       {!roomId && <label style={{ display: 'block', marginTop: 12 }}>Name<input value={name} onChange={e => setName(e.target.value)} style={{ display: 'block', width: '100%', padding: 10, color: '#111' }} /></label>}
@@ -37,6 +37,6 @@ export default function VoiceStreamSetup() {
       {roomId && <button disabled={busy} onClick={() => void select('off')} style={{ display: 'block', marginTop: 12 }}>Stop broadcasting this room</button>}
     </>}
     {error && <p role="status" style={{ marginTop: 16 }}>{error}</p>}
-    {result && <div style={{ marginTop: 20 }}><p>Added to Overlay Bay. Save the overlay there.</p><a href={result.roomUrl} target="_blank" rel="noreferrer">Join the voice room</a><p style={{ marginTop: 12 }}>For OBS or another browser source:</p><input readOnly value={result.sourceUrl} onFocus={e => e.target.select()} style={{ width: '100%', padding: 8, color: '#111' }} /></div>}
+    {result && <div style={{ marginTop: 20 }}><p>Added to Overlay Bay. Save the overlay there.</p><a href={result.roomUrl} target="_blank" rel="noreferrer">Join the voice room</a><p style={{ marginTop: 12 }}>Hidden stream listener URL (OBS or browser source):</p><input readOnly value={result.sourceUrl} onFocus={e => e.target.select()} style={{ width: '100%', padding: 8, color: '#111' }} /></div>}
   </main>;
 }

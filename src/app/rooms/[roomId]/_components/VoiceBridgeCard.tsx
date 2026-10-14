@@ -116,7 +116,7 @@ export function VoiceBridgeCard({ roomId }: { roomId: string }) {
         if (cfg) {
           setGuildId(cfg.guildId || '');
           setVoiceChannelId(cfg.voiceChannelId || '');
-          setRunning(state?.worker?.running ?? Boolean(cfg.enabled));
+          setRunning(state?.worker?.running ?? false);
           setRoomVoiceOutboundEnabled(
             state?.worker?.roomVoiceOutboundEnabled ?? cfg.roomVoiceOutboundEnabled ?? true,
           );
@@ -179,9 +179,16 @@ export function VoiceBridgeCard({ roomId }: { roomId: string }) {
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok || data.success === false) throw new Error(data.message || data.error || 'Request failed');
-      setRunning(enable);
+      const confirmedRunning = typeof data.status?.running === 'boolean' ? data.status.running : enable;
+      setRunning(confirmedRunning);
       applyWorkerState(data.status);
-      toast({ title: enable ? 'Discord voice bridge started' : 'Discord voice bridge stopped' });
+      const alreadyRunning = enable && /already running/i.test(String(data.message || ''));
+      toast({
+        title: alreadyRunning ? 'Discord voice bridge already running' : enable ? 'Discord voice bridge started' : 'Discord voice bridge stopped',
+        description: alreadyRunning
+          ? 'The Discord bot is already connected. The hidden stream listener is a separate receive-only connection and does not control this bridge.'
+          : undefined,
+      });
     } catch (err: any) {
       toast({ title: 'Voice bridge error', description: err?.message, variant: 'destructive' });
       setRunning(!enable);

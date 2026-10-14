@@ -44,6 +44,29 @@ export function DraggableContainer({
     setIsMounted(true);
   }, []);
 
+  // Keep popouts inside the visible viewport. Positions are persisted, so a
+  // layout saved on desktop (or before rotating a phone) can otherwise hide
+  // the title bar and its close button on smaller screens.
+  useEffect(() => {
+    const keepInViewport = () => {
+      const viewportWidth = window.innerWidth;
+      const viewportHeight = window.innerHeight;
+      const width = Math.min(size.width, Math.max(180, viewportWidth - 12));
+      const height = Math.min(size.height, Math.max(160, viewportHeight - 12));
+      const x = Math.max(0, Math.min(position.x, viewportWidth - width));
+      const y = Math.max(0, Math.min(position.y, viewportHeight - Math.min(height, 56)));
+      if (width !== size.width || height !== size.height) {
+        onSizeChange({ width, height });
+      }
+      if (x !== position.x || y !== position.y) {
+        onPositionChange({ x, y });
+      }
+    };
+    keepInViewport();
+    window.addEventListener('resize', keepInViewport);
+    return () => window.removeEventListener('resize', keepInViewport);
+  }, [position.x, position.y, size.width, size.height, onPositionChange, onSizeChange]);
+
   const handleMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
     if ((e.target as HTMLElement).closest('[data-no-drag]')) return;
     setIsDragging(true);
@@ -55,8 +78,8 @@ export function DraggableContainer({
 
   const handleMouseMove = (e: MouseEvent) => {
     if (isDragging) {
-      const newX = Math.max(0, e.clientX - dragOffset.x);
-      const newY = Math.max(0, e.clientY - dragOffset.y);
+      const newX = Math.max(0, Math.min(e.clientX - dragOffset.x, window.innerWidth - Math.min(size.width, window.innerWidth)));
+      const newY = Math.max(0, Math.min(e.clientY - dragOffset.y, window.innerHeight - 56));
       onPositionChange({
         x: newX,
         y: newY,
@@ -81,6 +104,11 @@ export function DraggableContainer({
 
   if (!isMounted) return null;
 
+  const visibleWidth = Math.min(size.width, Math.max(180, window.innerWidth - 12));
+  const visibleHeight = Math.min(size.height, Math.max(160, window.innerHeight - 12));
+  const visibleLeft = Math.max(0, Math.min(position.x, window.innerWidth - visibleWidth));
+  const visibleTop = Math.max(0, Math.min(position.y, window.innerHeight - Math.min(visibleHeight, 56)));
+
   return (
     <div
       ref={containerRef}
@@ -90,10 +118,12 @@ export function DraggableContainer({
         isDragging && 'opacity-75 cursor-grabbing'
       )}
       style={{
-        left: `${position.x}px`,
-        top: `${position.y}px`,
-        width: `${size.width}px`,
-        height: `${size.height}px`,
+        left: `${visibleLeft}px`,
+        top: `${visibleTop}px`,
+        width: `${visibleWidth}px`,
+        height: `${visibleHeight}px`,
+        maxWidth: 'calc(100vw - 12px)',
+        maxHeight: 'calc(100dvh - 12px)',
         opacity,
       }}
     >
@@ -130,6 +160,8 @@ export function DraggableContainer({
             {onClose && (
               <button
                 onClick={onClose}
+                title="Close window"
+                aria-label="Close window"
                 className="text-muted-foreground hover:text-foreground transition-colors flex-shrink-0"
               >
                 <X className="w-4 h-4" />
