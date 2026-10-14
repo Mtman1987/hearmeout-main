@@ -112,7 +112,10 @@ export async function POST(request: NextRequest) {
   }
 
   const workerUrl = getDjWorkerUrl();
-  const workerResponse = await fetch(`${workerUrl}/persona`, {
+  let workerResponse: Response | null = null;
+  let workerRequestError = '';
+  try {
+    workerResponse = await fetch(`${workerUrl}/persona`, {
     method: 'POST',
     headers: getDjWorkerRequestHeaders({ 'Content-Type': 'application/json' }),
     body: JSON.stringify({
@@ -135,11 +138,27 @@ export async function POST(request: NextRequest) {
       serviceSession: action === 'join',
     }),
     cache: 'no-store',
-    signal: typeof AbortSignal.timeout === 'function' ? AbortSignal.timeout(20000) : undefined,
-  }).catch(() => null);
+      signal: typeof AbortSignal.timeout === 'function' ? AbortSignal.timeout(20000) : undefined,
+    });
+  } catch (error) {
+    workerRequestError = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+    console.error('[BotSession] Persona worker request failed', {
+      workerUrl,
+      action,
+      roomId,
+      personaId: matched.ownerTenantId,
+      error: workerRequestError,
+    });
+  }
 
   if (!workerResponse) {
-    return NextResponse.json({ error: 'Persona worker is unavailable' }, { status: 502 });
+    const timeout = /timeout|timed out|abort/i.test(workerRequestError);
+    return NextResponse.json({
+      error: timeout ? 'Persona worker request timed out' : 'Persona worker request failed',
+      detail: workerRequestError || 'No response from the persona worker',
+      workerUrl,
+      action,
+    }, { status: 502, headers: { 'cache-control': 'private, no-store' } });
   }
   const workerPayload = await workerResponse.json().catch(() => ({}));
   if (workerResponse.ok) {
