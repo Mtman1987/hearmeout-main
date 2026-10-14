@@ -152,7 +152,7 @@ export default function StellaWakeTestListener({ roomId, remoteParticipants }: {
           const actorUsername = String((currentUser as any)?.username || currentUser?.displayName || '').trim();
           setLastTranscript(context);
           try {
-            await postRoomChatMessage(roomMessage(actorName, context, 'stella_wake_context'));
+            await postRoomChatMessage(roomMessage(actorName, context, 'stella_wake_context')).catch((cause) => console.warn('[StellaWakeTest] Context mirror failed:', cause));
             const result = await sendRoomPersonaCommand({
               roomId: roomRef.current,
               transcript: context,
