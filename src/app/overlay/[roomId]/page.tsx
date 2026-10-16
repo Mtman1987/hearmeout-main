@@ -34,6 +34,7 @@ type WatchPlayback = {
   updatedAt: number | string;
   muted?: boolean;
   volume?: number;
+  audioTrackIndex?: number;
 };
 
 type WatchRequest = {
@@ -328,6 +329,34 @@ export default function OverlayPage() {
   }, [cleanMode, lane, movieSessionId, movieState, musicSessionId, musicState]);
 
   const activeState = activeBundle.state;
+
+  // Stella can request audio-track=-1 to choose the best advertised track that
+  // is not labelled commentary. Explicit non-negative values select that HLS
+  // track. This intentionally does not alter playback, volume, or mute state.
+  useEffect(() => {
+    const requestedTrack = activeState?.playback?.audioTrackIndex;
+    if (typeof requestedTrack !== 'number' || !hlsRef.current || !audioTracks.length) return;
+    const targetTrack = requestedTrack === -1
+      ? preferredAudioTrackIndex(audioTracks)
+      : requestedTrack;
+    if (targetTrack < 0 || targetTrack >= audioTracks.length) {
+      setMediaStatus('No available non-commentary audio track was identified; playback and volume were left unchanged');
+      console.warn('[Overlay] Audio-track request could not find a clean track', {
+        requestedTrack,
+        tracks: audioTracks,
+      });
+      return;
+    }
+    hlsRef.current.audioTrack = targetTrack;
+    setSelectedAudioTrack(targetTrack);
+    setMediaStatus(`Audio track selected: ${audioTracks[targetTrack]?.name || `Audio ${targetTrack + 1}`}`);
+    console.info('[Overlay] Applied requested audio track', {
+      requestedTrack,
+      selectedTrack: targetTrack,
+      track: audioTracks[targetTrack],
+    });
+  }, [activeState?.playback?.audioTrackIndex, audioTracks]);
+
 
   // Tenant broadcast sources follow their own queue's chat-controlled mix.
   // Personal and Lounge observers keep their existing local volume behavior.
