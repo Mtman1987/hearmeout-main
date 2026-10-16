@@ -24,6 +24,7 @@ import {
 import { usePopout } from '@/components/PopoutWidgets/PopoutProvider';
 import { createOverlayCompletionTracker, overlayEndTarget } from '@/lib/overlay-media-end';
 import { twitchMusicSessionId } from '@/lib/twitch-media-scope';
+import { preferredAudioTrackIndex } from '@/lib/audio-track-selection';
 import { getRoomWatchSessionId } from '@/lib/watch-session';
 import { useCollection } from '@/hooks/use-db';
 
@@ -669,11 +670,21 @@ export default function OverlayPage() {
                   language: String(track?.lang || '').toLowerCase(),
                 }));
               setAudioTracks(tracks);
-              const english = tracks.find((track) => /^(?:en|eng|english)$/i.test(track.language) || /\benglish\b/i.test(track.name));
-              const preferred = english?.index ?? Math.max(0, Number(hlsRef.current?.audioTrack || 0));
-              hlsRef.current.audioTrack = preferred;
-              setSelectedAudioTrack(preferred);
-              setMediaStatus('Overlay media ready');
+              const preferred = preferredAudioTrackIndex(tracks);
+              console.info('[Overlay] HLS audio tracks discovered', {
+                itemTitle: item?.title || null,
+                tracks,
+                selectedTrack: preferred,
+                selection: preferred < 0 ? 'no-labelled-non-commentary-track' : 'non-commentary-preferred',
+              });
+              if (preferred >= 0) {
+                hlsRef.current.audioTrack = preferred;
+                setSelectedAudioTrack(preferred);
+                setMediaStatus('Overlay media ready');
+              } else {
+                setSelectedAudioTrack(-1);
+                setMediaStatus('All available audio tracks are labelled as commentary; no track was changed');
+              }
               applyPlaybackState(activeState);
             });
             hlsRef.current.on(Hls.Events.ERROR, (_event: unknown, data: any) => {
