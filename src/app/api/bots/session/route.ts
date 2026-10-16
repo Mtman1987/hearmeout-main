@@ -112,10 +112,12 @@ export async function POST(request: NextRequest) {
   }
 
   const workerUrl = getDjWorkerUrl();
-  const workerResponse = await fetch(`${workerUrl}/persona`, {
-    method: 'POST',
-    headers: getDjWorkerRequestHeaders({ 'Content-Type': 'application/json' }),
-    body: JSON.stringify({
+  let workerResponse: Response;
+  try {
+    workerResponse = await fetch(`${workerUrl}/persona`, {
+      method: 'POST',
+      headers: getDjWorkerRequestHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({
       action,
       roomId,
       personaId: matched.ownerTenantId,
@@ -133,13 +135,14 @@ export async function POST(request: NextRequest) {
       idleAvatar: matched.idleAvatar || matched.avatar || '',
       talkingAvatar: matched.talkingAvatar || matched.idleAvatar || matched.avatar || '',
       serviceSession: action === 'join',
-    }),
-    cache: 'no-store',
-    signal: typeof AbortSignal.timeout === 'function' ? AbortSignal.timeout(20000) : undefined,
-  }).catch(() => null);
-
-  if (!workerResponse) {
-    return NextResponse.json({ error: 'Persona worker is unavailable' }, { status: 502 });
+      }),
+      cache: 'no-store',
+      signal: typeof AbortSignal.timeout === 'function' ? AbortSignal.timeout(45_000) : undefined,
+    });
+  } catch (error) {
+    return NextResponse.json({
+      error: `Persona worker request failed: ${error instanceof Error ? error.message : String(error)}`,
+    }, { status: 502 });
   }
   const workerPayload = await workerResponse.json().catch(() => ({}));
   if (workerResponse.ok) {

@@ -14,6 +14,23 @@ const MAX_SEGMENTS = 12;
 
 type SpeechSegment = { index: number; text: string; at: number; final: boolean };
 
+function wakePhraseIn(text: string, targets: RoomBotDescriptor[]) {
+  const lower = text.toLowerCase();
+  return targets.some((target) => target.wakeNames.some((name) => {
+    const normalized = String(name || '').trim().toLowerCase();
+    return normalized && lower.includes(normalized);
+  }));
+}
+
+function removeWakePhrases(text: string, targets: RoomBotDescriptor[]) {
+  return targets.reduce((value, target) => target.wakeNames.reduce((current, name) => {
+    const normalized = String(name || '').trim();
+    if (!normalized) return current;
+    const escaped = normalized.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return current.replace(new RegExp(`\\b${escaped}\\b[:,]?`, 'ig'), '').trim();
+  }, value), text).trim();
+}
+
 function descriptors(participants: RemoteParticipant[]): RoomBotDescriptor[] {
   return participants.flatMap((participant) => {
     if (!isPersonaParticipant(participant)) return [];
@@ -42,7 +59,7 @@ function recognitionConstructor(): any {
 
 /**
  * Explicit test-only wake path. Speech recognition is opt-in and transcripts
- * stay in this component's bounded in-memory buffer until "Stella" is heard.
+ * stay in this component's bounded in-memory buffer until an active bot wake name is heard.
  * Browser speech recognition may transmit audio to the browser vendor's
  * recognition service; this component does not promise on-device audio STT.
  */
@@ -88,7 +105,7 @@ export default function StellaWakeTestListener({ roomId, remoteParticipants }: {
       return;
     }
     if (!targetsRef.current.length) {
-      setError('Add a bot to this room before starting the Stella test.');
+      setError('Add a bot to this room before starting the wake-word test.');
       return;
     }
 
@@ -124,12 +141,12 @@ export default function StellaWakeTestListener({ roomId, remoteParticipants }: {
           .slice(-MAX_SEGMENTS);
         setLastTranscript(text);
 
-        if (!final || !/\bstella\b/i.test(text) || handledIndicesRef.current.has(index)) continue;
+        if (!final || !wakePhraseIn(text, targetsRef.current) || handledIndicesRef.current.has(index)) continue;
         handledIndicesRef.current.add(index);
         const contextSegments = segmentsRef.current
           .filter((item) => now - item.at <= BUFFER_MS)
           .map((item) => item.text);
-        const latestRequest = text.replace(/\bstella\b[:,]?/ig, '').trim() || text;
+        const latestRequest = removeWakePhrases(text, targetsRef.current) || text;
         const context = [
           'Recent speech context (captured in memory during the last 30 seconds):',
           ...contextSegments,
@@ -206,13 +223,13 @@ export default function StellaWakeTestListener({ roomId, remoteParticipants }: {
       <div className="flex flex-wrap items-center gap-2">
         <Button type="button" size="sm" variant={enabled ? 'destructive' : 'secondary'} onClick={enabled ? stop : start}>
           {enabled ? <MicOff className="mr-2 h-4 w-4" /> : <Mic className="mr-2 h-4 w-4" />}
-          {enabled ? 'Stop Stella wake test' : 'Enable Stella wake test'}
+          {enabled ? 'Stop wake-word test' : 'Enable wake-word test'}
         </Button>
-        <span className="text-sm font-medium">Stella test: {status}</span>
+        <span className="text-sm font-medium">Wake-word test: {status}</span>
         {commandInFlightRef.current && <LoaderCircle className="h-4 w-4 animate-spin" />}
       </div>
       <p className="mt-2 text-xs text-muted-foreground">
-        Test mode only. Keeps up to 30 seconds of transcript in memory and sends it to the first active bot (or a named bot in your request) only after hearing “Stella”. Browser speech recognition may send microphone audio to the browser vendor for recognition; pre-wake transcript text is not sent by HearMeOut.
+        Test mode only. Keeps up to 30 seconds of transcript in memory and sends it to the first active bot (or a named bot in your request) only after hearing that bot’s configured wake name, such as “Hey Athena”. Browser speech recognition may send microphone audio to the browser vendor for recognition; pre-wake transcript text is not sent by HearMeOut.
       </p>
       {lastTranscript && <p className="mt-2 whitespace-pre-wrap break-words text-sm"><strong>Latest capture:</strong> {lastTranscript}</p>}
       {reply && <p className="mt-2 whitespace-pre-wrap break-words text-sm"><strong>Bot reply:</strong> {reply}</p>}
