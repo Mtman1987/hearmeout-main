@@ -28,29 +28,49 @@ jobs:
             exit 1
           fi
           set +e
-          timeout 35s flyctl logs --app hearmeout-main --no-tail --json > /tmp/hearmeout-runtime-logs.jsonl 2>&1
+          timeout 35s flyctl logs --app hearmeout-main --no-tail --json > /tmp/hearmeout-runtime-logs.json 2>&1
           rc=$?
           set -e
           echo "flyctl logs exit code: $rc"
           python3 - <<'PY'
-          import re
+          import json, re
           from pathlib import Path
-          p = Path("/tmp/hearmeout-runtime-logs.jsonl")
-          lines = p.read_text(errors="replace").splitlines() if p.exists() else []
-          print(f"Captured {len(lines)} log lines; showing only relevant diagnostic entries.")
+          raw = Path("/tmp/hearmeout-runtime-logs.json").read_text(errors="replace")
+          try:
+              data = json.loads(raw)
+              if isinstance(data, list):
+                  records = data
+              elif isinstance(data, dict):
+                  records = data.get("logs") or data.get("events") or data.get("data") or [data]
+              else:
+                  records = [data]
+          except Exception:
+              records = []
+              for line in raw.splitlines():
+                  try:
+                      records.append(json.loads(line))
+                  except Exception:
+                      if line.strip():
+                          records.append({"raw": line})
+          print(f"Retrieved {len(records)} log records.")
           patterns = re.compile(r"livekit|websocket|client-log|unauthori[sz]ed|\b401\b|\b403\b|\b404\b|\b5\d\d\b|error|exception|failed|failure|timeout|timed out|signal|disconnect|connection state", re.I)
           secrets = [
               (re.compile(r"(?i)(bearer\s+)[A-Za-z0-9._~+/=-]+"), r"\1[REDACTED]"),
               (re.compile(r"(?i)(access[_ -]?token|api[_ -]?key|secret|authorization)([=: ]+)[^\s,\"}]+"), r"\1\2[REDACTED]"),
               (re.compile(r"\bsk-[A-Za-z0-9_-]{12,}\b"), "[REDACTED_KEY]"),
           ]
-          matches = [line for line in lines[-500:] if patterns.search(line)]
-          if not matches:
-              print("No matching LiveKit/WebSocket/error lines found in the retrieved recent log window.")
-          for line in matches[-120:]:
-              for pattern, replacement in secrets:
-                  line = pattern.sub(replacement, line)
-              print(line[:2000])
+          selected = []
+          for rec in records:
+              serialized = json.dumps(rec, ensure_ascii=False, default=str)
+              if patterns.search(serialized):
+                  for pattern, replacement in secrets:
+                      serialized = pattern.sub(replacement, serialized)
+                  selected.append(serialized)
+          print(f"Relevant error/LiveKit records: {len(selected)}.")
+          for line in selected[-60:]:
+              print(line[:4000])
+          if not selected:
+              print("No relevant LiveKit/WebSocket/error records found in this retrieved log window.")
           PY
           if [ "$rc" -ne 0 ]; then
             echo "Log collection returned nonzero; inspect the messages above for access or CLI errors."
