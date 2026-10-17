@@ -1,4 +1,4 @@
-const LOUNGE_WORKER_URL = (process.env.LOUNGE_WORKER_URL || 'http://lounge.process.hmo-dj-worker.internal:3002').replace(/\/$/, '');
+const LOUNGE_PROGRAM_URL = (process.env.LOUNGE_PROGRAM_URL || 'https://hmo-dj-worker.fly.dev:4444/lounge/media/program').replace(/\/$/, '');
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -8,7 +8,7 @@ export const dynamic = 'force-dynamic';
 // secret lookup was turning a missing/mismatched secret into a misleading 502.
 export async function GET() {
   try {
-    const upstream = await fetch(`${LOUNGE_WORKER_URL}/lounge/media/program`, {
+    const upstream = await fetch(LOUNGE_PROGRAM_URL, {
       method: 'GET',
       cache: 'no-store',
       signal: AbortSignal.timeout(10000),
