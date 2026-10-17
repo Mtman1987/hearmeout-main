@@ -17,6 +17,8 @@ test('wake-word test is opt-in, bounded, and only hands off after an active bot 
   assert.match(listener, /const BUFFER_MS = 30_000/);
   assert.match(listener, /const MAX_SEGMENTS = 12/);
   assert.match(listener, /wakePhraseIn\(text, targetsRef\.current\)/);
+  assert.match(listener, /useCollection<RoomBotPresence>/);
+  assert.match(listener, /'Stella'/);
   assert.match(listener, /sendRoomPersonaCommand/);
   assert.match(listener, /pre-wake transcript text is not sent by HearMeOut/);
   assert.match(listener, /Browser speech recognition may send microphone audio/);
@@ -28,6 +30,17 @@ test('wake-word test reuses the active-room bot resolver and canonical command r
   assert.match(listener, /resolveBotInvocation\(latestRequest, targetsRef\.current\)/);
   assert.match(listener, /targetsRef\.current\[0\]/);
   assert.match(listener, /Hey Athena/);
+  assert.match(listener, /'Stella'/);
   assert.match(listener, /sendRoomPersonaCommand/);
   assert.match(client, /\/api\/bot\/commands/);
+});
+
+
+test('TTS-only personas do not start RTC worker sessions and remain available to wake routing', () => {
+  const session = source('src/app/api/bots/session/route.ts');
+  const userList = source('src/app/rooms/[roomId]/_components/UserList.tsx');
+  assert.match(session, /TTS-only personas speak through StreamWeaver's Say Player broadcast/);
+  assert.match(session, /joinMode: 'say-player-only'/);
+  assert.match(session, /if \(action === 'join'\) \{/);
+  assert.match(userList, /Say Player broadcast · no P2P/);
 });
