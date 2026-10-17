@@ -9,6 +9,8 @@ const source = (file) => fs.readFileSync(path.join(root, file), 'utf8');
 test('HearMeOut exposes a room-scoped Say queue poll that checks bot roster membership', () => {
   const route = source('src/app/api/rooms/persona-speech/route.ts');
   assert.match(route, /db\.get\(\`rooms\/\$\{roomId\}\/users\`, presenceId\)/);
+  assert.match(route, /requireRoomVoiceAccess\(roomId\)/);
+  assert.match(route, /Room password is required/);
   assert.match(route, /presence\.bot !== true/);
   assert.match(route, /hmo-say-/);
   assert.match(route, /api\/say\/next/);

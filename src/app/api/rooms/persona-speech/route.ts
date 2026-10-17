@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db, ensureDb } from '@/lib/db';
+import { requireRoomVoiceAccess } from '@/lib/room-voice-access';
 
 export const dynamic = 'force-dynamic';
 
@@ -31,6 +32,9 @@ export async function GET(request: NextRequest) {
   }
 
   try {
+    // This endpoint is routed through public middleware for compatibility with
+    // the room UI, so enforce the room's real session/password/ban/expiry guard here.
+    await requireRoomVoiceAccess(roomId);
     await ensureDb();
     const presenceId = `persona:${personaId}`;
     const presence = db.get(`rooms/${roomId}/users`, presenceId);
@@ -72,7 +76,21 @@ export async function GET(request: NextRequest) {
       remaining: Number(payload?.remaining || 0),
     }, { headers: { 'Cache-Control': 'no-store' } });
   } catch (error) {
-    console.warn('[HearMeOut Room Say Player] Queue poll failed:', error instanceof Error ? error.message : 'unknown error');
+    const message = error instanceof Error ? error.message : '';
+    const accessErrors = new Set([
+      'Sign in to join a voice room',
+      'Room was not found',
+      'Room expired',
+      'You are banned from this room',
+      'Room password is required',
+    ]);
+    if (accessErrors.has(message)) {
+      const status = message === 'Sign in to join a voice room' ? 401
+        : message === 'Room was not found' ? 404
+          : message === 'Room expired' ? 410 : 403;
+      return NextResponse.json({ ok: false, error: message }, { status, headers: { 'Cache-Control': 'no-store' } });
+    }
+    console.warn('[HearMeOut Room Say Player] Queue poll failed:', message || 'unknown error');
     return NextResponse.json({ ok: false, error: 'Could not connect to the room speech queue' }, { status: 502, headers: { 'Cache-Control': 'no-store' } });
   }
 }
