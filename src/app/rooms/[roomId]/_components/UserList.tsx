@@ -52,6 +52,9 @@ type PeerPresence = {
 function PeerPresenceParticipants({ roomId, localUserId, connectedPeerIds }: { roomId: string; localUserId?: string; connectedPeerIds: string[] }) {
   const { data: users } = useCollection<PeerPresence>(`rooms/${roomId}/users`, { pollInterval: 3000 });
   const activeUsers = (users || []).filter((presence) => {
+    // Say Player personas are rendered once by SayPlayerPersonaCards, using the same
+    // actionable PersonaCard UI as LiveKit personas. Never duplicate them here.
+    if (presence.bot === true || presence.presenceKind === 'persona') return false;
     if (presence.id === localUserId || presence.uid === localUserId) return false;
     const lastSeen = Number(presence.lastSeen || 0);
     return lastSeen > 0 && Date.now() - lastSeen < 45_000;
@@ -94,8 +97,8 @@ const isHiddenBridgeParticipant = (identity?: string) =>
 const isRoomTtsParticipant = (identity?: string) =>
   !!identity && identity.startsWith('room-tts:');
 
-function SayPlayerPersonaCards({ roomId, liveParticipants }: { roomId: string; liveParticipants: ReturnType<typeof useRemoteParticipants> }) {
-  const { data: users } = useCollection<PeerPresence & { personaId?: string; ownerTenantId?: string; wakeNames?: string[]; aliases?: string[] }>(`rooms/${roomId}/users`, { pollInterval: 3000 });
+function SayPlayerPersonaCards({ roomId, liveParticipants, isHost }: { roomId: string; liveParticipants: ReturnType<typeof useRemoteParticipants>; isHost: boolean }) {
+  const { data: users } = useCollection<PeerPresence & { personaId?: string; ownerTenantId?: string; ownerName?: string; wakeNames?: string[]; aliases?: string[]; serverMuted?: boolean; avatar?: string; idleAvatar?: string; talkingAvatar?: string }>(`rooms/${roomId}/users`, { pollInterval: 3000 });
   const livePersonaIds = new Set(liveParticipants.filter(isPersonaParticipant).map((participant) => participant.identity.replace(/^persona:/, '')));
   const personas = (users || []).filter((presence) =>
     (presence.bot === true || presence.presenceKind === 'persona')
@@ -105,22 +108,30 @@ function SayPlayerPersonaCards({ roomId, liveParticipants }: { roomId: string; l
     <>
       {personas.map((persona) => {
         const displayName = persona.displayName || 'StreamWeaver Persona';
-        return (
-          <Card key={persona.id || persona.personaId || displayName} className="flex flex-col h-full">
-            <CardContent className="p-4 flex items-start gap-4">
-              <Avatar className="h-16 w-16 ring-2 ring-primary/30">
-                {persona.photoURL ? <AvatarImage src={persona.photoURL} alt={displayName} /> : null}
-                <AvatarFallback>{displayName.charAt(0).toUpperCase()}</AvatarFallback>
-              </Avatar>
-              <div className="min-w-0 flex-1">
-                <p className="truncate text-lg font-bold">{displayName}</p>
-                <p className="mt-1 flex items-center gap-1.5 text-xs text-green-500">
-                  <Radio className="h-3.5 w-3.5" /> Say Player broadcast · no P2P
-                </p>
-              </div>
-            </CardContent>
-          </Card>
-        );
+        const personaId = String(persona.ownerTenantId || persona.personaId || persona.id || '').replace(/^persona:/, '');
+        // Reuse PersonaCard so Say Player personas inherit the normal card layout,
+        // mute/ban/kick controls, Talk button, and local volume slider.
+        const participant = {
+          identity: `persona:${personaId}`,
+          name: displayName,
+          metadata: JSON.stringify({
+            type: 'persona',
+            personaId,
+            ownerTenantId: personaId,
+            ownerName: persona.ownerName || '',
+            displayName,
+            avatar: persona.photoURL || '',
+            idleAvatar: persona.photoURL || '',
+            talkingAvatar: persona.talkingAvatar || persona.photoURL || '',
+            wakeNames: persona.wakeNames || [],
+            aliases: persona.aliases || [],
+            bot: true,
+          }),
+          isSpeaking: false,
+          isMicrophoneEnabled: !persona.serverMuted,
+          setVolume: () => {},
+        } as any;
+        return <PersonaCard key={persona.id || personaId || displayName} participant={participant} roomId={roomId} isHost={isHost} />;
       })}
     </>
   );
@@ -162,7 +173,6 @@ function LiveKitParticipants({ isHost, roomId }: { isHost: boolean; roomId: stri
       {allAudioTracks.map((trackRef) => (
         <AudioTrack key={trackRef.publication.trackSid} trackRef={trackRef} volume={1.0} muted={false} />
       ))}
-      <SayPlayerPersonaCards roomId={roomId} liveParticipants={remoteParticipants} />
       {allParticipants.map((participant) => (
         isPersonaParticipant(participant)
           ? <PersonaCard key={participant.sid} participant={participant} roomId={roomId} isHost={isHost} />
@@ -201,6 +211,7 @@ export default function UserList({ roomId, localVolume, onVolumeChange, showDJ, 
             />
           )}
           {voiceEnabled && <LiveKitParticipants isHost={isHost} roomId={roomId} />}
+          <SayPlayerPersonaCards roomId={roomId} liveParticipants={voiceEnabled ? [] as any : [] as any} isHost={isHost} />
           {voicePeerFallback && <PeerPresenceParticipants roomId={roomId} localUserId={user?.uid} connectedPeerIds={peerConnectedPeerIds} />}
         </div>
       </div>
