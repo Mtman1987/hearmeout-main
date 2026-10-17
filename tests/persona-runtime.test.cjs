@@ -31,11 +31,12 @@ test('typed chat and local Companion wake use the same explicit wake-name resolv
   assert.match(wake, /resolveBotInvocation\(transcript, targets\)/);
 });
 
-test('Athena explicitly accepts Hey Athena through the shared typed-and-local-wake resolver', () => {
+test('wake names come from room persona metadata, not a hard-coded assistant alias', () => {
   const routing = source('src/lib/room-persona-routing.ts');
   assert.match(routing, /expandedWakeNames/);
-  assert.match(routing, /names\.push\('Hey Athena'\)/);
+  assert.match(routing, /\.\.\.\(bot\.wakeNames \|\| \[\]\)/);
   assert.match(routing, /expandedWakeNames\(bot\)/);
+  assert.doesNotMatch(routing, /Hey Athena|Athena OS|Annie/);
 });
 
 test('ambient browser speech never reaches cloud STT; local Companion supplies wake transcripts', () => {
