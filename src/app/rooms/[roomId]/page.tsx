@@ -681,6 +681,7 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
     const [voiceRetrying, setVoiceRetrying] = useState(false);
     const [voiceConnectionEnabled, setVoiceConnectionEnabled] = useState(true);
     const [peerMicEnabled, setPeerMicEnabled] = useState(false);
+    const [localP2PSpeaking, setLocalP2PSpeaking] = useState(false);
     const peerVoiceRef = useRef<PeerVoiceMesh | null>(null);
     const peerVoiceStartingRef = useRef(false);
     const [peerVoiceStreams, setPeerVoiceStreams] = useState<Map<string, MediaStream>>(new Map());
@@ -813,6 +814,7 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
                     }
                 },
                 true,
+                (speaking) => setLocalP2PSpeaking(speaking),
             );
             peerVoiceRef.current = mesh;
             mesh.setMuted(true);
@@ -1156,6 +1158,8 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
                           voiceEnabled={voiceReady || voiceFallbackActive}
                           voicePeerFallback={voiceFallbackActive}
                           peerConnectedPeerIds={Array.from(peerVoiceStreams.keys())}
+                          peerVoiceStreams={peerVoiceStreams}
+                          localP2PSpeaking={localP2PSpeaking}
                           peerAudioBlocked={peerAudioBlocked}
                           onEnablePeerAudio={unlockPeerAudio}
                         />
