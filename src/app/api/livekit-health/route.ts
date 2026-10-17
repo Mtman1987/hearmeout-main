@@ -1,21 +1,28 @@
 import { NextResponse } from 'next/server';
 
 export async function GET() {
-  const required = {
-    LIVEKIT_API_KEY: !!process.env.LIVEKIT_API_KEY,
-    LIVEKIT_API_SECRET: !!process.env.LIVEKIT_API_SECRET,
-    NEXT_PUBLIC_LIVEKIT_URL: !!process.env.NEXT_PUBLIC_LIVEKIT_URL,
-    LIVEKIT_URL: !!process.env.LIVEKIT_URL,
-  };
+  const hasApiKey = Boolean(process.env.LIVEKIT_API_KEY?.trim());
+  const hasApiSecret = Boolean(process.env.LIVEKIT_API_SECRET?.trim());
+  const hasUrl = Boolean(
+    process.env.NEXT_PUBLIC_LIVEKIT_URL?.trim() || process.env.LIVEKIT_URL?.trim(),
+  );
+  const isConfigured = hasApiKey && hasApiSecret && hasUrl;
 
-  const isConfigured =
-    !!process.env.LIVEKIT_API_KEY &&
-    !!process.env.LIVEKIT_API_SECRET &&
-    (!!process.env.NEXT_PUBLIC_LIVEKIT_URL || !!process.env.LIVEKIT_URL);
-
-  return NextResponse.json({
-    isConfigured,
-    required,
-  });
+  // This endpoint is intentionally safe for unauthenticated diagnostics:
+  // report presence/configuration only, never credential values or raw URLs.
+  return NextResponse.json(
+    {
+      ok: isConfigured,
+      isConfigured,
+      checks: {
+        apiKeyPresent: hasApiKey,
+        apiSecretPresent: hasApiSecret,
+        urlPresent: hasUrl,
+      },
+    },
+    {
+      status: isConfigured ? 200 : 503,
+      headers: { 'Cache-Control': 'no-store' },
+    },
+  );
 }
-
