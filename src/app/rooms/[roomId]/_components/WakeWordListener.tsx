@@ -89,12 +89,15 @@ export default function WakeWordListener({ roomId, remoteParticipants }: { roomI
       const transcript = String(detail.transcript || '').trim();
       if (!transcript) return;
 
-      const invocation = resolveBotInvocation(transcript, targets)
-        || (/\bstella\b/i.test(transcript) ? targets[0] || null : null);
+      const invocation = resolveBotInvocation(transcript, targets);
       const targetTenantId = invocation?.targetTenantId;
       if (!invocation || !targetTenantId) return;
       const targetDisplayName = invocation.displayName;
-      const commandTranscript = transcript.replace(/\bstella\b[:,]?/ig, '').trim() || transcript;
+      const matchedTarget = targets.find((target) => target.targetTenantId === targetTenantId);
+      const commandTranscript = (matchedTarget?.wakeNames || []).reduce((value, name) => {
+        const escaped = name.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\$&');
+        return value.replace(new RegExp('\\\\b' + escaped + '\\\\b[:,]?', 'ig'), '').trim();
+      }, transcript) || transcript;
 
       const normalized = transcript.toLowerCase();
       const recent = lastTranscriptRef.current;
