@@ -76,3 +76,5 @@ jobs:
             echo "Log collection returned nonzero; inspect the messages above for access or CLI errors."
             exit "$rc"
           fi
+
+# Re-trigger bounded runtime-log collection after the latest persona-join failure.
