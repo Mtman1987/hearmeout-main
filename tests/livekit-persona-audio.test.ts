@@ -35,7 +35,8 @@ test('production has no direct browser TTS diagnostic player', async () => {
     readFile('src/components/tts-diagnostic-host.tsx', 'utf8'),
     (error: any) => error?.code === 'ENOENT',
   );
-  assert.match(route, /transportHealthy/);
+  assert.match(route, /room roster is the invite authority/);
+  assert.doesNotMatch(route, /healthyWorkerPersona|transportHealthy === true/);
   assert.match(route, /say-player-not-listening|delivered: result\?\.delivered/);
 });
 
