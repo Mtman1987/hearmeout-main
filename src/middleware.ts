@@ -22,6 +22,8 @@ const PUBLIC_PREFIXES = [
   // owner, and administrator controls remain protected elsewhere.
   '/api/bots',
   '/api/bot/commands',
+  // Public room-scoped speech listener; handler validates that the persona is in the room.
+  '/api/rooms/persona-speech',
   '/api/athena/commands',
   '/api/internal/persona-transcribe',
   '/api/internal/persona-command',
