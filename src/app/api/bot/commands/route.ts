@@ -190,6 +190,10 @@ async function speakThroughSayPlayer(body: BotCommandBody, payload: any) {
     data?.bot?.tenantId || payload?.bot?.tenantId || body.targetTenantId,
     128,
   );
+  // StreamWeaver's HearMeOut persona endpoint creates a room-scoped Say Player
+  // stream key. Queue to that exact listener instead of the bot's public tenant
+  // ID, or the room player will never receive the generated audio.
+  const sayStreamKey = text(data?.tts?.streamKey || payload?.tts?.streamKey, 128);
   const responseText = text(data?.response || payload?.response, 2000);
   if (!personaId || !responseText) {
     return {
@@ -206,7 +210,7 @@ async function speakThroughSayPlayer(body: BotCommandBody, payload: any) {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
     body: JSON.stringify({
-      tenantId: personaId,
+      tenantId: sayStreamKey || personaId,
       text: responseText,
       voice: text(body.voice, 128) || text(data?.tts?.voice, 128) || undefined,
     }),
