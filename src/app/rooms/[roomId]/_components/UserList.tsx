@@ -97,7 +97,8 @@ const isHiddenBridgeParticipant = (identity?: string) =>
 const isRoomTtsParticipant = (identity?: string) =>
   !!identity && identity.startsWith('room-tts:');
 
-function SayPlayerPersonaCards({ roomId, liveParticipants, isHost }: { roomId: string; liveParticipants: ReturnType<typeof useRemoteParticipants>; isHost: boolean }) {
+function SayPlayerPersonaCards({ roomId, isHost }: { roomId: string; isHost: boolean }) {
+  const liveParticipants = useRemoteParticipants();
   const { data: users } = useCollection<PeerPresence & { personaId?: string; ownerTenantId?: string; ownerName?: string; wakeNames?: string[]; aliases?: string[]; serverMuted?: boolean; avatar?: string; idleAvatar?: string; talkingAvatar?: string }>(`rooms/${roomId}/users`, { pollInterval: 3000 });
   const livePersonaIds = new Set(liveParticipants.filter(isPersonaParticipant).map((participant) => participant.identity.replace(/^persona:/, '')));
   const personas = (users || []).filter((presence) =>
@@ -211,7 +212,7 @@ export default function UserList({ roomId, localVolume, onVolumeChange, showDJ, 
             />
           )}
           {voiceEnabled && <LiveKitParticipants isHost={isHost} roomId={roomId} />}
-          <SayPlayerPersonaCards roomId={roomId} liveParticipants={voiceEnabled ? [] as any : [] as any} isHost={isHost} />
+          <SayPlayerPersonaCards roomId={roomId} isHost={isHost} />
           {voicePeerFallback && <PeerPresenceParticipants roomId={roomId} localUserId={user?.uid} connectedPeerIds={peerConnectedPeerIds} />}
         </div>
       </div>
