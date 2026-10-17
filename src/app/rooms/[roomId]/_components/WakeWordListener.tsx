@@ -39,6 +39,7 @@ function descriptorForPersona(participant: RemoteParticipant): RoomBotDescriptor
   const displayName = String(metadata.displayName || participant.name || identityName || 'StreamWeaver Bot').trim();
   const wakeNames = Array.from(new Set([
     displayName,
+    'Stella',
     metadata.personaId,
     participant.name,
     identityName,
@@ -90,10 +91,12 @@ export default function WakeWordListener({ roomId, remoteParticipants }: { roomI
       const transcript = String(detail.transcript || '').trim();
       if (!transcript) return;
 
-      const invocation = resolveBotInvocation(transcript, targets);
+      const invocation = resolveBotInvocation(transcript, targets)
+        || (/\\bstella\\b/i.test(transcript) ? targets[0] || null : null);
       const targetTenantId = invocation?.targetTenantId;
       if (!invocation || !targetTenantId) return;
       const targetDisplayName = invocation.displayName;
+      const commandTranscript = transcript.replace(/\\bstella\\b[:,]?/ig, '').trim() || transcript;
 
       const normalized = transcript.toLowerCase();
       const recent = lastTranscriptRef.current;
@@ -111,7 +114,7 @@ export default function WakeWordListener({ roomId, remoteParticipants }: { roomI
 
             const result = await sendRoomPersonaCommand({
               roomId,
-              transcript,
+              transcript: commandTranscript,
               targetTenantId,
               fallbackDisplayName: targetDisplayName,
               actorIdentity,
