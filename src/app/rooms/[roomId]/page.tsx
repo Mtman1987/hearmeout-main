@@ -1137,13 +1137,13 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
                               </p>
                               <p className="text-xs text-muted-foreground">
                                 {voiceFallbackActive
-                                  ? 'Human room voice is using P2P. Bot/persona speech stays on LiveKit; reconnect LiveKit below to hear Athena and other bots.'
+                                  ? 'Human room voice is using P2P. Bot/persona replies use StreamWeaver Say Player and do not depend on LiveKit.'
                                   : voiceFailureMessage || 'Voice is currently disconnected.'}
                               </p>
                             </div>
                             <Button size="sm" variant="outline" onClick={() => void retryLiveKitVoice()} disabled={voiceRetrying}>
                               {voiceRetrying ? <LoaderCircle className="mr-2 h-4 w-4 animate-spin" /> : null}
-                              Reconnect LiveKit
+                              Reconnect human LiveKit voice
                             </Button>
                           </div>
                         )}
