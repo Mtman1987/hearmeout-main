@@ -538,8 +538,9 @@ function LiveKitConnectionDiagnostics({ roomId, identity, serverUrl }: { roomId:
         const onConnectionStateChanged = (state: ConnectionState) => {
             const nextState = String(state);
             if (nextState === lastState) return;
+            const previousState = lastState;
             lastState = nextState;
-            report('connection-state', { previousState: lastState, nextState });
+            report('connection-state', { previousState, nextState });
         };
         const onSignalConnected = () => report('signal-connected');
         const onDisconnected = (reason?: DisconnectReason) => report('disconnected', {
