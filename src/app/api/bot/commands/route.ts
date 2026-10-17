@@ -21,17 +21,6 @@ type BotCommandBody = {
   actorDisplayName?: unknown;
 };
 
-type WorkerPersonaInstance = {
-  roomId?: unknown;
-  personaId?: unknown;
-  transportHealthy?: unknown;
-  runtime?: {
-    displayName?: unknown;
-    wakeNames?: unknown;
-    wakePolicy?: unknown;
-  };
-};
-
 function text(value: unknown, max: number) {
   return String(value || '').trim().slice(0, max);
 }
