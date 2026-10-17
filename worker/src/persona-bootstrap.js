@@ -154,7 +154,7 @@ async function handlePersona(req, res) {
     const livekitUrl = String(
       process.env.LIVEKIT_URL
       || process.env.NEXT_PUBLIC_LIVEKIT_URL
-      || 'wss://hearmeout-6ntnbsdm.livekit.cloud',
+      || 'wss://streamweaver-7atx04ct.livekit.cloud',
     ).trim();
     const persona = new PersonaSession({
       roomId,
