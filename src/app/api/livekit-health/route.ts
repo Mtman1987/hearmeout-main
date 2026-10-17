@@ -12,6 +12,8 @@ export async function GET() {
   // This unauthenticated endpoint reports only booleans and a coarse failure
   // category. Never return credentials, signed tokens, raw URLs, or room data.
   let roomServiceApi: 'ok' | 'credentials_rejected' | 'unreachable' | 'not_checked' = 'not_checked';
+  let activeRooms: number | null = null;
+  let activeParticipants: number | null = null;
 
   if (apiKey && apiSecret && rawUrl) {
     try {
@@ -20,10 +22,12 @@ export async function GET() {
         .replace(/^ws:/i, 'http:')
         .replace(/\/$/, '');
       const client = new RoomServiceClient(host, apiKey, apiSecret);
-      await Promise.race([
+      const rooms = await Promise.race([
         client.listRooms(),
         new Promise<never>((_, reject) => setTimeout(() => reject(new Error('probe timeout')), 5000)),
       ]);
+      activeRooms = rooms.length;
+      activeParticipants = rooms.reduce((sum, room) => sum + (Number(room.numParticipants) || 0), 0);
       roomServiceApi = 'ok';
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -49,6 +53,8 @@ export async function GET() {
         browserUrlPresent: Boolean(browserUrl),
         serverUrlPresent: Boolean(serverUrl),
         roomServiceApi,
+        activeRooms,
+        activeParticipants,
       },
     },
     {
