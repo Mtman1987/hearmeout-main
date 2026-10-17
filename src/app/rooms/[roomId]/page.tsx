@@ -647,7 +647,7 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
     }, [roomId, userDisplayName, userId, userPhotoURL]);
 
     const startPeerVoiceFallback = useCallback(async (reason: unknown) => {
-        if (room.streamVoiceEnabled) { setVoiceFailureMessage('Stream voice connection failed. Retry voice to reconnect.'); setVoiceFallbackFailed(true); return; }
+        if (room.streamVoiceEnabled) { const detail = reason instanceof Error ? reason.message : String(reason || 'Unknown LiveKit failure'); setVoiceFailureMessage(`Stream voice connection failed: ${detail}. Retry voice to reconnect.`); setVoiceFallbackFailed(true); return; }
         if (!userId || !roomId || peerVoiceRef.current?.active || peerVoiceStartingRef.current) return;
         peerVoiceStartingRef.current = true;
         voiceFallbackActiveRef.current = true;
@@ -719,7 +719,7 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
         } finally {
             peerVoiceStartingRef.current = false;
         }
-    }, [roomId, toast, userId]);
+    }, [room.streamVoiceEnabled, roomId, toast, userId]);
 
     const retryLiveKitVoice = useCallback(async () => {
         if (!userId || voiceRetrying) return;
@@ -836,6 +836,13 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
                 if (!isCancelled) setVoiceToken(token);
             } catch (e) {
                 if (isCancelled) return;
+                const detail = e instanceof Error ? e.message : String(e);
+                console.error('[Voice] LiveKit token generation failed:', detail);
+                fetch('/api/client-log', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(liveKitErrorPayload(e, 'livekit-token-generation', roomId, userId)),
+                }).catch(() => {});
                 await startPeerVoiceFallback(e);
             }
         };
