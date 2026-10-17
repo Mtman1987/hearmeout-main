@@ -27,7 +27,7 @@ import { useRouter } from 'next/navigation';
 
 interface RoomParticipantData { id: string; uid: string; displayName: string; photoURL: string; twitchChannel?: string; discordGuildId?: string; streamMode?: boolean; serverMuted?: boolean; }
 
-export default function UserCard({ participant, isLocal, isHost, roomId }: { participant: LivekitClient.Participant; isLocal: boolean; isHost?: boolean; roomId: string; }) {
+export default function UserCard({ participant, isLocal, isHost, roomId, isP2PSpeaking = false }: { participant: LivekitClient.Participant; isLocal: boolean; isHost?: boolean; roomId: string; isP2PSpeaking?: boolean; }) {
   const { user } = useSession();
   const { toast } = useToast();
   const room = useRoomContext();
@@ -287,6 +287,7 @@ export default function UserCard({ participant, isLocal, isHost, roomId }: { par
         <CardContent className="p-4 flex flex-col gap-4 flex-grow">
             <div className="flex items-start gap-4">
                 <div className="relative">
+                    {isLocal && isP2PSpeaking && <div aria-label="P2P audio activity" title="P2P microphone audio detected" className="pointer-events-none absolute -inset-1 rounded-full border-4 border-blue-500 shadow-[0_0_0_2px_rgba(59,130,246,0.25)]" />}
                     <Avatar className={cn("h-16 w-16 transition-all", (isSpeaking || (isLocal && wakeTestHeardSpeech)) && !isMuted && "ring-4 ring-primary ring-offset-2 ring-offset-card", (isSpeaking || (isLocal && wakeTestHeardSpeech)) && isMuted && "ring-4 ring-destructive ring-offset-2 ring-offset-card")}>
                         <AvatarImage src={photoURL} alt={displayName || 'User'} />
                         <AvatarFallback>{displayName?.charAt(0)?.toUpperCase() || 'U'}</AvatarFallback>
