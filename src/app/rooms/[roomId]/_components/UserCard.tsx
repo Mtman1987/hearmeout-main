@@ -52,6 +52,7 @@ export default function UserCard({ participant, isLocal, isHost, roomId }: { par
   const participantMeta = participant.metadata ? JSON.parse(participant.metadata) : {};
   const userRecordId = participantMeta.uid || identity;
   const [trackAudioLevel, setTrackAudioLevel] = useState(0);
+  const [wakeTestHeardSpeech, setWakeTestHeardSpeech] = useState(false);
   const [micPauseReason, setMicPauseReason] = useState<string | null>(
     isLocal ? 'Microphone muted on entry. Unmute once, then say “Athena …” or another joined persona wake name whenever you want the AI.' : null,
   );
@@ -66,6 +67,21 @@ export default function UserCard({ participant, isLocal, isHost, roomId }: { par
     }
     setMicPauseReason('Microphone muted. Unmute once to resume room audio and wake-name commands.');
   }, [isLocal, room]);
+
+  useEffect(() => {
+    if (!isLocal || typeof window === 'undefined') return;
+    let clearTimer: ReturnType<typeof setTimeout> | undefined;
+    const handleWakeSpeechDetected = () => {
+      setWakeTestHeardSpeech(true);
+      if (clearTimer) clearTimeout(clearTimer);
+      clearTimer = setTimeout(() => setWakeTestHeardSpeech(false), 900);
+    };
+    window.addEventListener('hmo-local-wake-speech-detected', handleWakeSpeechDetected);
+    return () => {
+      window.removeEventListener('hmo-local-wake-speech-detected', handleWakeSpeechDetected);
+      if (clearTimer) clearTimeout(clearTimer);
+    };
+  }, [isLocal]);
 
   useEffect(() => {
     if (!participant) return;
@@ -271,7 +287,7 @@ export default function UserCard({ participant, isLocal, isHost, roomId }: { par
         <CardContent className="p-4 flex flex-col gap-4 flex-grow">
             <div className="flex items-start gap-4">
                 <div className="relative">
-                    <Avatar className={cn("h-16 w-16 transition-all", isSpeaking && !isMuted && "ring-4 ring-primary ring-offset-2 ring-offset-card", isSpeaking && isMuted && "ring-4 ring-destructive ring-offset-2 ring-offset-card")}>
+                    <Avatar className={cn("h-16 w-16 transition-all", (isSpeaking || (isLocal && wakeTestHeardSpeech)) && !isMuted && "ring-4 ring-primary ring-offset-2 ring-offset-card", (isSpeaking || (isLocal && wakeTestHeardSpeech)) && isMuted && "ring-4 ring-destructive ring-offset-2 ring-offset-card")}>
                         <AvatarImage src={photoURL} alt={displayName || 'User'} />
                         <AvatarFallback>{displayName?.charAt(0)?.toUpperCase() || 'U'}</AvatarFallback>
                     </Avatar>
