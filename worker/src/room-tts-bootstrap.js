@@ -102,8 +102,8 @@ async function startRoomTts(roomId) {
   const startPromise = (async () => {
     const token = await mintRoomTtsToken(roomId);
     const livekitUrl = String(
-      process.env.LIVEKIT_URL
-      || process.env.NEXT_PUBLIC_LIVEKIT_URL
+      process.env.NEXT_PUBLIC_LIVEKIT_URL
+      || process.env.LIVEKIT_URL
       || 'wss://streamweaver-7atx04ct.livekit.cloud',
     ).trim();
     const session = new PersonaSession({
