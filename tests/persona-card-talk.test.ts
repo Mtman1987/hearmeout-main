@@ -41,7 +41,8 @@ test('public room persona chat uses the public service route with no user token 
   assert.match(route, /forwardPublicRoomPersona/);
   assert.match(route, /\/api\/internal\/hearmeout\/persona-command/);
   assert.match(route, /publicPersonaIsInRoom/);
-  assert.match(route, /healthyWorkerPersona/);
+  // Room-roster membership is authoritative in the current Say Player-only flow.
+  assert.doesNotMatch(route, /healthyWorkerPersona/);
   assert.match(route, /persona:\$\{targetTenantId\}/);
   assert.match(route, /StreamWeaver bearer secret/);
   assert.doesNotMatch(route, /getStreamWeaverServiceSecret|STREAMWEAVER_SECRET/);
@@ -62,6 +63,7 @@ test('HearMeOut middleware never asks for SPMT again on public persona interacti
   for (const route of [
     '/api/bots',
     '/api/bot/commands',
+    '/api/rooms/persona-speech',
     '/api/athena/commands',
     '/api/internal/persona-transcribe',
     '/api/internal/persona-command',
