@@ -1028,7 +1028,7 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
     }
 
     const voiceReady = !!livekitUrl && !!voiceToken;
-    const fallbackRoom = voiceFallbackActive ? getFallbackRoom() : null;
+    const fallbackRoom = !voiceReady || voiceFallbackActive ? getFallbackRoom() : null;
 
     return (
       voiceReady ? (
