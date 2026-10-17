@@ -15,6 +15,8 @@ const PUBLIC_PREFIXES = [
   '/api/worker/',
   '/api/livekit/webhook',
   '/api/livekit-token',
+  // Read-only configuration probe; exposes booleans only, never credentials.
+  '/api/livekit-health',
   // Public chatbot interaction must never be stopped by the SPMT user-session
   // middleware. These routes perform only room/persona interaction; account,
   // owner, and administrator controls remain protected elsewhere.
