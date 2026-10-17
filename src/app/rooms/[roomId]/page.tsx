@@ -518,6 +518,12 @@ function LiveKitConnectionDiagnostics({ roomId, identity, serverUrl }: { roomId:
         })();
 
         const report = (area: string, details: Record<string, unknown> = {}) => {
+            // Keep the latest non-secret connection context available to the room error handler.
+            (window as any).__hmoLiveKitDiagnostics = {
+                livekitHost,
+                connectionState: String(room.state),
+                timestamp: new Date().toISOString(),
+            };
             fetch('/api/client-log', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -629,6 +635,12 @@ function liveKitErrorPayload(err: unknown, area: string, roomId: string, identit
         status: (err as any)?.status || null,
         roomId,
         identity: identity || null,
+        // Include public host and latest state; never log the access token or API credentials.
+        livekitHost: (window as any).__hmoLiveKitDiagnostics?.livekitHost || (() => {
+            try { return new URL(process.env.NEXT_PUBLIC_LIVEKIT_URL || '').host || 'missing-livekit-host'; }
+            catch { return 'invalid-livekit-url'; }
+        })(),
+        connectionState: (window as any).__hmoLiveKitDiagnostics?.connectionState || null,
         userAgent: navigator.userAgent,
     };
 }
