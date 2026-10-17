@@ -111,15 +111,16 @@ test('persona presence is persistent and never expires with the 45 second human 
   assert.match(command, /const presence = db\.get/);
   assert.match(command, /persistent:\s*true/);
   assert.match(session, /speechMode:\s*'say-player'/);
-  assert.match(session, /joinMode:\s*'say-player-fallback'/);
-  assert.match(command, /existingPresence\?\.speechMode === 'say-player'/);
+  assert.match(session, /joinMode:\s*'say-player-only'/);
+  assert.match(command, /room roster is the invite authority/);
 });
 
 test('persona invite stays token-free while public persona speech uses StreamWeaver Say', () => {
   const sessionRoute = source('src/app/api/bots/session/route.ts');
   const bootstrap = source('worker/src/persona-bootstrap.js');
   const commandRoute = source('src/app/api/bot/commands/route.ts');
-  assert.match(sessionRoute, /serviceSession:\s*action === 'join'/);
+  assert.match(sessionRoute, /joinMode:\s*'say-player-only'/);
+  assert.doesNotMatch(sessionRoute, /getDjWorkerUrl|mintPersonaToken|LiveKit token route/);
   assert.doesNotMatch(sessionRoute, /spmtAccessToken:/);
   assert.doesNotMatch(sessionRoute, /spmtRefreshToken:/);
   assert.match(bootstrap, /app\.post\('\/persona\/speak'/);
@@ -136,7 +137,7 @@ test('room persona invites and commands do not depend on LiveKit or P2P', () => 
   assert.doesNotMatch(session, /getDjWorkerUrl|mintPersonaToken|LiveKit token route/);
   assert.doesNotMatch(service, /callWorker\('\/persona'/);
   assert.doesNotMatch(command, /healthyWorkerPersona|transportHealthy === true/);
-  assert.match(command, /speechMode.*Say Player|Say Player.*speech/i);
+  assert.match(command, /room roster is the invite authority/);
 });
 
 test('manual Talk button is the deliberate cloud-STT fallback and shares the bot-command client', () => {
