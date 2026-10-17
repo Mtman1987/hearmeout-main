@@ -140,9 +140,13 @@ export async function POST(request: NextRequest) {
       signal: typeof AbortSignal.timeout === 'function' ? AbortSignal.timeout(45_000) : undefined,
     });
   } catch (error) {
-    return NextResponse.json({
-      error: `Persona worker request failed: ${error instanceof Error ? error.message : String(error)}`,
-    }, { status: 502 });
+    // Persona identity and speech use the browser Say Player broadcast. If the RTC worker is unreachable,
+    // route the failure through the existing fallback so the persistent persona card still appears.
+    const reason = `Persona worker request failed: ${error instanceof Error ? error.message : String(error)}`;
+    workerResponse = new Response(JSON.stringify({ error: reason }), {
+      status: 503,
+      headers: { 'Content-Type': 'application/json' },
+    });
   }
   const workerPayload = await workerResponse.json().catch(() => ({}));
   const presenceId = `persona:${matched.ownerTenantId}`;
