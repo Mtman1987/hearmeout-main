@@ -151,6 +151,9 @@ async function forwardPublicRoomPersona(body: BotCommandBody) {
       roomId,
       targetTenantId,
       voice: text(body.voice, 128) || undefined,
+      // HearMeOut queues the final response through /api/say/queue after this
+      // endpoint returns; do not synthesize a second, unused audio payload here.
+      speak: false,
       ...actor,
     }),
     cache: 'no-store',
