@@ -111,10 +111,11 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: `${matched.name} is banned from this room` }, { status: 403 });
   }
 
-  // TTS-only personas speak through StreamWeaver's Say Player broadcast.
-  // Do not start a LiveKit/RTC worker session or ask a persona to join P2P.
+  const presenceId = `persona:${matched.ownerTenantId}`;
   if (action === 'join') {
-    const presenceId = `persona:${matched.ownerTenantId}`;
+    // A room invite registers the persona in HearMeOut's roster only.
+    // Persona commands and speech run through StreamWeaver + Say Player;
+    // no LiveKit token, RTC session, or P2P participant is required.
     db.set(`rooms/${roomId}/users`, presenceId, {
       id: presenceId,
       uid: presenceId,
@@ -144,119 +145,14 @@ export async function POST(request: NextRequest) {
     }, { status: 200, headers: { 'cache-control': 'private, no-store' } });
   }
 
-  const workerUrl = getDjWorkerUrl();
-  let workerResponse: Response;
-  try {
-    workerResponse = await fetch(`${workerUrl}/persona`, {
-      method: 'POST',
-      headers: getDjWorkerRequestHeaders({ 'Content-Type': 'application/json' }),
-      body: JSON.stringify({
-      action,
-      roomId,
-      personaId: matched.ownerTenantId,
-      displayName: matched.name,
-      ownerTenantId: matched.ownerTenantId,
-      ownerName: matched.ownerName || '',
-      wakeNames: matched.wakeNames || [matched.name, ...(matched.aliases || [])],
-      aliases: matched.aliases || [],
-      // Interests remain public promo/personality metadata. They are not wake
-      // triggers; typed and spoken invocation both use the shared wake-name resolver.
-      interests: matched.interests || [],
-      voice: matched.voice || '',
-      livekitTtsDescriptor: matched.livekitTtsDescriptor || '',
-      avatar: matched.avatar || '',
-      idleAvatar: matched.idleAvatar || matched.avatar || '',
-      talkingAvatar: matched.talkingAvatar || matched.idleAvatar || matched.avatar || '',
-      serviceSession: action === 'join',
-      }),
-      cache: 'no-store',
-      signal: typeof AbortSignal.timeout === 'function' ? AbortSignal.timeout(45_000) : undefined,
-    });
-  } catch (error) {
-    // Persona identity and speech use the browser Say Player broadcast. If the RTC worker is unreachable,
-    // route the failure through the existing fallback so the persistent persona card still appears.
-    const reason = `Persona worker request failed: ${error instanceof Error ? error.message : String(error)}`;
-    workerResponse = new Response(JSON.stringify({ error: reason }), {
-      status: 503,
-      headers: { 'Content-Type': 'application/json' },
-    });
-  }
-  const workerPayload = await workerResponse.json().catch(() => ({}));
-  const presenceId = `persona:${matched.ownerTenantId}`;
-  if (workerResponse.ok) {
-    if (action === 'join') {
-      db.set(`rooms/${roomId}/users`, presenceId, {
-        id: presenceId,
-        uid: presenceId,
-        displayName: matched.name,
-        photoURL: matched.idleAvatar || matched.avatar || '',
-        bot: true,
-        personaId: matched.ownerTenantId,
-        ownerName: matched.ownerName || '',
-        wakeNames: matched.wakeNames || [matched.name, ...(matched.aliases || [])],
-        aliases: matched.aliases || [],
-        interests: matched.interests || [],
-        presenceKind: 'persona',
-        persistent: true,
-        transportHealthy: workerPayload?.transportHealthy === true,
-        speechMode: 'say-player',
-        lastSeen: Date.now(),
-      }, { merge: true });
-    } else {
-      db.delete(`rooms/${roomId}/users`, presenceId);
-    }
-  } else if (action === 'join' && workerResponse.status >= 500) {
-    // Persona speech now uses StreamWeaver's Say Player, so a LiveKit worker
-    // outage should not prevent adding the persona for text/local-wake commands.
-    // Keep the transport limitation explicit; do not pretend RTC audio joined.
-    const reason = String(workerPayload?.error || 'Persona LiveKit transport is unavailable').slice(0, 300);
-    db.set(`rooms/${roomId}/users`, presenceId, {
-      id: presenceId,
-      uid: presenceId,
-      displayName: matched.name,
-      photoURL: matched.idleAvatar || matched.avatar || '',
-      bot: true,
-      personaId: matched.ownerTenantId,
-      ownerName: matched.ownerName || '',
-      wakeNames: matched.wakeNames || [matched.name, ...(matched.aliases || [])],
-      aliases: matched.aliases || [],
-      interests: matched.interests || [],
-      presenceKind: 'persona',
-      persistent: true,
-      transportHealthy: false,
-      speechMode: 'say-player',
-      joinMode: 'say-player-fallback',
-      joinWarning: reason,
-      lastSeen: Date.now(),
-    }, { merge: true });
-    return NextResponse.json({
-      success: true,
-      action: 'join',
-      degraded: true,
-      transportHealthy: false,
-      speechMode: 'say-player',
-      warning: reason,
-      bot: matched,
-    }, {
-      status: 200,
-      headers: { 'cache-control': 'private, no-store' },
-    });
-  } else if (action === 'leave') {
-    // Allow local removal even when the RTC worker is unavailable.
-    db.delete(`rooms/${roomId}/users`, presenceId);
-    return NextResponse.json({
-      success: true,
-      action: 'leave',
-      warning: 'Room presence was removed; worker disconnect could not be confirmed.',
-      bot: matched,
-    }, {
-      status: 200,
-      headers: { 'cache-control': 'private, no-store' },
-    });
-  }
-
-  return NextResponse.json({ ...workerPayload, bot: matched }, {
-    status: workerResponse.status,
-    headers: { 'cache-control': 'private, no-store' },
-  });
+  // Leaving a persona only removes its room roster entry. There is no RTC
+  // session to disconnect in Say Player-only mode.
+  db.delete(`rooms/${roomId}/users`, presenceId);
+  return NextResponse.json({
+    success: true,
+    action: 'leave',
+    speechMode: 'say-player',
+    joinMode: 'say-player-only',
+    bot: matched,
+  }, { status: 200, headers: { 'cache-control': 'private, no-store' } });
 }
