@@ -151,6 +151,9 @@ async function forwardPublicRoomPersona(body: BotCommandBody) {
       roomId,
       targetTenantId,
       voice: text(body.voice, 128) || undefined,
+      // HearMeOut queues the final response through /api/say/queue after this
+      // endpoint returns; do not synthesize a second, unused audio payload here.
+      speak: false,
       ...actor,
     }),
     cache: 'no-store',
@@ -166,82 +169,56 @@ function payloadData(payload: any) {
   return payload?.data && typeof payload.data === 'object' ? payload.data : payload;
 }
 
-function workerSpeechDiagnostic(result: any, roomId: string, personaId: string) {
-  const bytes = Number(result?.bytes);
-  return {
-    roomId: text(result?.roomId, 160) || roomId,
-    personaId: text(result?.personaId, 128) || personaId,
-    bytes: Number.isFinite(bytes) && bytes >= 0 ? bytes : undefined,
-    transportHealthy: result?.transportHealthy === true,
-  };
-}
-
-async function clearStalePersonaPresence(roomId: string, personaId: string) {
-  try {
-    await ensureDb();
-    db.delete(`rooms/${roomId}/users`, `persona:${personaId}`);
-  } catch (error) {
-    console.warn('[Bot Commands] Could not clear stale persona presence:', error);
-  }
-}
-
-async function speakThroughPersona(body: BotCommandBody, payload: any) {
+async function speakThroughSayPlayer(body: BotCommandBody, payload: any) {
   if (body.speak === false) return { attempted: false, reason: 'speech-disabled' };
-  const roomId = text(body.roomId, 160);
+
   const data = payloadData(payload);
   const personaId = text(
     data?.bot?.tenantId || payload?.bot?.tenantId || body.targetTenantId,
     128,
   );
-  const audioDataUri = text(
-    data?.tts?.audioDataUri || payload?.tts?.audioDataUri,
-    30_000_000,
-  );
-  if (!roomId || !personaId || !audioDataUri) {
+  const responseText = text(data?.response || payload?.response, 2000);
+  if (!personaId || !responseText) {
     return {
       attempted: false,
-      reason: 'persona-or-audio-missing',
-      diagnostic: {
-        roomIdPresent: !!roomId,
-        personaIdPresent: !!personaId,
-        audioPresent: !!audioDataUri,
-      },
+      reason: 'persona-or-response-missing',
+      diagnostic: { personaIdPresent: !!personaId, responsePresent: !!responseText },
     };
   }
 
-  const workerUrl = getDjWorkerUrl();
-  const workerResponse = await fetch(`${workerUrl}/persona/speak`, {
+  // Use the same StreamWeaver Say queue as !say instead of publishing persona
+  // audio to the LiveKit RTC track. StreamWeaver's active Say Player is the
+  // canonical browser-source broadcast path.
+  const sayResponse = await fetch(`${STREAMWEAVER_BASE_URL}/api/say/queue`, {
     method: 'POST',
-    headers: getDjWorkerRequestHeaders({ 'Content-Type': 'application/json' }),
-    body: JSON.stringify({ roomId, personaId, audioDataUri }),
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+    body: JSON.stringify({
+      tenantId: personaId,
+      text: responseText,
+      voice: text(body.voice, 128) || text(data?.tts?.voice, 128) || undefined,
+    }),
     cache: 'no-store',
     signal: typeof AbortSignal.timeout === 'function' ? AbortSignal.timeout(45000) : undefined,
   }).catch(() => null);
 
-  if (!workerResponse) return { attempted: true, ok: false, error: 'Persona worker unavailable' };
-  const result = await workerResponse.json().catch(() => ({}));
-  const worker = workerSpeechDiagnostic(result, roomId, personaId);
-  if (!workerResponse.ok && (workerResponse.status === 404 || workerResponse.status === 409)) {
-    await clearStalePersonaPresence(roomId, personaId);
+  if (!sayResponse) {
+    return { attempted: true, ok: false, error: 'StreamWeaver Say queue unavailable' };
   }
-  if (workerResponse.ok) {
-    await ensureDb();
-    db.set(`rooms/${roomId}/users`, `persona:${personaId}`, {
-      presenceKind: 'persona',
-      persistent: true,
-      transportHealthy: true,
-      lastSeen: Date.now(),
-    }, { merge: true });
-  }
-  return workerResponse.ok
-    ? { attempted: true, ok: true, status: workerResponse.status, worker }
-    : {
-        attempted: true,
-        ok: false,
-        status: workerResponse.status,
-        error: text(result?.error, 500),
-        worker,
-      };
+  const result = await sayResponse.json().catch(() => ({}));
+  const skipped = result?.skipped === true;
+  const ok = sayResponse.ok && result?.ok !== false && !skipped;
+  return {
+    attempted: true,
+    ok,
+    status: sayResponse.status,
+    delivered: result?.delivered || 'say-player',
+    tenantId: text(result?.tenantId, 160) || personaId,
+    queued: Number.isFinite(Number(result?.queued)) ? Number(result.queued) : 0,
+    ...(skipped ? { reason: text(result?.reason, 200) || 'say-player-not-listening' } : {}),
+    ...(!ok ? { error: text(result?.error, 500) || (skipped
+      ? 'No active StreamWeaver Say Player is listening for this persona tenant'
+      : 'StreamWeaver Say queue rejected the speech') } : {}),
+  };
 }
 
 export async function POST(request: NextRequest) {
@@ -282,7 +259,7 @@ export async function POST(request: NextRequest) {
   let personaSpeech: any = undefined;
   if (upstream.response.ok) {
     try {
-      personaSpeech = await speakThroughPersona(commandBody, upstream.payload);
+      personaSpeech = await speakThroughSayPlayer(commandBody, upstream.payload);
     } catch (error) {
       personaSpeech = {
         attempted: true,

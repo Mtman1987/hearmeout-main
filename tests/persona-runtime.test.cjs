@@ -109,7 +109,7 @@ test('persona presence is persistent and never expires with the 45 second human 
   assert.match(command, /persistent:\s*true/);
 });
 
-test('persona invite stays token-free for human conversation and worker keeps the TTS endpoint', () => {
+test('persona invite stays token-free while public persona speech uses StreamWeaver Say', () => {
   const sessionRoute = source('src/app/api/bots/session/route.ts');
   const bootstrap = source('worker/src/persona-bootstrap.js');
   const commandRoute = source('src/app/api/bot/commands/route.ts');
@@ -117,7 +117,8 @@ test('persona invite stays token-free for human conversation and worker keeps th
   assert.doesNotMatch(sessionRoute, /spmtAccessToken:/);
   assert.doesNotMatch(sessionRoute, /spmtRefreshToken:/);
   assert.match(bootstrap, /app\.post\('\/persona\/speak'/);
-  assert.match(commandRoute, /\/persona\/speak/);
+  assert.match(commandRoute, /\/api\/say\/queue/);
+  assert.doesNotMatch(commandRoute, /\/persona\/speak/);
 });
 
 test('persona LiveKit transport rejects stale sessions and re-invite replaces them', () => {
