@@ -35,6 +35,8 @@ interface UserListProps {
   voiceEnabled?: boolean;
   voicePeerFallback?: boolean;
   peerConnectedPeerIds?: string[];
+  peerVoiceStreams?: Map<string, MediaStream>;
+  localP2PSpeaking?: boolean;
   peerAudioBlocked?: boolean;
   onEnablePeerAudio?: () => void;
 }
@@ -49,46 +51,97 @@ type PeerPresence = {
   presenceKind?: string;
 };
 
-function PeerPresenceParticipants({ roomId, localUserId, connectedPeerIds }: { roomId: string; localUserId?: string; connectedPeerIds: string[] }) {
+function useP2PStreamSpeaking(stream?: MediaStream) {
+  const [speaking, setSpeaking] = React.useState(false);
+  React.useEffect(() => {
+    if (!stream || typeof window === 'undefined') { setSpeaking(false); return; }
+    let context: AudioContext | null = null;
+    let timer: ReturnType<typeof setInterval> | null = null;
+    let source: MediaStreamAudioSourceNode | null = null;
+    let analyser: AnalyserNode | null = null;
+    let active = false;
+    let quietTicks = 0;
+    try {
+      const AudioContextCtor = window.AudioContext || (window as any).webkitAudioContext;
+      context = new AudioContextCtor();
+      source = context.createMediaStreamSource(stream);
+      analyser = context.createAnalyser();
+      analyser.fftSize = 512;
+      source.connect(analyser);
+      void context.resume().catch(() => {});
+      const samples = new Uint8Array(analyser.fftSize);
+      timer = setInterval(() => {
+        if (!analyser) return;
+        analyser.getByteTimeDomainData(samples);
+        let sum = 0;
+        for (const sample of samples) { const value = (sample - 128) / 128; sum += value * value; }
+        const rms = Math.sqrt(sum / samples.length);
+        const detected = rms > (active ? 0.025 : 0.045);
+        if (detected) quietTicks = 0; else quietTicks++;
+        const next = detected || (active && quietTicks < 4);
+        if (next !== active) { active = next; setSpeaking(next); }
+      }, 100);
+    } catch (error) {
+      console.warn('[PeerVoice] Could not meter remote P2P audio:', error);
+      setSpeaking(false);
+    }
+    return () => {
+      if (timer) clearInterval(timer);
+      try { source?.disconnect(); } catch {}
+      if (context) void context.close().catch(() => {});
+      setSpeaking(false);
+    };
+  }, [stream]);
+  return speaking;
+}
+
+function PeerPresenceCard({ presence, connectedPeerIds, peerVoiceStreams }: {
+  presence: PeerPresence;
+  connectedPeerIds: string[];
+  peerVoiceStreams: Map<string, MediaStream>;
+}) {
+  const displayName = presence.displayName || 'HearMeOut User';
+  const photoURL = presence.photoURL || `https://picsum.photos/seed/${presence.id}/100/100`;
+  const userIds = [presence.id, presence.uid].filter(Boolean) as string[];
+  const isPersona = presence.bot === true || presence.presenceKind === 'persona';
+  const peerId = !isPersona ? connectedPeerIds.find((id) => userIds.some((userId) => id.includes(`-${userId}-`))) : undefined;
+  const mediaConnected = !!peerId;
+  const p2pSpeaking = useP2PStreamSpeaking(peerId ? peerVoiceStreams.get(peerId) : undefined);
+  return (
+    <Card className="flex flex-col h-full">
+      <CardContent className="p-4 flex items-start gap-4">
+        <div className="relative shrink-0">
+          {p2pSpeaking && <div aria-label="P2P audio activity" title="P2P audio activity detected" className="pointer-events-none absolute -inset-1 rounded-full border-4 border-blue-500 shadow-[0_0_0_2px_rgba(59,130,246,0.25)]" />}
+          <Avatar className={`h-16 w-16 transition-all ${mediaConnected ? 'ring-4 ring-green-400 ring-offset-2 ring-offset-background shadow-lg' : 'ring-1 ring-border'}`}>
+            <AvatarImage src={photoURL} alt={displayName} />
+            <AvatarFallback>{displayName.charAt(0).toUpperCase()}</AvatarFallback>
+          </Avatar>
+        </div>
+        <div className="min-w-0 flex-1">
+          <p className="truncate text-lg font-bold">{displayName}</p>
+          <p className={`mt-1 flex items-center gap-1.5 text-xs ${mediaConnected || isPersona ? 'text-green-500' : 'text-amber-500'}`}>
+            <Radio className="h-3.5 w-3.5" /> {isPersona ? 'Say Player connected' : p2pSpeaking ? 'P2P audio active' : mediaConnected ? 'P2P audio connected' : 'Connecting P2P audio…'}
+          </p>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+function PeerPresenceParticipants({ roomId, localUserId, connectedPeerIds, peerVoiceStreams }: {
+  roomId: string;
+  localUserId?: string;
+  connectedPeerIds: string[];
+  peerVoiceStreams: Map<string, MediaStream>;
+}) {
   const { data: users } = useCollection<PeerPresence>(`rooms/${roomId}/users`, { pollInterval: 3000 });
   const activeUsers = (users || []).filter((presence) => {
-    // Say Player personas are rendered once by SayPlayerPersonaCards, using the same
-    // actionable PersonaCard UI as LiveKit personas. Never duplicate them here.
     if (presence.bot === true || presence.presenceKind === 'persona') return false;
     if (presence.id === localUserId || presence.uid === localUserId) return false;
     const lastSeen = Number(presence.lastSeen || 0);
     return lastSeen > 0 && Date.now() - lastSeen < 45_000;
   });
-
-  return (
-    <>
-      {activeUsers.map((presence) => {
-        const displayName = presence.displayName || 'HearMeOut User';
-        const photoURL = presence.photoURL || `https://picsum.photos/seed/${presence.id}/100/100`;
-        const userIds = [presence.id, presence.uid].filter(Boolean) as string[];
-        const isPersona = presence.bot === true || presence.presenceKind === 'persona';
-        const mediaConnected = !isPersona && connectedPeerIds.some((peerId) =>
-          userIds.some((userId) => peerId.includes(`-${userId}-`)),
-        );
-        return (
-          <Card key={presence.id} className="flex flex-col h-full">
-            <CardContent className="p-4 flex items-start gap-4">
-              <Avatar className={`h-16 w-16 transition-all ${mediaConnected ? 'ring-4 ring-green-400 ring-offset-2 ring-offset-background shadow-lg' : 'ring-1 ring-border'}`}>
-                <AvatarImage src={photoURL} alt={displayName} />
-                <AvatarFallback>{displayName.charAt(0).toUpperCase()}</AvatarFallback>
-              </Avatar>
-              <div className="min-w-0 flex-1">
-                <p className="truncate text-lg font-bold">{displayName}</p>
-                <p className={`mt-1 flex items-center gap-1.5 text-xs ${mediaConnected || isPersona ? 'text-green-500' : 'text-amber-500'}`}>
-                  <Radio className="h-3.5 w-3.5" /> {isPersona ? 'Say Player connected' : mediaConnected ? 'P2P audio connected' : 'Connecting P2P audio…'}
-                </p>
-              </div>
-            </CardContent>
-          </Card>
-        );
-      })}
-    </>
-  );
+  return <>{activeUsers.map((presence) => <PeerPresenceCard key={presence.id} presence={presence} connectedPeerIds={connectedPeerIds} peerVoiceStreams={peerVoiceStreams} />)}</>;
 }
 
 const isHiddenBridgeParticipant = (identity?: string) =>
@@ -138,7 +191,7 @@ function SayPlayerPersonaCards({ roomId, isHost }: { roomId: string; isHost: boo
   );
 }
 
-function LiveKitParticipants({ isHost, roomId }: { isHost: boolean; roomId: string }) {
+function LiveKitParticipants({ isHost, roomId, localP2PSpeaking }: { isHost: boolean; roomId: string; localP2PSpeaking: boolean }) {
   const { localParticipant } = useLocalParticipant();
   const remoteParticipants = useRemoteParticipants();
   const voiceInputParticipants = remoteParticipants.filter(
@@ -177,13 +230,13 @@ function LiveKitParticipants({ isHost, roomId }: { isHost: boolean; roomId: stri
       {allParticipants.map((participant) => (
         isPersonaParticipant(participant)
           ? <PersonaCard key={participant.sid} participant={participant} roomId={roomId} isHost={isHost} />
-          : <UserCard key={participant.sid} participant={participant} isLocal={participant.isLocal} isHost={isHost} roomId={roomId} />
+          : <UserCard key={participant.sid} participant={participant} isLocal={participant.isLocal} isP2PSpeaking={participant.isLocal && localP2PSpeaking} isHost={isHost} roomId={roomId} />
       ))}
     </>
   );
 }
 
-export default function UserList({ roomId, localVolume, onVolumeChange, showDJ, onOpenQueue, onOpenAddSong, onOpenWatch, voiceEnabled = true, voicePeerFallback = false, peerConnectedPeerIds = [], peerAudioBlocked = false, onEnablePeerAudio }: UserListProps) {
+export default function UserList({ roomId, localVolume, onVolumeChange, showDJ, onOpenQueue, onOpenAddSong, onOpenWatch, voiceEnabled = true, voicePeerFallback = false, peerConnectedPeerIds = [], peerVoiceStreams = new Map(), localP2PSpeaking = false, peerAudioBlocked = false, onEnablePeerAudio }: UserListProps) {
   const { user } = useSession();
   const { data: room } = useDoc<RoomData>('rooms', roomId, 2000);
 
@@ -211,9 +264,9 @@ export default function UserList({ roomId, localVolume, onVolumeChange, showDJ, 
               onOpenWatch={onOpenWatch}
             />
           )}
-          {voiceEnabled && <LiveKitParticipants isHost={isHost} roomId={roomId} />}
+          {voiceEnabled && <LiveKitParticipants isHost={isHost} roomId={roomId} localP2PSpeaking={localP2PSpeaking} />}
           <SayPlayerPersonaCards roomId={roomId} isHost={isHost} />
-          {voicePeerFallback && <PeerPresenceParticipants roomId={roomId} localUserId={user?.uid} connectedPeerIds={peerConnectedPeerIds} />}
+          {voicePeerFallback && <PeerPresenceParticipants roomId={roomId} localUserId={user?.uid} connectedPeerIds={peerConnectedPeerIds} peerVoiceStreams={peerVoiceStreams} />}
         </div>
       </div>
     </>
