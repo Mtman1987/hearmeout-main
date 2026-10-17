@@ -113,14 +113,26 @@ async function publicPersonaIsInRoom(roomId: string, targetTenantId: string) {
   // left behind after a worker restart; none of those should lie about whether
   // the persona is actually connected and publishable right now.
   const instance = await healthyWorkerPersona(roomId, targetTenantId);
+  const existingPresence = db.get(`rooms/${roomId}/users`, presenceId);
   if (!instance) {
+    // The room may intentionally be in Say Player fallback mode after a LiveKit
+    // join failure. That mode supports public typed/local-wake commands and
+    // broadcast speech, but does not claim a healthy RTC persona track.
+    if (existingPresence?.speechMode === 'say-player') {
+      db.set(`rooms/${roomId}/users`, presenceId, {
+        ...existingPresence,
+        persistent: true,
+        transportHealthy: false,
+        lastSeen: Date.now(),
+      }, { merge: true });
+      return true;
+    }
     db.delete(`rooms/${roomId}/users`, presenceId);
     return false;
   }
 
   // Self-heal/upgrade the convenience presence row from the real live session.
-  // Human presence pruning must never expire this row while the RTC persona is
-  // still alive.
+  // Persona replies use Say Player even when the LiveKit input transport is healthy.
   db.set(`rooms/${roomId}/users`, presenceId, {
     id: presenceId,
     uid: presenceId,
@@ -130,6 +142,7 @@ async function publicPersonaIsInRoom(roomId: string, targetTenantId: string) {
     presenceKind: 'persona',
     persistent: true,
     transportHealthy: true,
+    speechMode: 'say-player',
     lastSeen: Date.now(),
   }, { merge: true });
   return true;
