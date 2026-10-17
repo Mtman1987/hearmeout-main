@@ -107,6 +107,9 @@ test('persona presence is persistent and never expires with the 45 second human 
   assert.match(command, /method:\s*'GET'/);
   assert.match(command, /Self-heal\/upgrade|self-heal/i);
   assert.match(command, /persistent:\s*true/);
+  assert.match(session, /speechMode:\s*'say-player'/);
+  assert.match(session, /joinMode:\s*'say-player-fallback'/);
+  assert.match(command, /existingPresence\?\.speechMode === 'say-player'/);
 });
 
 test('persona invite stays token-free while public persona speech uses StreamWeaver Say', () => {
