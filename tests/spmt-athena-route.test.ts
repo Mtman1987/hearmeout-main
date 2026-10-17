@@ -21,7 +21,8 @@ const workerPackage = new URL('../worker/package.json', import.meta.url);
 test('HearMeOut human bot conversation never depends on a user SPMT session, bot-share, or StreamWeaver secret', async () => {
   const source = await readFile(botApiRoute, 'utf8');
   assert.match(source, /publicPersonaIsInRoom/);
-  assert.match(source, /healthyWorkerPersona/);
+  // Room-roster membership is authoritative for Say Player-only personas; no RTC worker health dependency remains.
+  assert.doesNotMatch(source, /healthyWorkerPersona/);
   assert.match(source, /\/api\/internal\/hearmeout\/persona-command/);
   assert.match(source, /StreamWeaver bearer secret/);
   assert.doesNotMatch(source, /HMO_SPMT_COOKIE/);
@@ -135,11 +136,13 @@ test('bot join API uses room management plus the public persona catalog, never S
   assert.match(source, /canManageRoom/);
   assert.match(source, /Only the room owner or room staff can manage bots/);
   assert.match(source, /\/api\/internal\/hearmeout\/bots/);
-  assert.match(source, /getDjWorkerRequestHeaders/);
-  assert.match(source, /\/persona/);
-  assert.match(source, /serviceSession: action === 'join'/);
+  // Joining records the persona in the room roster; it does not provision a LiveKit/DJ-worker session.
+  assert.doesNotMatch(source, /getDjWorkerRequestHeaders|callWorker\(['"]\/persona/);
+  assert.doesNotMatch(source, /serviceSession:\s*action === 'join'/);
   assert.match(source, /presenceKind:\s*'persona'/);
   assert.match(source, /persistent:\s*true/);
+  assert.match(source, /speechMode:\s*'say-player'/);
+  assert.match(source, /joinMode:\s*'say-player-only'/);
   assert.doesNotMatch(source, /HMO_SPMT_COOKIE|refreshHmoSpmtSession|getBotShareMode/);
   assert.doesNotMatch(source, /getStreamWeaverServiceSecret|STREAMWEAVER_SECRET/);
   assert.doesNotMatch(source, /Authorization:\s*`Bearer/);
@@ -167,10 +170,12 @@ test('persona worker joins the plain voice room with worker-authenticated LiveKi
   assert.match(workerPkg.scripts.start, /persona-bootstrap\.js/);
 });
 
-test('Athena wake names stay backward compatible through joined persona metadata, not a separate command path', async () => {
+test('persona wake names flow through joined metadata instead of being hard-coded in the room listener', async () => {
+  const sessionSource = await readFile(botSessionRoute, 'utf8');
   const chatSource = await readFile(chatBox, 'utf8');
   const wakeSource = await readFile(wakeWordListener, 'utf8');
-  for (const name of ['Hey Athena', 'Athena OS', 'Athena', 'Annie']) {
-    assert.ok(chatSource.includes(`'${name}'`) || wakeSource.includes(`'${name}'`), `${name} wake name is missing`);
-  }
+  assert.match(sessionSource, /wakeNames: matched\.wakeNames/);
+  assert.match(chatSource, /metadata\.wakeNames/);
+  assert.match(wakeSource, /metadata\.wakeNames/);
+  assert.doesNotMatch(wakeSource, /Hey Athena|Athena OS/);
 });

@@ -18,7 +18,7 @@ import {
  * - HearMeOut never continuously uploads room speech for STT.
  * - The always-on wake detector belongs to a local Companion client.
  * - A local Companion emits this event only after its on-device listener has
- *   matched a wake phrase such as "Hey Athena".
+ *   matched a wake phrase configured in joined persona metadata.
  * - The deliberate Talk button remains the browser-only fallback and is the
  *   only browser path that records audio for cloud STT.
  */

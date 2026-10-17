@@ -1,6 +1,7 @@
 'use client';
 
 import UserCard from "./UserCard";
+import RoomSayPlayerAudio from './RoomSayPlayerAudio';
 import PersonaCard, { isPersonaParticipant } from './PersonaCard';
 import DJCard from "./DJCard";
 import MobileVoiceControl from './MobileVoiceControl';
@@ -158,8 +159,12 @@ function SayPlayerPersonaCards({ roomId, isHost }: { roomId: string; isHost: boo
     (presence.bot === true || presence.presenceKind === 'persona')
     && !livePersonaIds.has(String(presence.ownerTenantId || presence.personaId || presence.id || '').replace(/^persona:/, ''))
   );
+  const speechPersonaIds = personas
+    .map((presence) => String(presence.ownerTenantId || presence.personaId || presence.id || '').replace(/^persona:/, ''))
+    .filter(Boolean);
   return (
     <>
+      {speechPersonaIds.length > 0 && <RoomSayPlayerAudio roomId={roomId} personaIds={speechPersonaIds} />}
       {personas.map((persona) => {
         const displayName = persona.displayName || 'StreamWeaver Persona';
         const personaId = String(persona.ownerTenantId || persona.personaId || persona.id || '').replace(/^persona:/, '');
