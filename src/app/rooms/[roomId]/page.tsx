@@ -752,7 +752,8 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
     }, [roomId, userDisplayName, userId, userPhotoURL]);
 
     const startPeerVoiceFallback = useCallback(async (reason: unknown) => {
-        if (room.streamVoiceEnabled) { const detail = reason instanceof Error ? reason.message : String(reason || 'Unknown LiveKit failure'); setVoiceFailureMessage(`Stream voice connection failed: ${detail}. Retry voice to reconnect.`); setVoiceFallbackFailed(true); return; }
+        // Stream-enabled rooms must also fall back to browser P2P when LiveKit signaling fails.
+        // Do not strand these rooms on a yellow/red LiveKit status while regular rooms can use P2P.
         if (!userId || !roomId || peerVoiceRef.current?.active || peerVoiceStartingRef.current) return;
         peerVoiceStartingRef.current = true;
         voiceFallbackActiveRef.current = true;
