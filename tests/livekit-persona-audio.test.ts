@@ -5,8 +5,8 @@ import { readFile } from 'node:fs/promises';
 test('HearMeOut room renders and unlocks remote LiveKit audio', async () => {
   const source = await readFile('src/app/rooms/[roomId]/page.tsx', 'utf8');
   assert.match(source, /<RoomAudioRenderer\s*\/>/);
-  assert.match(source, /const fallbackRoom = !voiceReady \\|\\| voiceFallbackActive \\? getFallbackRoom\\(\\) : null/);
-  assert.match(source, /<RoomContext\\.Provider value=\\{fallbackRoom\\}>/);
+  assert.match(source, /const fallbackRoom = !voiceReady \|\| voiceFallbackActive \? getFallbackRoom\(\) : null/);
+  assert.match(source, /<RoomContext\.Provider value=\\{fallbackRoom\\}>/);
   assert.match(source, /RoomEvent\.AudioPlaybackStatusChanged/);
   assert.match(source, /await room\.startAudio\(\)/);
   assert.match(source, /<RoomAudioPlayback volume=\{localVolume\}\s*\/>/);
