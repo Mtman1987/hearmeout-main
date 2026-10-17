@@ -1,18 +1,25 @@
-import { loungeWorker } from '@/lib/lounge-worker';
+const LOUNGE_WORKER_URL = (process.env.LOUNGE_WORKER_URL || 'http://lounge.process.hmo-dj-worker.internal:3002').replace(/\/$/, '');
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-// The persistent Lounge worker owns the current music/movie queue and clock.
-// Saved web watch sessions are separate and must not redirect this viewer.
+// This endpoint is a read-only public status snapshot on the Lounge worker.
+// Do not require the shared worker secret just to render the current program;
+// secret lookup was turning a missing/mismatched secret into a misleading 502.
 export async function GET() {
   try {
-    const upstream = await loungeWorker('media/program', 'GET', AbortSignal.timeout(8000));
+    const upstream = await fetch(`${LOUNGE_WORKER_URL}/lounge/media/program`, {
+      method: 'GET',
+      cache: 'no-store',
+      signal: AbortSignal.timeout(10000),
+      headers: { accept: 'application/json' },
+    });
     return new Response(upstream.body, {
       status: upstream.status,
-      headers: { 'content-type': 'application/json', 'cache-control': 'no-store' },
+      headers: { 'content-type': upstream.headers.get('content-type') || 'application/json', 'cache-control': 'no-store' },
     });
-  } catch {
+  } catch (error) {
+    console.error('[Lounge media program] upstream request failed:', error);
     return Response.json({ error: 'Lounge worker unavailable' }, { status: 502 });
   }
 }
