@@ -154,6 +154,9 @@ export default function StellaWakeTestListener({ roomId, remoteParticipants }: {
           .sort((a, b) => a.index - b.index)
           .slice(-MAX_SEGMENTS);
         setLastTranscript(text);
+        // Mirror recognized browser speech into the local avatar's speaking ring.
+        // This confirms recognition is receiving words; it does not claim P2P audio is published.
+        if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent('hmo-local-wake-speech-detected', { detail: { text, at: now } }));
 
         if (!final || !wakePhraseIn(text, targetsRef.current) || handledIndicesRef.current.has(index)) continue;
         handledIndicesRef.current.add(index);
