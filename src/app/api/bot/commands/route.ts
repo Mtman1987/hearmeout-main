@@ -88,64 +88,18 @@ async function resolvePublicActor(body: BotCommandBody) {
   return { actorUserId, actorUsername, actorDisplayName };
 }
 
-async function healthyWorkerPersona(roomId: string, targetTenantId: string): Promise<WorkerPersonaInstance | null> {
-  const response = await fetch(`${getDjWorkerUrl()}/persona`, {
-    method: 'GET',
-    headers: getDjWorkerRequestHeaders({ Accept: 'application/json' }),
-    cache: 'no-store',
-    signal: typeof AbortSignal.timeout === 'function' ? AbortSignal.timeout(6000) : undefined,
-  }).catch(() => null);
-  if (!response?.ok) return null;
-  const payload = await response.json().catch(() => ({}));
-  const instances = Array.isArray(payload?.instances) ? payload.instances as WorkerPersonaInstance[] : [];
-  return instances.find((instance) =>
-    text(instance?.roomId, 160) === roomId
-    && text(instance?.personaId, 128) === targetTenantId
-    && instance?.transportHealthy === true,
-  ) || null;
-}
-
 async function publicPersonaIsInRoom(roomId: string, targetTenantId: string) {
   await ensureDb();
   const presenceId = `persona:${targetTenantId}`;
-
-  // The RTC worker is authoritative. A SQLite row can be pruned, stale, or
-  // left behind after a worker restart; none of those should lie about whether
-  // the persona is actually connected and publishable right now.
-  const instance = await healthyWorkerPersona(roomId, targetTenantId);
-  const existingPresence = db.get(`rooms/${roomId}/users`, presenceId);
-  if (!instance) {
-    // The room may intentionally be in Say Player fallback mode after a LiveKit
-    // join failure. That mode supports public typed/local-wake commands and
-    // broadcast speech, but does not claim a healthy RTC persona track.
-    if (existingPresence?.speechMode === 'say-player') {
-      db.set(`rooms/${roomId}/users`, presenceId, {
-        ...existingPresence,
-        persistent: true,
-        transportHealthy: false,
-        lastSeen: Date.now(),
-      }, { merge: true });
-      return true;
-    }
-    db.delete(`rooms/${roomId}/users`, presenceId);
-    return false;
-  }
-
-  // Self-heal/upgrade the convenience presence row from the real live session.
-  // Persona replies use Say Player even when the LiveKit input transport is healthy.
-  db.set(`rooms/${roomId}/users`, presenceId, {
-    id: presenceId,
-    uid: presenceId,
-    displayName: text(instance.runtime?.displayName, 96) || targetTenantId,
-    bot: true,
-    personaId: targetTenantId,
-    presenceKind: 'persona',
-    persistent: true,
-    transportHealthy: true,
-    speechMode: 'say-player',
-    lastSeen: Date.now(),
-  }, { merge: true });
-  return true;
+  const presence = db.get(`rooms/${roomId}/users`, presenceId);
+  // The room roster is the invite authority. Do not require a LiveKit worker,
+  // RTC track, or P2P participant: room bots are ordinary StreamWeaver
+  // conversational personas whose speech is delivered by Say Player.
+  return Boolean(
+    presence
+    && presence.bot === true
+    && (presence.presenceKind === 'persona' || presence.personaId === targetTenantId)
+  );
 }
 
 async function forwardPublicRoomPersona(body: BotCommandBody) {
