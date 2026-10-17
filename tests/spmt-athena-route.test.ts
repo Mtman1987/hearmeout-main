@@ -167,10 +167,10 @@ test('persona worker joins the plain voice room with worker-authenticated LiveKi
   assert.match(workerPkg.scripts.start, /persona-bootstrap\.js/);
 });
 
-test('Athena wake names stay backward compatible through joined persona metadata, not a separate command path', async () => {
+test('room wake routing does not restore removed hardcoded Athena aliases', async () => {
   const chatSource = await readFile(chatBox, 'utf8');
   const wakeSource = await readFile(wakeWordListener, 'utf8');
-  for (const name of ['Hey Athena', 'Athena OS', 'Athena', 'Annie']) {
-    assert.ok(chatSource.includes(`'${name}'`) || wakeSource.includes(`'${name}'`), `${name} wake name is missing`);
-  }
+  assert.doesNotMatch(chatSource, /'Hey Athena'|'Athena OS'/);
+  assert.doesNotMatch(wakeSource, /'Hey Athena'|'Athena OS'/);
+  assert.match(wakeSource, /sendRoomPersonaCommand/);
 });
