@@ -508,6 +508,64 @@ function RoomHeader({ roomName, onToggleChat, showDJ, onToggleDJ, canBridge, sho
     );
 }
 
+function LiveKitConnectionDiagnostics({ roomId, identity, serverUrl }: { roomId: string; identity: string | null; serverUrl: string }) {
+    const room = useRoomContext();
+
+    useEffect(() => {
+        let lastState: string | null = null;
+        const livekitHost = (() => {
+            try { return new URL(serverUrl).host; } catch { return 'invalid-livekit-url'; }
+        })();
+
+        const report = (area: string, details: Record<string, unknown> = {}) => {
+            fetch('/api/client-log', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                keepalive: true,
+                body: JSON.stringify({
+                    area: `livekit-diagnostic-${area}`,
+                    roomId,
+                    identity,
+                    livekitHost,
+                    timestamp: new Date().toISOString(),
+                    connectionState: String(room.state),
+                    userAgent: navigator.userAgent,
+                    ...details,
+                }),
+            }).catch(() => {});
+        };
+
+        const onConnectionStateChanged = (state: ConnectionState) => {
+            const nextState = String(state);
+            if (nextState === lastState) return;
+            const previousState = lastState;
+            lastState = nextState;
+            report('connection-state', { previousState, nextState });
+        };
+        const onSignalConnected = () => report('signal-connected');
+        const onDisconnected = (reason?: DisconnectReason) => report('disconnected', {
+            disconnectReason: reason === undefined ? null : String(reason),
+            disconnectReasonName: reason === undefined ? null : DisconnectReason[reason] || null,
+        });
+        const onReconnecting = () => report('reconnecting');
+
+        report('listener-started', { initialState: String(room.state) });
+        room.on(RoomEvent.ConnectionStateChanged, onConnectionStateChanged);
+        room.on(RoomEvent.SignalConnected, onSignalConnected);
+        room.on(RoomEvent.Disconnected, onDisconnected);
+        room.on(RoomEvent.Reconnecting, onReconnecting);
+
+        return () => {
+            room.off(RoomEvent.ConnectionStateChanged, onConnectionStateChanged);
+            room.off(RoomEvent.SignalConnected, onSignalConnected);
+            room.off(RoomEvent.Disconnected, onDisconnected);
+            room.off(RoomEvent.Reconnecting, onReconnecting);
+        };
+    }, [room, roomId, identity, serverUrl]);
+
+    return null;
+}
+
 function LiveKitConnectionStatus() {
     const connectionState = useConnectionState();
     let indicatorClass = 'bg-gray-500';
@@ -926,20 +984,45 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
       voiceReady ? (
       <LiveKitRoom key={voiceConnectionGeneration} serverUrl={livekitUrl} token={voiceToken} connect={true} audio={false} video={false}
           options={{ audioCaptureDefaults: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } }}
-          onConnected={() => setVoiceFailureMessage(null)}
+          onConnected={() => {
+            setVoiceFailureMessage(null);
+            fetch('/api/client-log', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              keepalive: true,
+              body: JSON.stringify({ area: 'livekit-connected-callback', roomId, identity: voiceIdentityRef.current || null, timestamp: new Date().toISOString() }),
+            }).catch(() => {});
+          }}
           onDisconnected={(reason) => {
+            fetch('/api/client-log', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              keepalive: true,
+              body: JSON.stringify({
+                area: 'livekit-disconnected-callback',
+                roomId,
+                identity: voiceIdentityRef.current || null,
+                reason: reason === undefined ? null : String(reason),
+                reasonName: reason === undefined ? null : DisconnectReason[reason] || null,
+                timestamp: new Date().toISOString(),
+              }),
+            }).catch(() => {});
             if (reason === DisconnectReason.CLIENT_INITIATED || voiceFallbackActiveRef.current) return;
             setVoiceFailureMessage(voiceDisconnectMessage(reason));
           }}
           onError={(err) => {
-            if (voiceFallbackActiveRef.current || peerVoiceStartingRef.current) return;
+            // Always capture the original LiveKit error, even when the peer fallback
+            // is already running; otherwise the failure that triggered reconnects is lost.
             fetch('/api/client-log', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
+              keepalive: true,
               body: JSON.stringify(liveKitErrorPayload(err, 'livekit-room', roomId, voiceIdentityRef.current || null)),
             }).catch(() => {});
+            if (voiceFallbackActiveRef.current || peerVoiceStartingRef.current) return;
             void startPeerVoiceFallback(err);
           }}>
+        <LiveKitConnectionDiagnostics roomId={roomId} identity={voiceIdentityRef.current || null} serverUrl={livekitUrl} />
         <RoomAudioPlayback volume={localVolume} />
         {renderRoomUI()}
       </LiveKitRoom>
