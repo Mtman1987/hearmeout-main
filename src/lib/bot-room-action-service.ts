@@ -187,7 +187,7 @@ export async function changeRoomPersonaForBotAction(input: ServiceActor & {
   } else {
     db.delete(`rooms/${room.id}/users`, presenceId);
   }
-  return { success: true as const, control: input.control, room: { id: room.id, name: room.name || room.id }, bot, worker: result };
+  return { success: true as const, control: input.control, room: { id: room.id, name: room.name || room.id }, bot, worker: { speechMode: 'say-player', joinMode: 'say-player-only' } };
 }
 
 async function resolveVoiceChannel(guildId: string, selector: string) {
