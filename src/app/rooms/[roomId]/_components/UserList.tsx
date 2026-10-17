@@ -94,6 +94,38 @@ const isHiddenBridgeParticipant = (identity?: string) =>
 const isRoomTtsParticipant = (identity?: string) =>
   !!identity && identity.startsWith('room-tts:');
 
+function SayPlayerPersonaCards({ roomId, liveParticipants }: { roomId: string; liveParticipants: ReturnType<typeof useRemoteParticipants> }) {
+  const { data: users } = useCollection<PeerPresence & { personaId?: string; ownerTenantId?: string; wakeNames?: string[]; aliases?: string[] }>(`rooms/${roomId}/users`, { pollInterval: 3000 });
+  const livePersonaIds = new Set(liveParticipants.filter(isPersonaParticipant).map((participant) => participant.identity.replace(/^persona:/, '')));
+  const personas = (users || []).filter((presence) =>
+    (presence.bot === true || presence.presenceKind === 'persona')
+    && !livePersonaIds.has(String(presence.ownerTenantId || presence.personaId || presence.id || '').replace(/^persona:/, ''))
+  );
+  return (
+    <>
+      {personas.map((persona) => {
+        const displayName = persona.displayName || 'StreamWeaver Persona';
+        return (
+          <Card key={persona.id || persona.personaId || displayName} className="flex flex-col h-full">
+            <CardContent className="p-4 flex items-start gap-4">
+              <Avatar className="h-16 w-16 ring-2 ring-primary/30">
+                {persona.photoURL ? <AvatarImage src={persona.photoURL} alt={displayName} /> : null}
+                <AvatarFallback>{displayName.charAt(0).toUpperCase()}</AvatarFallback>
+              </Avatar>
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-lg font-bold">{displayName}</p>
+                <p className="mt-1 flex items-center gap-1.5 text-xs text-green-500">
+                  <Radio className="h-3.5 w-3.5" /> Say Player broadcast · no P2P
+                </p>
+              </div>
+            </CardContent>
+          </Card>
+        );
+      })}
+    </>
+  );
+}
+
 function LiveKitParticipants({ isHost, roomId }: { isHost: boolean; roomId: string }) {
   const { localParticipant } = useLocalParticipant();
   const remoteParticipants = useRemoteParticipants();
@@ -130,6 +162,7 @@ function LiveKitParticipants({ isHost, roomId }: { isHost: boolean; roomId: stri
       {allAudioTracks.map((trackRef) => (
         <AudioTrack key={trackRef.publication.trackSid} trackRef={trackRef} volume={1.0} muted={false} />
       ))}
+      <SayPlayerPersonaCards roomId={roomId} liveParticipants={remoteParticipants} />
       {allParticipants.map((participant) => (
         isPersonaParticipant(participant)
           ? <PersonaCard key={participant.sid} participant={participant} roomId={roomId} isHost={isHost} />
