@@ -68,8 +68,8 @@ test('room actions enforce management, hide unrelated private rooms, and use wor
   assert.match(service, /resolveManagedRoomForBotAction/);
   assert.match(service, /canManageRoom\(actor, ownerId\)/);
   assert.doesNotMatch(service, /isActivityRoomId\(text\(room\?\.id/);
-  assert.match(service, /getDjWorkerRequestHeaders/);
-  assert.match(service, /serviceSession: input\.control === 'join'/);
+  assert.doesNotMatch(service, /callWorker\('\/persona'/);
+  assert.match(service, /joinMode:\s*'say-player-only'/);
 });
 
 test('voice bridge bot actions apply the privacy gate and roll back a failed start', () => {
