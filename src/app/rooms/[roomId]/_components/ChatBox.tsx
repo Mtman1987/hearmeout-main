@@ -13,6 +13,7 @@ import { Send, Info, ShieldAlert, Smile, Frown, Meh, LoaderCircle, MessageSquare
 import { runModeration } from "@/app/actions";
 import type { ModerateContentOutput } from "@/ai/flows/sentiment-based-moderation";
 import { useSession } from "@/hooks/use-session";
+import { useCollection } from '@/hooks/use-db';
 import { isPersonaParticipant, parsePersonaMetadata } from "./PersonaCard";
 import { resolveBotInvocation, type RoomBotDescriptor } from '@/lib/room-persona-routing';
 import { ROOM_CHAT_MESSAGE_EVENT, sendRoomPersonaCommand, type RoomChatMessage } from '@/lib/room-persona-client';
@@ -21,6 +22,19 @@ import BotPicker, {
   fetchAvailableRoomBots,
   type AvailableRoomBot,
 } from "./BotPicker";
+
+type RoomBotPresence = {
+  id?: string;
+  uid?: string;
+  bot?: boolean;
+  presenceKind?: string;
+  displayName?: string;
+  personaId?: string;
+  ownerTenantId?: string;
+  wakeNames?: string[];
+  aliases?: string[];
+  previousNames?: string[];
+};
 
 interface AdminChatMessage {
   id: string;
@@ -94,7 +108,32 @@ export default function ChatBox({ roomId, compact = false, onOpenSpaceChat, onOp
   const scrollAreaRef = useRef<HTMLDivElement>(null);
   const { user } = useSession();
   const room = useContext(RoomContext);
-  const activeBotParticipants = botParticipants ?? liveKitBots;
+  // Presence is the authoritative room roster for Say Player/P2P fallback too.
+  // A bot can be active in this room even while it has no LiveKit participant.
+  const { data: roomUsers } = useCollection<RoomBotPresence>(
+    activeRoomId ? `rooms/${activeRoomId}/users` : '',
+    { pollInterval: 3000 },
+  );
+  const activeBotParticipants = React.useMemo(() => {
+    const byTenant = new Map<string, RoomBotDescriptor>();
+    for (const bot of (botParticipants ?? liveKitBots)) {
+      const key = String(bot.targetTenantId || bot.displayName).trim().toLowerCase();
+      if (key) byTenant.set(key, bot);
+    }
+    for (const presence of roomUsers || []) {
+      if (presence.bot !== true && presence.presenceKind !== 'persona') continue;
+      const identityName = String(presence.personaId || presence.ownerTenantId || presence.id || presence.uid || '').replace(/^persona:/, '').trim();
+      const displayName = String(presence.displayName || identityName || 'StreamWeaver Bot').trim();
+      const targetTenantId = String(presence.ownerTenantId || presence.personaId || identityName).trim();
+      if (!targetTenantId) continue;
+      const wakeNames = Array.from(new Set([
+        displayName, targetTenantId, ...(presence.wakeNames || []),
+        ...(presence.aliases || []), ...(presence.previousNames || []),
+      ].map((entry) => String(entry || '').trim()).filter(Boolean)));
+      byTenant.set(targetTenantId.toLowerCase(), { displayName, wakeNames, targetTenantId });
+    }
+    return Array.from(byTenant.values());
+  }, [botParticipants, liveKitBots, roomUsers]);
 
   useEffect(() => {
     if (!room) {
