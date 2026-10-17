@@ -24,6 +24,7 @@ import {
 import { usePopout } from '@/components/PopoutWidgets/PopoutProvider';
 import { createOverlayCompletionTracker, overlayEndTarget } from '@/lib/overlay-media-end';
 import { twitchMusicSessionId } from '@/lib/twitch-media-scope';
+import { preferredAudioTrackIndex } from '@/lib/audio-track-selection';
 import { getRoomWatchSessionId } from '@/lib/watch-session';
 import { useCollection } from '@/hooks/use-db';
 
@@ -33,6 +34,7 @@ type WatchPlayback = {
   updatedAt: number | string;
   muted?: boolean;
   volume?: number;
+  audioTrackIndex?: number;
 };
 
 type WatchRequest = {
@@ -327,6 +329,34 @@ export default function OverlayPage() {
   }, [cleanMode, lane, movieSessionId, movieState, musicSessionId, musicState]);
 
   const activeState = activeBundle.state;
+
+  // Stella can request audio-track=-1 to choose the best advertised track that
+  // is not labelled commentary. Explicit non-negative values select that HLS
+  // track. This intentionally does not alter playback, volume, or mute state.
+  useEffect(() => {
+    const requestedTrack = activeState?.playback?.audioTrackIndex;
+    if (typeof requestedTrack !== 'number' || !hlsRef.current || !audioTracks.length) return;
+    const targetTrack = requestedTrack === -1
+      ? preferredAudioTrackIndex(audioTracks)
+      : requestedTrack;
+    if (targetTrack < 0 || targetTrack >= audioTracks.length) {
+      setMediaStatus('No available non-commentary audio track was identified; playback and volume were left unchanged');
+      console.warn('[Overlay] Audio-track request could not find a clean track', {
+        requestedTrack,
+        tracks: audioTracks,
+      });
+      return;
+    }
+    hlsRef.current.audioTrack = targetTrack;
+    setSelectedAudioTrack(targetTrack);
+    setMediaStatus(`Audio track selected: ${audioTracks[targetTrack]?.name || `Audio ${targetTrack + 1}`}`);
+    console.info('[Overlay] Applied requested audio track', {
+      requestedTrack,
+      selectedTrack: targetTrack,
+      track: audioTracks[targetTrack],
+    });
+  }, [activeState?.playback?.audioTrackIndex, audioTracks]);
+
 
   // Tenant broadcast sources follow their own queue's chat-controlled mix.
   // Personal and Lounge observers keep their existing local volume behavior.
@@ -669,11 +699,21 @@ export default function OverlayPage() {
                   language: String(track?.lang || '').toLowerCase(),
                 }));
               setAudioTracks(tracks);
-              const english = tracks.find((track) => /^(?:en|eng|english)$/i.test(track.language) || /\benglish\b/i.test(track.name));
-              const preferred = english?.index ?? Math.max(0, Number(hlsRef.current?.audioTrack || 0));
-              hlsRef.current.audioTrack = preferred;
-              setSelectedAudioTrack(preferred);
-              setMediaStatus('Overlay media ready');
+              const preferred = preferredAudioTrackIndex(tracks);
+              console.info('[Overlay] HLS audio tracks discovered', {
+                itemTitle: item?.title || null,
+                tracks,
+                selectedTrack: preferred,
+                selection: preferred < 0 ? 'no-labelled-non-commentary-track' : 'non-commentary-preferred',
+              });
+              if (preferred >= 0) {
+                hlsRef.current.audioTrack = preferred;
+                setSelectedAudioTrack(preferred);
+                setMediaStatus('Overlay media ready');
+              } else {
+                setSelectedAudioTrack(-1);
+                setMediaStatus('All available audio tracks are labelled as commentary; no track was changed');
+              }
               applyPlaybackState(activeState);
             });
             hlsRef.current.on(Hls.Events.ERROR, (_event: unknown, data: any) => {

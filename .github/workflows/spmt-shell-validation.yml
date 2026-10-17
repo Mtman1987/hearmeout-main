@@ -43,6 +43,8 @@ jobs:
         run: node --import tsx --test tests/spmt-shell-parity.test.ts
       - name: Test workspace theme contract
         run: npm run test:workspace-theme
+      - name: Test commentary-aware audio track selection
+        run: node --import tsx --test tests/audio-track-selection.test.ts
       - name: Test Lounge media resilience
         run: |
           node --check worker/src/lounge-direct.js

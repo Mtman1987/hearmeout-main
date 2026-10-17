@@ -93,6 +93,7 @@ type WatchSession = {
     updatedAt: number;
     muted?: boolean;
     volume?: number;
+    audioTrackIndex?: number;
   };
   events: Array<{
     id: string;
@@ -1332,6 +1333,21 @@ export async function controlWatchSession(sessionId: string, action: string, pos
     // A mix change must not look like a seek to passive broadcast players.
     session.playback.muted = action === 'mute';
     addEvent(session, `${action === 'mute' ? 'Muted' : 'Unmuted'} ${session.current?.item.title || 'session'}`);
+    saveWatchStateToDisk();
+    return session;
+  }
+
+  if (action === 'audio-track') {
+    const audioTrackIndex = Number(position);
+    if (!Number.isInteger(audioTrackIndex) || audioTrackIndex < -1 || audioTrackIndex > 31) {
+      throw new Error('Audio track must be -1 (best non-commentary track) or a valid track index.');
+    }
+    // -1 tells the active player to select its best available non-commentary track.
+    // Do not touch playback position, mute state, or volume.
+    session.playback.audioTrackIndex = audioTrackIndex;
+    addEvent(session, audioTrackIndex === -1
+      ? 'Requested best non-commentary audio track'
+      : `Requested audio track ${audioTrackIndex}`);
     saveWatchStateToDisk();
     return session;
   }
