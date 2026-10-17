@@ -145,8 +145,8 @@ export async function POST(request: NextRequest) {
     }, { status: 502 });
   }
   const workerPayload = await workerResponse.json().catch(() => ({}));
+  const presenceId = `persona:${matched.ownerTenantId}`;
   if (workerResponse.ok) {
-    const presenceId = `persona:${matched.ownerTenantId}`;
     if (action === 'join') {
       db.set(`rooms/${roomId}/users`, presenceId, {
         id: presenceId,
@@ -162,11 +162,60 @@ export async function POST(request: NextRequest) {
         presenceKind: 'persona',
         persistent: true,
         transportHealthy: workerPayload?.transportHealthy === true,
+        speechMode: 'say-player',
         lastSeen: Date.now(),
       }, { merge: true });
     } else {
       db.delete(`rooms/${roomId}/users`, presenceId);
     }
+  } else if (action === 'join' && workerResponse.status >= 500) {
+    // Persona speech now uses StreamWeaver's Say Player, so a LiveKit worker
+    // outage should not prevent adding the persona for text/local-wake commands.
+    // Keep the transport limitation explicit; do not pretend RTC audio joined.
+    const reason = String(workerPayload?.error || 'Persona LiveKit transport is unavailable').slice(0, 300);
+    db.set(`rooms/${roomId}/users`, presenceId, {
+      id: presenceId,
+      uid: presenceId,
+      displayName: matched.name,
+      photoURL: matched.idleAvatar || matched.avatar || '',
+      bot: true,
+      personaId: matched.ownerTenantId,
+      ownerName: matched.ownerName || '',
+      wakeNames: matched.wakeNames || [matched.name, ...(matched.aliases || [])],
+      aliases: matched.aliases || [],
+      interests: matched.interests || [],
+      presenceKind: 'persona',
+      persistent: true,
+      transportHealthy: false,
+      speechMode: 'say-player',
+      joinMode: 'say-player-fallback',
+      joinWarning: reason,
+      lastSeen: Date.now(),
+    }, { merge: true });
+    return NextResponse.json({
+      success: true,
+      action: 'join',
+      degraded: true,
+      transportHealthy: false,
+      speechMode: 'say-player',
+      warning: reason,
+      bot: matched,
+    }, {
+      status: 200,
+      headers: { 'cache-control': 'private, no-store' },
+    });
+  } else if (action === 'leave') {
+    // Allow local removal even when the RTC worker is unavailable.
+    db.delete(`rooms/${roomId}/users`, presenceId);
+    return NextResponse.json({
+      success: true,
+      action: 'leave',
+      warning: 'Room presence was removed; worker disconnect could not be confirmed.',
+      bot: matched,
+    }, {
+      status: 200,
+      headers: { 'cache-control': 'private, no-store' },
+    });
   }
 
   return NextResponse.json({ ...workerPayload, bot: matched }, {
