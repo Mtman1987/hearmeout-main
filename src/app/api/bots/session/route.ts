@@ -2,8 +2,6 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth';
 import { db, ensureDb } from '@/lib/db';
 import { canManageRoom } from '@/lib/room-access';
-import { getDjWorkerUrl } from '@/lib/dj-worker-config';
-import { getDjWorkerRequestHeaders } from '@/lib/dj-worker-auth';
 
 const STREAMWEAVER_BASE_URL = String(
   process.env.STREAMWEAVER_BASE_URL || 'https://streamweaver-new.fly.dev',
