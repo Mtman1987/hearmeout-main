@@ -39,14 +39,12 @@ function descriptorForPersona(participant: RemoteParticipant): RoomBotDescriptor
   const displayName = String(metadata.displayName || participant.name || identityName || 'StreamWeaver Bot').trim();
   const wakeNames = Array.from(new Set([
     displayName,
-    'Stella',
     metadata.personaId,
     participant.name,
     identityName,
     ...(metadata.wakeNames || []),
     ...(metadata.aliases || []),
     ...(metadata.previousNames || []),
-    ...(displayName.toLowerCase().includes('athena') ? ['Hey Athena', 'Athena', 'Athena OS', 'Annie'] : []),
   ].map((value) => String(value || '').trim()).filter(Boolean)));
   const targetTenantId = String(metadata.ownerTenantId || metadata.personaId || identityName || '').trim();
   if (!targetTenantId || !wakeNames.length) return null;
@@ -76,7 +74,7 @@ export default function WakeWordListener({ roomId, remoteParticipants }: { roomI
       const identityName = String(presence.personaId || presence.ownerTenantId || presence.id || presence.uid || '').replace(/^persona:/, '').trim();
       const displayName = String(presence.displayName || identityName || 'StreamWeaver Bot').trim();
       const targetTenantId = String(presence.ownerTenantId || presence.personaId || identityName).trim();
-      const wakeNames = Array.from(new Set([displayName, targetTenantId, ...(presence.wakeNames || []), ...(presence.aliases || []), ...(presence.previousNames || []), ...(displayName.toLowerCase().includes('athena') ? ['Hey Athena', 'Athena', 'Athena OS', 'Annie'] : [])].map((value) => String(value || '').trim()).filter(Boolean)));
+      const wakeNames = Array.from(new Set([displayName, targetTenantId, ...(presence.wakeNames || []), ...(presence.aliases || []), ...(presence.previousNames || [])].map((value) => String(value || '').trim()).filter(Boolean)));
       return targetTenantId ? [{ displayName, wakeNames, targetTenantId }] : [];
     });
     return Array.from(new Map([...liveTargets, ...presenceTargets].map((target) => [target.targetTenantId, target])).values());
