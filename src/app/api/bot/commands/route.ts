@@ -1,7 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth';
-import { getDjWorkerUrl } from '@/lib/dj-worker-config';
-import { getDjWorkerRequestHeaders } from '@/lib/dj-worker-auth';
 import { db, ensureDb } from '@/lib/db';
 
 const STREAMWEAVER_BASE_URL = String(
