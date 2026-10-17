@@ -35,7 +35,7 @@ test('production has no direct browser TTS diagnostic player', async () => {
     (error: any) => error?.code === 'ENOENT',
   );
   assert.match(route, /transportHealthy/);
-  assert.match(route, /workerBytes|bytes/);
+  assert.match(route, /say-player-not-listening|delivered: result\?\.delivered/);
 });
 
 test('late LiveKit audio elements inherit the selected output device', async () => {
