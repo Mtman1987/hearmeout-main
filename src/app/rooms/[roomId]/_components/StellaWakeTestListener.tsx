@@ -151,23 +151,26 @@ export default function StellaWakeTestListener({ roomId, remoteParticipants }: {
           .filter((item) => now - item.at <= BUFFER_MS)
           .sort((a, b) => a.index - b.index)
           .slice(-MAX_SEGMENTS);
-        setLastTranscript(text);
-        // Mirror recognized browser speech into the local avatar's speaking ring.
-        // This confirms recognition is receiving words; it does not claim P2P audio is published.
-        if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent('hmo-local-wake-speech-detected', { detail: { text, at: now } }));
-
-        if (!final || !wakePhraseIn(text, targetsRef.current) || handledIndicesRef.current.has(index)) continue;
-        handledIndicesRef.current.add(index);
         const contextSegments = segmentsRef.current
           .filter((item) => now - item.at <= BUFFER_MS)
           .map((item) => item.text);
-        const latestRequest = removeWakePhrases(text, targetsRef.current) || text;
+        const spokenText = contextSegments.join(' ').trim() || text;
+        setLastTranscript(spokenText);
+        // Mirror recognized browser speech into the local avatar's speaking ring.
+        // This confirms recognition is receiving words; it does not claim P2P audio is published.
+        if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent('hmo-local-wake-speech-detected', { detail: { text: spokenText, at: now } }));
+
+        // SpeechRecognition can split the wake name and request into separate final
+        // results. Match against the rolling transcript, not only the latest segment.
+        if (!final || !wakePhraseIn(spokenText, targetsRef.current) || handledIndicesRef.current.has(index)) continue;
+        handledIndicesRef.current.add(index);
+        const latestRequest = removeWakePhrases(spokenText, targetsRef.current) || spokenText;
         const context = [
           'Recent speech context (captured in memory during the last 30 seconds):',
           ...contextSegments,
           `Latest request: ${latestRequest}`,
         ].join('\n');
-        const invocation = resolveBotInvocation(text, targetsRef.current);
+        const invocation = resolveBotInvocation(spokenText, targetsRef.current);
         const target = invocation?.targetTenantId
           ? invocation
           : targetsRef.current[0];
@@ -244,7 +247,7 @@ export default function StellaWakeTestListener({ roomId, remoteParticipants }: {
         {commandInFlightRef.current && <LoaderCircle className="h-4 w-4 animate-spin" />}
       </div>
       <p className="mt-2 text-xs text-muted-foreground">
-        Test mode only. Keeps up to 30 seconds of transcript in memory and sends it to the first active room bot (or a named bot in your request) only after hearing the active bot’s display name or configured alias. Browser speech recognition may send microphone audio to the browser vendor for recognition; pre-wake transcript text is not sent by HearMeOut.
+        Test mode only. Shows the rolling transcript (up to 30 seconds in memory) as you speak. It sends a command only after a joined bot’s display name or configured alias is detected in that transcript. Browser speech recognition may send microphone audio to the browser vendor for recognition; pre-wake transcript text is not sent by HearMeOut.
       </p>
       {lastTranscript && <p className="mt-2 whitespace-pre-wrap break-words text-sm"><strong>Latest capture:</strong> {lastTranscript}</p>}
       {reply && <p className="mt-2 whitespace-pre-wrap break-words text-sm"><strong>Bot reply:</strong> {reply}</p>}
