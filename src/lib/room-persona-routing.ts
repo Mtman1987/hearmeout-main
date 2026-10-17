@@ -18,13 +18,6 @@ function expandedWakeNames(bot: RoomBotDescriptor) {
     bot.displayName,
     ...(bot.wakeNames || []),
   ].map((value) => String(value || '').trim()).filter(Boolean)));
-  const athenaLike = names.some((name) => {
-    const normalized = name.toLowerCase();
-    return normalized.includes('athena') || normalized === 'annie';
-  });
-  if (athenaLike && !names.some((name) => name.toLowerCase() === 'hey athena')) {
-    names.push('Hey Athena');
-  }
   return names;
 }
 
