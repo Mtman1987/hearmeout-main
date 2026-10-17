@@ -117,6 +117,10 @@ export class PeerVoiceMesh {
   private onPeerLeft: ((peerId: string) => void) | null = null;
   private pollInterval: ReturnType<typeof setInterval> | null = null;
   private callTimeouts: Map<string, ReturnType<typeof setTimeout>> = new Map();
+  private localMeterContext: AudioContext | null = null;
+  private localMeterTimer: ReturnType<typeof setInterval> | null = null;
+  private onLocalSpeaking: ((speaking: boolean) => void) | null = null;
+  private localSpeaking = false;
 
   get peerId() { return this._peerId; }
   get active() { return !!this.peer && !this.peer.destroyed; }
@@ -127,10 +131,12 @@ export class PeerVoiceMesh {
     onRemoteStream: (peerId: string, stream: MediaStream) => void,
     onPeerLeft: (peerId: string) => void,
     startMuted = true,
+    onLocalSpeaking?: (speaking: boolean) => void,
   ): Promise<string> {
     this._roomId = roomId;
     this.onRemoteStream = onRemoteStream;
     this.onPeerLeft = onPeerLeft;
+    this.onLocalSpeaking = onLocalSpeaking || null;
 
     try {
       this.localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
@@ -142,6 +148,7 @@ export class PeerVoiceMesh {
     if (startMuted) {
       for (const track of this.localStream.getAudioTracks()) track.enabled = false;
     }
+    this.startLocalAudioMeter();
 
     const peerId = `hmo-voice-${roomId}-${userId}-${Math.random().toString(36).slice(2, 6)}`;
     this._peerId = peerId;
@@ -278,6 +285,36 @@ export class PeerVoiceMesh {
     }).catch(() => {});
   }
 
+  private startLocalAudioMeter() {
+    try {
+      const AudioContextCtor = window.AudioContext || (window as any).webkitAudioContext;
+      const context: AudioContext = new AudioContextCtor();
+      const source = context.createMediaStreamSource(this.localStream!);
+      const analyser = context.createAnalyser();
+      analyser.fftSize = 512;
+      source.connect(analyser);
+      this.localMeterContext = context;
+      void context.resume().catch(() => {});
+      const samples = new Uint8Array(analyser.fftSize);
+      let quietTicks = 0;
+      this.localMeterTimer = setInterval(() => {
+        analyser.getByteTimeDomainData(samples);
+        let sum = 0;
+        for (const sample of samples) { const value = (sample - 128) / 128; sum += value * value; }
+        const rms = Math.sqrt(sum / samples.length);
+        const speaking = rms > (this.localSpeaking ? 0.025 : 0.045);
+        if (speaking) quietTicks = 0; else quietTicks++;
+        const next = speaking || (this.localSpeaking && quietTicks < 4);
+        if (next !== this.localSpeaking) {
+          this.localSpeaking = next;
+          this.onLocalSpeaking?.(next);
+        }
+      }, 100);
+    } catch (error) {
+      console.warn('[PeerVoice] Could not start local audio activity meter:', error);
+    }
+  }
+
   setMuted(muted: boolean) {
     if (!this.localStream) return;
     for (const track of this.localStream.getAudioTracks()) {
@@ -301,6 +338,13 @@ export class PeerVoiceMesh {
   }
 
   leave() {
+    if (this.localMeterTimer) clearInterval(this.localMeterTimer);
+    this.localMeterTimer = null;
+    if (this.localSpeaking) this.onLocalSpeaking?.(false);
+    this.localSpeaking = false;
+    this.onLocalSpeaking = null;
+    if (this.localMeterContext) void this.localMeterContext.close().catch(() => {});
+    this.localMeterContext = null;
     if (this.pollInterval) clearInterval(this.pollInterval);
     this.pollInterval = null;
     for (const timeout of this.callTimeouts.values()) clearTimeout(timeout);
