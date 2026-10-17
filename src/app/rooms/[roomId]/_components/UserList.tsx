@@ -80,7 +80,7 @@ function PeerPresenceParticipants({ roomId, localUserId, connectedPeerIds }: { r
               <div className="min-w-0 flex-1">
                 <p className="truncate text-lg font-bold">{displayName}</p>
                 <p className={`mt-1 flex items-center gap-1.5 text-xs ${mediaConnected || isPersona ? 'text-green-500' : 'text-amber-500'}`}>
-                  <Radio className="h-3.5 w-3.5" /> {isPersona ? 'Say Player broadcast · no P2P' : mediaConnected ? 'P2P audio connected' : 'Connecting P2P audio…'}
+                  <Radio className="h-3.5 w-3.5" /> {isPersona ? 'Say Player connected' : mediaConnected ? 'P2P audio connected' : 'Connecting P2P audio…'}
                 </p>
               </div>
             </CardContent>
