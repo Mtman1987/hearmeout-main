@@ -42,8 +42,6 @@ function descriptors(participants: RemoteParticipant[]): RoomBotDescriptor[] {
     const wakeNames = Array.from(new Set([
       displayName, metadata.personaId, participant.name, identityName,
       ...(metadata.wakeNames || []), ...(metadata.aliases || []), ...(metadata.previousNames || []),
-      'Stella',
-      ...(displayName.toLowerCase().includes('athena') ? ['Hey Athena', 'Athena', 'Athena OS', 'Annie'] : []),
     ].map((value) => String(value || '').trim()).filter(Boolean)));
     const targetTenantId = String(metadata.ownerTenantId || metadata.personaId || identityName || '').trim();
     return targetTenantId ? [{ displayName, wakeNames, targetTenantId }] : [];
@@ -76,7 +74,7 @@ export default function StellaWakeTestListener({ roomId, remoteParticipants }: {
       const identityName = String(presence.personaId || presence.ownerTenantId || presence.id || presence.uid || '').replace(/^persona:/, '').trim();
       const displayName = String(presence.displayName || identityName || 'StreamWeaver Bot').trim();
       const targetTenantId = String(presence.ownerTenantId || presence.personaId || identityName).trim();
-      const wakeNames = Array.from(new Set([displayName, targetTenantId, 'Stella', ...(presence.wakeNames || []), ...(presence.aliases || []), ...(presence.previousNames || []), ...(displayName.toLowerCase().includes('athena') ? ['Hey Athena', 'Athena', 'Athena OS', 'Annie'] : [])].map((value) => String(value || '').trim()).filter(Boolean)));
+      const wakeNames = Array.from(new Set([displayName, targetTenantId, ...(presence.wakeNames || []), ...(presence.aliases || []), ...(presence.previousNames || [])].map((value) => String(value || '').trim()).filter(Boolean)));
       return targetTenantId ? [{ displayName, wakeNames, targetTenantId }] : [];
     });
     return Array.from(new Map([...liveTargets, ...presenceTargets].map((target) => [target.targetTenantId, target])).values());
@@ -169,13 +167,13 @@ export default function StellaWakeTestListener({ roomId, remoteParticipants }: {
           ...contextSegments,
           `Latest request: ${latestRequest}`,
         ].join('\n');
-        const invocation = resolveBotInvocation(latestRequest, targetsRef.current);
+        const invocation = resolveBotInvocation(text, targetsRef.current);
         const target = invocation?.targetTenantId
           ? invocation
           : targetsRef.current[0];
         if (!target?.targetTenantId || commandInFlightRef.current) continue;
 
-        // Nothing is sent before this explicit wake-word match.
+        // Nothing is sent before this active bot's configured wake name matches.
         segmentsRef.current = [];
         commandInFlightRef.current = true;
         setStatus(`Sending to ${target.displayName}…`);
@@ -246,7 +244,7 @@ export default function StellaWakeTestListener({ roomId, remoteParticipants }: {
         {commandInFlightRef.current && <LoaderCircle className="h-4 w-4 animate-spin" />}
       </div>
       <p className="mt-2 text-xs text-muted-foreground">
-        Test mode only. Keeps up to 30 seconds of transcript in memory and sends it to the first active room bot (or a named bot in your request) only after hearing “Stella” or that bot’s configured wake name. Browser speech recognition may send microphone audio to the browser vendor for recognition; pre-wake transcript text is not sent by HearMeOut.
+        Test mode only. Keeps up to 30 seconds of transcript in memory and sends it to the first active room bot (or a named bot in your request) only after hearing the active bot’s display name or configured alias. Browser speech recognition may send microphone audio to the browser vendor for recognition; pre-wake transcript text is not sent by HearMeOut.
       </p>
       {lastTranscript && <p className="mt-2 whitespace-pre-wrap break-words text-sm"><strong>Latest capture:</strong> {lastTranscript}</p>}
       {reply && <p className="mt-2 whitespace-pre-wrap break-words text-sm"><strong>Bot reply:</strong> {reply}</p>}
