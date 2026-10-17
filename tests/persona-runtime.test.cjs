@@ -106,9 +106,9 @@ test('persona presence is persistent and never expires with the 45 second human 
   assert.match(prune, /continue;/);
   assert.match(session, /presenceKind:\s*'persona'/);
   assert.match(session, /persistent:\s*true/);
-  assert.match(command, /healthyWorkerPersona/);
-  assert.match(command, /method:\s*'GET'/);
-  assert.match(command, /Self-heal\/upgrade|self-heal/i);
+  assert.doesNotMatch(command, /healthyWorkerPersona/);
+  assert.doesNotMatch(command, /getDjWorkerUrl\(\).*persona/);
+  assert.match(command, /const presence = db\.get/);
   assert.match(command, /persistent:\s*true/);
   assert.match(session, /speechMode:\s*'say-player'/);
   assert.match(session, /joinMode:\s*'say-player-fallback'/);
@@ -127,15 +127,16 @@ test('persona invite stays token-free while public persona speech uses StreamWea
   assert.doesNotMatch(commandRoute, /\/persona\/speak/);
 });
 
-test('persona LiveKit transport rejects stale sessions and re-invite replaces them', () => {
-  const session = source('worker/src/persona-session.js');
-  const bootstrap = source('worker/src/persona-bootstrap.js');
-  assert.match(session, /isHealthy\(\)/);
-  assert.match(session, /Persona session is not connected to a publishable LiveKit track/);
-  assert.match(session, /Math\.ceil\(input\.length \/ bytesPerFrame\)/);
-  assert.match(bootstrap, /replacing stale LiveKit session/);
-  assert.match(bootstrap, /transportHealthy/);
-  assert.match(bootstrap, /Persona LiveKit transport is stale; re-invite the persona/);
+test('room persona invites and commands do not depend on LiveKit or P2P', () => {
+  const session = source('src/app/api/bots/session/route.ts');
+  const command = source('src/app/api/bot/commands/route.ts');
+  const service = source('src/lib/bot-room-action-service.ts');
+  assert.match(session, /joinMode:\s*'say-player-only'/);
+  assert.match(service, /joinMode:\s*'say-player-only'/);
+  assert.doesNotMatch(session, /getDjWorkerUrl|mintPersonaToken|LiveKit token route/);
+  assert.doesNotMatch(service, /callWorker\('\/persona'/);
+  assert.doesNotMatch(command, /healthyWorkerPersona|transportHealthy === true/);
+  assert.match(command, /speechMode.*Say Player|Say Player.*speech/i);
 });
 
 test('manual Talk button is the deliberate cloud-STT fallback and shares the bot-command client', () => {
