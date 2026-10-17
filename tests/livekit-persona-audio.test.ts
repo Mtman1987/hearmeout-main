@@ -19,11 +19,11 @@ test('typed and spoken persona replies use the canonical StreamWeaver Say broadc
 
   assert.match(chat, /sendRoomPersonaCommand/);
   assert.match(wake, /sendRoomPersonaCommand/);
-  assert.match(client, /speak:\\s*true/);
-  assert.match(route, /\\/api\\/say\\/queue/);
-  assert.match(route, /tenantId:\\s*personaId/);
-  assert.match(route, /text:\\s*responseText/);
-  assert.doesNotMatch(route, /\\/persona\\/speak/);
+  assert.match(client, /speak:\s*true/);
+  assert.match(route, /\/api\/say\/queue/);
+  assert.match(route, /tenantId:\s*personaId/);
+  assert.match(route, /text:\s*responseText/);
+  assert.doesNotMatch(route, /\/persona\/speak/);
 });
 test('production has no direct browser TTS diagnostic player', async () => {
   const layout = await readFile('src/app/layout.tsx', 'utf8');
