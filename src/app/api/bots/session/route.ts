@@ -111,6 +111,39 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: `${matched.name} is banned from this room` }, { status: 403 });
   }
 
+  // TTS-only personas speak through StreamWeaver's Say Player broadcast.
+  // Do not start a LiveKit/RTC worker session or ask a persona to join P2P.
+  if (action === 'join') {
+    const presenceId = `persona:${matched.ownerTenantId}`;
+    db.set(`rooms/${roomId}/users`, presenceId, {
+      id: presenceId,
+      uid: presenceId,
+      displayName: matched.name,
+      photoURL: matched.idleAvatar || matched.avatar || '',
+      bot: true,
+      personaId: matched.ownerTenantId,
+      ownerTenantId: matched.ownerTenantId,
+      ownerName: matched.ownerName || '',
+      wakeNames: matched.wakeNames || [matched.name, ...(matched.aliases || [])],
+      aliases: matched.aliases || [],
+      interests: matched.interests || [],
+      presenceKind: 'persona',
+      persistent: true,
+      transportHealthy: true,
+      speechMode: 'say-player',
+      joinMode: 'say-player-only',
+      lastSeen: Date.now(),
+    }, { merge: true });
+    return NextResponse.json({
+      success: true,
+      action: 'join',
+      transportHealthy: true,
+      speechMode: 'say-player',
+      joinMode: 'say-player-only',
+      bot: matched,
+    }, { status: 200, headers: { 'cache-control': 'private, no-store' } });
+  }
+
   const workerUrl = getDjWorkerUrl();
   let workerResponse: Response;
   try {
