@@ -3,6 +3,7 @@
 import React from 'react';
 import type { RemoteParticipant } from 'livekit-client';
 import { useSession } from '@/hooks/use-session';
+import { useCollection } from '@/hooks/use-db';
 import { isPersonaParticipant, parsePersonaMetadata } from './PersonaCard';
 import { resolveBotInvocation, type RoomBotDescriptor } from '@/lib/room-persona-routing';
 import {
@@ -22,6 +23,8 @@ import {
  *   only browser path that records audio for cloud STT.
  */
 export const LOCAL_COMPANION_WAKE_EVENT = 'spmt-companion-athena-command';
+
+type RoomBotPresence = { id?: string; uid?: string; bot?: boolean; presenceKind?: string; displayName?: string; personaId?: string; ownerTenantId?: string; wakeNames?: string[]; aliases?: string[]; previousNames?: string[] };
 
 type LocalCompanionWakeDetail = {
   transcript?: string;
@@ -64,10 +67,19 @@ export default function WakeWordListener({ roomId, remoteParticipants }: { roomI
   const lastTranscriptRef = React.useRef<{ text: string; at: number }>({ text: '', at: 0 });
   const processingQueueRef = React.useRef<Promise<void>>(Promise.resolve());
 
-  const targets = React.useMemo(
-    () => remoteParticipants.map(descriptorForPersona).filter(Boolean) as RoomBotDescriptor[],
-    [remoteParticipants],
-  );
+  const { data: roomUsers } = useCollection<RoomBotPresence>(`rooms/${roomId}/users`, { pollInterval: 3000 });
+  const targets = React.useMemo(() => {
+    const liveTargets = remoteParticipants.map(descriptorForPersona).filter(Boolean) as RoomBotDescriptor[];
+    const presenceTargets = (roomUsers || []).flatMap((presence) => {
+      if (presence.bot !== true && presence.presenceKind !== 'persona') return [];
+      const identityName = String(presence.personaId || presence.ownerTenantId || presence.id || presence.uid || '').replace(/^persona:/, '').trim();
+      const displayName = String(presence.displayName || identityName || 'StreamWeaver Bot').trim();
+      const targetTenantId = String(presence.ownerTenantId || presence.personaId || identityName).trim();
+      const wakeNames = Array.from(new Set([displayName, targetTenantId, ...(presence.wakeNames || []), ...(presence.aliases || []), ...(presence.previousNames || []), ...(displayName.toLowerCase().includes('athena') ? ['Hey Athena', 'Athena', 'Athena OS', 'Annie'] : [])].map((value) => String(value || '').trim()).filter(Boolean)));
+      return targetTenantId ? [{ displayName, wakeNames, targetTenantId }] : [];
+    });
+    return Array.from(new Map([...liveTargets, ...presenceTargets].map((target) => [target.targetTenantId, target])).values());
+  }, [remoteParticipants, roomUsers]);
   const humanName = String(user?.displayName || (user as any)?.username || 'HearMeOut User').trim();
   const actorIdentity = String(user?.uid || '').trim();
   const actorUsername = String((user as any)?.username || user?.displayName || '').trim();
