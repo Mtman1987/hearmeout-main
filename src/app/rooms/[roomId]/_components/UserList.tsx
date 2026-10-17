@@ -45,6 +45,8 @@ type PeerPresence = {
   displayName?: string;
   photoURL?: string;
   lastSeen?: number;
+  bot?: boolean;
+  presenceKind?: string;
 };
 
 function PeerPresenceParticipants({ roomId, localUserId, connectedPeerIds }: { roomId: string; localUserId?: string; connectedPeerIds: string[] }) {
@@ -61,7 +63,8 @@ function PeerPresenceParticipants({ roomId, localUserId, connectedPeerIds }: { r
         const displayName = presence.displayName || 'HearMeOut User';
         const photoURL = presence.photoURL || `https://picsum.photos/seed/${presence.id}/100/100`;
         const userIds = [presence.id, presence.uid].filter(Boolean) as string[];
-        const mediaConnected = connectedPeerIds.some((peerId) =>
+        const isPersona = presence.bot === true || presence.presenceKind === 'persona';
+        const mediaConnected = !isPersona && connectedPeerIds.some((peerId) =>
           userIds.some((userId) => peerId.includes(`-${userId}-`)),
         );
         return (
@@ -73,8 +76,8 @@ function PeerPresenceParticipants({ roomId, localUserId, connectedPeerIds }: { r
               </Avatar>
               <div className="min-w-0 flex-1">
                 <p className="truncate text-lg font-bold">{displayName}</p>
-                <p className={`mt-1 flex items-center gap-1.5 text-xs ${mediaConnected ? 'text-green-500' : 'text-amber-500'}`}>
-                  <Radio className="h-3.5 w-3.5" /> {mediaConnected ? 'P2P audio connected' : 'Connecting P2P audio…'}
+                <p className={`mt-1 flex items-center gap-1.5 text-xs ${mediaConnected || isPersona ? 'text-green-500' : 'text-amber-500'}`}>
+                  <Radio className="h-3.5 w-3.5" /> {isPersona ? 'Say Player broadcast · no P2P' : mediaConnected ? 'P2P audio connected' : 'Connecting P2P audio…'}
                 </p>
               </div>
             </CardContent>
