@@ -152,8 +152,8 @@ async function handlePersona(req, res) {
   try {
     const token = await mintPersonaToken({ roomId, personaId, displayName, metadata });
     const livekitUrl = String(
-      process.env.LIVEKIT_URL
-      || process.env.NEXT_PUBLIC_LIVEKIT_URL
+      process.env.NEXT_PUBLIC_LIVEKIT_URL
+      || process.env.LIVEKIT_URL
       || 'wss://streamweaver-7atx04ct.livekit.cloud',
     ).trim();
     const persona = new PersonaSession({
