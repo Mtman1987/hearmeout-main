@@ -109,7 +109,7 @@ test('persona presence is persistent and never expires with the 45 second human 
   assert.doesNotMatch(command, /healthyWorkerPersona/);
   assert.doesNotMatch(command, /getDjWorkerUrl\(\).*persona/);
   assert.match(command, /const presence = db\.get/);
-  assert.match(command, /persistent:\s*true/);
+  assert.match(command, /presence\.bot === true/);
   assert.match(session, /speechMode:\s*'say-player'/);
   assert.match(session, /joinMode:\s*'say-player-only'/);
   assert.match(command, /room roster is the invite authority/);
