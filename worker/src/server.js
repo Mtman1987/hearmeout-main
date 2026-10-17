@@ -2305,7 +2305,7 @@ class DJSession {
     const token = await this.getLiveKitToken();
     if (!token) throw new Error('Failed to get LiveKit token');
 
-    const livekitUrl = process.env.LIVEKIT_URL || process.env.NEXT_PUBLIC_LIVEKIT_URL || 'wss://streamweaver-7atx04ct.livekit.cloud';
+    const livekitUrl = process.env.LIVEKIT_URL || process.env.NEXT_PUBLIC_LIVEKIT_URL || 'wss://hearmeout-6ntnbsdm.livekit.cloud';
     if (!livekitUrl) throw new Error('LIVEKIT_URL not configured. Set LIVEKIT_URL or NEXT_PUBLIC_LIVEKIT_URL');
 
     // Connect to LiveKit
