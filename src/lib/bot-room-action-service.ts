@@ -161,27 +161,10 @@ export async function changeRoomPersonaForBotAction(input: ServiceActor & {
   if (input.control === 'join' && db.get(`rooms/${room.id}/banned`, presenceId)) {
     throw new Error(`${bot.name} is banned from this room.`);
   }
-  const result = await callWorker('/persona', {
-    method: 'POST',
-    body: JSON.stringify({
-      action: input.control,
-      roomId: room.id,
-      personaId: bot.ownerTenantId,
-      displayName: bot.name,
-      ownerTenantId: bot.ownerTenantId,
-      ownerName: bot.ownerName || '',
-      wakeNames: bot.wakeNames || [bot.name, ...(bot.aliases || [])],
-      aliases: bot.aliases || [],
-      interests: bot.interests || [],
-      voice: bot.voice || '',
-      livekitTtsDescriptor: bot.livekitTtsDescriptor || '',
-      avatar: bot.avatar || '',
-      idleAvatar: bot.idleAvatar || bot.avatar || '',
-      talkingAvatar: bot.talkingAvatar || bot.idleAvatar || bot.avatar || '',
-      serviceSession: input.control === 'join',
-    }),
-  });
   if (input.control === 'join') {
+    // Keep bot actions consistent with the room UI: invite into the HearMeOut
+    // roster, not into LiveKit/P2P. StreamWeaver handles the conversation and
+    // the Say Player handles audio delivery.
     db.set(`rooms/${room.id}/users`, presenceId, {
       id: presenceId,
       uid: presenceId,
@@ -189,6 +172,16 @@ export async function changeRoomPersonaForBotAction(input: ServiceActor & {
       photoURL: bot.idleAvatar || bot.avatar || '',
       bot: true,
       personaId: bot.ownerTenantId,
+      ownerTenantId: bot.ownerTenantId,
+      ownerName: bot.ownerName || '',
+      wakeNames: bot.wakeNames || [bot.name, ...(bot.aliases || [])],
+      aliases: bot.aliases || [],
+      interests: bot.interests || [],
+      presenceKind: 'persona',
+      persistent: true,
+      transportHealthy: true,
+      speechMode: 'say-player',
+      joinMode: 'say-player-only',
       lastSeen: Date.now(),
     }, { merge: true });
   } else {
