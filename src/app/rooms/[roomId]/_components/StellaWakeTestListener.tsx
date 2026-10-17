@@ -98,6 +98,10 @@ export default function StellaWakeTestListener({ roomId, remoteParticipants }: {
   const [lastTranscript, setLastTranscript] = React.useState('');
   const [reply, setReply] = React.useState('');
 
+  React.useEffect(() => {
+    if (enabled) setStatus(targets.length ? 'Listening' : 'Listening; waiting for room bot');
+  }, [enabled, targets]);
+
   React.useEffect(() => () => {
     enabledRef.current = false;
     try { recognitionRef.current?.abort(); } catch {}
@@ -119,11 +123,6 @@ export default function StellaWakeTestListener({ roomId, remoteParticipants }: {
       setStatus('Unavailable');
       return;
     }
-    if (!targetsRef.current.length) {
-      setError('Add a bot to this room before starting the wake-word test.');
-      return;
-    }
-
     setError('');
     setReply('');
     setLastTranscript('');
@@ -139,7 +138,7 @@ export default function StellaWakeTestListener({ roomId, remoteParticipants }: {
     recognition.interimResults = true;
     recognition.lang = 'en-US';
 
-    recognition.onstart = () => { if (enabledRef.current) setStatus('Listening'); };
+    recognition.onstart = () => { if (enabledRef.current) setStatus(targetsRef.current.length ? 'Listening' : 'Listening; waiting for room bot'); };
     recognition.onresult = (event: any) => {
       if (!enabledRef.current) return;
       const now = Date.now();
@@ -220,7 +219,7 @@ export default function StellaWakeTestListener({ roomId, remoteParticipants }: {
       if (!enabledRef.current || recognitionRef.current !== recognition) return;
       // Some browsers end a continuous session after silence; restart while the
       // explicit test toggle remains enabled.
-      try { recognition.start(); setStatus('Listening'); }
+      try { recognition.start(); setStatus(targetsRef.current.length ? 'Listening' : 'Listening; waiting for room bot'); }
       catch { setStatus('Restarting…'); }
     };
 
