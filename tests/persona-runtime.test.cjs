@@ -25,7 +25,7 @@ test('typed chat and local Companion wake use the same explicit wake-name resolv
   assert.match(chat, /room-persona-routing/);
   assert.match(chat, /resolveBotInvocation\(submittedText, activeBotParticipants\)/);
   assert.match(chat, /useCollection<RoomBotPresence>/);
-  assert.match(chat, /rooms\\/\$\{activeRoomId\}\\/users/);
+  assert.match(chat, /activeRoomId \? `rooms\//);
   assert.match(chat, /presence\.presenceKind !== 'persona'/);
   assert.match(wake, /room-persona-routing/);
   assert.match(wake, /resolveBotInvocation\(transcript, targets\)/);
