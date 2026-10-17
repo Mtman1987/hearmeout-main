@@ -5,6 +5,7 @@ import type { RemoteParticipant } from 'livekit-client';
 import { Mic, MicOff, LoaderCircle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { useSession } from '@/hooks/use-session';
+import { useCollection } from '@/hooks/use-db';
 import { isPersonaParticipant, parsePersonaMetadata } from './PersonaCard';
 import { resolveBotInvocation, type RoomBotDescriptor } from '@/lib/room-persona-routing';
 import { postRoomChatMessage, sendRoomPersonaCommand, type RoomChatMessage } from '@/lib/room-persona-client';
@@ -13,6 +14,7 @@ const BUFFER_MS = 30_000;
 const MAX_SEGMENTS = 12;
 
 type SpeechSegment = { index: number; text: string; at: number; final: boolean };
+type RoomBotPresence = { id?: string; uid?: string; bot?: boolean; presenceKind?: string; displayName?: string; personaId?: string; ownerTenantId?: string; wakeNames?: string[]; aliases?: string[]; previousNames?: string[] };
 
 function wakePhraseIn(text: string, targets: RoomBotDescriptor[]) {
   const lower = text.toLowerCase();
@@ -40,6 +42,7 @@ function descriptors(participants: RemoteParticipant[]): RoomBotDescriptor[] {
     const wakeNames = Array.from(new Set([
       displayName, metadata.personaId, participant.name, identityName,
       ...(metadata.wakeNames || []), ...(metadata.aliases || []), ...(metadata.previousNames || []),
+      'Stella',
       ...(displayName.toLowerCase().includes('athena') ? ['Hey Athena', 'Athena', 'Athena OS', 'Annie'] : []),
     ].map((value) => String(value || '').trim()).filter(Boolean)));
     const targetTenantId = String(metadata.ownerTenantId || metadata.personaId || identityName || '').trim();
@@ -65,7 +68,19 @@ function recognitionConstructor(): any {
  */
 export default function StellaWakeTestListener({ roomId, remoteParticipants }: { roomId: string; remoteParticipants: RemoteParticipant[] }) {
   const { user } = useSession();
-  const targets = React.useMemo(() => descriptors(remoteParticipants), [remoteParticipants]);
+  const { data: roomUsers } = useCollection<RoomBotPresence>(`rooms/${roomId}/users`, { pollInterval: 3000 });
+  const targets = React.useMemo(() => {
+    const liveTargets = descriptors(remoteParticipants);
+    const presenceTargets = (roomUsers || []).flatMap((presence) => {
+      if (presence.bot !== true && presence.presenceKind !== 'persona') return [];
+      const identityName = String(presence.personaId || presence.ownerTenantId || presence.id || presence.uid || '').replace(/^persona:/, '').trim();
+      const displayName = String(presence.displayName || identityName || 'StreamWeaver Bot').trim();
+      const targetTenantId = String(presence.ownerTenantId || presence.personaId || identityName).trim();
+      const wakeNames = Array.from(new Set([displayName, targetTenantId, 'Stella', ...(presence.wakeNames || []), ...(presence.aliases || []), ...(presence.previousNames || []), ...(displayName.toLowerCase().includes('athena') ? ['Hey Athena', 'Athena', 'Athena OS', 'Annie'] : [])].map((value) => String(value || '').trim()).filter(Boolean)));
+      return targetTenantId ? [{ displayName, wakeNames, targetTenantId }] : [];
+    });
+    return Array.from(new Map([...liveTargets, ...presenceTargets].map((target) => [target.targetTenantId, target])).values());
+  }, [remoteParticipants, roomUsers]);
   const targetsRef = React.useRef(targets);
   targetsRef.current = targets;
   const userRef = React.useRef(user);
@@ -229,7 +244,7 @@ export default function StellaWakeTestListener({ roomId, remoteParticipants }: {
         {commandInFlightRef.current && <LoaderCircle className="h-4 w-4 animate-spin" />}
       </div>
       <p className="mt-2 text-xs text-muted-foreground">
-        Test mode only. Keeps up to 30 seconds of transcript in memory and sends it to the first active bot (or a named bot in your request) only after hearing that bot’s configured wake name, such as “Hey Athena”. Browser speech recognition may send microphone audio to the browser vendor for recognition; pre-wake transcript text is not sent by HearMeOut.
+        Test mode only. Keeps up to 30 seconds of transcript in memory and sends it to the first active room bot (or a named bot in your request) only after hearing “Stella” or that bot’s configured wake name. Browser speech recognition may send microphone audio to the browser vendor for recognition; pre-wake transcript text is not sent by HearMeOut.
       </p>
       {lastTranscript && <p className="mt-2 whitespace-pre-wrap break-words text-sm"><strong>Latest capture:</strong> {lastTranscript}</p>}
       {reply && <p className="mt-2 whitespace-pre-wrap break-words text-sm"><strong>Bot reply:</strong> {reply}</p>}
