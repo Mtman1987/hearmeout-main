@@ -679,6 +679,7 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
     const [voiceFailureMessage, setVoiceFailureMessage] = useState<string | null>(null);
     const [voiceConnectionGeneration, setVoiceConnectionGeneration] = useState(0);
     const [voiceRetrying, setVoiceRetrying] = useState(false);
+    const [voiceConnectionEnabled, setVoiceConnectionEnabled] = useState(true);
     const [peerMicEnabled, setPeerMicEnabled] = useState(false);
     const peerVoiceRef = useRef<PeerVoiceMesh | null>(null);
     const peerVoiceStartingRef = useRef(false);
@@ -704,6 +705,40 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
     useEffect(() => { voiceFallbackActiveRef.current = voiceFallbackActive; }, [voiceFallbackActive]);
 
     const isStreamMode = !!userSettings?.streamMode;
+
+    // Save free-tier LiveKit minutes when a regular room tab is abandoned.
+    // Explicit stream rooms stay connected in the background so OBS/bot audio
+    // continues to work. Returning to a hidden regular-room tab reconnects it.
+    useEffect(() => {
+        if (room.streamVoiceEnabled || isStreamMode) {
+            setVoiceConnectionEnabled(true);
+            return;
+        }
+
+        let disconnectTimer: ReturnType<typeof setTimeout> | undefined;
+        const syncVisibility = () => {
+            if (document.visibilityState === 'visible') {
+                if (disconnectTimer) clearTimeout(disconnectTimer);
+                disconnectTimer = undefined;
+                setVoiceConnectionEnabled(true);
+                return;
+            }
+
+            if (disconnectTimer) clearTimeout(disconnectTimer);
+            disconnectTimer = setTimeout(() => {
+                if (document.visibilityState !== 'visible') {
+                    setVoiceConnectionEnabled(false);
+                }
+            }, 90_000);
+        };
+
+        syncVisibility();
+        document.addEventListener('visibilitychange', syncVisibility);
+        return () => {
+            if (disconnectTimer) clearTimeout(disconnectTimer);
+            document.removeEventListener('visibilitychange', syncVisibility);
+        };
+    }, [isStreamMode, room.streamVoiceEnabled]);
 
     const mintVoiceToken = useCallback(async () => {
         if (!userId) throw new Error('Sign in is required for voice.');
@@ -994,7 +1029,7 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
 
     return (
       voiceReady ? (
-      <LiveKitRoom key={voiceConnectionGeneration} serverUrl={livekitUrl} token={voiceToken} connect={true} audio={false} video={false}
+      <LiveKitRoom key={voiceConnectionGeneration} serverUrl={livekitUrl} token={voiceToken} connect={voiceConnectionEnabled} audio={false} video={false}
           options={{ audioCaptureDefaults: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } }}
           onConnected={() => {
             setVoiceFailureMessage(null);
