@@ -60,7 +60,10 @@ async function callWorker(path: string, init?: RequestInit) {
   // public hostname as a fallback for local/dev deployments and transient 6PN
   // DNS failures.
   const publicUrl = 'https://hmo-dj-worker.fly.dev';
-  const urls = url === privateUrl
+  const startingBridge = path === '/voice-bridge' && init?.method === 'POST';
+  const urls = startingBridge
+    ? [url]
+    : url === privateUrl
     ? [privateUrl, publicUrl]
     : url.includes('hmo-dj-worker.fly.dev')
       ? [privateUrl, url]
@@ -70,7 +73,11 @@ async function callWorker(path: string, init?: RequestInit) {
   for (const candidate of urls) {
     const route = candidate === url ? 'public-worker' : 'private-worker';
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 8000);
+    // Starting a Discord gateway session includes token retrieval, gateway
+    // identify, voice negotiation, and LiveKit setup; it routinely exceeds
+    // the short status-request budget. Never retry a timed-out start against a
+    // second URL because the first worker may still finish and join Discord.
+    const timeout = setTimeout(() => controller.abort(), startingBridge ? 60000 : 8000);
     try {
       const res = await fetch(`${candidate}${path}`, {
         ...init,
@@ -98,6 +105,7 @@ async function callWorker(path: string, init?: RequestInit) {
         error: error?.message || String(error),
         cause: error?.cause?.code || error?.cause?.message || undefined,
       });
+      if (startingBridge && error?.name === 'AbortError') break;
     }
   }
   const detail = attempts.map((attempt) => `${attempt.route}: ${attempt.cause || attempt.error}`).join(' | ');
