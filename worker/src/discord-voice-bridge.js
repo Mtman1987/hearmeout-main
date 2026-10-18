@@ -16,6 +16,15 @@ const { DiscordSpeakerPresence } = require('./discord-speaker-presence');
 // ══════════════════════════════════════════════════════════════════════════
 
 const { Readable } = require('stream');
+const wrtc = require('@roamhq/wrtc');
+Object.assign(globalThis, {
+  RTCPeerConnection: wrtc.RTCPeerConnection,
+  RTCSessionDescription: wrtc.RTCSessionDescription,
+  RTCIceCandidate: wrtc.RTCIceCandidate,
+  MediaStream: wrtc.MediaStream,
+  MediaStreamTrack: wrtc.MediaStreamTrack,
+});
+const { Peer } = require('peerjs');
 const {
   AudioSource,
   AudioFrame,
@@ -160,6 +169,18 @@ class VoiceBridge {
     this.publishRoom = null;
     this.mixedSource = null;
     this.mixedTrack = null;
+    // PeerJS is the transport fallback when LiveKit quota or connectivity blocks the bridge.
+    this.transport = 'livekit';
+    this.peerFallback = false;
+    this.peer = null;
+    this.peerAudioSource = null;
+    this.peerAudioTrack = null;
+    this.peerStream = null;
+    this.peerId = null;
+    this.peerConnections = [];
+    this.peerSinks = new Map();
+    this.peerPresenceTimer = null;
+    this.transportSwitchPromise = null;
 
     // Per-user decoder state (no Room per user — just opus decode + PCM mix)
     this.userDecoders = new Map(); // userId -> { opusStream, decoder, stopped }
@@ -312,7 +333,7 @@ class VoiceBridge {
   // Each source owns a small playout buffer so packet scheduling jitter does
   // not turn into hard speech/silence edges on the 20ms LiveKit clock.
   async discordMixTick() {
-    if (this.stopped || !this.mixedSource) return;
+    if (this.stopped || (!this.mixedSource && !this.peerAudioSource)) return;
 
     const frames = [];
     for (const src of this.discordMixSources.values()) {
@@ -337,6 +358,22 @@ class VoiceBridge {
     }
 
     const samples = new Int16Array(out.buffer, out.byteOffset, out.length / 2);
+    if (this.peerAudioSource) {
+      try {
+        this.peerAudioSource.onData({
+          samples,
+          sampleRate: SAMPLE_RATE,
+          bitsPerSample: 16,
+          channelCount: CHANNELS,
+          numberOfFrames: samples.length / CHANNELS,
+        });
+      } catch (error) {
+        this.discordCaptureErrors += 1;
+        console.warn('[VoiceBridge:' + this.roomId + '] PeerJS audio publish failed:', error?.message || error);
+      }
+      return;
+    }
+    if (!this.mixedSource) return;
     const audioFrame = new AudioFrame(samples, SAMPLE_RATE, CHANNELS, SAMPLES_PER_FRAME);
     try {
       // Backpressure from AudioSource is part of the clock. Await it instead of
@@ -345,6 +382,229 @@ class VoiceBridge {
       await this.mixedSource.captureFrame(audioFrame);
     } catch {
       this.discordCaptureErrors += 1;
+    }
+  }
+
+
+  async registerPeerPresence(peerId) {
+    const response = await fetch(this.appUrl + '/api/peer-voice/register', {
+      method: 'POST',
+      headers: { ...this.workerHeaders, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ roomId: this.roomId, peerId }),
+      cache: 'no-store',
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok || payload?.ok === false) {
+      throw new Error('PeerJS bridge registry rejected presence (' + response.status + '): ' + (payload?.error || 'request failed'));
+    }
+  }
+
+  async unregisterPeerPresence(peerId) {
+    if (!peerId) return;
+    try {
+      await fetch(this.appUrl + '/api/peer-voice/register', {
+        method: 'DELETE',
+        headers: { ...this.workerHeaders, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ roomId: this.roomId, peerId }),
+        cache: 'no-store',
+      });
+    } catch {}
+  }
+
+  async startPeerPublisher() {
+    // This prefix sorts after hmo-voice-* so browser PeerVoiceMesh peers initiate
+    // calls to this publisher without needing a separate discovery protocol.
+    const basePeerId = 'hmo-zdiscord-' + String(this.roomId).replace(/[^A-Za-z0-9_-]/g, '-');
+    let lastError = null;
+
+    for (let attempt = 1; attempt <= 4; attempt += 1) {
+      const peerId = attempt === 1 ? basePeerId : basePeerId + '-' + Date.now().toString(36) + '-' + attempt;
+      await this.cleanupPeerPublisher();
+      this.peerAudioSource = new wrtc.nonstandard.RTCAudioSource();
+      this.peerAudioTrack = this.peerAudioSource.createTrack();
+      this.peerStream = new wrtc.MediaStream([this.peerAudioTrack]);
+
+      try {
+        await new Promise((resolve, reject) => {
+          let registered = false;
+          this.peer = new Peer(peerId, { debug: 1 });
+          this.peer.on('open', async () => {
+            try {
+              await this.registerPeerPresence(peerId);
+              registered = true;
+              this.peerId = peerId;
+              this.peerFallback = true;
+              this.transport = 'peerjs';
+              this.peerPresenceTimer = setInterval(() => {
+                this.registerPeerPresence(peerId).catch((error) => {
+                  console.warn('[VoiceBridge:' + this.roomId + '] PeerJS presence heartbeat failed:', error?.message || error);
+                });
+              }, 5000);
+              this.peerPresenceTimer.unref?.();
+              console.log('[VoiceBridge:' + this.roomId + '] PeerJS Discord audio publisher ready as ' + peerId);
+              resolve();
+            } catch (error) {
+              reject(error);
+            }
+          });
+
+          this.peer.on('call', (call) => {
+            if (!this.peerStream) {
+              try { call.close(); } catch {}
+              return;
+            }
+            console.log('[VoiceBridge:' + this.roomId + '] PeerJS room peer connected: ' + call.peer);
+            call.answer(this.peerStream);
+            this.peerConnections.push(call);
+            call.on('stream', (stream) => this.attachPeerVoiceSource(call.peer, stream));
+            const cleanup = () => {
+              this.detachPeerVoiceSource(call.peer);
+              this.peerConnections = this.peerConnections.filter((connection) => connection !== call);
+            };
+            call.on('close', cleanup);
+            call.on('error', (error) => {
+              console.warn('[VoiceBridge:' + this.roomId + '] PeerJS room call failed:', error?.message || error);
+              cleanup();
+            });
+          });
+
+          this.peer.on('error', (error) => {
+            console.warn('[VoiceBridge:' + this.roomId + '] PeerJS error:', error?.message || error);
+            if (!registered) reject(error);
+          });
+          this.peer.on('disconnected', () => {
+            if (this.peer && !this.peer.destroyed) this.peer.reconnect();
+          });
+        });
+        return;
+      } catch (error) {
+        lastError = error;
+        const message = error?.message || String(error);
+        await this.cleanupPeerPublisher();
+        if (!/taken|unavailable|already/i.test(message) || attempt === 4) break;
+        const waitMs = attempt * 1500;
+        console.warn('[VoiceBridge:' + this.roomId + '] PeerJS ID unavailable; retrying with a fresh ID in ' + waitMs + 'ms');
+        await new Promise((resolve) => setTimeout(resolve, waitMs));
+      }
+    }
+
+    throw lastError || new Error('Could not start PeerJS Discord publisher as ' + basePeerId);
+  }
+
+  attachPeerVoiceSource(peerId, remoteStream) {
+    if (this.stopped || !peerId || !remoteStream?.getAudioTracks) return;
+    const sourceKey = 'voice:' + peerId;
+    if (this.peerSinks.has(sourceKey)) return;
+    const AudioSink = wrtc.nonstandard?.RTCAudioSink;
+    if (typeof AudioSink !== 'function') {
+      console.warn('[VoiceBridge:' + this.roomId + '] RTCAudioSink unavailable; room microphone return is disabled on PeerJS.');
+      return;
+    }
+
+    const track = remoteStream.getAudioTracks().find((candidate) => candidate.readyState !== 'ended');
+    if (!track) return;
+    const sink = new AudioSink(track);
+    this.peerSinks.set(sourceKey, sink);
+    sink.ondata = (data) => {
+      if (this.stopped || !data?.samples) return;
+      const channels = Math.max(1, Number(data.channelCount) || 1);
+      const sampleRate = Math.max(1, Number(data.sampleRate) || SAMPLE_RATE);
+      const input = data.samples;
+      if (!(input instanceof Int16Array)) return;
+      const inputFrames = Math.floor(input.length / channels);
+      if (!inputFrames) return;
+      const outputFrames = Math.max(1, Math.round(inputFrames * SAMPLE_RATE / sampleRate));
+      const pcm = Buffer.allocUnsafe(outputFrames * CHANNELS * 2);
+      for (let frame = 0; frame < outputFrames; frame += 1) {
+        const sourceFrame = Math.min(inputFrames - 1, Math.floor(frame * sampleRate / SAMPLE_RATE));
+        const left = input[sourceFrame * channels];
+        const right = channels > 1 ? input[sourceFrame * channels + 1] : left;
+        const byteOffset = frame * CHANNELS * 2;
+        pcm.writeInt16LE(left, byteOffset);
+        pcm.writeInt16LE(right, byteOffset + 2);
+      }
+      let source = this.mixSources.get(sourceKey);
+      if (!source) {
+        source = { stream: null, buf: Buffer.alloc(0), closed: false };
+        this.mixSources.set(sourceKey, source);
+      }
+      const combined = source.buf.length ? Buffer.concat([source.buf, pcm]) : pcm;
+      source.buf = combined.length > MAX_SOURCE_BACKLOG
+        ? combined.subarray(combined.length - MAX_SOURCE_BACKLOG)
+        : combined;
+    };
+  }
+
+  detachPeerVoiceSource(peerId) {
+    const sourceKey = String(peerId || '').startsWith('voice:') ? String(peerId) : 'voice:' + String(peerId || '');
+    const sink = this.peerSinks.get(sourceKey);
+    if (sink) {
+      sink.ondata = null;
+      try { sink.stop(); } catch {}
+      this.peerSinks.delete(sourceKey);
+    }
+    this.detachMixSource(sourceKey);
+  }
+
+  async cleanupPeerPublisher() {
+    if (this.peerPresenceTimer) {
+      clearInterval(this.peerPresenceTimer);
+      this.peerPresenceTimer = null;
+    }
+    for (const sourceKey of Array.from(this.peerSinks.keys())) {
+      this.detachPeerVoiceSource(sourceKey);
+    }
+    for (const connection of this.peerConnections) {
+      try { connection.close(); } catch {}
+    }
+    this.peerConnections = [];
+    const registeredPeerId = this.peerId;
+    this.peerId = null;
+    if (registeredPeerId) await this.unregisterPeerPresence(registeredPeerId);
+    try { this.peerAudioTrack?.stop(); } catch {}
+    try { this.peer?.destroy(); } catch {}
+    this.peer = null;
+    this.peerAudioSource = null;
+    this.peerAudioTrack = null;
+    this.peerStream = null;
+    this.peerFallback = false;
+    if (this.transport === 'peerjs') this.transport = 'livekit';
+  }
+
+  async cleanupLiveKitTransport() {
+    if (this.publishReconnectTimer) {
+      clearTimeout(this.publishReconnectTimer);
+      this.publishReconnectTimer = null;
+    }
+    for (const spec of this.listenerSpecs) {
+      if (spec.reconnectTimer) {
+        clearTimeout(spec.reconnectTimer);
+        spec.reconnectTimer = null;
+      }
+      try { await spec.room?.disconnect(); } catch {}
+    }
+    for (const sourceKey of Array.from(this.mixSources.keys())) this.detachMixSource(sourceKey);
+    try { await this.publishRoom?.disconnect(); } catch {}
+    this.publishRoom = null;
+    this.mixedSource = null;
+    this.mixedTrack = null;
+    this.listenerSpecs = [];
+  }
+
+  async switchToPeerFallback(reason) {
+    if (this.peerFallback && this.peer) return;
+    if (this.transportSwitchPromise) return this.transportSwitchPromise;
+    const operation = (async () => {
+      console.warn('[VoiceBridge:' + this.roomId + '] Switching Discord bridge to PeerJS after LiveKit failure: ' + String(reason || 'unknown'));
+      await this.cleanupLiveKitTransport();
+      await this.startPeerPublisher();
+      this.speakerPresence.changed();
+    })();
+    this.transportSwitchPromise = operation;
+    try {
+      await operation;
+    } finally {
+      if (this.transportSwitchPromise === operation) this.transportSwitchPromise = null;
     }
   }
 
@@ -560,13 +820,18 @@ class VoiceBridge {
 
     this.publishReconnectTimer = setTimeout(async () => {
       this.publishReconnectTimer = null;
-      if (this.stopped) return;
+      if (this.stopped || this.peerFallback) return;
       try {
         await this.startPublisher();
         this.publishReconnectAttempts = 0;
       } catch (err) {
         console.warn(`[VoiceBridge:${this.roomId}] Publisher reconnect failed:`, err?.message || err);
-        this.schedulePublisherReconnect('retry-failed');
+        try {
+          await this.switchToPeerFallback('LiveKit publisher reconnect failed: ' + (err?.message || err));
+        } catch (fallbackError) {
+          console.warn(`[VoiceBridge:${this.roomId}] PeerJS fallback failed:`, fallbackError?.message || fallbackError);
+          this.schedulePublisherReconnect('retry-failed');
+        }
       }
     }, delayMs);
   }
@@ -596,6 +861,14 @@ class VoiceBridge {
         spec.reconnectAttempts = 0;
       } catch (err) {
         console.warn(`[VoiceBridge:${this.roomId}] ${spec.label} listener reconnect failed:`, err?.message || err);
+        if ((spec.reconnectAttempts || 0) >= 2) {
+          try {
+            await this.switchToPeerFallback('LiveKit ' + spec.label + ' listener reconnect failed: ' + (err?.message || err));
+            return;
+          } catch (fallbackError) {
+            console.warn(`[VoiceBridge:${this.roomId}] PeerJS fallback failed:`, fallbackError?.message || fallbackError);
+          }
+        }
         this.scheduleListenerReconnect(spec, 'retry-failed');
       }
     }, delayMs);
@@ -655,10 +928,21 @@ class VoiceBridge {
       throw new Error('Selected channel is not a voice channel');
     }
 
-    // Bring the LiveKit side up first so a transient WS/rate-limit failure does
-    // not cause a visible join-then-immediate-leave cycle in Discord.
-    await this.startPublisher();
-    await this.startListeners();
+    // Prefer LiveKit while it is available. If the quota or transport is down,
+    // keep the Discord connection and publish its mixed voice through PeerJS.
+    try {
+      await this.startPublisher();
+      await this.startListeners();
+      this.transport = 'livekit';
+    } catch (liveKitError) {
+      console.warn('[VoiceBridge:' + this.roomId + '] LiveKit setup failed; trying PeerJS fallback:', liveKitError?.message || liveKitError);
+      try {
+        await this.cleanupLiveKitTransport();
+        await this.startPeerPublisher();
+      } catch (peerError) {
+        throw new Error('LiveKit setup failed (' + (liveKitError?.message || liveKitError) + '); PeerJS fallback failed (' + (peerError?.message || peerError) + ')');
+      }
+    }
 
     this.connection = joinVoiceChannel({
       channelId: this.voiceChannelId,
@@ -721,7 +1005,7 @@ class VoiceBridge {
 
     this.publishRoom = new Room();
     this.publishRoom.on(RoomEvent.Disconnected, (reason) => {
-      if (this.stopped) return;
+      if (this.stopped || this.peerFallback) return;
       this.schedulePublisherReconnect(String(reason || 'disconnected'));
     });
 
@@ -772,6 +1056,8 @@ class VoiceBridge {
       roomId: this.roomId,
       guildId: this.guildId,
       voiceChannelId: this.voiceChannelId,
+      transport: this.peerFallback ? 'peerjs' : 'livekit',
+      peerFallback: this.peerFallback,
       startedAt: this.startedAt,
       discordSpeakers: this.userDecoders.size,
       discordPresence: this.speakerPresence.snapshot(),
@@ -809,6 +1095,7 @@ class VoiceBridge {
 
     try { this.player?.stop(true); } catch {}
     try { this.mixStream?.push(null); } catch {}
+    try { await this.cleanupPeerPublisher(); } catch {}
     try { await this.publishRoom?.disconnect(); } catch {}
     for (const spec of this.listenerSpecs) { try { await spec.room?.disconnect(); } catch {} }
     try { this.connection?.destroy(); } catch {}
