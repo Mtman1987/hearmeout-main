@@ -71,6 +71,15 @@ jobs:
           # Discord bridge transport changes affect only the persistent DJ process.
           # Do not restart Lounge, Spotlight, or Activity for a bridge-only fix.
           if [ "${changed:-}" = "worker/src/discord-voice-bridge.js" ]; then target=dj; fi
+
+          # A DJ-only dual-stack listener fix is scoped to the persistent bridge process.
+          # Do not wake or redeploy the suspendable Activity process for this network fix.
+          if [ "${changed:-}" = "worker/src/server.js" ]; then
+            diff=$(git diff "$DEPLOY_BEFORE" "$DEPLOY_AFTER" -- worker/src/server.js)
+            if printf '%s\n' "$diff" | grep -Fq "+const BIND_HOST = WORKER_ROLE === 'dj'"; then
+              target=dj
+            fi
+          fi
           echo "target=$target" >> "$GITHUB_OUTPUT"
       - name: Check Lounge state and routing
         run: |

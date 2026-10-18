@@ -3216,10 +3216,19 @@ process.on('unhandledRejection', (reason) => {
 });
 
 // ── Start ───────────────────────────────────────────────────────────────
-// Bind explicitly on IPv4 so Fly's HTTP health probe cannot race an IPv6-only
-// listener; operators can override this for local dual-stack environments.
-const BIND_HOST = process.env.HMO_BIND_HOST || '0.0.0.0';
-app.listen(PORT, BIND_HOST, () => {
+// The DJ bridge must accept sibling-app traffic over Fly's private IPv6 6PN.
+// Node's IPv6 wildcard is dual-stack when ipv6Only is false, preserving Fly Proxy
+// health checks over IPv4. Keep unrelated worker roles on their existing bind.
+const requestedBindHost = process.env.HMO_BIND_HOST;
+const BIND_HOST = WORKER_ROLE === 'dj'
+  ? (requestedBindHost && requestedBindHost !== '0.0.0.0' ? requestedBindHost : '::')
+  : (requestedBindHost || '0.0.0.0');
+const LISTEN_OPTIONS = {
+  port: PORT,
+  host: BIND_HOST,
+  ...(BIND_HOST === '::' ? { ipv6Only: false } : {}),
+};
+app.listen(LISTEN_OPTIONS, () => {
   console.log(`[DJ Worker] Server running on port ${PORT}`);
   console.log(`[DJ Worker] Bind host: ${BIND_HOST}`);
   console.log(`[DJ Worker] App URL: ${APP_URL}`);
