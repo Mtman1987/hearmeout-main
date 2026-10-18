@@ -2,6 +2,7 @@
 
 import * as React from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Switch } from '@/components/ui/switch';
 import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
@@ -34,6 +35,7 @@ type BridgeState = {
     transport?: 'livekit' | 'peerjs';
     peerFallback?: boolean;
     discordSpeakers?: number;
+    discordPresence?: { displayName?: string; photoURL?: string; source?: string };
     appSources?: number;
     roomVoiceOutboundEnabled?: boolean;
     mode?: 'two-way' | 'listen-only';
@@ -246,6 +248,9 @@ export function VoiceBridgeCard({ roomId }: { roomId: string }) {
   };
 
   const discordMuted = Boolean(status?.discordSelfMute || status?.discordServerMute || status?.discordSuppressed);
+  const activeSpeakerName = status?.discordPresence?.displayName || 'Discord VC';
+  const activeSpeakerPhoto = status?.discordPresence?.photoURL || '';
+  const hasActiveSpeaker = activeSpeakerName !== 'Discord VC';
 
   return (
     <Card>
@@ -263,6 +268,19 @@ export function VoiceBridgeCard({ roomId }: { roomId: string }) {
           need to join the Discord voice channel yourself. Use the privacy gate below when you want
           to hear Discord without sending this room&apos;s conversation back.
         </p>
+
+        {running && (
+          <div className="flex items-center gap-3 rounded-md border p-3">
+            <Avatar className="h-10 w-10 shrink-0">
+              {activeSpeakerPhoto ? <AvatarImage src={activeSpeakerPhoto} alt={activeSpeakerName} /> : null}
+              <AvatarFallback>{hasActiveSpeaker ? activeSpeakerName.slice(0, 1).toUpperCase() : 'DC'}</AvatarFallback>
+            </Avatar>
+            <div className="min-w-0">
+              <p className="truncate text-sm font-medium">{activeSpeakerName}</p>
+              <p className="text-xs text-muted-foreground">{hasActiveSpeaker ? 'Active Discord speaker' : 'Waiting for Discord speech'}</p>
+            </div>
+          </div>
+        )}
 
         <div className="flex flex-wrap gap-2">
           <Button variant="outline" asChild><a href="/api/discord/bot-invite" target="_blank" rel="noopener noreferrer">Add SPMT to a server</a></Button>
