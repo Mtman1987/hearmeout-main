@@ -71,3 +71,38 @@ test('HearMeOut middleware never asks for SPMT again on public persona interacti
     assert.ok(middleware.includes(`'${route}'`), `${route} must bypass SPMT user-session middleware`);
   }
 });
+
+
+test('bot talk details collapse behind the mic control without unmounting the Say Player', () => {
+  const card = source('src/app/rooms/[roomId]/_components/PersonaCard.tsx');
+  const userList = source('src/app/rooms/[roomId]/_components/UserList.tsx');
+
+  assert.match(card, /aria-expanded=\{talkPanelOpen\}/);
+  assert.match(card, /\{talkPanelOpen && \(/);
+  assert.match(card, /\{!metadata\.sayPlayer && \(/);
+  assert.match(userList, /speechPersonaIds\.length > 0 && <RoomSayPlayerAudio/);
+  assert.match(userList, /sayPlayer:\s*true/);
+});
+
+test('bridge card shows one active Discord speaker avatar without rendering a roster', () => {
+  const card = source('src/app/rooms/[roomId]/_components/VoiceBridgeCard.tsx');
+
+  assert.match(card, /discordPresence\?: \{ displayName\?: string; photoURL\?: string; source\?: string \}/);
+  assert.match(card, /status\?\.discordPresence\?\.photoURL/);
+  assert.match(card, /status\?\.discordPresence\?\.displayName/);
+  assert.match(card, /Active Discord speaker/);
+  assert.doesNotMatch(card, /discordMembers|activeSpeakers/);
+});
+
+test('Discord Activities keeps shared session selection but uses the movable controls instead of a permanent iframe', () => {
+  const page = source('src/app/rooms/[roomId]/page.tsx');
+  const userList = source('src/app/rooms/[roomId]/_components/UserList.tsx');
+
+  assert.match(page, /onOpenControls: \(kind: WatchMediaKind\) => void/);
+  assert.match(page, /Open \{selectedLane\.label\} Controls/);
+  assert.match(page, /onOpenControls=\{\(kind\) => openPopout\('watch'/);
+  assert.doesNotMatch(page, /title=\{\x60\$\{selectedLane\.label\} Discord Activity playback\x60\}/);
+  assert.match(page, /voiceFallbackFailed \|\| !voiceFallbackActive/);
+  assert.match(userList, /Your browser blocked incoming P2P audio/);
+  assert.match(userList, /Enable P2P Audio/);
+});
