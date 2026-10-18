@@ -14,6 +14,8 @@ const api = read('src/app/api/discord/voice-bridge/route.ts');
 const ui = read('src/app/rooms/[roomId]/_components/VoiceBridgeCard.tsx');
 const dockerfile = read('worker/Dockerfile');
 const audioStatePatch = read('worker/scripts/patch-voice-bridge-audio-state.cjs');
+const peerRegistry = read('src/app/api/peer-voice/register/route.ts');
+const peerVoiceService = read('src/lib/peer-audio-service.ts');
 
 test('worker starts privacy-safe and gates only the HearMeOut voice lane', () => {
   assert.match(bridge, /roomVoiceOutboundEnabled = false/);
@@ -65,6 +67,22 @@ test('worker build reports real Discord mute state and handles Stage suppression
   assert.match(audioStatePatch, /discordServerMute/);
   assert.match(audioStatePatch, /discordSuppressed/);
   assert.match(audioStatePatch, /setSuppressed\(false\)/);
+});
+
+
+test('Discord bridge falls back to PeerJS when LiveKit is unavailable', () => {
+  assert.match(bridge, /async startPeerPublisher\(\)/);
+  assert.match(bridge, /this\.peerAudioSource\.onData\(/);
+  assert.match(bridge, /hmo-zdiscord-/);
+  assert.match(bridge, /LiveKit setup failed; trying PeerJS fallback/);
+  assert.match(bridge, /RTCAudioSink/);
+  assert.match(bridge, /transport: this\.peerFallback \? 'peerjs' : 'livekit'/);
+  assert.match(peerRegistry, /isDjWorkerRequest/);
+  assert.match(peerRegistry, /fromDjWorker/);
+  assert.doesNotMatch(peerRegistry, /Streaming rooms use LiveKit voice/);
+  assert.match(peerVoiceService, /this\._peerId\.localeCompare\(remotePeerId\) > 0/);
+  assert.match(peerVoiceService, /this\.peer\.call\(remotePeerId, this\.localStream\)/);
+  assert.match(ui, /PeerJS fallback/);
 });
 
 test('the voice-bridge API does not invite or join Athena/persona bots', () => {
