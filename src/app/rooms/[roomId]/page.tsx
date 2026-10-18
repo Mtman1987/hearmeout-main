@@ -1164,11 +1164,13 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
                           peerAudioBlocked={peerAudioBlocked}
                           onEnablePeerAudio={unlockPeerAudio}
                         />
-                        {isActivityRoomId(roomId) && showDiscordActivity ? (
+                        {isActivityRoomId(roomId) ? (
+                          showDiscordActivity ? (
                           <DiscordActivityEmbedCard
                             canPause={isOwner}
                             onOpenControls={(kind) => openPopout('watch', { width: 760, height: 700 }, { source: 'musicWatch', sessionScope: isStreamMode ? 'overlay' : 'discord', roomId, canControl: isOwner || isActivityRoom, initialTab: kind })}
                           />
+                          ) : null
                         ) : (
                           <SharedWatchCard
                             roomId={roomId}
