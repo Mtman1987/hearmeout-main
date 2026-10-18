@@ -1,0 +1,35 @@
+name: Discord bridge PeerJS fallback checks
+
+on:
+  pull_request:
+    paths:
+      - 'worker/src/discord-voice-bridge.js'
+      - 'src/app/api/peer-voice/register/route.ts'
+      - 'src/app/rooms/[roomId]/_components/VoiceBridgeCard.tsx'
+      - 'tests/voice-bridge-privacy-gate.test.cjs'
+      - '.github/workflows/discord-bridge-peerjs-check.yml'
+  push:
+    branches:
+      - fix/discord-bridge-peerjs-fallback-20261017
+    paths:
+      - 'worker/src/discord-voice-bridge.js'
+      - 'src/app/api/peer-voice/register/route.ts'
+      - 'src/app/rooms/[roomId]/_components/VoiceBridgeCard.tsx'
+      - 'tests/voice-bridge-privacy-gate.test.cjs'
+      - '.github/workflows/discord-bridge-peerjs-check.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  check-discord-bridge:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Check bridge syntax
+        run: node --check worker/src/discord-voice-bridge.js
+      - name: Check bridge privacy and PeerJS fallback contracts
+        run: node --test tests/voice-bridge-privacy-gate.test.cjs
