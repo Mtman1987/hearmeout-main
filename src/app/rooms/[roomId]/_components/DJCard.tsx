@@ -40,6 +40,7 @@ interface DJCardProps {
   onOpenQueue: () => void;
   onOpenAddSong: () => void;
   onOpenWatch?: () => void;
+  watchButtonLabel?: string;
 }
 
 function effectivePlaybackPosition(playback?: SharedMusicState['playback'], now = Date.now()) {
@@ -75,7 +76,7 @@ function formatClock(value: number) {
 
 export default function DJCard({
   roomId, localVolume, onVolumeChange, canControl,
-  onOpenQueue, onOpenAddSong, onOpenWatch,
+  onOpenQueue, onOpenAddSong, onOpenWatch, watchButtonLabel,
 }: DJCardProps) {
   const musicSessionId = getRoomWatchSessionId(roomId, 'music');
   const [sharedState, setSharedState] = useState<SharedMusicState | null>(null);
@@ -288,7 +289,7 @@ export default function DJCard({
                 <Button variant="ghost" size="icon" className="h-8 w-8" onClick={onOpenWatch}>
                   <Film className="h-4 w-4" />
                 </Button>
-              </TooltipTrigger><TooltipContent><p>Open music player</p></TooltipContent></Tooltip>
+              </TooltipTrigger><TooltipContent><p>{watchButtonLabel || 'Open music player'}</p></TooltipContent></Tooltip>
             ) : null}
           </div>
 
