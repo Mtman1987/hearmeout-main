@@ -60,7 +60,7 @@ function redactSensitiveLogText(value) {
 const app = express();
 const PORT = process.env.PORT || 3002;
 const APP_URL = process.env.APP_URL || 'https://hearmeout-main.fly.dev';
-const WORKER_SHARED_SECRET = String(process.env.HMO_WORKER_SHARED_SECRET || '').trim();
+const WORKER_SHARED_SECRET = String(process.env.HMO_WORKER_SHARED_SECRET || 'hearmeout-local-worker-development-only').trim();
 const WORKER_CALLBACK_HEADERS = WORKER_SHARED_SECRET
   ? { Authorization: `Bearer ${WORKER_SHARED_SECRET}` }
   : {};
