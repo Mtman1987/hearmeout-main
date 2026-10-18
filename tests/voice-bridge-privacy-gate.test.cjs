@@ -53,6 +53,14 @@ test('main app preserves explicit privacy choices but migrates legacy rooms to t
   assert.match(api, /Bridge privacy gate could not be confirmed/);
 });
 
+test('DJ worker listens on Fly private IPv6 while retaining IPv4-compatible public health checks', () => {
+  const server = read('worker/src/server.js');
+  assert.match(server, /WORKER_ROLE === 'dj'\s*\?\s*\(requestedBindHost && requestedBindHost !== '0\.0\.0\.0' \? requestedBindHost : '::'\)/);
+  assert.match(server, /ipv6Only: false/);
+  assert.match(server, /app\.listen\(LISTEN_OPTIONS/);
+  assert.match(api, /dj\.process\.hmo-dj-worker\.internal:3002/);
+});
+
 test('room UI follows live worker outbound state instead of a stale browser toggle', () => {
   assert.match(ui, /applyWorkerState/);
   assert.match(ui, /worker\?\.roomVoiceOutboundEnabled/);
