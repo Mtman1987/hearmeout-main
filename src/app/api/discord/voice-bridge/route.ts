@@ -55,10 +55,11 @@ async function callWorker(path: string, init?: RequestInit) {
   const url = getDjWorkerUrl();
   if (!url) return { ok: false, status: 503, body: { error: 'Worker not configured' } };
   const privateUrl = 'http://dj.process.hmo-dj-worker.internal:3002';
-  // The public Fly hostname is the verified route from the main app to the DJ
-  // process. Try it first; the private process hostname is not resolvable in
-  // every Fly runtime and should never make a healthy worker look unreachable.
-  const urls = url.includes('hmo-dj-worker.fly.dev') ? [url, privateUrl] : [url];
+  // Prefer Fly's private IPv6 route now that the DJ worker listens dual-stack.
+  // It avoids the public Fly Proxy timeout between sibling apps. Keep the
+  // public hostname as a fallback for local/dev deployments and transient 6PN
+  // DNS failures.
+  const urls = url.includes('hmo-dj-worker.fly.dev') ? [privateUrl, url] : [url];
   let lastError: any;
   const attempts: Array<{ route: string; error: string; cause?: string }> = [];
   for (const candidate of urls) {
