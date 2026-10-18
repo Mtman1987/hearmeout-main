@@ -79,9 +79,24 @@ test('bot talk details collapse behind the mic control without unmounting the Sa
 
   assert.match(card, /aria-expanded=\{talkPanelOpen\}/);
   assert.match(card, /\{talkPanelOpen && \(/);
-  assert.match(card, /\{!metadata\.sayPlayer && \(/);
+  assert.match(card, /volumeOverride\?: number/);
+  assert.match(card, /metadata\.sayPlayer && onVolumeOverrideChange/);
+  assert.match(card, /aria-label=\{`\$\{displayName\} volume`\}/);
+  assert.doesNotMatch(card, /\{!metadata\.sayPlayer && \(/);
   assert.match(userList, /speechPersonaIds\.length > 0 && <RoomSayPlayerAudio/);
   assert.match(userList, /sayPlayer:\s*true/);
+  assert.match(userList, /volumesByPersona/);
+});
+
+test('Discord Activity panel is hidden by default and opened from the DJ card', () => {
+  const page = source('src/app/rooms/[roomId]/page.tsx');
+  const userList = source('src/app/rooms/[roomId]/_components/UserList.tsx');
+  const dj = source('src/app/rooms/[roomId]/_components/DJCard.tsx');
+  assert.match(page, /const \[showDiscordActivity, setShowDiscordActivity\] = useState\(false\)/);
+  assert.match(page, /isActivityRoomId\(roomId\) && showDiscordActivity \?/);
+  assert.match(page, /onToggleDiscordActivity=\{isActivityRoom \?/);
+  assert.match(userList, /onToggleDiscordActivity/);
+  assert.match(dj, /aria-label=\{showDiscordActivity \? 'Hide Discord Activity panel' : 'Show Discord Activity panel'\}/);
 });
 
 test('bridge card shows one active Discord speaker avatar without rendering a roster', () => {
