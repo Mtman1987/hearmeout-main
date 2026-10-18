@@ -33,7 +33,8 @@ interface UserListProps {
   onOpenQueue: () => void;
   onOpenAddSong: () => void;
   onOpenWatch?: () => void;
-  watchButtonLabel?: string;
+  showDiscordActivity?: boolean;
+  onToggleDiscordActivity?: () => void;
   voiceEnabled?: boolean;
   voicePeerFallback?: boolean;
   peerConnectedPeerIds?: string[];
@@ -153,9 +154,7 @@ const isRoomTtsParticipant = (identity?: string) =>
   !!identity && identity.startsWith('room-tts:');
 
 function SayPlayerPersonaCards({ roomId, isHost }: { roomId: string; isHost: boolean }) {
-  const [volumeByPersonaState, setVolumeByPersonaState] = React.useState<Record<string, number>>({});
-  const audioGestureRef = React.useRef<(() => void) | null>(null);
-  const registerAudioGesture = React.useCallback((resume: () => void) => { audioGestureRef.current = resume; }, []);
+  const [volumesByPersona, setVolumesByPersona] = React.useState<Record<string, number>>({});
   const liveParticipants = useRemoteParticipants();
   const { data: users } = useCollection<PeerPresence & { personaId?: string; ownerTenantId?: string; ownerName?: string; wakeNames?: string[]; aliases?: string[]; serverMuted?: boolean; avatar?: string; idleAvatar?: string; talkingAvatar?: string }>(`rooms/${roomId}/users`, { pollInterval: 3000 });
   const livePersonaIds = new Set(liveParticipants.filter(isPersonaParticipant).map((participant) => participant.identity.replace(/^persona:/, '')));
@@ -166,10 +165,9 @@ function SayPlayerPersonaCards({ roomId, isHost }: { roomId: string; isHost: boo
   const speechPersonaIds = personas
     .map((presence) => String(presence.ownerTenantId || presence.personaId || presence.id || '').replace(/^persona:/, ''))
     .filter(Boolean);
-  const volumeByPersona = Object.fromEntries(speechPersonaIds.map((personaId) => [personaId, volumeByPersonaState[personaId] ?? 0.8])) as Record<string, number>;
   return (
     <>
-      {speechPersonaIds.length > 0 && <RoomSayPlayerAudio roomId={roomId} personaIds={speechPersonaIds} volumeByPersona={volumeByPersona} onUserGestureReady={registerAudioGesture} />}
+      {speechPersonaIds.length > 0 && <RoomSayPlayerAudio roomId={roomId} personaIds={speechPersonaIds} volumes={volumesByPersona} />}
       {personas.map((persona) => {
         const displayName = persona.displayName || 'StreamWeaver Persona';
         const personaId = String(persona.ownerTenantId || persona.personaId || persona.id || '').replace(/^persona:/, '');
@@ -196,7 +194,15 @@ function SayPlayerPersonaCards({ roomId, isHost }: { roomId: string; isHost: boo
           isMicrophoneEnabled: !persona.serverMuted,
           setVolume: () => {},
         } as any;
-        return <PersonaCard key={persona.id || personaId || displayName} participant={participant} roomId={roomId} isHost={isHost} volumeOverride={volumeByPersona[personaId] ?? 0.8} onVolumeChange={(volume) => setVolumeByPersonaState((current) => ({ ...current, [personaId]: volume }))} onVolumeInteraction={() => audioGestureRef.current?.()} />;
+        return <PersonaCard
+          key={persona.id || personaId || displayName}
+          participant={participant}
+          roomId={roomId}
+          isHost={isHost}
+          volumeOverride={volumesByPersona[personaId] ?? 0.8}
+          onVolumeOverrideChange={(next) => setVolumesByPersona((current) => ({ ...current, [personaId]: next }))}
+          onVolumeUserGesture={() => window.dispatchEvent(new Event('hmo-resume-bot-audio'))}
+        />;
       })}
     </>
   );
@@ -247,7 +253,7 @@ function LiveKitParticipants({ isHost, roomId, localP2PSpeaking }: { isHost: boo
   );
 }
 
-export default function UserList({ roomId, localVolume, onVolumeChange, showDJ, onOpenQueue, onOpenAddSong, onOpenWatch, watchButtonLabel, voiceEnabled = true, voicePeerFallback = false, peerConnectedPeerIds = [], peerVoiceStreams = new Map(), localP2PSpeaking = false, peerAudioBlocked = false, onEnablePeerAudio }: UserListProps) {
+export default function UserList({ roomId, localVolume, onVolumeChange, showDJ, onOpenQueue, onOpenAddSong, onOpenWatch, showDiscordActivity = false, onToggleDiscordActivity, voiceEnabled = true, voicePeerFallback = false, peerConnectedPeerIds = [], peerVoiceStreams = new Map(), localP2PSpeaking = false, peerAudioBlocked = false, onEnablePeerAudio }: UserListProps) {
   const { user } = useSession();
   const { data: room } = useDoc<RoomData>('rooms', roomId, 2000);
 
@@ -273,7 +279,8 @@ export default function UserList({ roomId, localVolume, onVolumeChange, showDJ, 
               onOpenQueue={onOpenQueue}
               onOpenAddSong={onOpenAddSong}
               onOpenWatch={onOpenWatch}
-              watchButtonLabel={watchButtonLabel}
+              showDiscordActivity={showDiscordActivity}
+              onToggleDiscordActivity={onToggleDiscordActivity}
             />
           )}
           {voiceEnabled && <LiveKitParticipants isHost={isHost} roomId={roomId} localP2PSpeaking={localP2PSpeaking} />}
