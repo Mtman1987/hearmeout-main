@@ -59,7 +59,12 @@ async function callWorker(path: string, init?: RequestInit) {
   // It avoids the public Fly Proxy timeout between sibling apps. Keep the
   // public hostname as a fallback for local/dev deployments and transient 6PN
   // DNS failures.
-  const urls = url.includes('hmo-dj-worker.fly.dev') ? [privateUrl, url] : [url];
+  const publicUrl = 'https://hmo-dj-worker.fly.dev';
+  const urls = url === privateUrl
+    ? [privateUrl, publicUrl]
+    : url.includes('hmo-dj-worker.fly.dev')
+      ? [privateUrl, url]
+      : [url];
   let lastError: any;
   const attempts: Array<{ route: string; error: string; cause?: string }> = [];
   for (const candidate of urls) {
