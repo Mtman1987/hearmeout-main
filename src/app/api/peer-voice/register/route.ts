@@ -39,6 +39,9 @@ export async function POST(request: NextRequest) {
     if (!db.get('rooms', roomId)) return NextResponse.json({ error: 'Room not found' }, { status: 404 });
   } else {
     try { await requireRoomVoiceAccess(roomId); } catch { return NextResponse.json({ error: 'Room access required' }, { status: 403 }); }
+    if (String(peerId).startsWith('hmo-zdiscord-')) {
+      return NextResponse.json({ error: 'That PeerJS identity is reserved for the voice bridge' }, { status: 403 });
+    }
   }
 
   if (!registry.has(roomId)) registry.set(roomId, new Map());
@@ -52,6 +55,17 @@ export async function POST(request: NextRequest) {
 export async function DELETE(request: NextRequest) {
   const { roomId, peerId } = await request.json();
   if (!roomId || !peerId) return NextResponse.json({ error: 'Missing roomId or peerId' }, { status: 400 });
+
+  const fromDjWorker = request.headers.has('authorization') && isDjWorkerRequest(request);
+  if (fromDjWorker) {
+    await ensureDb();
+    if (!db.get('rooms', roomId)) return NextResponse.json({ error: 'Room not found' }, { status: 404 });
+  } else {
+    try { await requireRoomVoiceAccess(roomId); } catch { return NextResponse.json({ error: 'Room access required' }, { status: 403 }); }
+    if (String(peerId).startsWith('hmo-zdiscord-')) {
+      return NextResponse.json({ error: 'Only the authenticated worker can unregister the voice bridge' }, { status: 403 });
+    }
+  }
 
   registry.get(roomId)?.delete(peerId);
   cleanRoom(roomId);
