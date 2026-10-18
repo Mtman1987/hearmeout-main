@@ -15,7 +15,7 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { useToast } from '@/hooks/use-toast';
-import { LoaderCircle, Radio } from 'lucide-react';
+import { LoaderCircle, Radio, Settings2, SlidersHorizontal } from 'lucide-react';
 
 const VOICE_CHANNEL_TYPES = new Set([2, 13]);
 
@@ -69,6 +69,8 @@ export function VoiceBridgeCard({ roomId }: { roomId: string }) {
   const [audioProfile, setAudioProfile] = React.useState<'low-latency' | 'balanced' | 'resilient'>('balanced');
   const [status, setStatus] = React.useState<BridgeState['worker']>();
   const [loadingChannels, setLoadingChannels] = React.useState(false);
+  const [showConnectionSettings, setShowConnectionSettings] = React.useState(false);
+  const [showAdvancedSettings, setShowAdvancedSettings] = React.useState(false);
   const [busy, setBusy] = React.useState(false);
 
   const applyWorkerState = React.useCallback((worker?: BridgeState['worker']) => {
@@ -257,17 +259,17 @@ export function VoiceBridgeCard({ roomId }: { roomId: string }) {
       <CardHeader className="pb-3">
         <CardTitle className="flex items-center gap-2 text-base">
           <Radio className="h-4 w-4" />
-          Discord Voice Bridge
+          <span>Discord Voice Bridge</span>
           {running && <Badge variant="secondary" className="ml-1">Live</Badge>}
           {running && discordMuted && <Badge variant="destructive" className="ml-1">Discord muted</Badge>}
+          <div className="ml-auto flex shrink-0 items-center gap-1">
+            <Button type="button" variant={showConnectionSettings ? 'secondary' : 'ghost'} size="icon" className="h-8 w-8" aria-label="Discord server and channel settings" aria-expanded={showConnectionSettings} onClick={() => setShowConnectionSettings((open) => !open)}><Settings2 className="h-4 w-4" /></Button>
+            <Button type="button" variant={showAdvancedSettings ? 'secondary' : 'ghost'} size="icon" className="h-8 w-8" aria-label="Discord bridge secondary settings" aria-expanded={showAdvancedSettings} onClick={() => setShowAdvancedSettings((open) => !open)}><SlidersHorizontal className="h-4 w-4" /></Button>
+          </div>
         </CardTitle>
       </CardHeader>
-      <CardContent className="space-y-4">
-        <p className="text-sm text-muted-foreground">
-          The bridge bot stays in Discord and carries that voice channel into this room. You do not
-          need to join the Discord voice channel yourself. Use the privacy gate below when you want
-          to hear Discord without sending this room&apos;s conversation back.
-        </p>
+      <CardContent className="space-y-3">
+        <p className="text-xs text-muted-foreground">Connect this room to a Discord voice channel. Use the settings icons for channel selection and secondary audio options.</p>
 
         {running && (
           <div className="flex items-center gap-3 rounded-md border p-3">
@@ -282,28 +284,32 @@ export function VoiceBridgeCard({ roomId }: { roomId: string }) {
           </div>
         )}
 
-        <div className="flex flex-wrap gap-2">
-          <Button variant="outline" asChild><a href="/api/discord/bot-invite" target="_blank" rel="noopener noreferrer">Add SPMT to a server</a></Button>
-          <Button variant="outline" onClick={refreshServers}>Refresh servers</Button>
-        </div>
-        <div className="grid gap-3 sm:grid-cols-2">
-          <div className="space-y-1.5">
-            <Label htmlFor={serverSelectId}>Server</Label>
-            <select id={serverSelectId} value={guildId} onChange={(event) => onGuildChange(event.target.value)} disabled={running || busy}
-              className="h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring disabled:cursor-not-allowed disabled:opacity-50">
-              <option value="">Select a server</option>
-              {guilds.map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}
-            </select>
+        {showConnectionSettings && (
+          <div className="space-y-3 rounded-md border p-3">
+          <div className="flex flex-wrap gap-2">
+            <Button variant="outline" asChild><a href="/api/discord/bot-invite" target="_blank" rel="noopener noreferrer">Add SPMT to a server</a></Button>
+            <Button variant="outline" onClick={refreshServers}>Refresh servers</Button>
           </div>
-          <div className="space-y-1.5">
-            <Label htmlFor={channelSelectId}>Voice channel</Label>
-            <select id={channelSelectId} value={voiceChannelId} onChange={(event) => setVoiceChannelId(event.target.value)} disabled={running || busy || !guildId || loadingChannels}
-              className="h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring disabled:cursor-not-allowed disabled:opacity-50">
-              <option value="">{loadingChannels ? 'Loading…' : !guildId ? 'Select a server first' : channels.length ? 'Select a voice channel' : 'No voice channels found'}</option>
-              {channels.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-            </select>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div className="space-y-1.5">
+              <Label htmlFor={serverSelectId}>Server</Label>
+              <select id={serverSelectId} value={guildId} onChange={(event) => onGuildChange(event.target.value)} disabled={running || busy}
+                className="h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring disabled:cursor-not-allowed disabled:opacity-50">
+                <option value="">Select a server</option>
+                {guilds.map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}
+              </select>
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor={channelSelectId}>Voice channel</Label>
+              <select id={channelSelectId} value={voiceChannelId} onChange={(event) => setVoiceChannelId(event.target.value)} disabled={running || busy || !guildId || loadingChannels}
+                className="h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring disabled:cursor-not-allowed disabled:opacity-50">
+                <option value="">{loadingChannels ? 'Loading…' : !guildId ? 'Select a server first' : channels.length ? 'Select a voice channel' : 'No voice channels found'}</option>
+                {channels.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+              </select>
+            </div>
           </div>
-        </div>
+          </div>
+        )}
 
         <div className="flex items-center justify-between rounded-md border p-3">
           <div className="flex items-center gap-3">
@@ -316,33 +322,37 @@ export function VoiceBridgeCard({ roomId }: { roomId: string }) {
           <Switch checked={running} disabled={busy} onCheckedChange={(checked) => setBridge(checked)} />
         </div>
 
-        <div className="flex items-center justify-between gap-4 rounded-md border p-3">
-          <div className="min-w-0">
-            <Label className="cursor-pointer">Let Discord hear this room</Label>
-            <p className="mt-1 text-xs text-muted-foreground">
-              {roomVoiceOutboundEnabled ? 'Two-way: HearMeOut room voices are sent to Discord.' : 'Listen-only: Discord stays audible here, but this room stays private.'}
-            </p>
-            <p className="mt-1 text-xs text-muted-foreground">Music uses its own bridge lane and is not muted by this room-voice gate.</p>
+        {showAdvancedSettings && (
+          <div className="space-y-3 rounded-md border p-3">
+          <div className="flex items-center justify-between gap-4 rounded-md border p-3">
+            <div className="min-w-0">
+              <Label className="cursor-pointer">Let Discord hear this room</Label>
+              <p className="mt-1 text-xs text-muted-foreground">
+                {roomVoiceOutboundEnabled ? 'Two-way: HearMeOut room voices are sent to Discord.' : 'Listen-only: Discord stays audible here, but this room stays private.'}
+              </p>
+              <p className="mt-1 text-xs text-muted-foreground">Music uses its own bridge lane and is not muted by this room-voice gate.</p>
+            </div>
+            <Switch checked={roomVoiceOutboundEnabled} disabled={busy} aria-label="Let Discord hear this HearMeOut room" onCheckedChange={(checked) => setRoomOutbound(checked)} />
           </div>
-          <Switch checked={roomVoiceOutboundEnabled} disabled={busy} aria-label="Let Discord hear this HearMeOut room" onCheckedChange={(checked) => setRoomOutbound(checked)} />
-        </div>
-
-        <div className="space-y-2 rounded-md border p-3">
-          <div>
-            <Label>Discord → LiveKit reliability</Label>
-            <p className="mt-1 text-xs text-muted-foreground">Balanced adapts to normal jitter. Use Resilient when the connection is dropping packets; Low latency is best only on a clean route.</p>
+  
+          <div className="space-y-2 rounded-md border p-3">
+            <div>
+              <Label>Discord → LiveKit reliability</Label>
+              <p className="mt-1 text-xs text-muted-foreground">Balanced adapts to normal jitter. Use Resilient when the connection is dropping packets; Low latency is best only on a clean route.</p>
+            </div>
+            <Select value={audioProfile} onValueChange={(value) => changeAudioProfile(value as typeof audioProfile)} disabled={busy}>
+              <SelectTrigger aria-label="Discord audio reliability profile"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="low-latency">Low latency</SelectItem>
+                <SelectItem value="balanced">Balanced</SelectItem>
+                <SelectItem value="resilient">Resilient / slow internet</SelectItem>
+              </SelectContent>
+            </Select>
+            {running && status?.discordJitter ? <p className="text-xs text-muted-foreground">Buffer {status.discordJitter.bufferedMs ?? 0} ms / {status.discordJitter.targetMs ?? 0} ms · network jitter {status.discordJitter.arrivalJitterMs ?? 0} ms · underruns {status.discordJitter.underruns ?? 0} · dropped {status.discordJitter.droppedFrames ?? 0}</p> : null}
+            <p className="text-xs text-muted-foreground">Krisp: not applied to this server-published Discord PCM track. Browser WebRTC echo/noise cancellation still applies to human microphones; the bridge fixes transport jitter before LiveKit ingest.</p>
           </div>
-          <Select value={audioProfile} onValueChange={(value) => changeAudioProfile(value as typeof audioProfile)} disabled={busy}>
-            <SelectTrigger aria-label="Discord audio reliability profile"><SelectValue /></SelectTrigger>
-            <SelectContent>
-              <SelectItem value="low-latency">Low latency</SelectItem>
-              <SelectItem value="balanced">Balanced</SelectItem>
-              <SelectItem value="resilient">Resilient / slow internet</SelectItem>
-            </SelectContent>
-          </Select>
-          {running && status?.discordJitter ? <p className="text-xs text-muted-foreground">Buffer {status.discordJitter.bufferedMs ?? 0} ms / {status.discordJitter.targetMs ?? 0} ms · network jitter {status.discordJitter.arrivalJitterMs ?? 0} ms · underruns {status.discordJitter.underruns ?? 0} · dropped {status.discordJitter.droppedFrames ?? 0}</p> : null}
-          <p className="text-xs text-muted-foreground">Krisp: not applied to this server-published Discord PCM track. Browser WebRTC echo/noise cancellation still applies to human microphones; the bridge fixes transport jitter before LiveKit ingest.</p>
-        </div>
+          </div>
+        )}
       </CardContent>
     </Card>
   );
