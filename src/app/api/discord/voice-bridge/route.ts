@@ -55,19 +55,27 @@ async function callWorker(path: string, init?: RequestInit) {
   const url = getDjWorkerUrl();
   if (!url) return { ok: false, status: 503, body: { error: 'Worker not configured' } };
   const privateUrl = 'http://dj.process.hmo-dj-worker.internal:3002';
-  const urls = url.includes('hmo-dj-worker.fly.dev') ? [privateUrl, url] : [url];
+  // The public Fly hostname is the verified route from the main app to the DJ
+  // process. Try it first; the private process hostname is not resolvable in
+  // every Fly runtime and should never make a healthy worker look unreachable.
+  const urls = url.includes('hmo-dj-worker.fly.dev') ? [url, privateUrl] : [url];
   let lastError: any;
   for (const candidate of urls) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 8000);
     try {
       const res = await fetch(`${candidate}${path}`, {
         ...init,
+        signal: controller.signal,
         headers: getDjWorkerRequestHeaders({ 'Content-Type': 'application/json', ...(init?.headers || {}) }),
       });
+      clearTimeout(timeout);
       const body = await res.json().catch(() => ({}));
       // A real HTTP response proves this route is reachable; preserve its status
       // rather than masking worker-level errors with a different network route.
       return { ok: res.ok, status: res.status, body };
     } catch (error: any) {
+      clearTimeout(timeout);
       lastError = error;
     }
   }
