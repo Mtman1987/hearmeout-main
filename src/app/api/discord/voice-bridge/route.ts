@@ -77,6 +77,13 @@ async function callWorker(path: string, init?: RequestInit) {
     } catch (error: any) {
       clearTimeout(timeout);
       lastError = error;
+      console.error('[VoiceBridge] worker request failed', {
+        path,
+        route: candidate === url ? 'configured' : 'private-fallback',
+        name: error?.name || 'Error',
+        message: error?.message || String(error),
+        cause: error?.cause?.code || error?.cause?.message || undefined,
+      });
     }
   }
   return { ok: false, status: 502, body: { error: `Worker unreachable: ${lastError?.message || lastError}` } };
