@@ -87,9 +87,58 @@ export async function GET(req: NextRequest) {
   const roomId = new URL(req.url).searchParams.get('roomId') || '';
   if (!roomId) return NextResponse.json({ error: 'Missing roomId' }, { status: 400 });
 
-  const room = db.get('rooms', roomId);
-  const cfg = readConfig(room);
-  const status = await callWorker(`/voice-bridge?roomId=${encodeURIComponent(roomId)}`, { method: 'GET' });
+  const auth = authorize(roomId, session.uid);
+  if (!auth.ok) return NextResponse.json({ error: auth.error }, { status: auth.status });
+
+  const cfg = readConfig(auth.room);
+  let status = await callWorker(`/voice-bridge?roomId=${encodeURIComponent(roomId)}`, { method: 'GET' });
+
+  // A worker redeploy clears its in-memory bridge map while the persisted room
+  // config remains enabled. Recover only when the worker answered successfully
+  // and explicitly reports that this configured bridge is not running.
+  if (
+    status.ok &&
+    status.body?.running === false &&
+    cfg.enabled &&
+    cfg.guildId &&
+    cfg.voiceChannelId
+  ) {
+    const restarted = await callWorker('/voice-bridge', {
+      method: 'POST',
+      body: JSON.stringify({
+        action: 'start',
+        roomId,
+        guildId: cfg.guildId,
+        voiceChannelId: cfg.voiceChannelId,
+        audioProfile: cfg.audioProfile,
+      }),
+    });
+
+    if (restarted.ok && restarted.body?.success !== false) {
+      const gate = await callWorker('/voice-bridge/gate', {
+        method: 'POST',
+        body: JSON.stringify({
+          roomId,
+          roomVoiceOutboundEnabled: cfg.roomVoiceOutboundEnabled,
+        }),
+      });
+      if (gate.ok && gate.body?.success !== false) {
+        status = { ...gate, body: { ...restarted.body, ...gate.body, running: gate.body?.status?.running ?? restarted.body?.status?.running } };
+      } else {
+        await callWorker('/voice-bridge', {
+          method: 'POST',
+          body: JSON.stringify({ action: 'stop', roomId }),
+        });
+        status = {
+          ok: false,
+          status: gate.ok ? 502 : gate.status,
+          body: { error: gate.body?.error || gate.body?.message || 'Bridge recovery could not confirm the privacy gate', running: false },
+        };
+      }
+    } else {
+      status = restarted;
+    }
+  }
 
   return NextResponse.json({ config: cfg, worker: status.body });
 }
