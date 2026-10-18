@@ -904,7 +904,7 @@ class VoiceBridge {
       this.detachMixSource(`${spec.label}:${participant.identity}`);
     });
     listener.on(RoomEvent.Disconnected, (reason) => {
-      if (this.stopped) return;
+      if (this.stopped || this.liveKitCleanupInProgress || this.peerFallback) return;
       this.scheduleListenerReconnect(spec, String(reason || 'disconnected'));
     });
 
