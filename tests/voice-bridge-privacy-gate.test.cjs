@@ -79,6 +79,8 @@ test('Discord bridge falls back to PeerJS when LiveKit is unavailable', () => {
   assert.match(bridge, /transport: this\.peerFallback \? 'peerjs' : 'livekit'/);
   assert.match(peerRegistry, /isDjWorkerRequest/);
   assert.match(peerRegistry, /fromDjWorker/);
+  assert.match(peerRegistry, /reserved for the voice bridge/);
+  assert.match(peerRegistry, /Only the authenticated worker can unregister the voice bridge/);
   assert.doesNotMatch(peerRegistry, /Streaming rooms use LiveKit voice/);
   assert.match(peerVoiceService, /this\._peerId\.localeCompare\(remotePeerId\) > 0/);
   assert.match(peerVoiceService, /this\.peer\.call\(remotePeerId, this\.localStream\)/);
