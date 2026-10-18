@@ -51,28 +51,33 @@ export function isPersonaParticipant(participant: Participant) {
   return participant.identity.startsWith('persona:') || !!parsePersonaMetadata(participant.metadata);
 }
 
-export default function PersonaCard({ participant, roomId, isHost = false }: { participant: Participant; roomId: string; isHost?: boolean }) {
+export default function PersonaCard({ participant, roomId, isHost = false, volumeOverride, onVolumeChange, onVolumeInteraction }: { participant: Participant; roomId: string; isHost?: boolean; volumeOverride?: number; onVolumeChange?: (volume: number) => void; onVolumeInteraction?: () => void }) {
   const { toast } = useToast();
   const metadata = parsePersonaMetadata(participant.metadata) || {};
   const displayName = metadata.displayName || participant.name || participant.identity.replace(/^persona:/, '') || 'StreamWeaver Persona';
   const isSpeaking = participant.isSpeaking;
   const avatar = (isSpeaking ? metadata.talkingAvatar : metadata.idleAvatar) || metadata.avatar || '';
   const [volume, setVolume] = React.useState(1);
+  const currentVolume = metadata.sayPlayer ? (volumeOverride ?? 0.8) : volume;
   const [pendingAction, setPendingAction] = React.useState('');
   const [talkStatus, setTalkStatus] = React.useState<TalkStatus>('idle');
   const [talkPanelOpen, setTalkPanelOpen] = React.useState(false);
   const [talkTranscript, setTalkTranscript] = React.useState('');
   const [talkReply, setTalkReply] = React.useState('');
   const [talkError, setTalkError] = React.useState('');
-  const lastVolume = React.useRef(1);
+  const lastVolume = React.useRef(metadata.sayPlayer ? 0.8 : 1);
+  const updateVolume = React.useCallback((nextVolume: number) => {
+    if (metadata.sayPlayer && onVolumeChange) onVolumeChange(nextVolume);
+    else setVolume(nextVolume);
+  }, [metadata.sayPlayer, onVolumeChange]);
   const recorderRef = React.useRef<ReturnType<typeof captureMicrophone> | null>(null);
   const mountedRef = React.useRef(true);
 
   React.useEffect(() => {
     const remote = participant as RemoteParticipant;
-    if (volume > 0) lastVolume.current = volume;
-    if (typeof remote.setVolume === 'function') remote.setVolume(volume);
-  }, [participant, volume]);
+    if (currentVolume > 0) lastVolume.current = currentVolume;
+    if (typeof remote.setVolume === 'function') remote.setVolume(currentVolume);
+  }, [participant, currentVolume]);
 
   React.useEffect(() => {
     mountedRef.current = true;
@@ -244,12 +249,10 @@ export default function PersonaCard({ participant, roomId, isHost = false }: { p
         </div>
         )}
 
-        {!metadata.sayPlayer && (
         <div className="mt-auto flex items-center gap-2">
-          <Tooltip><TooltipTrigger asChild><Button variant="outline" size="icon" className="h-8 w-8" onClick={() => setVolume((current) => current > 0 ? 0 : lastVolume.current)}>{volume > 0 ? <Volume2 className="h-4 w-4" /> : <VolumeX className="h-4 w-4" />}</Button></TooltipTrigger><TooltipContent>{volume > 0 ? 'Mute for me' : 'Unmute for me'}</TooltipContent></Tooltip>
-          <Slider aria-label={`${displayName} volume`} value={[volume]} onValueChange={(value) => setVolume(value[0])} max={1} step={0.05} />
+          <Tooltip><TooltipTrigger asChild><Button variant="outline" size="icon" className="h-8 w-8" aria-label={currentVolume > 0 ? `Mute ${displayName} for me` : `Unmute ${displayName} for me`} onClick={() => { const nextVolume = currentVolume > 0 ? 0 : lastVolume.current; updateVolume(nextVolume); if (nextVolume > 0) onVolumeInteraction?.(); }}>{currentVolume > 0 ? <Volume2 className="h-4 w-4" /> : <VolumeX className="h-4 w-4" />}</Button></TooltipTrigger><TooltipContent>{currentVolume > 0 ? 'Mute for me' : 'Unmute for me'}</TooltipContent></Tooltip>
+          <Slider aria-label={`${displayName} volume`} value={[currentVolume]} onValueChange={(value) => { updateVolume(value[0]); if (value[0] > 0) onVolumeInteraction?.(); }} max={1} step={0.05} />
         </div>
-        )}
       </CardContent>
     </Card>
   );
