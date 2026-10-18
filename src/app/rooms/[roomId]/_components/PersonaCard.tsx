@@ -257,7 +257,6 @@ export default function PersonaCard({ participant, roomId, isHost = false, volum
           <Tooltip><TooltipTrigger asChild><Button variant="outline" size="icon" className="h-8 w-8" aria-label={cardVolume > 0 ? `Mute ${displayName} for me` : `Unmute ${displayName} for me`} onClick={() => changeCardVolume(cardVolume > 0 ? 0 : lastVolume.current || 0.8)}>{cardVolume > 0 ? <Volume2 className="h-4 w-4" /> : <VolumeX className="h-4 w-4" />}</Button></TooltipTrigger><TooltipContent>{cardVolume > 0 ? 'Mute for me' : 'Unmute for me'}</TooltipContent></Tooltip>
           <Slider aria-label={`${displayName} volume`} value={[cardVolume]} onValueChange={(value) => changeCardVolume(value[0])} max={1} step={0.05} />
         </div>
-        )}
       </CardContent>
     </Card>
   );
