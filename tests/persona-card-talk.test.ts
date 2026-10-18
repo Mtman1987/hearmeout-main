@@ -93,7 +93,7 @@ test('Discord Activity panel is hidden by default and opened from the DJ card', 
   const userList = source('src/app/rooms/[roomId]/_components/UserList.tsx');
   const dj = source('src/app/rooms/[roomId]/_components/DJCard.tsx');
   assert.match(page, /const \[showDiscordActivity, setShowDiscordActivity\] = useState\(false\)/);
-  assert.match(page, /isActivityRoomId\(roomId\) && showDiscordActivity \?/);
+  assert.match(page, /isActivityRoomId\(roomId\) \? \(\s*showDiscordActivity \?/);
   assert.match(page, /onToggleDiscordActivity=\{isActivityRoom \?/);
   assert.match(userList, /onToggleDiscordActivity/);
   assert.match(dj, /aria-label=\{showDiscordActivity \? 'Hide Discord Activity panel' : 'Show Discord Activity panel'\}/);
