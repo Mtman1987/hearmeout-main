@@ -83,7 +83,7 @@ export default function RoomSayPlayerAudio({ roomId, personaIds, volumes = {} }:
       }
       queueRef.current.unshift(next);
       blockedRef.current = true;
-      setStatus('The browser blocked audio playback. Tap Resume bot audio to allow it.');
+      setStatus("The browser blocked playback. Adjust this bot's volume to retry.");
     });
     setStatus('Speaking…');
   };
