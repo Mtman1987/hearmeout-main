@@ -60,13 +60,16 @@ async function callWorker(path: string, init?: RequestInit) {
   // every Fly runtime and should never make a healthy worker look unreachable.
   const urls = url.includes('hmo-dj-worker.fly.dev') ? [url, privateUrl] : [url];
   let lastError: any;
+  const attempts: Array<{ route: string; error: string; cause?: string }> = [];
   for (const candidate of urls) {
+    const route = candidate === url ? 'public-worker' : 'private-worker';
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 8000);
     try {
       const res = await fetch(`${candidate}${path}`, {
         ...init,
         signal: controller.signal,
+        cache: 'no-store',
         headers: getDjWorkerRequestHeaders({ 'Content-Type': 'application/json', ...(init?.headers || {}) }),
       });
       clearTimeout(timeout);
@@ -79,14 +82,27 @@ async function callWorker(path: string, init?: RequestInit) {
       lastError = error;
       console.error('[VoiceBridge] worker request failed', {
         path,
-        route: candidate === url ? 'configured' : 'private-fallback',
+        route,
         name: error?.name || 'Error',
         message: error?.message || String(error),
         cause: error?.cause?.code || error?.cause?.message || undefined,
       });
+      attempts.push({
+        route,
+        error: error?.message || String(error),
+        cause: error?.cause?.code || error?.cause?.message || undefined,
+      });
     }
   }
-  return { ok: false, status: 502, body: { error: `Worker unreachable: ${lastError?.message || lastError}` } };
+  const detail = attempts.map((attempt) => `${attempt.route}: ${attempt.cause || attempt.error}`).join(' | ');
+  return {
+    ok: false,
+    status: 502,
+    body: {
+      error: `Worker unreachable: ${detail || lastError?.message || lastError}`,
+      attempts,
+    },
+  };
 }
 
 function authorize(roomId: string, uid: string) {
