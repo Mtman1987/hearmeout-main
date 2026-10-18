@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useCallback, useEffect, useState } from 'react';
-import { Film, ListMusic, Music, Pause, Play, Radio, SkipForward, Volume2, VolumeX } from 'lucide-react';
+import { Film, ListMusic, MonitorPlay, Music, Pause, Play, Radio, SkipForward, Volume2, VolumeX } from 'lucide-react';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -40,6 +40,8 @@ interface DJCardProps {
   onOpenQueue: () => void;
   onOpenAddSong: () => void;
   onOpenWatch?: () => void;
+  showDiscordActivity?: boolean;
+  onToggleDiscordActivity?: () => void;
 }
 
 function effectivePlaybackPosition(playback?: SharedMusicState['playback'], now = Date.now()) {
@@ -75,7 +77,7 @@ function formatClock(value: number) {
 
 export default function DJCard({
   roomId, localVolume, onVolumeChange, canControl,
-  onOpenQueue, onOpenAddSong, onOpenWatch,
+  onOpenQueue, onOpenAddSong, onOpenWatch, showDiscordActivity = false, onToggleDiscordActivity,
 }: DJCardProps) {
   const musicSessionId = getRoomWatchSessionId(roomId, 'music');
   const [sharedState, setSharedState] = useState<SharedMusicState | null>(null);
@@ -285,10 +287,17 @@ export default function DJCard({
             </TooltipTrigger><TooltipContent><p>Add songs</p></TooltipContent></Tooltip>
             {onOpenWatch ? (
               <Tooltip><TooltipTrigger asChild>
-                <Button variant="ghost" size="icon" className="h-8 w-8" onClick={onOpenWatch}>
+                <Button variant="ghost" size="icon" className="h-8 w-8" onClick={onOpenWatch} aria-label="Open music player">
                   <Film className="h-4 w-4" />
                 </Button>
               </TooltipTrigger><TooltipContent><p>Open music player</p></TooltipContent></Tooltip>
+            ) : null}
+            {onToggleDiscordActivity ? (
+              <Tooltip><TooltipTrigger asChild>
+                <Button variant={showDiscordActivity ? 'secondary' : 'ghost'} size="icon" className="h-8 w-8" onClick={onToggleDiscordActivity} aria-label={showDiscordActivity ? 'Hide Discord Activity panel' : 'Show Discord Activity panel'} aria-expanded={showDiscordActivity}>
+                  <MonitorPlay className="h-4 w-4" />
+                </Button>
+              </TooltipTrigger><TooltipContent><p>{showDiscordActivity ? 'Hide Discord Activity' : 'Show Discord Activity'}</p></TooltipContent></Tooltip>
             ) : null}
           </div>
 
