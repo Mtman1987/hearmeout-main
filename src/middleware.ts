@@ -13,6 +13,9 @@ const PUBLIC_PREFIXES = [
   '/api/webhooks/',
   '/api/discord/',
   '/api/worker/',
+  // Peer voice routes perform their own room-session/worker authorization;
+  // do not require a separate SPMT cookie before they can inspect that access.
+  '/api/peer-voice/',
   '/api/livekit/webhook',
   '/api/livekit-token',
   // Read-only configuration probe; exposes booleans only, never credentials.

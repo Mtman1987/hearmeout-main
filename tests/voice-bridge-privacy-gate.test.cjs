@@ -16,6 +16,7 @@ const dockerfile = read('worker/Dockerfile');
 const audioStatePatch = read('worker/scripts/patch-voice-bridge-audio-state.cjs');
 const peerRegistry = read('src/app/api/peer-voice/register/route.ts');
 const peerVoiceService = read('src/lib/peer-audio-service.ts');
+const middleware = read('src/middleware.ts');
 
 test('worker starts privacy-safe and gates only the HearMeOut voice lane', () => {
   assert.match(bridge, /roomVoiceOutboundEnabled = false/);
@@ -94,6 +95,11 @@ test('Discord bridge falls back to PeerJS when LiveKit is unavailable', () => {
   assert.match(peerVoiceService, /this\._peerId\.localeCompare\(remotePeerId\) > 0/);
   assert.match(peerVoiceService, /this\.peer\.call\(remotePeerId, this\.localStream\)/);
   assert.match(ui, /PeerJS fallback/);
+});
+
+test('PeerJS signaling reaches its own room-access guard without requiring SPMT middleware first', () => {
+  assert.match(middleware, /'\/api\/peer-voice\/'/);
+  assert.match(peerRegistry, /requireRoomVoiceAccess\(roomId\)/);
 });
 
 test('the voice-bridge API does not invite or join Athena/persona bots', () => {
