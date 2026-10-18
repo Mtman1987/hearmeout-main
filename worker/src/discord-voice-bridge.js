@@ -181,6 +181,7 @@ class VoiceBridge {
     this.peerSinks = new Map();
     this.peerPresenceTimer = null;
     this.transportSwitchPromise = null;
+    this.liveKitCleanupInProgress = false;
 
     // Per-user decoder state (no Room per user — just opus decode + PCM mix)
     this.userDecoders = new Map(); // userId -> { opusStream, decoder, stopped }
@@ -572,23 +573,28 @@ class VoiceBridge {
   }
 
   async cleanupLiveKitTransport() {
-    if (this.publishReconnectTimer) {
-      clearTimeout(this.publishReconnectTimer);
-      this.publishReconnectTimer = null;
-    }
-    for (const spec of this.listenerSpecs) {
-      if (spec.reconnectTimer) {
-        clearTimeout(spec.reconnectTimer);
-        spec.reconnectTimer = null;
+    this.liveKitCleanupInProgress = true;
+    try {
+      if (this.publishReconnectTimer) {
+        clearTimeout(this.publishReconnectTimer);
+        this.publishReconnectTimer = null;
       }
-      try { await spec.room?.disconnect(); } catch {}
+      for (const spec of this.listenerSpecs) {
+        if (spec.reconnectTimer) {
+          clearTimeout(spec.reconnectTimer);
+          spec.reconnectTimer = null;
+        }
+        try { await spec.room?.disconnect(); } catch {}
+      }
+      for (const sourceKey of Array.from(this.mixSources.keys())) this.detachMixSource(sourceKey);
+      try { await this.publishRoom?.disconnect(); } catch {}
+      this.publishRoom = null;
+      this.mixedSource = null;
+      this.mixedTrack = null;
+      this.listenerSpecs = [];
+    } finally {
+      this.liveKitCleanupInProgress = false;
     }
-    for (const sourceKey of Array.from(this.mixSources.keys())) this.detachMixSource(sourceKey);
-    try { await this.publishRoom?.disconnect(); } catch {}
-    this.publishRoom = null;
-    this.mixedSource = null;
-    this.mixedTrack = null;
-    this.listenerSpecs = [];
   }
 
   async switchToPeerFallback(reason) {
@@ -1005,7 +1011,7 @@ class VoiceBridge {
 
     this.publishRoom = new Room();
     this.publishRoom.on(RoomEvent.Disconnected, (reason) => {
-      if (this.stopped || this.peerFallback) return;
+      if (this.stopped || this.peerFallback || this.liveKitCleanupInProgress) return;
       this.schedulePublisherReconnect(String(reason || 'disconnected'));
     });
 
