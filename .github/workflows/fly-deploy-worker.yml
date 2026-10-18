@@ -92,6 +92,7 @@ jobs:
           if [ "$DEPLOY_TARGET" = "media" ]; then args+=(--process-groups dj,activity); fi
           flyctl deploy . --config worker/fly.toml --dockerfile worker/Dockerfile --remote-only --ha=false --yes "${args[@]}"
       - name: Check Lounge and Spotlight feeds
+        if: steps.scope.outputs.target != 'dj'
         run: |
           set -euo pipefail
           for port in 4444 4445 4446; do
