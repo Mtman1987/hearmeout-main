@@ -18,15 +18,18 @@ test('HearMeOut exposes a room-scoped Say queue poll that checks bot roster memb
   assert.match(route, /Cache-Control': 'no-store'/);
 });
 
-test('room UI activates and plays the room-scoped bot speech queue', () => {
+test('room UI automatically activates the room-scoped bot speech queue without a separate player bar', () => {
   const player = source('src/app/rooms/[roomId]/_components/RoomSayPlayerAudio.tsx');
   const userList = source('src/app/rooms/[roomId]/_components/UserList.tsx');
   const middleware = source('src/middleware.ts');
   assert.match(userList, /RoomSayPlayerAudio/);
+  assert.match(userList, /volumeByPersona=\{volumeByPersona\}/);
+  assert.match(userList, /onUserGestureReady=\{registerAudioGesture\}/);
   assert.match(player, /api\/rooms\/persona-speech/);
   assert.match(player, /new Audio\(next\.audioUrl\)/);
   assert.match(player, /audio\.play\(\)/);
-  assert.match(player, /Enable bot audio/);
-  assert.match(player, /Resume bot audio/);
+  assert.match(player, /autoStartedKeyRef/);
+  assert.match(player, /className="sr-only" aria-live="polite"/);
+  assert.doesNotMatch(player, /Enable bot audio|Resume bot audio/);
   assert.match(middleware, /api\/rooms\/persona-speech/);
 });

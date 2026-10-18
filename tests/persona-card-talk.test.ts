@@ -79,9 +79,35 @@ test('bot talk details collapse behind the mic control without unmounting the Sa
 
   assert.match(card, /aria-expanded=\{talkPanelOpen\}/);
   assert.match(card, /\{talkPanelOpen && \(/);
-  assert.match(card, /\{!metadata\.sayPlayer && \(/);
+  assert.match(card, /const currentVolume = metadata\.sayPlayer \? \(volumeOverride \?\? 0\.8\) : volume/);
+  assert.match(card, /onVolumeInteraction\?\.\(\)/);
   assert.match(userList, /speechPersonaIds\.length > 0 && <RoomSayPlayerAudio/);
+  assert.match(userList, /volumeByPersona=\{volumeByPersona\}/);
+  assert.match(userList, /volumeOverride=\{volumeByPersona\[personaId\] \?\? 0\.8\}/);
   assert.match(userList, /sayPlayer:\s*true/);
+});
+
+
+test('Discord Activity is hidden by default and can be toggled from the DJ card', () => {
+  const page = source('src/app/rooms/[roomId]/page.tsx');
+  const userList = source('src/app/rooms/[roomId]/_components/UserList.tsx');
+  const dj = source('src/app/rooms/[roomId]/_components/DJCard.tsx');
+
+  assert.match(page, /const \[showActivityPanel, setShowActivityPanel\] = useState\(false\)/);
+  assert.match(page, /showActivityPanel \? \(/);
+  assert.match(page, /if \(isActivityRoom\) \{ setShowActivityPanel\(\(visible\) => !visible\); return; \}/);
+  assert.match(userList, /watchButtonLabel\?: string/);
+  assert.match(dj, /watchButtonLabel \|\| 'Open music player'/);
+});
+
+test('Discord bridge channel and secondary controls stay collapsed behind icon buttons', () => {
+  const bridge = source('src/app/rooms/[roomId]/_components/VoiceBridgeCard.tsx');
+
+  assert.match(bridge, /aria-label=\{showSetup \? 'Hide Discord bridge connection settings'/);
+  assert.match(bridge, /\{showSetup && \(/);
+  assert.match(bridge, /aria-label=\{showAdvanced \? 'Hide Discord bridge advanced settings'/);
+  assert.match(bridge, /\{showAdvanced && \(/);
+  assert.match(bridge, /Enable voice bridge/);
 });
 
 test('bridge card shows one active Discord speaker avatar without rendering a roster', () => {
