@@ -22,11 +22,13 @@ test('room UI activates and plays the room-scoped bot speech queue', () => {
   const player = source('src/app/rooms/[roomId]/_components/RoomSayPlayerAudio.tsx');
   const userList = source('src/app/rooms/[roomId]/_components/UserList.tsx');
   const middleware = source('src/middleware.ts');
-  assert.match(userList, /RoomSayPlayerAudio/);
+  assert.match(userList, /RoomSayPlayerAudio roomId=\{roomId\} personaIds=\{speechPersonaIds\} volumes=\{volumesByPersona\}/);
   assert.match(player, /api\/rooms\/persona-speech/);
   assert.match(player, /new Audio\(next\.audioUrl\)/);
   assert.match(player, /audio\.play\(\)/);
-  assert.match(player, /Enable bot audio/);
-  assert.match(player, /Resume bot audio/);
+  assert.match(player, /useState\(true\)/);
+  assert.match(player, /hmo-resume-bot-audio/);
+  assert.match(player, /return null;/);
+  assert.doesNotMatch(player, /Enable bot audio|Resume bot audio|Bot reply volume/);
   assert.match(middleware, /api\/rooms\/persona-speech/);
 });
