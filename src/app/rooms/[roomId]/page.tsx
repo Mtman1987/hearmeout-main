@@ -687,7 +687,7 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
     const [peerAudioBlocked, setPeerAudioBlocked] = useState(false);
     const [localVolume, setLocalVolume] = useState(0.5);
     const [showDJ, setShowDJ] = useState(false);
-    const [showActivityPanel, setShowActivityPanel] = useState(false);
+    const [showDiscordActivity, setShowDiscordActivity] = useState(false);
     const [showVoiceBridge, setShowVoiceBridge] = useState(false);
     const isActivityRoom = isActivityRoomId(roomId);
 
@@ -1153,11 +1153,9 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
                           showDJ={showDJ}
                           onOpenQueue={() => openPopout('watch', { width: 760, height: 700 }, { source: 'musicQueue', sessionScope: isStreamMode ? 'overlay' : 'discord', roomId, canControl: isOwner || isActivityRoom, initialTab: 'music' })}
                           onOpenAddSong={() => openPopout('addSong', { width: 460, height: 560 }, { source: 'addSong', sessionScope: isStreamMode ? 'overlay' : 'discord', roomId, canControl: isOwner })}
-                          onOpenWatch={() => {
-                            if (isActivityRoom) { setShowActivityPanel((visible) => !visible); return; }
-                            openPopout('watch', { width: 760, height: 700 }, { source: 'musicWatch', sessionScope: isStreamMode ? 'overlay' : 'discord', roomId, canControl: isOwner || isActivityRoom, initialTab: 'music' });
-                          }}
-                          watchButtonLabel={isActivityRoom ? (showActivityPanel ? 'Hide Discord Activity' : 'Show Discord Activity') : 'Open music player'}
+                          onOpenWatch={() => openPopout('watch', { width: 760, height: 700 }, { source: 'musicWatch', sessionScope: isStreamMode ? 'overlay' : 'discord', roomId, canControl: isOwner || isActivityRoom, initialTab: 'music' })}
+                          showDiscordActivity={showDiscordActivity}
+                          onToggleDiscordActivity={isActivityRoom ? () => setShowDiscordActivity((open) => !open) : undefined}
                           voiceEnabled={voiceReady || voiceFallbackActive}
                           voicePeerFallback={voiceFallbackActive}
                           peerConnectedPeerIds={Array.from(peerVoiceStreams.keys())}
@@ -1166,12 +1164,12 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
                           peerAudioBlocked={peerAudioBlocked}
                           onEnablePeerAudio={unlockPeerAudio}
                         />
-                        {isActivityRoom ? (
-                          showActivityPanel ? (
-                            <DiscordActivityEmbedCard
-                              canPause={isOwner}
-                              onOpenControls={(kind) => openPopout('watch', { width: 760, height: 700 }, { source: 'musicWatch', sessionScope: isStreamMode ? 'overlay' : 'discord', roomId, canControl: isOwner || isActivityRoom, initialTab: kind })}
-                            />
+                        {isActivityRoomId(roomId) ? (
+                          showDiscordActivity ? (
+                          <DiscordActivityEmbedCard
+                            canPause={isOwner}
+                            onOpenControls={(kind) => openPopout('watch', { width: 760, height: 700 }, { source: 'musicWatch', sessionScope: isStreamMode ? 'overlay' : 'discord', roomId, canControl: isOwner || isActivityRoom, initialTab: kind })}
+                          />
                           ) : null
                         ) : (
                           <SharedWatchCard
