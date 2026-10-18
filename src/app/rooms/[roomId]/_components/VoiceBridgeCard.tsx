@@ -31,6 +31,8 @@ type BridgeState = {
   };
   worker?: {
     running?: boolean;
+    transport?: 'livekit' | 'peerjs';
+    peerFallback?: boolean;
     discordSpeakers?: number;
     appSources?: number;
     roomVoiceOutboundEnabled?: boolean;
@@ -290,7 +292,7 @@ export function VoiceBridgeCard({ roomId }: { roomId: string }) {
             {busy ? <LoaderCircle className="h-4 w-4 animate-spin" /> : null}
             <div>
               <Label className="cursor-pointer">Enable voice bridge</Label>
-              {running && status ? <p className="text-xs text-muted-foreground">{status.discordSpeakers ?? 0} Discord speaker(s) · {status.appSources ?? 0} app voice(s)</p> : null}
+              {running && status ? <p className="text-xs text-muted-foreground">{status.transport === 'peerjs' ? 'PeerJS fallback' : 'LiveKit'} · {status.discordSpeakers ?? 0} Discord speaker(s) · {status.appSources ?? 0} app voice(s)</p> : null}
             </div>
           </div>
           <Switch checked={running} disabled={busy} onCheckedChange={(checked) => setBridge(checked)} />
