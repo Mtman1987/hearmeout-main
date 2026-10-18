@@ -51,7 +51,7 @@ export function isPersonaParticipant(participant: Participant) {
   return participant.identity.startsWith('persona:') || !!parsePersonaMetadata(participant.metadata);
 }
 
-export default function PersonaCard({ participant, roomId, isHost = false }: { participant: Participant; roomId: string; isHost?: boolean }) {
+export default function PersonaCard({ participant, roomId, isHost = false, volumeOverride, onVolumeOverrideChange, onVolumeUserGesture }: { participant: Participant; roomId: string; isHost?: boolean; volumeOverride?: number; onVolumeOverrideChange?: (volume: number) => void; onVolumeUserGesture?: () => void }) {
   const { toast } = useToast();
   const metadata = parsePersonaMetadata(participant.metadata) || {};
   const displayName = metadata.displayName || participant.name || participant.identity.replace(/^persona:/, '') || 'StreamWeaver Persona';
@@ -67,12 +67,13 @@ export default function PersonaCard({ participant, roomId, isHost = false }: { p
   const lastVolume = React.useRef(1);
   const recorderRef = React.useRef<ReturnType<typeof captureMicrophone> | null>(null);
   const mountedRef = React.useRef(true);
+  const cardVolume = metadata.sayPlayer && typeof volumeOverride === 'number' ? volumeOverride : volume;
 
   React.useEffect(() => {
     const remote = participant as RemoteParticipant;
-    if (volume > 0) lastVolume.current = volume;
-    if (typeof remote.setVolume === 'function') remote.setVolume(volume);
-  }, [participant, volume]);
+    if (cardVolume > 0) lastVolume.current = cardVolume;
+    if (!metadata.sayPlayer && typeof remote.setVolume === 'function') remote.setVolume(volume);
+  }, [participant, volume, cardVolume, metadata.sayPlayer]);
 
   React.useEffect(() => {
     mountedRef.current = true;
@@ -153,6 +154,14 @@ export default function PersonaCard({ participant, roomId, isHost = false }: { p
   };
 
   const talkBusy = talkStatus === 'transcribing' || talkStatus === 'sending';
+  const changeCardVolume = (next: number) => {
+    if (metadata.sayPlayer && onVolumeOverrideChange) {
+      onVolumeOverrideChange(next);
+      onVolumeUserGesture?.();
+    } else {
+      setVolume(next);
+    }
+  };
 
   return (
     <Card className="flex h-full flex-col">
@@ -244,10 +253,9 @@ export default function PersonaCard({ participant, roomId, isHost = false }: { p
         </div>
         )}
 
-        {!metadata.sayPlayer && (
         <div className="mt-auto flex items-center gap-2">
-          <Tooltip><TooltipTrigger asChild><Button variant="outline" size="icon" className="h-8 w-8" onClick={() => setVolume((current) => current > 0 ? 0 : lastVolume.current)}>{volume > 0 ? <Volume2 className="h-4 w-4" /> : <VolumeX className="h-4 w-4" />}</Button></TooltipTrigger><TooltipContent>{volume > 0 ? 'Mute for me' : 'Unmute for me'}</TooltipContent></Tooltip>
-          <Slider aria-label={`${displayName} volume`} value={[volume]} onValueChange={(value) => setVolume(value[0])} max={1} step={0.05} />
+          <Tooltip><TooltipTrigger asChild><Button variant="outline" size="icon" className="h-8 w-8" aria-label={cardVolume > 0 ? `Mute ${displayName} for me` : `Unmute ${displayName} for me`} onClick={() => changeCardVolume(cardVolume > 0 ? 0 : lastVolume.current || 0.8)}>{cardVolume > 0 ? <Volume2 className="h-4 w-4" /> : <VolumeX className="h-4 w-4" />}</Button></TooltipTrigger><TooltipContent>{cardVolume > 0 ? 'Mute for me' : 'Unmute for me'}</TooltipContent></Tooltip>
+          <Slider aria-label={`${displayName} volume`} value={[cardVolume]} onValueChange={(value) => changeCardVolume(value[0])} max={1} step={0.05} />
         </div>
         )}
       </CardContent>
