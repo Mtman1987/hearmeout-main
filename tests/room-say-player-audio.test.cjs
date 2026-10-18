@@ -28,7 +28,7 @@ test('room UI activates and plays the room-scoped bot speech queue', () => {
   assert.match(player, /audio\.play\(\)/);
   assert.match(player, /useState\(true\)/);
   assert.match(player, /hmo-resume-bot-audio/);
-  assert.match(player, /return null;/);
+  assert.match(player, /sr-only.*aria-live="polite"/);
   assert.doesNotMatch(player, /Enable bot audio|Resume bot audio|Bot reply volume/);
   assert.match(middleware, /api\/rooms\/persona-speech/);
 });
