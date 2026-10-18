@@ -54,16 +54,24 @@ function readConfig(room: any): VoiceBridgeConfig {
 async function callWorker(path: string, init?: RequestInit) {
   const url = getDjWorkerUrl();
   if (!url) return { ok: false, status: 503, body: { error: 'Worker not configured' } };
-  try {
-    const res = await fetch(`${url}${path}`, {
-      ...init,
-      headers: getDjWorkerRequestHeaders({ 'Content-Type': 'application/json', ...(init?.headers || {}) }),
-    });
-    const body = await res.json().catch(() => ({}));
-    return { ok: res.ok, status: res.status, body };
-  } catch (error: any) {
-    return { ok: false, status: 502, body: { error: `Worker unreachable: ${error?.message || error}` } };
+  const privateUrl = 'http://dj.process.hmo-dj-worker.internal:3002';
+  const urls = url.includes('hmo-dj-worker.fly.dev') ? [privateUrl, url] : [url];
+  let lastError: any;
+  for (const candidate of urls) {
+    try {
+      const res = await fetch(`${candidate}${path}`, {
+        ...init,
+        headers: getDjWorkerRequestHeaders({ 'Content-Type': 'application/json', ...(init?.headers || {}) }),
+      });
+      const body = await res.json().catch(() => ({}));
+      // A real HTTP response proves this route is reachable; preserve its status
+      // rather than masking worker-level errors with a different network route.
+      return { ok: res.ok, status: res.status, body };
+    } catch (error: any) {
+      lastError = error;
+    }
   }
+  return { ok: false, status: 502, body: { error: `Worker unreachable: ${lastError?.message || lastError}` } };
 }
 
 function authorize(roomId: string, uid: string) {
