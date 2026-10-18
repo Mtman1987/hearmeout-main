@@ -30,6 +30,7 @@ export default function RoomSayPlayerAudio({ roomId, personaIds, volumes = {} }:
   const enabledRef = useRef(true);
   const volumesRef = useRef<Record<string, number>>(volumes);
   const activeIdsRef = useRef<Set<string>>(new Set(ids));
+  const activePersonaRef = useRef<string | null>(null);
   const playNextRef = useRef<() => void>(() => {});
 
   enabledRef.current = enabled;
@@ -53,13 +54,17 @@ export default function RoomSayPlayerAudio({ roomId, personaIds, volumes = {} }:
     const requestedVolume = Number(volumesRef.current[next.personaId] ?? 0.8);
     audio.volume = Math.max(0, Math.min(1, Number.isFinite(requestedVolume) ? requestedVolume : 0.8));
     audioRef.current = audio;
+    activePersonaRef.current = next.personaId;
 
     const finish = (failed: boolean) => {
       if (settled) return;
       settled = true;
       cursorsRef.current.set(next.personaId, Math.max(cursorsRef.current.get(next.personaId) || 0, next.id));
       playingRef.current = false;
-      if (audioRef.current === audio) audioRef.current = null;
+      if (audioRef.current === audio) {
+        audioRef.current = null;
+        activePersonaRef.current = null;
+      }
       audio.pause();
       if (failed) setStatus('A bot reply audio file failed. Still listening for the next reply.');
       else setStatus('Bot audio enabled · listening for replies.');
@@ -72,7 +77,10 @@ export default function RoomSayPlayerAudio({ roomId, personaIds, volumes = {} }:
       if (settled) return;
       settled = true;
       playingRef.current = false;
-      if (audioRef.current === audio) audioRef.current = null;
+      if (audioRef.current === audio) {
+        audioRef.current = null;
+        activePersonaRef.current = null;
+      }
       queueRef.current.unshift(next);
       blockedRef.current = true;
       setStatus('The browser blocked audio playback. Tap Resume bot audio to allow it.');
@@ -80,6 +88,14 @@ export default function RoomSayPlayerAudio({ roomId, personaIds, volumes = {} }:
     setStatus('Speaking…');
   };
   playNextRef.current = playNext;
+
+  useEffect(() => {
+    const activePersonaId = activePersonaRef.current;
+    const currentAudio = audioRef.current;
+    if (!activePersonaId || !currentAudio) return;
+    const requestedVolume = Number(volumes[activePersonaId] ?? 0.8);
+    currentAudio.volume = Math.max(0, Math.min(1, Number.isFinite(requestedVolume) ? requestedVolume : 0.8));
+  }, [volumes]);
 
   useEffect(() => {
     const resumeAfterUserGesture = () => {
@@ -146,6 +162,5 @@ export default function RoomSayPlayerAudio({ roomId, personaIds, volumes = {} }:
 
   // The queue listener is intentionally invisible. Per-bot volume and mute
   // controls live on each Say Player bot card instead of in a separate player bar.
-  return null;
-}  );
+  return <span className="sr-only" aria-live="polite">{status}</span>;
 }
