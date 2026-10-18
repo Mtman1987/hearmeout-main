@@ -102,7 +102,7 @@ test('Discord Activities keeps shared session selection but uses the movable con
   assert.match(page, /Open \{selectedLane\.label\} Controls/);
   assert.match(page, /onOpenControls=\{\(kind\) => openPopout\('watch'/);
   assert.doesNotMatch(page, /title=\{\x60\$\{selectedLane\.label\} Discord Activity playback\x60\}/);
-  assert.match(page, /voiceFallbackFailed \|\| !voiceFallbackActive/);
+  assert.match(page, /!voiceFallbackActive \|\| voiceFallbackFailed \|\| !peerVoiceRef\.current\?\.active/);
   assert.match(userList, /Your browser blocked incoming P2P audio/);
   assert.match(userList, /Enable P2P Audio/);
 });
