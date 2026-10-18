@@ -105,3 +105,11 @@ test('PeerJS signaling reaches its own room-access guard without requiring SPMT 
 test('the voice-bridge API does not invite or join Athena/persona bots', () => {
   assert.doesNotMatch(api, /\/api\/bots\/session|\/persona|athena/i);
 });
+
+test('bridge server/channel dropdowns and secondary switches are collapsed behind accessible icon controls', () => {
+  assert.match(ui, /showConnectionSettings && \(/);
+  assert.match(ui, /aria-label="Discord server and channel settings"/);
+  assert.match(ui, /showAdvancedSettings && \(/);
+  assert.match(ui, /aria-label="Discord bridge secondary settings"/);
+  assert.match(ui, /setBridge\(checked\)/);
+});
