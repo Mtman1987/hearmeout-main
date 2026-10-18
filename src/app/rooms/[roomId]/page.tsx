@@ -212,7 +212,7 @@ const ACTIVITY_WATCH_LANES: Array<{ kind: WatchMediaKind; label: string; session
     { kind: 'music', label: 'Music', sessionId: getRoomWatchSessionId(ACTIVITY_ROOM_ID, 'music') },
 ];
 
-function DiscordActivityEmbedCard({ canPause = false }: { canPause?: boolean }) {
+function DiscordActivityEmbedCard({ canPause = false, onOpenControls }: { canPause?: boolean; onOpenControls: (kind: WatchMediaKind) => void }) {
     const [states, setStates] = useState<Record<string, WatchCardState | null>>({});
     const [selectedKind, setSelectedKind] = useState<WatchMediaKind>('movie');
 
@@ -283,15 +283,13 @@ function DiscordActivityEmbedCard({ canPause = false }: { canPause?: boolean }) 
                 </div>
             </CardHeader>
             <CardContent className="space-y-3">
-                <div className="aspect-video w-full overflow-hidden rounded-md border bg-black">
-                    <iframe
-                            src={selectedUrl}
-                            title={`${selectedLane.label} Discord Activity playback`}
-                            className="h-full w-full"
-                            allow="autoplay; fullscreen; encrypted-media; picture-in-picture"
-                            sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-presentation"
-                        />
-
+                <div className="flex aspect-video w-full flex-col items-center justify-center gap-3 rounded-md border border-dashed bg-muted/20 p-4 text-center">
+                    {selectedLane.kind === 'music' ? <Music className="h-7 w-7 text-muted-foreground" /> : <Film className="h-7 w-7 text-muted-foreground" />}
+                    <div className="space-y-1">
+                        <p className="text-sm font-medium">{selectedState?.current ? `${selectedLane.label} session is active` : `No active ${selectedLane.label.toLowerCase()} session`}</p>
+                        <p className="max-w-md text-xs text-muted-foreground">This shared session stays in sync. Open its movable controls when you need to play, skip, or adjust volume.</p>
+                    </div>
+                    <Button type="button" size="sm" onClick={() => onOpenControls(selectedKind)}>Open {selectedLane.label} Controls</Button>
                 </div>
                 {selectedState?.current ? (
                     <div className="min-w-0">
@@ -1129,7 +1127,7 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
                     />
 
                     <main className="flex-1 p-4 md:p-6 overflow-y-auto space-y-6">
-                        {(voiceFailureMessage || voiceFallbackActive || voiceFallbackFailed) && (
+                        {((!voiceFallbackActive || voiceFallbackFailed || !peerVoiceRef.current?.active) && (voiceFailureMessage || voiceFallbackFailed)) && (
                           <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-amber-500/50 bg-amber-500/10 p-3">
                             <div>
                               <p className="text-sm font-medium">
@@ -1164,7 +1162,10 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
                           onEnablePeerAudio={unlockPeerAudio}
                         />
                         {isActivityRoomId(roomId) ? (
-                          <DiscordActivityEmbedCard canPause={isOwner} />
+                          <DiscordActivityEmbedCard
+                            canPause={isOwner}
+                            onOpenControls={(kind) => openPopout('watch', { width: 760, height: 700 }, { source: 'musicWatch', sessionScope: isStreamMode ? 'overlay' : 'discord', roomId, canControl: isOwner || isActivityRoom, initialTab: kind })}
+                          />
                         ) : (
                           <SharedWatchCard
                             roomId={roomId}

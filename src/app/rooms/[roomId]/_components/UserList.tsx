@@ -185,6 +185,7 @@ function SayPlayerPersonaCards({ roomId, isHost }: { roomId: string; isHost: boo
             wakeNames: persona.wakeNames || [],
             aliases: persona.aliases || [],
             bot: true,
+            sayPlayer: true,
           }),
           isSpeaking: false,
           isMicrophoneEnabled: !persona.serverMuted,
