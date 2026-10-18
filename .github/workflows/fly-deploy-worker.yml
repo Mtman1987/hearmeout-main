@@ -68,10 +68,15 @@ jobs:
           if [ -n "${changed:-}" ] && ! echo "$changed" | grep -qvE '^worker/(fly.toml|scripts/run-role.sh)$'; then
             if git diff "$DEPLOY_BEFORE" "$DEPLOY_AFTER" -- worker/fly.toml | grep -q '^+.*activity'; then target=activity; fi
           fi
+          # Discord bridge transport changes affect only the persistent DJ process.
+          # Do not restart Lounge, Spotlight, or Activity for a bridge-only fix.
+          if [ "${changed:-}" = "worker/src/discord-voice-bridge.js" ]; then target=dj; fi
           echo "target=$target" >> "$GITHUB_OUTPUT"
       - name: Check Lounge state and routing
         run: |
           node --check worker/src/server.js
+          node --check worker/src/discord-voice-bridge.js
+          node --test tests/voice-bridge-privacy-gate.test.cjs
           node --test worker/tests/youtube-request-media.test.cjs worker/tests/discord-audio-stream.test.cjs
           node --test worker/tests/lounge-program.test.cjs
           node --check worker/src/spotlight-hls.js
@@ -83,7 +88,7 @@ jobs:
         run: |
           set -euo pipefail
           args=()
-          if [ "$DEPLOY_TARGET" = "spotlight" ] || [ "$DEPLOY_TARGET" = "lounge" ] || [ "$DEPLOY_TARGET" = "activity" ]; then args+=(--process-groups "$DEPLOY_TARGET"); fi
+          if [ "$DEPLOY_TARGET" = "spotlight" ] || [ "$DEPLOY_TARGET" = "lounge" ] || [ "$DEPLOY_TARGET" = "activity" ] || [ "$DEPLOY_TARGET" = "dj" ]; then args+=(--process-groups "$DEPLOY_TARGET"); fi
           if [ "$DEPLOY_TARGET" = "media" ]; then args+=(--process-groups dj,activity); fi
           flyctl deploy . --config worker/fly.toml --dockerfile worker/Dockerfile --remote-only --ha=false --yes "${args[@]}"
       - name: Check Lounge and Spotlight feeds
