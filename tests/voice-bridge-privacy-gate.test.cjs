@@ -75,6 +75,7 @@ test('Discord bridge falls back to PeerJS when LiveKit is unavailable', () => {
   assert.match(bridge, /this\.peerAudioSource\.onData\(/);
   assert.match(bridge, /hmo-zdiscord-/);
   assert.match(bridge, /LiveKit setup failed; trying PeerJS fallback/);
+  assert.match(bridge, /this\.stopped \|\| this\.liveKitCleanupInProgress \|\| this\.peerFallback/);
   assert.match(bridge, /RTCAudioSink/);
   assert.match(bridge, /transport: this\.peerFallback \? 'peerjs' : 'livekit'/);
   assert.match(peerRegistry, /isDjWorkerRequest/);
