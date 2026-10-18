@@ -32,6 +32,7 @@ export type PersonaMetadata = {
   ownerName?: string;
   idleAvatar?: string;
   talkingAvatar?: string;
+  sayPlayer?: boolean;
 };
 
 type TalkStatus = 'idle' | 'recording' | 'transcribing' | 'sending' | 'done' | 'error';
@@ -59,6 +60,7 @@ export default function PersonaCard({ participant, roomId, isHost = false }: { p
   const [volume, setVolume] = React.useState(1);
   const [pendingAction, setPendingAction] = React.useState('');
   const [talkStatus, setTalkStatus] = React.useState<TalkStatus>('idle');
+  const [talkPanelOpen, setTalkPanelOpen] = React.useState(false);
   const [talkTranscript, setTalkTranscript] = React.useState('');
   const [talkReply, setTalkReply] = React.useState('');
   const [talkError, setTalkError] = React.useState('');
@@ -168,6 +170,22 @@ export default function PersonaCard({ participant, roomId, isHost = false }: { p
           <div className="flex flex-wrap items-center gap-2">
             <p className="truncate text-lg font-bold">{displayName}</p>
             <Badge variant="secondary" className="gap-1"><Bot className="h-3 w-3" />BOT</Badge>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  type="button"
+                  variant={talkPanelOpen ? "secondary" : "ghost"}
+                  size="icon"
+                  className="h-7 w-7"
+                  aria-label={talkPanelOpen ? `Hide talk details for ${displayName}` : `Show talk controls for ${displayName}`}
+                  aria-expanded={talkPanelOpen}
+                  onClick={() => setTalkPanelOpen((open) => talkBusy || talkStatus === 'recording' ? true : !open)}
+                >
+                  <Mic className="h-4 w-4" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>{talkPanelOpen ? 'Hide talk details' : `Talk to ${displayName}`}</TooltipContent>
+            </Tooltip>
           </div>
           {metadata.ownerName && (
             <p className="mt-1 truncate text-xs text-muted-foreground">Owned by {metadata.ownerName}</p>
@@ -187,6 +205,7 @@ export default function PersonaCard({ participant, roomId, isHost = false }: { p
           </div>
         </div>
 
+        {talkPanelOpen && (
         <div className="rounded-lg border bg-muted/20 p-3">
           <Button
             type="button"
@@ -223,11 +242,14 @@ export default function PersonaCard({ participant, roomId, isHost = false }: { p
           ) : null}
           {talkError ? <div className="mt-2 text-sm text-destructive">{talkError}</div> : null}
         </div>
+        )}
 
+        {!metadata.sayPlayer && (
         <div className="mt-auto flex items-center gap-2">
           <Tooltip><TooltipTrigger asChild><Button variant="outline" size="icon" className="h-8 w-8" onClick={() => setVolume((current) => current > 0 ? 0 : lastVolume.current)}>{volume > 0 ? <Volume2 className="h-4 w-4" /> : <VolumeX className="h-4 w-4" />}</Button></TooltipTrigger><TooltipContent>{volume > 0 ? 'Mute for me' : 'Unmute for me'}</TooltipContent></Tooltip>
           <Slider aria-label={`${displayName} volume`} value={[volume]} onValueChange={(value) => setVolume(value[0])} max={1} step={0.05} />
         </div>
+        )}
       </CardContent>
     </Card>
   );
