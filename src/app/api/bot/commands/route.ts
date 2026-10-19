@@ -169,6 +169,21 @@ async function speakThroughSayPlayer(body: BotCommandBody, payload: any) {
 
   let deliveryTenantId = sayStreamKey || personaId;
   let queuedResult = await queueSpeech(deliveryTenantId);
+
+  // The hidden HearMeOut listener polls every 500 ms. When a reply races its
+  // first poll, StreamWeaver can correctly report no listener for that instant.
+  // Retry the room stream once after one poll interval; keep StreamWeaver's
+  // active-consumer guard intact and never retry a queue that already succeeded.
+  if (
+    queuedResult.skipped
+    && queuedResult.result?.reason === 'no-active-say-listener'
+    && sayStreamKey
+    && sayStreamKey !== personaId
+  ) {
+    await new Promise((resolve) => setTimeout(resolve, 650));
+    queuedResult = await queueSpeech(sayStreamKey);
+  }
+
   if (queuedResult.skipped && sayStreamKey && personaId && sayStreamKey !== personaId) {
     deliveryTenantId = personaId;
     queuedResult = await queueSpeech(deliveryTenantId);
