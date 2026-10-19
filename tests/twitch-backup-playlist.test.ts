@@ -42,6 +42,11 @@ test('requests play before fallback, natural end resumes it, and stale end canno
  assert.equal(a.current?.requestId,id);assert.equal(a.backupPlaylist.cursor,1);
  await controlWatchSession(a.id,'next',undefined,undefined,{isAdmin:true});
  assert.equal(a.current?.item.title,'Backup B');
+ await controlTwitchBackupPlaylist(a.id,'shuffle-off');
+ assert.equal(a.backupPlaylist.shuffleEnabled,false);
+ assert.deepEqual(a.backupPlaylist.entries.map((entry:any)=>entry.id),a.backupPlaylist.sourceEntries.map((entry:any)=>entry.id));
+ await controlTwitchBackupPlaylist(a.id,'shuffle-on');
+ assert.equal(a.backupPlaylist.shuffleEnabled,true);
  await controlTwitchBackupPlaylist(a.id,'off');
  assert.equal(a.current,null);assert.equal(a.backupPlaylist.enabled,false);
  assert.equal(b.current?.requestId,'other-current');assert.equal(lounge.current?.requestId,'lounge-current');
