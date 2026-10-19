@@ -17,7 +17,7 @@ test('room wake handling uses the active local Companion listener, not a failed 
   assert.match(listener, /LOCAL_COMPANION_WAKE_EVENT/);
   assert.match(listener, /resolveBotInvocation\(transcript, targets\)/);
   assert.match(listener, /sendRoomPersonaCommand/);
-  assert.match(listener, /pre-wake transcript text is not sent by HearMeOut/);
+  assert.match(listener, /if \(!transcript\) return/);
   assert.doesNotMatch(listener, /new MediaRecorder|SpeechRecognition/);
 });
 
