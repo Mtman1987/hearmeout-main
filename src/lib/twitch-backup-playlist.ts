@@ -1,7 +1,7 @@
 import { getDjWorkerUrl } from './dj-worker-config';
 import { getDjWorkerRequestHeaders } from './dj-worker-auth';
 export type BackupPlaylistEntry = { id: string; title: string; duration: number; artist: string; thumbnail: string };
-export type BackupPlaylist = { enabled: boolean; url: string; title: string; entries: BackupPlaylistEntry[]; cursor: number; shuffleVersion?: number };
+export type BackupPlaylist = { enabled: boolean; url: string; title: string; entries: BackupPlaylistEntry[]; cursor: number; shuffleVersion?: number; shuffleEnabled?: boolean; sourceEntries?: BackupPlaylistEntry[] };
 
 export function shuffleBackupEntries<T>(entries: T[], random: () => number = Math.random) {
   const shuffled = [...entries];
@@ -31,7 +31,7 @@ export async function importBackupPlaylist(value: string): Promise<BackupPlaylis
     const entries = (Array.isArray(data.entries) ? data.entries : []).filter((entry: BackupPlaylistEntry) =>
       /^[A-Za-z0-9_-]{11}$/.test(entry?.id || '') && !seen.has(entry.id) && Boolean(seen.add(entry.id)));
     if (!response.ok || !entries.length) throw new Error(data.error || 'No public playlist videos found.');
-    return { enabled: true, url, title: data.title || 'Backup music', entries: shuffleBackupEntries(entries), cursor: 0, shuffleVersion: 1 };
+    return { enabled: true, url, title: data.title || 'Backup music', entries: shuffleBackupEntries(entries), sourceEntries: entries, shuffleEnabled: true, cursor: 0, shuffleVersion: 1 };
   }
   const seen = new Set<string>();
   const entries = playlist.videos.filter(video => /^[A-Za-z0-9_-]{11}$/.test(video.id || '') && !seen.has(video.id!) && Boolean(seen.add(video.id!))).map(video => ({
@@ -46,16 +46,19 @@ export function nextBackupEntry(playlist?: BackupPlaylist, random: () => number 
   // Existing tenant playlists persisted before shuffle was added retain their original order.
   // Migrate each saved playlist exactly once before playing its first track.
   if (playlist.shuffleVersion !== 1) {
-    playlist.entries = shuffleBackupEntries(playlist.entries, random);
+    playlist.sourceEntries ||= [...playlist.entries];
+    if (playlist.shuffleEnabled !== false) playlist.entries = shuffleBackupEntries(playlist.entries, random);
     playlist.cursor = 0;
     playlist.shuffleVersion = 1;
   }
   const cursor = Math.max(0, Math.floor(Number(playlist.cursor) || 0)) % playlist.entries.length;
   const entry = playlist.entries[cursor];
   if (cursor + 1 >= playlist.entries.length) {
-    playlist.entries = shuffleBackupEntries(playlist.entries, random);
-    if (playlist.entries.length > 1 && playlist.entries[0].id === entry.id) {
-      [playlist.entries[0], playlist.entries[1]] = [playlist.entries[1], playlist.entries[0]];
+    if (playlist.shuffleEnabled !== false) {
+      playlist.entries = shuffleBackupEntries(playlist.entries, random);
+      if (playlist.entries.length > 1 && playlist.entries[0].id === entry.id) {
+        [playlist.entries[0], playlist.entries[1]] = [playlist.entries[1], playlist.entries[0]];
+      }
     }
     playlist.cursor = 0;
   } else {
@@ -64,5 +67,5 @@ export function nextBackupEntry(playlist?: BackupPlaylist, random: () => number 
   return entry;
 }
 export function backupPlaylistSummary(playlist?: BackupPlaylist) {
-  return { enabled: Boolean(playlist?.enabled), url: playlist?.url || '', title: playlist?.title || '', count: playlist?.entries.length || 0 };
+  return { enabled: Boolean(playlist?.enabled), url: playlist?.url || '', title: playlist?.title || '', count: playlist?.entries.length || 0, shuffleEnabled: Boolean(playlist?.entries.length) && playlist?.shuffleEnabled !== false };
 }

@@ -1235,8 +1235,18 @@ export async function controlTwitchBackupPlaylist(sessionId: string, control: st
     if (!session.backupPlaylist?.entries.length) throw new Error('Set a playlist first with !playlist <YouTube playlist URL>.');
     session.backupPlaylist.enabled = true;
   } else if (control === 'off' && session.backupPlaylist) session.backupPlaylist.enabled = false;
-  else if (!['status', 'off'].includes(control)) throw new Error('Unsupported playlist control.');
-  if (control !== 'status') {
+  else if (control === 'shuffle-on' || control === 'shuffle-off') {
+    if (!session.backupPlaylist?.entries.length) throw new Error('Set a playlist first with !playlist <YouTube playlist URL>.');
+    const playlist = session.backupPlaylist;
+    playlist.sourceEntries ||= [...playlist.entries];
+    playlist.shuffleEnabled = control === 'shuffle-on';
+    playlist.entries = playlist.shuffleEnabled
+      ? (await import('@/lib/twitch-backup-playlist')).shuffleBackupEntries(playlist.sourceEntries)
+      : [...playlist.sourceEntries];
+    playlist.shuffleVersion = 1;
+    playlist.cursor = 0;
+  } else if (!['status', 'shuffle-status', 'off'].includes(control)) throw new Error('Unsupported playlist control.');
+  if (!['status', 'shuffle-status'].includes(control)) {
     if ((!session.backupPlaylist?.enabled) && session.current?.requestedBy.userId === 'backup-playlist') {
       session.current = session.queue.shift() || null;
       session.playback = { ...session.playback, status: session.current ? 'playing' : 'idle', position: 0, updatedAt: Date.now() };
