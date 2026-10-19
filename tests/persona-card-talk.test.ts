@@ -84,8 +84,15 @@ test('bot talk details collapse behind the mic control without unmounting the Sa
   assert.match(card, /aria-label=\{`\$\{displayName\} volume`\}/);
   assert.doesNotMatch(card, /\{!metadata\.sayPlayer && \(/);
   assert.match(userList, /speechPersonaIds\.length > 0 && <RoomSayPlayerAudio/);
+  assert.match(userList, /const activePersonas = \(users \|\| \[\]\)\.filter/);
+  assert.match(userList, /const speechPersonaIds = activePersonas/);
+  assert.match(userList, /isLocal=\{participant === localParticipant\}/);
   assert.match(userList, /sayPlayer:\s*true/);
   assert.match(userList, /volumesByPersona/);
+
+  const commands = source('src/app/api/bot/commands/route.ts');
+  assert.match(commands, /queuedResult\.skipped && sayStreamKey && personaId/);
+  assert.match(commands, /deliveryTenantId = personaId/);
 });
 
 test('Discord Activity panel is hidden by default and opened from the DJ card', () => {
