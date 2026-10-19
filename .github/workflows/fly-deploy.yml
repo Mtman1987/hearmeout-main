@@ -26,23 +26,22 @@ jobs:
       - name: Verify Twitch queue isolation and Discord Activity startup
         run: npm ci --ignore-scripts && node --import tsx --test tests/twitch-media-isolation.test.ts tests/twitch-backup-playlist.test.ts tests/overlay-media-end.test.ts tests/discord-activity-startup.test.ts tests/activity-worker-routing.test.ts tests/discord-media-source.test.ts tests/stream-voice-access.test.ts tests/room-voice-access.test.cjs tests/livekit-persona-audio.test.ts tests/room-say-player-audio.test.cjs tests/voice-bridge-privacy-gate.test.cjs
       - uses: superfly/flyctl-actions/setup-flyctl@master
-      - name: Ensure private persona voice service credential
+      - name: Provision persona voice credential from existing shared secret
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN_MAIN || secrets.FLY_API_TOKEN }}
+          BOT_SECRET_KEY: ${{ secrets.BOT_SECRET_KEY }}
+          STREAMWEAVER_SECRET: ${{ secrets.STREAMWEAVER_SECRET }}
+          HEARMEOUT_PERSONA_VOICE_SECRET: ${{ secrets.HEARMEOUT_PERSONA_VOICE_SECRET }}
         run: |
           set -euo pipefail
-          hmo_has=false
-          sw_has=false
-          flyctl secrets list --app hearmeout-main --json | jq -e 'any(.[]; .Name == "HEARMEOUT_PERSONA_VOICE_SECRET")' >/dev/null && hmo_has=true || true
-          flyctl secrets list --app streamweaver-new --json | jq -e 'any(.[]; .Name == "HEARMEOUT_PERSONA_VOICE_SECRET")' >/dev/null && sw_has=true || true
-          if [ "$hmo_has" = true ] && [ "$sw_has" = true ]; then
-            echo "Persona voice service credential already exists on both apps."
-          else
-            voice_secret="$(openssl rand -hex 32)"
-            flyctl secrets set HEARMEOUT_PERSONA_VOICE_SECRET="$voice_secret" --app hearmeout-main
-            flyctl secrets set HEARMEOUT_PERSONA_VOICE_SECRET="$voice_secret" --app streamweaver-new
-            unset voice_secret
+          voice_secret="${HEARMEOUT_PERSONA_VOICE_SECRET:-${BOT_SECRET_KEY:-${STREAMWEAVER_SECRET:-}}}"
+          if [ -z "$voice_secret" ]; then
+            flyctl secrets unset HEARMEOUT_PERSONA_VOICE_SECRET --app hearmeout-main || true
+            echo "::error::No existing shared persona voice credential is available in repository/organization secrets; refusing to create a mismatched credential."
+            exit 1
           fi
+          flyctl secrets set HEARMEOUT_PERSONA_VOICE_SECRET="$voice_secret" --app hearmeout-main
+          unset voice_secret
       - name: Deploy live app
         run: flyctl deploy . --remote-only --config fly.toml --build-arg BUILD_SHA=${GITHUB_SHA} --build-arg GITHUB_SHA=${GITHUB_SHA} --build-arg GH_SHA=${GITHUB_SHA} --yes
         env:
