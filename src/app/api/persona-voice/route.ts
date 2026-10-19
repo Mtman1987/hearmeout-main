@@ -54,7 +54,7 @@ export async function POST(request: NextRequest) {
   if (!roomId || !tenantId || !voice || !['save', 'test'].includes(action)) {
     return NextResponse.json({ error: 'roomId, botId, voice, and a valid action are required' }, { status: 400 });
   }
-  const access = await authorize(request, roomId);
+  const access = await authorize(request, roomId, tenantId);
   if (access.error) return access.error;
   return upstream('/api/internal/hearmeout/persona-voice', {
     method: 'POST',
