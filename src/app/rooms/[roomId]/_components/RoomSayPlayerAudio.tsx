@@ -4,11 +4,18 @@ import { useEffect, useRef, useState } from 'react';
 
 type SayItem = { id: number; audioUrl: string; personaId: string };
 
+// Keep a room tab bounded even if autoplay is blocked or the Say API catches up.
+const SAY_POLL_INTERVAL_MS = 1_000;
+const MAX_PENDING_SAY_ITEMS = 24;
+
 async function readRoomQueue(roomId: string, personaId: string, cursor?: number, latest = false) {
   const params = new URLSearchParams({ roomId, personaId });
   if (latest) params.set('latest', '1');
   else params.set('after', String(Math.max(0, cursor || 0)));
-  const response = await fetch(`/api/rooms/persona-speech?${params.toString()}`, { cache: 'no-store' });
+  const response = await fetch(`/api/rooms/persona-speech?${params.toString()}`, {
+    cache: 'no-store',
+    signal: typeof AbortSignal.timeout === 'function' ? AbortSignal.timeout(10_000) : undefined,
+  });
   const payload = await response.json().catch(() => ({}));
   if (!response.ok || payload?.ok === false) {
     throw new Error(String(payload?.error || 'Room speech queue is unavailable'));
@@ -43,6 +50,7 @@ export default function RoomSayPlayerAudio({ roomId, personaIds, volumes = {} }:
     if (!next) return;
     if (!activeIdsRef.current.has(next.personaId)) {
       cursorsRef.current.set(next.personaId, Math.max(cursorsRef.current.get(next.personaId) || 0, next.id));
+      seenRef.current.delete(`${next.personaId}:${next.id}`);
       queueMicrotask(() => playNextRef.current());
       return;
     }
@@ -60,6 +68,7 @@ export default function RoomSayPlayerAudio({ roomId, personaIds, volumes = {} }:
       if (settled) return;
       settled = true;
       cursorsRef.current.set(next.personaId, Math.max(cursorsRef.current.get(next.personaId) || 0, next.id));
+      seenRef.current.delete(`${next.personaId}:${next.id}`);
       playingRef.current = false;
       if (audioRef.current === audio) {
         audioRef.current = null;
@@ -136,6 +145,17 @@ export default function RoomSayPlayerAudio({ roomId, personaIds, volumes = {} }:
             if (!id || id <= (cursorsRef.current.get(result.personaId) || 0) || !audioUrl || seenRef.current.has(key)) continue;
             seenRef.current.add(key);
             queueRef.current.push({ id, audioUrl, personaId: result.personaId });
+
+            // Never let a blocked browser or a large backlog grow memory forever.
+            while (queueRef.current.length > MAX_PENDING_SAY_ITEMS) {
+              const dropped = queueRef.current.shift();
+              if (!dropped) break;
+              seenRef.current.delete(`${dropped.personaId}:${dropped.id}`);
+              cursorsRef.current.set(
+                dropped.personaId,
+                Math.max(cursorsRef.current.get(dropped.personaId) || 0, dropped.id),
+              );
+            }
           }
         }
         playNextRef.current();
@@ -147,7 +167,7 @@ export default function RoomSayPlayerAudio({ roomId, personaIds, volumes = {} }:
     };
 
     void poll();
-    const timer = window.setInterval(() => void poll(), 500);
+    const timer = window.setInterval(() => void poll(), SAY_POLL_INTERVAL_MS);
     return () => {
       stopped = true;
       window.clearInterval(timer);

@@ -8,8 +8,7 @@ import WakeWordListener from './WakeWordListener';
 import React from "react";
 import { useSession } from '@/hooks/use-session';
 import { useCollection, useDoc } from '@/hooks/use-db';
-import { useLocalParticipant, useRemoteParticipants, useTracks, AudioTrack } from '@livekit/components-react';
-import { Track } from 'livekit-client';
+import { useLocalParticipant, useRemoteParticipants } from '@livekit/components-react';
 import '@livekit/components-styles';
 import { canManageRoom } from '@/lib/room-access';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
@@ -221,18 +220,6 @@ function LiveKitParticipants({ isHost, roomId, localP2PSpeaking }: { isHost: boo
     (participant) => !isHiddenBridgeParticipant(participant?.identity) && !isRoomTtsParticipant(participant?.identity),
   );
 
-  const allAudioTracks = useTracks(
-    [Track.Source.Microphone, Track.Source.Unknown],
-    { onlySubscribed: true }
-  ).filter(track =>
-    track.publication
-    && !track.participant.isLocal
-    && !isHiddenBridgeParticipant(track.participant.identity)
-    // RoomAudioPlayback already renders this system TTS track. Excluding it
-    // here prevents the same synthesized voice from being played twice.
-    && !isRoomTtsParticipant(track.participant.identity)
-  );
-
   return (
     <>
       {/* One authoritative human-speech path for the entire room. It records
@@ -242,9 +229,6 @@ function LiveKitParticipants({ isHost, roomId, localP2PSpeaking }: { isHost: boo
           but deliberately excluded from STT so a spoken bot reply cannot wake
           another bot and feed back into itself. */}
       <WakeWordListener roomId={roomId} remoteParticipants={voiceInputParticipants} />
-      {allAudioTracks.map((trackRef) => (
-        <AudioTrack key={trackRef.publication.trackSid} trackRef={trackRef} volume={1.0} muted={false} />
-      ))}
       {allParticipants.map((participant) => (
         isPersonaParticipant(participant)
           ? <PersonaCard key={participant.sid} participant={participant} roomId={roomId} isHost={isHost} />
