@@ -45,7 +45,7 @@ test('requests play before fallback, natural end resumes it, and stale end canno
  assert.equal(a.current?.item.title,'Backup B');
  await controlTwitchBackupPlaylist(a.id,'shuffle-off');
  assert.equal(a.backupPlaylist.shuffleEnabled,false);
- assert.deepEqual(a.backupPlaylist.entries.map((entry:any)=>entry.id),a.backupPlaylist.sourceEntries.map((entry:any)=>entry.id));
+ assert.deepEqual(a.backupPlaylist.entries.map((entry:any)=>entry.id),a.backupPlaylist.sourceEntries!.map((entry:any)=>entry.id));
  await controlTwitchBackupPlaylist(a.id,'shuffle-on');
  assert.equal(a.backupPlaylist.shuffleEnabled,true);
  await controlTwitchBackupPlaylist(a.id,'off');

@@ -9,6 +9,7 @@ const root = path.resolve(__dirname, '..');
 const read = (relativePath) => fs.readFileSync(path.join(root, relativePath), 'utf8');
 
 const bridge = read('worker/src/discord-voice-bridge.js');
+const workerServer = read('worker/src/server.js');
 const bootstrap = read('worker/src/persona-bootstrap.js');
 const api = read('src/app/api/discord/voice-bridge/route.ts');
 const ui = read('src/app/rooms/[roomId]/_components/VoiceBridgeCard.tsx');
@@ -17,6 +18,11 @@ const audioStatePatch = read('worker/scripts/patch-voice-bridge-audio-state.cjs'
 const peerRegistry = read('src/app/api/peer-voice/register/route.ts');
 const peerVoiceService = read('src/lib/peer-audio-service.ts');
 const middleware = read('src/middleware.ts');
+
+test('browser, persona worker, and Discord bridge prefer the same LiveKit project URL', () => {
+  assert.match(workerServer, /const BRIDGE_LIVEKIT_URL =[\s\S]{0,200}process\.env\.NEXT_PUBLIC_LIVEKIT_URL\s*\|\|\s*process\.env\.LIVEKIT_URL/);
+  assert.match(bootstrap, /process\.env\.NEXT_PUBLIC_LIVEKIT_URL\s*\|\|\s*process\.env\.LIVEKIT_URL/);
+});
 
 test('worker starts privacy-safe and gates only the HearMeOut voice lane', () => {
   assert.match(bridge, /roomVoiceOutboundEnabled = false/);

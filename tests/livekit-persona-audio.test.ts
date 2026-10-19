@@ -24,7 +24,8 @@ test('typed and spoken persona replies use the canonical StreamWeaver Say broadc
   assert.match(client, /speak:\s*true/);
   assert.match(route, /\/api\/say\/queue/);
   assert.match(route, /tts\?\.streamKey/);
-  assert.match(route, /tenantId:\s*sayStreamKey\s*\|\|\s*personaId/);
+  assert.match(route, /queuedResult\.skipped && sayStreamKey && personaId/);
+  assert.match(route, /deliveryTenantId = personaId/);
   assert.match(route, /text:\s*responseText/);
   assert.doesNotMatch(route, /\/persona\/speak/);
 });
