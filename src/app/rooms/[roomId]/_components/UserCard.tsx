@@ -52,36 +52,15 @@ export default function UserCard({ participant, isLocal, isHost, roomId, isP2PSp
   const participantMeta = participant.metadata ? JSON.parse(participant.metadata) : {};
   const userRecordId = participantMeta.uid || identity;
   const [trackAudioLevel, setTrackAudioLevel] = useState(0);
-  const [wakeTestHeardSpeech, setWakeTestHeardSpeech] = useState(false);
-  const [micPauseReason, setMicPauseReason] = useState<string | null>(
-    isLocal ? 'Microphone muted on entry. Unmute once, then say “Athena …” or another joined persona wake name whenever you want the AI.' : null,
-  );
   const isSpeaking = participant.isSpeaking;
 
   const setMicEnabled = useCallback(async (enabled: boolean) => {
     if (!isLocal || !room) return;
     await room.localParticipant.setMicrophoneEnabled(enabled);
     if (enabled) {
-      setMicPauseReason(null);
       return;
     }
-    setMicPauseReason('Microphone muted. Unmute once to resume room audio and wake-name commands.');
   }, [isLocal, room]);
-
-  useEffect(() => {
-    if (!isLocal || typeof window === 'undefined') return;
-    let clearTimer: ReturnType<typeof setTimeout> | undefined;
-    const handleWakeSpeechDetected = () => {
-      setWakeTestHeardSpeech(true);
-      if (clearTimer) clearTimeout(clearTimer);
-      clearTimer = setTimeout(() => setWakeTestHeardSpeech(false), 900);
-    };
-    window.addEventListener('hmo-local-wake-speech-detected', handleWakeSpeechDetected);
-    return () => {
-      window.removeEventListener('hmo-local-wake-speech-detected', handleWakeSpeechDetected);
-      if (clearTimer) clearTimeout(clearTimer);
-    };
-  }, [isLocal]);
 
   useEffect(() => {
     if (!participant) return;
@@ -106,7 +85,6 @@ export default function UserCard({ participant, isLocal, isHost, roomId, isP2PSp
     if (!isLocal) return;
     if (firestoreUser?.serverMuted) {
       void room.localParticipant.setMicrophoneEnabled(false).then(() => {
-        setMicPauseReason('A room moderator muted your microphone. You are still listening.');
       });
     }
   }, [firestoreUser?.serverMuted, isLocal, room]);
@@ -206,7 +184,6 @@ export default function UserCard({ participant, isLocal, isHost, roomId, isP2PSp
   const handleToggleMic = async () => {
     if (!isLocal || !room) return;
     if (firestoreUser?.serverMuted && !participant.isMicrophoneEnabled) {
-      setMicPauseReason('A room moderator muted your microphone. You are still listening.');
       return;
     }
     await setMicEnabled(!participant.isMicrophoneEnabled);
@@ -288,7 +265,7 @@ export default function UserCard({ participant, isLocal, isHost, roomId, isP2PSp
             <div className="flex items-start gap-4">
                 <div className="relative">
                     {isLocal && isP2PSpeaking && <div aria-label="P2P audio activity" title="P2P microphone audio detected" className="pointer-events-none absolute -inset-1 rounded-full border-4 border-blue-500 shadow-[0_0_0_2px_rgba(59,130,246,0.25)]" />}
-                    <Avatar className={cn("h-16 w-16 transition-all", (isSpeaking || (isLocal && wakeTestHeardSpeech)) && !isMuted && "ring-4 ring-primary ring-offset-2 ring-offset-card", (isSpeaking || (isLocal && wakeTestHeardSpeech)) && isMuted && "ring-4 ring-destructive ring-offset-2 ring-offset-card")}>
+                    <Avatar className={cn("h-16 w-16 transition-all", isSpeaking && !isMuted && "ring-4 ring-primary ring-offset-2 ring-offset-card", isSpeaking && isMuted && "ring-4 ring-destructive ring-offset-2 ring-offset-card")}>
                         <AvatarImage src={photoURL} alt={displayName || 'User'} />
                         <AvatarFallback>{displayName?.charAt(0)?.toUpperCase() || 'U'}</AvatarFallback>
                     </Avatar>
@@ -342,11 +319,6 @@ export default function UserCard({ participant, isLocal, isHost, roomId, isP2PSp
                 </div>
             </div>
             <div className="space-y-2 flex-grow flex flex-col justify-end">
-                {isLocal && micPauseReason && (
-                  <p className="rounded-md border border-amber-500/40 bg-amber-500/10 px-2 py-1.5 text-xs text-muted-foreground">
-                    {micPauseReason}
-                  </p>
-                )}
                 <SpeakingIndicator audioLevel={isMuted ? 0 : (isSpeaking ? trackAudioLevel : 0)} />
                 {!isLocal && (
                     <div className="flex items-center gap-2">
