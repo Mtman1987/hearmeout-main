@@ -156,11 +156,16 @@ function SayPlayerPersonaCards({ roomId, isHost }: { roomId: string; isHost: boo
   const liveParticipants = useRemoteParticipants();
   const { data: users } = useCollection<PeerPresence & { personaId?: string; ownerTenantId?: string; ownerName?: string; wakeNames?: string[]; aliases?: string[]; serverMuted?: boolean; avatar?: string; idleAvatar?: string; talkingAvatar?: string }>(`rooms/${roomId}/users`, { pollInterval: 3000 });
   const livePersonaIds = new Set(liveParticipants.filter(isPersonaParticipant).map((participant) => participant.identity.replace(/^persona:/, '')));
-  const personas = (users || []).filter((presence) =>
-    (presence.bot === true || presence.presenceKind === 'persona')
-    && !livePersonaIds.has(String(presence.ownerTenantId || presence.personaId || presence.id || '').replace(/^persona:/, ''))
+  // Every active persona speaks through Say Player, whether its card is backed
+  // by a LiveKit participant or by persistent room presence. Keep audio listening
+  // independent from card rendering so live personas never lose their speech.
+  const activePersonas = (users || []).filter(
+    (presence) => presence.bot === true || presence.presenceKind === 'persona'
   );
-  const speechPersonaIds = personas
+  const personas = activePersonas.filter((presence) =>
+    !livePersonaIds.has(String(presence.ownerTenantId || presence.personaId || presence.id || '').replace(/^persona:/, ''))
+  );
+  const speechPersonaIds = activePersonas
     .map((presence) => String(presence.ownerTenantId || presence.personaId || presence.id || '').replace(/^persona:/, ''))
     .filter(Boolean);
   return (
@@ -243,7 +248,7 @@ function LiveKitParticipants({ isHost, roomId, localP2PSpeaking }: { isHost: boo
       {allParticipants.map((participant) => (
         isPersonaParticipant(participant)
           ? <PersonaCard key={participant.sid} participant={participant} roomId={roomId} isHost={isHost} />
-          : <UserCard key={participant.sid} participant={participant} isLocal={participant.isLocal} isP2PSpeaking={participant.isLocal && localP2PSpeaking} isHost={isHost} roomId={roomId} />
+          : <UserCard key={participant.sid} participant={participant} isLocal={participant === localParticipant} isP2PSpeaking={participant === localParticipant && localP2PSpeaking} isHost={isHost} roomId={roomId} />
       ))}
     </>
   );
