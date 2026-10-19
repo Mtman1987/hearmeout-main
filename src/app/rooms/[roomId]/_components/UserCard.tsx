@@ -27,6 +27,17 @@ import { useRouter } from 'next/navigation';
 
 interface RoomParticipantData { id: string; uid: string; displayName: string; photoURL: string; twitchChannel?: string; discordGuildId?: string; streamMode?: boolean; serverMuted?: boolean; }
 
+function parseParticipantMetadata(metadata?: string | null): Record<string, any> {
+  if (!metadata) return {};
+  try {
+    const parsed = JSON.parse(metadata);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    // A stale/malformed remote participant must not crash the entire room UI.
+    return {};
+  }
+}
+
 export default function UserCard({ participant, isLocal, isHost, roomId, isP2PSpeaking = false }: { participant: LivekitClient.Participant; isLocal: boolean; isHost?: boolean; roomId: string; isP2PSpeaking?: boolean; }) {
   const { user } = useSession();
   const { toast } = useToast();
@@ -49,7 +60,7 @@ export default function UserCard({ participant, isLocal, isHost, roomId, isP2PSp
   const { devices: audioOutputDevices, activeDeviceId: activeAudioOutputDeviceId, setDevice: setAudioOutputDevice } = useAudioDevice({ kind: 'audiooutput' });
 
   const { name, identity } = participant;
-  const participantMeta = participant.metadata ? JSON.parse(participant.metadata) : {};
+  const participantMeta = parseParticipantMetadata(participant.metadata);
   const userRecordId = participantMeta.uid || identity;
   const [trackAudioLevel, setTrackAudioLevel] = useState(0);
   const isSpeaking = participant.isSpeaking;
