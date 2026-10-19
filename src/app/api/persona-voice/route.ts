@@ -21,7 +21,7 @@ async function authorize(request: NextRequest, roomId: string, tenantId: string)
 }
 
 async function upstream(path: string, init: RequestInit) {
-  const secret = String(process.env.BOT_SECRET_KEY || process.env.STREAMWEAVER_SECRET || '').trim();
+  const secret = String(process.env.HEARMEOUT_PERSONA_VOICE_SECRET || process.env.BOT_SECRET_KEY || process.env.STREAMWEAVER_SECRET || '').trim();
   if (!secret) return NextResponse.json({ error: 'Voice settings service is not configured' }, { status: 503 });
   const response = await fetch(`${STREAMWEAVER_BASE_URL}${path}`, {
     ...init,
