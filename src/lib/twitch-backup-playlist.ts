@@ -67,5 +67,5 @@ export function nextBackupEntry(playlist?: BackupPlaylist, random: () => number 
   return entry;
 }
 export function backupPlaylistSummary(playlist?: BackupPlaylist) {
-  return { enabled: Boolean(playlist?.enabled), url: playlist?.url || '', title: playlist?.title || '', count: playlist?.entries.length || 0, shuffleEnabled: playlist?.shuffleEnabled !== false };
+  return { enabled: Boolean(playlist?.enabled), url: playlist?.url || '', title: playlist?.title || '', count: playlist?.entries.length || 0, shuffleEnabled: Boolean(playlist?.entries.length) && playlist?.shuffleEnabled !== false };
 }
