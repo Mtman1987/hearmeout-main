@@ -4,7 +4,6 @@ import UserCard from "./UserCard";
 import RoomSayPlayerAudio from './RoomSayPlayerAudio';
 import PersonaCard, { isPersonaParticipant } from './PersonaCard';
 import DJCard from "./DJCard";
-import MobileVoiceControl from './MobileVoiceControl';
 import WakeWordListener from './WakeWordListener';
 import React from "react";
 import { useSession } from '@/hooks/use-session';
@@ -238,7 +237,6 @@ function LiveKitParticipants({ isHost, roomId, localP2PSpeaking }: { isHost: boo
           but deliberately excluded from STT so a spoken bot reply cannot wake
           another bot and feed back into itself. */}
       <WakeWordListener roomId={roomId} remoteParticipants={voiceInputParticipants} />
-      <MobileVoiceControl roomId={roomId} remoteParticipants={voiceInputParticipants} />
       {allAudioTracks.map((trackRef) => (
         <AudioTrack key={trackRef.publication.trackSid} trackRef={trackRef} volume={1.0} muted={false} />
       ))}
