@@ -25,6 +25,15 @@ test('typed and spoken persona replies use the canonical StreamWeaver Say broadc
   assert.match(route, /\/api\/say\/queue/);
   assert.match(route, /tts\?\.streamKey/);
   assert.match(route, /queuedResult\.skipped && sayStreamKey && personaId/);
+  // An early reply may race the hidden listener's first 500 ms poll. Retry
+  // once only for the explicit no-listener result, before the public-key fallback.
+  assert.match(route, /queuedResult\.result\?\.reason === 'no-active-say-listener'/);
+  assert.match(route, /setTimeout\(resolve, 650\)/);
+  assert.ok(
+    route.indexOf("queuedResult.result?.reason === 'no-active-say-listener'")
+      < route.indexOf('deliveryTenantId = personaId'),
+    'the room listener retry must happen before fallback to the public persona stream',
+  );
   assert.match(route, /deliveryTenantId = personaId/);
   assert.match(route, /text:\s*responseText/);
   assert.doesNotMatch(route, /\/persona\/speak/);
