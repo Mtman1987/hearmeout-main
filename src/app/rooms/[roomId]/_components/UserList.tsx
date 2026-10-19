@@ -6,7 +6,6 @@ import PersonaCard, { isPersonaParticipant } from './PersonaCard';
 import DJCard from "./DJCard";
 import MobileVoiceControl from './MobileVoiceControl';
 import WakeWordListener from './WakeWordListener';
-import StellaWakeTestListener from './StellaWakeTestListener';
 import React from "react";
 import { useSession } from '@/hooks/use-session';
 import { useCollection, useDoc } from '@/hooks/use-db';
@@ -239,7 +238,6 @@ function LiveKitParticipants({ isHost, roomId, localP2PSpeaking }: { isHost: boo
           but deliberately excluded from STT so a spoken bot reply cannot wake
           another bot and feed back into itself. */}
       <WakeWordListener roomId={roomId} remoteParticipants={voiceInputParticipants} />
-      <StellaWakeTestListener roomId={roomId} remoteParticipants={voiceInputParticipants} />
       <MobileVoiceControl roomId={roomId} remoteParticipants={voiceInputParticipants} />
       {allAudioTracks.map((trackRef) => (
         <AudioTrack key={trackRef.publication.trackSid} trackRef={trackRef} volume={1.0} muted={false} />
@@ -269,7 +267,7 @@ export default function UserList({ roomId, localVolume, onVolumeChange, showDJ, 
             <Button size="sm" onClick={onEnablePeerAudio}>Enable P2P Audio</Button>
           </div>
         )}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
+        <div className="grid grid-cols-2 gap-3 sm:gap-6 sm:grid-cols-2 lg:grid-cols-3">
           {showDJ && (
             <DJCard
               roomId={roomId}
