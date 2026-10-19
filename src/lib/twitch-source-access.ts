@@ -7,7 +7,7 @@ function sourceToken(tenantId: string) {
 }
 export function twitchSourceUrl(tenantId: string, base: string) {
   const url = new URL('/overlay/twitch-' + tenantId.toLowerCase(), base);
-  url.search = new URLSearchParams({ media: 'music', clean: '1', muted: '0', volume: '1', sourceKey: sourceToken(tenantId) }).toString();
+  url.search = new URLSearchParams({ media: 'music', clean: '1', nowPlaying: '1', muted: '0', volume: '1', sourceKey: sourceToken(tenantId) }).toString();
   return url.toString();
 }
 export function validTwitchSource(tenantId: string, token: string) {

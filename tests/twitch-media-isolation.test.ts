@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { twitchMusicSessionId } from '../src/lib/twitch-media-scope';
 import { twitchSourceUrl, validTwitchSource } from '../src/lib/twitch-source-access';
+import { shouldRenderCleanIdle, shouldShowNowPlayingPanel } from '../src/lib/overlay-display';
 import { isPublicActivityRequest } from '../src/lib/activity-access';
 process.env.HEARMEOUT_SERVICE_SECRET = 'isolated-test-service-key';
 process.env.WATCH_STATE_FILE = join(mkdtempSync(join(tmpdir(), 'twitch-media-test-')), 'state.json');
@@ -15,11 +16,19 @@ test('two broadcaster sources target separate queues and cannot use each otherâ€
   assert.notEqual(twitchMusicSessionId('123'), twitchMusicSessionId('456'));
   assert.equal(a.pathname, '/overlay/twitch-123');
   assert.equal(a.searchParams.get('media'), 'music');
+  assert.equal(a.searchParams.get('nowPlaying'), '1');
   assert(validTwitchSource('123', a.searchParams.get('sourceKey')!));
   assert(!validTwitchSource('456', a.searchParams.get('sourceKey')!));
   assert(!validTwitchSource('123', b.searchParams.get('sourceKey')!));
   assert(!validTwitchSource('../123', 'bad'));
   assert.throws(() => twitchMusicSessionId(''));
+});
+test('signed Twitch OBS sources keep now-playing visible in clean mode, even while loading', () => {
+  const visible = shouldShowNowPlayingPanel({ cleanMode: true, userPreference: false, sourceRequested: true });
+  assert.equal(visible, true);
+  assert.equal(shouldRenderCleanIdle({ cleanMode: true, hasPlaybackUrl: false, showNowPlayingPanel: visible }), false);
+  assert.equal(shouldShowNowPlayingPanel({ cleanMode: true, userPreference: true, sourceRequested: false }), false);
+  assert.equal(shouldRenderCleanIdle({ cleanMode: true, hasPlaybackUrl: false, showNowPlayingPanel: false }), true);
 });
 test('OBS session is readable without login; mutations are not public Activity exceptions', () => {
   assert(isPublicActivityRequest(new URL('https://hmo.test/api/watch/sessions/watch-twitch-123-music/state'), 'GET'));

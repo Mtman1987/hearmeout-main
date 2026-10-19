@@ -3,6 +3,17 @@ import { getDjWorkerRequestHeaders } from './dj-worker-auth';
 export type BackupPlaylistEntry = { id: string; title: string; duration: number; artist: string; thumbnail: string };
 export type BackupPlaylist = { enabled: boolean; url: string; title: string; entries: BackupPlaylistEntry[]; cursor: number };
 
+export function shuffleBackupEntries<T>(entries: T[], random: () => number = Math.random) {
+  const shuffled = [...entries];
+  for (let index = shuffled.length - 1; index > 0; index -= 1) {
+    const sample = Number(random());
+    const safeSample = Number.isFinite(sample) ? Math.max(0, Math.min(1, sample)) : 0;
+    const target = Math.min(index, Math.floor(safeSample * (index + 1)));
+    [shuffled[index], shuffled[target]] = [shuffled[target], shuffled[index]];
+  }
+  return shuffled;
+}
+
 export function publicPlaylistUrl(value: string) {
   const url = new URL(value);
   if (url.protocol !== 'https:' || !['youtube.com', 'www.youtube.com', 'm.youtube.com', 'music.youtube.com'].includes(url.hostname)
@@ -16,8 +27,11 @@ export async function importBackupPlaylist(value: string): Promise<BackupPlaylis
   if (!playlist?.videos?.length) {
     const response = await fetch(getDjWorkerUrl() + '/watch/youtube/playlist?url=' + encodeURIComponent(url), { headers: getDjWorkerRequestHeaders(), signal: AbortSignal.timeout(65000), cache: 'no-store' });
     const data = await response.json();
-    if (!response.ok || !data.entries?.length) throw new Error(data.error || 'No public playlist videos found.');
-    return { enabled: true, url, title: data.title || 'Backup music', entries: data.entries, cursor: 0 };
+    const seen = new Set<string>();
+    const entries = (Array.isArray(data.entries) ? data.entries : []).filter((entry: BackupPlaylistEntry) =>
+      /^[A-Za-z0-9_-]{11}$/.test(entry?.id || '') && !seen.has(entry.id) && Boolean(seen.add(entry.id)));
+    if (!response.ok || !entries.length) throw new Error(data.error || 'No public playlist videos found.');
+    return { enabled: true, url, title: data.title || 'Backup music', entries: shuffleBackupEntries(entries), cursor: 0 };
   }
   const seen = new Set<string>();
   const entries = playlist.videos.filter(video => /^[A-Za-z0-9_-]{11}$/.test(video.id || '') && !seen.has(video.id!) && Boolean(seen.add(video.id!))).map(video => ({
@@ -25,12 +39,21 @@ export async function importBackupPlaylist(value: string): Promise<BackupPlaylis
     artist: video.channel?.name || '', thumbnail: video.thumbnail?.url || '',
   }));
   if (!entries.length) throw new Error('No videos found. Make the playlist public or unlisted and try again.');
-  return { enabled: true, url, title: playlist.title || 'Backup music', entries, cursor: 0 };
+  return { enabled: true, url, title: playlist.title || 'Backup music', entries: shuffleBackupEntries(entries), cursor: 0 };
 }
-export function nextBackupEntry(playlist?: BackupPlaylist) {
+export function nextBackupEntry(playlist?: BackupPlaylist, random: () => number = Math.random) {
   if (!playlist?.enabled || !playlist.entries.length) return null;
-  const entry = playlist.entries[Math.max(0, playlist.cursor || 0) % playlist.entries.length];
-  playlist.cursor = ((playlist.cursor || 0) + 1) % playlist.entries.length;
+  const cursor = Math.max(0, Math.floor(Number(playlist.cursor) || 0)) % playlist.entries.length;
+  const entry = playlist.entries[cursor];
+  if (cursor + 1 >= playlist.entries.length) {
+    playlist.entries = shuffleBackupEntries(playlist.entries, random);
+    if (playlist.entries.length > 1 && playlist.entries[0].id === entry.id) {
+      [playlist.entries[0], playlist.entries[1]] = [playlist.entries[1], playlist.entries[0]];
+    }
+    playlist.cursor = 0;
+  } else {
+    playlist.cursor = cursor + 1;
+  }
   return entry;
 }
 export function backupPlaylistSummary(playlist?: BackupPlaylist) {

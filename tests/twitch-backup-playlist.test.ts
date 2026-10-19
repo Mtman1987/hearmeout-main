@@ -3,14 +3,23 @@ import assert from 'node:assert/strict';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { publicPlaylistUrl, nextBackupEntry } from '../src/lib/twitch-backup-playlist';
+import { publicPlaylistUrl, nextBackupEntry, shuffleBackupEntries } from '../src/lib/twitch-backup-playlist';
 process.env.WATCH_STATE_FILE=join(mkdtempSync(join(tmpdir(),'backup-playlist-')),'state.json');
 
-test('playlist imports accept only YouTube playlist URLs and rotate every entry', () => {
+test('playlist imports accept only YouTube playlist URLs and shuffle complete cycles', () => {
  assert.equal(publicPlaylistUrl('https://www.youtube.com/watch?v=abcdefghijk&list=PL1234567890'),'https://www.youtube.com/playlist?list=PL1234567890');
  assert.throws(()=>publicPlaylistUrl('https://example.com/playlist?list=PL1234567890'));
- const playlist:any={enabled:true,cursor:0,entries:[{id:'a'},{id:'b'}]};
- assert.equal(nextBackupEntry(playlist)?.id,'a');assert.equal(nextBackupEntry(playlist)?.id,'b');assert.equal(nextBackupEntry(playlist)?.id,'a');
+ const original=[{id:'a'},{id:'b'},{id:'c'}];
+ const shuffled=shuffleBackupEntries(original,()=>0);
+ assert.deepEqual(shuffled.map(entry=>entry.id),['b','c','a']);
+ assert.deepEqual(original.map(entry=>entry.id),['a','b','c']);
+ const playlist:any={enabled:true,cursor:0,entries:original};
+ const firstCycle=Array.from({length:3},()=>nextBackupEntry(playlist,()=>0)!.id);
+ const secondCycle=Array.from({length:3},()=>nextBackupEntry(playlist,()=>0)!.id);
+ assert.deepEqual([...firstCycle].sort(),['a','b','c']);
+ assert.deepEqual([...secondCycle].sort(),['a','b','c']);
+ assert.notEqual(firstCycle.at(-1),secondCycle[0]);
+ assert.equal(playlist.cursor,0);
  playlist.enabled=false;assert.equal(nextBackupEntry(playlist),null);
 });
 test('requests play before fallback, natural end resumes it, and stale end cannot advance again', async () => {

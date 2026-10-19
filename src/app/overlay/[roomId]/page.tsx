@@ -23,6 +23,7 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { usePopout } from '@/components/PopoutWidgets/PopoutProvider';
 import { createOverlayCompletionTracker, overlayEndTarget } from '@/lib/overlay-media-end';
+import { shouldRenderCleanIdle, shouldShowNowPlayingPanel } from '@/lib/overlay-display';
 import { twitchMusicSessionId } from '@/lib/twitch-media-scope';
 import { getRoomWatchSessionId } from '@/lib/watch-session';
 import { useCollection } from '@/hooks/use-db';
@@ -185,6 +186,7 @@ export default function OverlayPage() {
   const requestedLane = (searchParams.get('media') || searchParams.get('lane') || 'auto').toLowerCase();
   const lane: MediaLane = twitchTenant ? 'music' : requestedLane === 'music' || requestedLane === 'movie' ? requestedLane : 'auto';
   const cleanMode = ['1', 'true', 'yes', 'on'].includes(String(searchParams.get('clean') || '').toLowerCase());
+  const sourceRequestedNowPlaying = searchParams.get('nowPlaying') === '1';
   const hideIdle = cleanMode && searchParams.get('hideIdle') === '1';
   const directLoungeMode = cleanMode && roomId === 'system-spacemountainlive-lounge' && searchParams.get('direct') === '1';
   const volumeParam = searchParams.get('volume');
@@ -364,7 +366,8 @@ export default function OverlayPage() {
       )
     : '';
   const embeddedMode = Boolean(effectivePlaybackUrl && isEmbeddedVideoUrl(effectivePlaybackUrl));
-  const cleanIdle = cleanMode && !effectivePlaybackUrl;
+  const showNowPlayingPanel = shouldShowNowPlayingPanel({ cleanMode, userPreference: showNowPlaying, sourceRequested: sourceRequestedNowPlaying });
+  const cleanIdle = shouldRenderCleanIdle({ cleanMode, hasPlaybackUrl: Boolean(effectivePlaybackUrl), showNowPlayingPanel });
 
   useEffect(() => {
     if (!hideIdle) return;
@@ -989,7 +992,7 @@ export default function OverlayPage() {
         </div>
       )}
 
-      {!cleanMode && showNowPlaying && (
+      {showNowPlayingPanel && (
         <div style={{ position: 'absolute', left: 20, bottom: 20 }}>
           <div className="flex min-w-[320px] max-w-[520px] items-center gap-4 rounded-lg bg-black/80 p-4 shadow-2xl backdrop-blur-md">
             {mediaImage ? (
