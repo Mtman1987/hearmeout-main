@@ -2958,7 +2958,9 @@ app.get('/dj', authorizeWorker, (req, res) => {
 
 // ── Discord voice bridge ────────────────────────────────────────────────
 const BRIDGE_LIVEKIT_URL =
-  process.env.LIVEKIT_URL || process.env.NEXT_PUBLIC_LIVEKIT_URL || '';
+  // Match the browser and token generator: NEXT_PUBLIC_LIVEKIT_URL is the
+  // canonical project; a server-only LIVEKIT_URL is only a fallback.
+  process.env.NEXT_PUBLIC_LIVEKIT_URL || process.env.LIVEKIT_URL || '';
 
 // The bot token lives on the main app. Rather than duplicating the secret on
 // the worker, fetch it over the existing internal worker channel. Falls back to
