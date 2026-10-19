@@ -147,34 +147,50 @@ async function speakThroughSayPlayer(body: BotCommandBody, payload: any) {
   // Use the same StreamWeaver Say queue as !say instead of publishing persona
   // audio to the LiveKit RTC track. StreamWeaver's active Say Player is the
   // canonical browser-source broadcast path.
-  const sayResponse = await fetch(`${STREAMWEAVER_BASE_URL}/api/say/queue`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-    body: JSON.stringify({
-      tenantId: sayStreamKey || personaId,
-      text: responseText,
-      voice: text(body.voice, 128) || text(data?.tts?.voice, 128) || undefined,
-    }),
-    cache: 'no-store',
-    signal: typeof AbortSignal.timeout === 'function' ? AbortSignal.timeout(45000) : undefined,
-  }).catch(() => null);
+  // Prefer the room-scoped listener. Some existing browser/OBS setups only
+  // listen on the persona's public Say Player, so retry there only when the
+  // room-scoped queue explicitly says nobody is listening.
+  const queueSpeech = async (tenantId: string) => {
+    const response = await fetch(`${STREAMWEAVER_BASE_URL}/api/say/queue`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: JSON.stringify({
+        tenantId,
+        text: responseText,
+        voice: text(body.voice, 128) || text(data?.tts?.voice, 128) || undefined,
+      }),
+      cache: 'no-store',
+      signal: typeof AbortSignal.timeout === 'function' ? AbortSignal.timeout(45000) : undefined,
+    }).catch(() => null);
+    if (!response) return { response: null, result: {}, skipped: false };
+    const result = await response.json().catch(() => ({}));
+    return { response, result, skipped: result?.skipped === true };
+  };
 
-  if (!sayResponse) {
-    return { attempted: true, ok: false, error: 'StreamWeaver Say queue unavailable' };
+  let deliveryTenantId = sayStreamKey || personaId;
+  let queuedResult = await queueSpeech(deliveryTenantId);
+  if (queuedResult.skipped && sayStreamKey && personaId && sayStreamKey !== personaId) {
+    deliveryTenantId = personaId;
+    queuedResult = await queueSpeech(deliveryTenantId);
   }
-  const result = await sayResponse.json().catch(() => ({}));
-  const skipped = result?.skipped === true;
+
+  const sayResponse = queuedResult.response;
+  const result = queuedResult.result;
+  const skipped = queuedResult.skipped;
+  if (!sayResponse) {
+    return { attempted: true, ok: false, tenantId: deliveryTenantId, error: 'StreamWeaver Say queue unavailable' };
+  }
   const ok = sayResponse.ok && result?.ok !== false && !skipped;
   return {
     attempted: true,
     ok,
     status: sayResponse.status,
     delivered: result?.delivered || 'say-player',
-    tenantId: text(result?.tenantId, 160) || personaId,
+    tenantId: text(result?.tenantId, 160) || deliveryTenantId,
     queued: Number.isFinite(Number(result?.queued)) ? Number(result.queued) : 0,
     ...(skipped ? { reason: text(result?.reason, 200) || 'say-player-not-listening' } : {}),
     ...(!ok ? { error: text(result?.error, 500) || (skipped
-      ? 'No active StreamWeaver Say Player is listening for this persona tenant'
+      ? 'No active StreamWeaver Say Player is listening for either the room or persona stream'
       : 'StreamWeaver Say queue rejected the speech') } : {}),
   };
 }
