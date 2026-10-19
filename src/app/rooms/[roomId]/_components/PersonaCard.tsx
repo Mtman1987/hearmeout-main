@@ -4,7 +4,7 @@ import { captureMicrophone } from '@/lib/microphone-capture';
 
 import React from 'react';
 import type { Participant, RemoteParticipant } from 'livekit-client';
-import { Bot, LoaderCircle, Mic, MicOff, Radio, ShieldOff, Square, UserX, Volume2, VolumeX } from 'lucide-react';
+import { Bot, LoaderCircle, Mic, MicOff, Radio, Settings2, ShieldOff, Square, UserX, Volume2, VolumeX } from 'lucide-react';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent } from '@/components/ui/card';
@@ -64,6 +64,12 @@ export default function PersonaCard({ participant, roomId, isHost = false, volum
   const [talkTranscript, setTalkTranscript] = React.useState('');
   const [talkReply, setTalkReply] = React.useState('');
   const [talkError, setTalkError] = React.useState('');
+  const [voicePanelOpen, setVoicePanelOpen] = React.useState(false);
+  const [voiceOptions, setVoiceOptions] = React.useState<Array<{ id: string; label: string; gender: string; description: string }>>([]);
+  const [selectedVoice, setSelectedVoice] = React.useState('');
+  const [voiceBusy, setVoiceBusy] = React.useState(false);
+  const [voiceMessage, setVoiceMessage] = React.useState('');
+  const [voiceError, setVoiceError] = React.useState('');
   const lastVolume = React.useRef(1);
   const recorderRef = React.useRef<ReturnType<typeof captureMicrophone> | null>(null);
   const mountedRef = React.useRef(true);
@@ -154,6 +160,57 @@ export default function PersonaCard({ participant, roomId, isHost = false, volum
   };
 
   const talkBusy = talkStatus === 'transcribing' || talkStatus === 'sending';
+
+  const loadVoiceSettings = React.useCallback(async () => {
+    setVoiceBusy(true);
+    setVoiceError('');
+    setVoiceMessage('');
+    try {
+      const response = await fetch(`/api/persona-voice?roomId=${encodeURIComponent(roomId)}&botId=${encodeURIComponent(personaTargetId)}`, { cache: 'no-store' });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(String(payload?.error?.message || payload?.error || 'Could not load voice settings.'));
+      const data = payload?.data || payload;
+      setVoiceOptions(Array.isArray(data.voices) ? data.voices : []);
+      setSelectedVoice(String(data.voice || 'kokoro:af_heart'));
+    } catch (error) {
+      setVoiceError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setVoiceBusy(false);
+    }
+  }, [personaTargetId, roomId]);
+
+  const changeVoiceSetting = async (action: 'save' | 'test') => {
+    if (!selectedVoice || voiceBusy) return;
+    setVoiceBusy(true);
+    setVoiceError('');
+    setVoiceMessage(action === 'test' ? 'Generating voice sample…' : '');
+    try {
+      const response = await fetch('/api/persona-voice', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ roomId, botId: personaTargetId, voice: selectedVoice, action }),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(String(payload?.error?.message || payload?.error || 'Voice action failed.'));
+      const data = payload?.data || payload;
+      if (action === 'save') {
+        setVoiceMessage('Voice saved for this bot.');
+        toast({ title: 'Bot voice saved', description: `${displayName} will use the selected voice for future replies.` });
+      } else {
+        const audioDataUri = String(data.audioDataUri || '');
+        if (!audioDataUri.startsWith('data:audio/')) throw new Error('The voice service returned no playable sample.');
+        const audio = new Audio(audioDataUri);
+        await audio.play();
+        setVoiceMessage('Playing voice sample…');
+        audio.onended = () => setVoiceMessage('Voice sample finished.');
+      }
+    } catch (error) {
+      setVoiceError(error instanceof Error ? error.message : String(error));
+      setVoiceMessage('');
+    } finally {
+      setVoiceBusy(false);
+    }
+  };
   const changeCardVolume = (next: number) => {
     if (metadata.sayPlayer && onVolumeOverrideChange) {
       onVolumeOverrideChange(next);
@@ -179,6 +236,20 @@ export default function PersonaCard({ participant, roomId, isHost = false, volum
           <div className="flex flex-wrap items-center gap-2">
             <p className="truncate text-lg font-bold">{displayName}</p>
             <Badge variant="secondary" className="gap-1"><Bot className="h-3 w-3" />BOT</Badge>
+            {isHost && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button type="button" variant={voicePanelOpen ? 'secondary' : 'ghost'} size="icon" className="h-7 w-7" aria-label={`Voice settings for ${displayName}`} aria-expanded={voicePanelOpen} onClick={() => {
+                    const next = !voicePanelOpen;
+                    setVoicePanelOpen(next);
+                    if (next) void loadVoiceSettings();
+                  }}>
+                    <Settings2 className="h-4 w-4" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>Voice settings</TooltipContent>
+              </Tooltip>
+            )}
             <Tooltip>
               <TooltipTrigger asChild>
                 <Button
@@ -213,6 +284,34 @@ export default function PersonaCard({ participant, roomId, isHost = false, volum
             )}
           </div>
         </div>
+
+        {voicePanelOpen && isHost && (
+          <div className="rounded-lg border bg-muted/20 p-3 space-y-3">
+            <div className="text-sm font-semibold">Bot voice</div>
+            <p className="text-xs text-muted-foreground">Choose a free Kokoro voice. Test plays a short sample; Save changes this bot’s future replies.</p>
+            <select
+              aria-label={`Voice for ${displayName}`}
+              className="w-full rounded-md border bg-background px-3 py-2 text-sm"
+              value={selectedVoice}
+              disabled={voiceBusy || voiceOptions.length === 0}
+              onChange={(event) => { setSelectedVoice(event.target.value); setVoiceMessage(''); setVoiceError(''); }}
+            >
+              {voiceOptions.length === 0 && <option value="">Loading voice catalog…</option>}
+              {voiceOptions.map((voice) => <option key={voice.id} value={voice.id}>{voice.label} — {voice.gender}</option>)}
+            </select>
+            {voiceOptions.find((voice) => voice.id === selectedVoice)?.description && (
+              <p className="text-xs text-muted-foreground">{voiceOptions.find((voice) => voice.id === selectedVoice)?.description}</p>
+            )}
+            <div className="flex gap-2">
+              <Button type="button" variant="outline" className="flex-1" disabled={voiceBusy || !selectedVoice} onClick={() => void changeVoiceSetting('test')}>
+                {voiceBusy ? <LoaderCircle className="mr-2 h-4 w-4 animate-spin" /> : null}Test voice
+              </Button>
+              <Button type="button" className="flex-1" disabled={voiceBusy || !selectedVoice} onClick={() => void changeVoiceSetting('save')}>Save voice</Button>
+            </div>
+            {voiceMessage && <p role="status" className="text-xs text-muted-foreground">{voiceMessage}</p>}
+            {voiceError && <p role="alert" className="text-xs text-destructive">{voiceError}</p>}
+          </div>
+        )}
 
         {talkPanelOpen && (
         <div className="rounded-lg border bg-muted/20 p-3">
