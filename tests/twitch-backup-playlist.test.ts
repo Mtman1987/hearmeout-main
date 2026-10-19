@@ -29,7 +29,8 @@ test('requests play before fallback, natural end resumes it, and stale end canno
  const {getWatchSession,controlWatchSession,controlTwitchBackupPlaylist}=await import('../src/lib/watch-request-service');
  const a=getWatchSession('watch-twitch-fatkid-music'),b=getWatchSession('watch-twitch-other-music'),lounge=getWatchSession('discord-music-room');
  const item:any={id:'test',title:'Requested',type:'music',runtime:'3m',metadata:{},playbackUrl:'/fixture.mp4'};
- a.backupPlaylist={enabled:true,title:'Backup',url:'https://www.youtube.com/playlist?list=PL1234567890',cursor:0,entries:[{id:'abcdefghijk',title:'Backup A',duration:180000,artist:'Artist',thumbnail:''},{id:'lmnopqrstuv',title:'Backup B',duration:180000,artist:'Artist',thumbnail:''}]};
+ const backupEntries=[{id:'abcdefghijk',title:'Backup A',duration:180000,artist:'Artist',thumbnail:''},{id:'lmnopqrstuv',title:'Backup B',duration:180000,artist:'Artist',thumbnail:''}];
+ a.backupPlaylist={enabled:true,title:'Backup',url:'https://www.youtube.com/playlist?list=PL1234567890',cursor:0,entries:backupEntries,sourceEntries:backupEntries.map((entry:any)=>({...entry})),shuffleEnabled:false};
  a.current={requestId:'old',item,requestedBy:{userId:'human',username:'Human'}} as any;
  a.queue=[{requestId:'human-next',item,requestedBy:{userId:'human',username:'Human'}} as any];
  b.current={requestId:'other-current',item} as any;lounge.current={requestId:'lounge-current',item} as any;
