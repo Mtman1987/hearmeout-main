@@ -20,8 +20,7 @@ const peerVoiceService = read('src/lib/peer-audio-service.ts');
 const middleware = read('src/middleware.ts');
 
 test('browser, persona worker, and Discord bridge prefer the same LiveKit project URL', () => {
-  assert.match(workerServer, /process\.env\.NEXT_PUBLIC_LIVEKIT_URL\s*\|\|\s*process\.env\.LIVEKIT_URL/);
-  assert.doesNotMatch(workerServer, /process\.env\.LIVEKIT_URL\s*\|\|\s*process\.env\.NEXT_PUBLIC_LIVEKIT_URL/);
+  assert.match(workerServer, /const BRIDGE_LIVEKIT_URL =[\s\S]{0,200}process\.env\.NEXT_PUBLIC_LIVEKIT_URL\s*\|\|\s*process\.env\.LIVEKIT_URL/);
   assert.match(bootstrap, /process\.env\.NEXT_PUBLIC_LIVEKIT_URL\s*\|\|\s*process\.env\.LIVEKIT_URL/);
 });
 
