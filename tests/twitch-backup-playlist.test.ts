@@ -15,6 +15,8 @@ test('playlist imports accept only YouTube playlist URLs and shuffle complete cy
  assert.deepEqual(original.map(entry=>entry.id),['a','b','c']);
  const playlist:any={enabled:true,cursor:0,entries:original};
  const firstCycle=Array.from({length:3},()=>nextBackupEntry(playlist,()=>0)!.id);
+ assert.equal(playlist.shuffleVersion,1);
+ assert.deepEqual(firstCycle,['b','c','a']);
  const secondCycle=Array.from({length:3},()=>nextBackupEntry(playlist,()=>0)!.id);
  assert.deepEqual([...firstCycle].sort(),['a','b','c']);
  assert.deepEqual([...secondCycle].sort(),['a','b','c']);
