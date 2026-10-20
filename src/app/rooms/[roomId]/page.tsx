@@ -924,7 +924,7 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
 
     useEffect(() => {
         if (isUserLoading || !userId || !roomId) return;
-        if (voiceTokenRef.current || voiceFallbackActiveRef.current) return;
+        if (voiceFallbackActiveRef.current || (voiceTokenRef.current && !room.streamVoiceEnabled)) return;
         let isCancelled = false;
         const setup = async () => {
             const userPresence = {
@@ -938,6 +938,12 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
             fetch(`/api/db?collection=rooms/${roomId}/users`).then(r => r.json()).then(users => {
                 if (Array.isArray(users)) dbUpdate('rooms', roomId, { occupantCount: users.length });
             }).catch(() => {});
+            // Stream voice rooms must use PeerJS directly while LiveKit is unavailable.
+            // Do not wait for token generation / a LiveKit connection timeout before enabling P2P.
+            if (room.streamVoiceEnabled) {
+                await startPeerVoiceFallback(new Error('Stream voice room is using PeerJS while LiveKit is unavailable'));
+                return;
+            }
             try {
                 const token = await mintVoiceToken();
                 if (!isCancelled) setVoiceToken(token);
@@ -999,7 +1005,7 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
             }
             peerVoiceAudioRefs.current.clear();
         };
-    }, [isUserLoading, roomId, mintVoiceToken, startPeerVoiceFallback, userDisplayName, userId, userPhotoURL]);
+    }, [isUserLoading, roomId, mintVoiceToken, startPeerVoiceFallback, userDisplayName, userId, userPhotoURL, room.streamVoiceEnabled]);
 
     const livekitUrl = process.env.NEXT_PUBLIC_LIVEKIT_URL;
 
