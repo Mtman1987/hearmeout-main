@@ -50,11 +50,11 @@ test('stream overlay consumes source-key protected bot Say audio without replaci
   const route = source('src/app/api/voice/stream-speech/route.ts');
   const overlay = source('src/app/overlay/voices/[roomId]/page.tsx');
   assert.match(route, /validVoiceSource\(roomId, sourceKey\)/);
-  assert.match(route, /streamVoiceEnabled/);
+  assert.ok(route.includes('streamVoiceEnabled'));
   assert.match(route, /rooms\/\$\{roomId\}\/users/);
   assert.match(route, /api\/say\/next/);
   assert.match(overlay, /api\/voice\/stream-speech/);
-  assert.match(overlay, /playNextSay/);
-  assert.match(overlay, /sayPoll = setInterval/);
+  assert.ok(overlay.includes('playNextSay'));
+  assert.ok(overlay.includes('sayPoll = setInterval'));
   assert.match(overlay, /sayAudios\.forEach/);
 });
