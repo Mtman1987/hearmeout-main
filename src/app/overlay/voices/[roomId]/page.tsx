@@ -21,6 +21,65 @@ export default function StreamVoices() {
     let silentStream: MediaStream | undefined;
     const peerCalls = new Map<string, MediaConnection>();
     const elements = new Set<HTMLMediaElement>();
+    const sayCursors = new Map<string, number>();
+    const saySeen = new Set<string>();
+    const sayQueue: Array<{ id: number; audioUrl: string; personaId: string }> = [];
+    const sayAudios = new Set<HTMLAudioElement>();
+    let sayPersonaIds: string[] = [];
+    let sayPoll: ReturnType<typeof setInterval> | undefined;
+    let sayPolling = false;
+    let sayPlaying = false;
+    const playNextSay = () => {
+      if (stopped || ended || sayPlaying || !sayQueue.length) return;
+      const next = sayQueue.shift()!;
+      sayPlaying = true;
+      const audio = document.createElement('audio');
+      audio.autoplay = true; audio.preload = 'auto'; audio.setAttribute('playsinline', ''); audio.src = next.audioUrl;
+      sayAudios.add(audio); audioRoot.current?.appendChild(audio); applyVolume();
+      let settled = false;
+      const finish = () => {
+        if (settled) return; settled = true; audio.pause(); audio.remove(); sayAudios.delete(audio);
+        saySeen.delete(`${next.personaId}:${next.id}`); sayCursors.set(next.personaId, Math.max(sayCursors.get(next.personaId) || 0, next.id));
+        sayPlaying = false; playNextSay();
+      };
+      audio.onended = finish; audio.onerror = finish;
+      void audio.play().catch(() => { if (!stopped) setStatus('bot-audio-blocked'); finish(); });
+    };
+    const pollSayAudio = async () => {
+      if (stopped || ended || sayPolling) return;
+      sayPolling = true;
+      try {
+        if (!sayPersonaIds.length) {
+          const listResponse = await fetch('/api/voice/stream-speech?' + new URLSearchParams({ roomId, sourceKey, list: '1' }), { cache: 'no-store' });
+          if (!listResponse.ok) return;
+          const listData = await listResponse.json() as { personas?: string[] };
+          sayPersonaIds = Array.isArray(listData.personas) ? listData.personas : [];
+        }
+        const results = await Promise.all(sayPersonaIds.map(async personaId => {
+          if (!sayCursors.has(personaId)) {
+            const response = await fetch('/api/voice/stream-speech?' + new URLSearchParams({ roomId, sourceKey, personaId, latest: '1' }), { cache: 'no-store' });
+            if (!response.ok) return null;
+            const data = await response.json() as { latestId?: number };
+            sayCursors.set(personaId, Math.max(0, Number(data.latestId || 0)));
+            return null;
+          }
+          const response = await fetch('/api/voice/stream-speech?' + new URLSearchParams({ roomId, sourceKey, personaId, after: String(sayCursors.get(personaId) || 0) }), { cache: 'no-store' });
+          if (!response.ok) return null;
+          const data = await response.json() as { items?: Array<{ id?: number; audioUrl?: string }> };
+          return { personaId, items: Array.isArray(data.items) ? data.items : [] };
+        }));
+        for (const result of results) {
+          if (!result) continue;
+          for (const item of result.items) {
+            const id = Number(item.id || 0), audioUrl = String(item.audioUrl || ''), key = `${result.personaId}:${id}`;
+            if (!id || !audioUrl || id <= (sayCursors.get(result.personaId) || 0) || saySeen.has(key)) continue;
+            saySeen.add(key); sayQueue.push({ id, audioUrl, personaId: result.personaId });
+            while (sayQueue.length > 24) { const dropped = sayQueue.shift(); if (dropped) { saySeen.delete(`${dropped.personaId}:${dropped.id}`); sayCursors.set(dropped.personaId, Math.max(sayCursors.get(dropped.personaId) || 0, dropped.id)); } }
+          }
+        }
+        playNextSay();
+      } catch {} finally { sayPolling = false; }
+    };
     let volume = 1, muted = false;
     const applyVolume = () => elements.forEach(audio => { audio.volume = volume; audio.muted = muted; });
     const onMessage = (event: MessageEvent) => {
@@ -31,7 +90,7 @@ export default function StreamVoices() {
       applyVolume();
     };
     window.addEventListener('message', onMessage);
-    const clearAudio = () => { elements.forEach(audio => { audio.pause(); audio.srcObject = null; audio.remove(); }); elements.clear(); };
+    const clearAudio = () => { elements.forEach(audio => { audio.pause(); audio.srcObject = null; audio.remove(); }); elements.clear(); sayAudios.forEach(audio => { audio.pause(); audio.remove(); }); sayAudios.clear(); sayQueue.length = 0; };
     const attachPeerStream = (stream: MediaStream) => {
       if (stopped) return;
       setStatus('audio-received');
@@ -101,6 +160,8 @@ export default function StreamVoices() {
     };
     void validateSource();
     void startPeerFallback();
+    void pollSayAudio();
+    sayPoll = setInterval(() => { void pollSayAudio(); }, 1000);
     const enabledTimer = setInterval(async () => {
       if (stopped || ended) return;
       try {
@@ -111,7 +172,7 @@ export default function StreamVoices() {
     return () => {
       stopped = true; clearInterval(enabledTimer);
       if (expiryTimer) clearTimeout(expiryTimer);
-      if (peerPoll) clearInterval(peerPoll); if (presenceTimer) clearInterval(presenceTimer);
+      if (peerPoll) clearInterval(peerPoll); if (presenceTimer) clearInterval(presenceTimer); if (sayPoll) clearInterval(sayPoll);
       window.removeEventListener('message', onMessage); clearAudio();
       peerCalls.forEach(call => { try { call.close(); } catch {} }); peerCalls.clear();
       if (peer) {
