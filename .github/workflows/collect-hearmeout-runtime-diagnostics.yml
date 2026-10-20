@@ -77,4 +77,4 @@ jobs:
             exit "$rc"
           fi
 
-# Re-trigger bounded runtime-log collection after the latest persona-join failure.
+# Re-trigger bounded runtime-log collection after the latest Stella voice-session reset (2026-10-20).
