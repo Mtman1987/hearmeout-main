@@ -26,6 +26,7 @@ export default function StreamVoices() {
     const sayQueue: Array<{ id: number; audioUrl: string; personaId: string }> = [];
     const sayAudios = new Set<HTMLAudioElement>();
     let sayPersonaIds: string[] = [];
+    let sayRosterRefreshAt = 0;
     let sayPoll: ReturnType<typeof setInterval> | undefined;
     let sayPolling = false;
     let sayPlaying = false;
@@ -49,11 +50,12 @@ export default function StreamVoices() {
       if (stopped || ended || sayPolling) return;
       sayPolling = true;
       try {
-        if (!sayPersonaIds.length) {
+        if (!sayRosterRefreshAt || Date.now() >= sayRosterRefreshAt) {
           const listResponse = await fetch('/api/voice/stream-speech?' + new URLSearchParams({ roomId, sourceKey, list: '1' }), { cache: 'no-store' });
           if (!listResponse.ok) return;
           const listData = await listResponse.json() as { personas?: string[] };
           sayPersonaIds = Array.isArray(listData.personas) ? listData.personas : [];
+          sayRosterRefreshAt = Date.now() + 5000;
         }
         const results = await Promise.all(sayPersonaIds.map(async personaId => {
           if (!sayCursors.has(personaId)) {
