@@ -938,6 +938,12 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
             fetch(`/api/db?collection=rooms/${roomId}/users`).then(r => r.json()).then(users => {
                 if (Array.isArray(users)) dbUpdate('rooms', roomId, { occupantCount: users.length });
             }).catch(() => {});
+            // Stream voice rooms must use PeerJS directly while LiveKit is unavailable.
+            // Do not wait for token generation / a LiveKit connection timeout before enabling P2P.
+            if (room.streamVoiceEnabled) {
+                await startPeerVoiceFallback(new Error('Stream voice room is using PeerJS while LiveKit is unavailable'));
+                return;
+            }
             try {
                 const token = await mintVoiceToken();
                 if (!isCancelled) setVoiceToken(token);
