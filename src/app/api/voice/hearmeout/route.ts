@@ -84,7 +84,7 @@ function listOpenRooms(baseUrl: string): OpenRoom[] {
   const rooms = db.list('rooms')
     .filter((room) => room.data?.isPrivate !== true)
     .filter((room) => {
-      const expiresAt = effectiveRoomExpiry(room.data?.expiresAt, room.data?.createdAt);
+      const expiresAt = effectiveRoomExpiry(room.data?.expiresAt, room.data?.createdAt, room.data?.persistent === true || room.data?.systemRoom === true);
       return !expiresAt || expiresAt > now;
     })
     .map((room) => {
