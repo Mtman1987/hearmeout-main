@@ -81,7 +81,7 @@ export default function StreamVoices() {
       } catch {} finally { sayPolling = false; }
     };
     let volume = 1, muted = false;
-    const applyVolume = () => elements.forEach(audio => { audio.volume = volume; audio.muted = muted; });
+    const applyVolume = () => { elements.forEach(audio => { audio.volume = volume; audio.muted = muted; }); sayAudios.forEach(audio => { audio.volume = volume; audio.muted = muted; }); };
     const onMessage = (event: MessageEvent) => {
       if (event.origin !== 'https://spmt.live' || event.source !== window.parent || event.data?.type !== 'spmt.obspmt.audio') return;
       const next = Number(event.data.volume);
