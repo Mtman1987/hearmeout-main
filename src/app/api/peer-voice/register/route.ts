@@ -25,7 +25,7 @@ async function authorize(request: NextRequest, roomId: string, peerId: string, s
     await ensureDb(); if (!db.get('rooms', roomId)) throw new Error('Room not found');
   } else {
     await requireRoomVoiceAccess(roomId);
-    if (peerId.startsWith('hmo-zdiscord-')) throw new Error('Only the authenticated worker can unregister the voice bridge');
+    if (peerId.startsWith('hmo-zdiscord-')) throw new Error('Peer ID is reserved for the voice bridge. Only the authenticated worker can unregister the voice bridge');
   }
 }
 export async function POST(request: NextRequest) {
