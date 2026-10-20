@@ -273,11 +273,16 @@ function chooseStableQuality(){
  try{
   const qualities=typeof player.getQualities==='function'?player.getQualities():[];
   const values=(qualities||[]).map(value=>String(value||'')).filter(Boolean);
+  // The Lounge output is 854x480@30. Decode no more Twitch video than
+  // we can actually deliver; preferring 720p only wastes CPU before FFmpeg
+  // immediately scales those frames back down to 480p.
   const preferred=
+    values.find(value=>/^480p30$/i.test(value))||
+    values.find(value=>/^480p$/i.test(value))||
+    values.find(value=>/^360p30$/i.test(value))||
+    values.find(value=>/^360p$/i.test(value))||
     values.find(value=>/^720p30$/i.test(value))||
     values.find(value=>/^720p$/i.test(value))||
-    values.find(value=>/^480p(?:30)?$/i.test(value))||
-    values.find(value=>/^360p(?:30)?$/i.test(value))||
     values.find(value=>!/(?:60|chunked)/i.test(value))||
     'auto';
   if(preferred!=='auto'&&typeof player.setQuality==='function')player.setQuality(preferred);
