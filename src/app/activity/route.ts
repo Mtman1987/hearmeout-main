@@ -182,11 +182,12 @@ async function html(request: Request) {
         <button id="bridge-bot-copy" type="button">Copy invite link</button>
         <p class="muted">A server manager can use this link. After adding it, retry your bridge connection.</p>
       </div>
-      <div class="toolbar activity-chrome" aria-label="Playback volume">
+      <div class="toolbar activity-chrome" aria-label="Playback controls">
         <div class="volume" title="Volume">
           <input id="volume" type="range" min="0" max="100" value="85" aria-label="Volume" />
           <span id="volume-label">85%</span>
         </div>
+        <button class="icon-btn" type="button" data-action="next" title="Skip current movie" aria-label="Skip current movie">⏭ Skip</button>
       </div>
       <div id="player-hooks" hidden inert aria-hidden="true">
         <button class="icon-btn" id="play-pause" data-action="play-pause" title="Play" aria-label="Play">▶</button>
