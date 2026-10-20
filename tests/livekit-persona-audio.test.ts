@@ -13,43 +13,37 @@ test('HearMeOut room renders and unlocks remote LiveKit audio', async () => {
   assert.match(source, /Enable room and bot audio/);
 });
 
-test('typed and spoken persona replies use the canonical StreamWeaver Say broadcast queue', async () => {
+test('typed and spoken persona replies use the room-scoped hidden Say Player queue', async () => {
   const chat = await readFile('src/app/rooms/[roomId]/_components/ChatBox.tsx', 'utf8');
   const wake = await readFile('src/app/rooms/[roomId]/_components/WakeWordListener.tsx', 'utf8');
   const client = await readFile('src/lib/room-persona-client.ts', 'utf8');
   const route = await readFile('src/app/api/bot/commands/route.ts', 'utf8');
 
-  assert.match(chat, /sendRoomPersonaCommand/);
-  assert.match(wake, /sendRoomPersonaCommand/);
-  assert.match(client, /speak:\s*true/);
-  assert.match(route, /\/api\/say\/queue/);
-  assert.match(route, /tts\?\.streamKey/);
-  assert.match(route, /queuedResult\.skipped && sayStreamKey && personaId/);
-  // An early reply may race the hidden listener's first 500 ms poll. Retry
-  // once only for the explicit no-listener result, before the public-key fallback.
-  assert.match(route, /queuedResult\.result\?\.reason === 'no-active-say-listener'/);
-  assert.match(route, /setTimeout\(resolve, 650\)/);
-  assert.ok(
-    route.indexOf("queuedResult.result?.reason === 'no-active-say-listener'")
-      < route.indexOf('deliveryTenantId = personaId'),
-    'the room listener retry must happen before fallback to the public persona stream',
-  );
-  assert.match(route, /deliveryTenantId = personaId/);
-  assert.match(route, /text:\s*responseText/);
-  assert.doesNotMatch(route, /\/persona\/speak/);
+  assert.ok(chat.includes('sendRoomPersonaCommand'));
+  assert.ok(wake.includes('sendRoomPersonaCommand'));
+  assert.ok(client.includes('speak: true'));
+  assert.ok(route.includes('/api/say/queue'));
+  assert.ok(route.includes('tts?.streamKey'));
+  assert.ok(route.includes('queuedResult.skipped'));
+  assert.ok(route.includes("queuedResult.result?.reason === 'no-active-say-listener'"));
+  assert.ok(route.includes('for (let attempt = 0; attempt < 3 && queuedResult.skipped; attempt += 1)'));
+  assert.ok(route.includes('setTimeout(resolve, 1100)'));
+  assert.ok(!route.includes('deliveryTenantId = personaId'));
+  assert.ok(route.includes('text: responseText'));
+  assert.ok(!route.includes('/persona/speak'));
 });
 test('production has no direct browser TTS diagnostic player', async () => {
   const layout = await readFile('src/app/layout.tsx', 'utf8');
   const route = await readFile('src/app/api/bot/commands/route.ts', 'utf8');
 
-  assert.doesNotMatch(layout, /TtsDiagnosticHost|tts-diagnostic-host/);
+  assert.ok(!layout.includes('TtsDiagnosticHost') && !layout.includes('tts-diagnostic-host'));
   await assert.rejects(
     readFile('src/components/tts-diagnostic-host.tsx', 'utf8'),
     (error: any) => error?.code === 'ENOENT',
   );
-  assert.match(route, /room roster is the invite authority/);
-  assert.doesNotMatch(route, /healthyWorkerPersona|transportHealthy === true/);
-  assert.match(route, /say-player-not-listening|delivered: result\?\.delivered/);
+  assert.ok(route.includes('room roster is the invite authority'));
+  assert.ok(!route.includes('healthyWorkerPersona') && !route.includes('transportHealthy === true'));
+  assert.ok(route.includes('say-player-not-listening') || route.includes('delivered: result?.delivered'));
 });
 
 test('late LiveKit audio elements inherit the selected output device', async () => {
