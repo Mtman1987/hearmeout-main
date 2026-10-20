@@ -3,7 +3,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { useParams, useSearchParams } from 'next/navigation';
 import Peer, { MediaConnection } from 'peerjs';
-import { Room, RoomEvent, Track, RemoteParticipant, RemoteTrackPublication } from 'livekit-client';
 
 export default function StreamVoices() {
   const { roomId } = useParams<{ roomId: string }>();
@@ -17,8 +16,7 @@ export default function StreamVoices() {
     let expiryTimer: ReturnType<typeof setTimeout> | undefined;
     let peerPoll: ReturnType<typeof setInterval> | undefined;
     let presenceTimer: ReturnType<typeof setInterval> | undefined;
-    let retry: ReturnType<typeof setTimeout> | undefined;
-    let room: Room | undefined, peer: Peer | undefined;
+    let peer: Peer | undefined;
     let silentContext: AudioContext | undefined;
     let silentStream: MediaStream | undefined;
     const peerCalls = new Map<string, MediaConnection>();
@@ -36,16 +34,14 @@ export default function StreamVoices() {
     const clearAudio = () => { elements.forEach(audio => { audio.pause(); audio.srcObject = null; audio.remove(); }); elements.clear(); };
     const attachPeerStream = (stream: MediaStream) => {
       if (stopped) return;
+      setStatus('audio-received');
+      fetch('/api/client-log', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ area: 'overlay-voices', message: 'PeerJS remote audio stream received', roomId, identity: peer?.id || null, userAgent: navigator.userAgent }) }).catch(() => {});
       const audio = document.createElement('audio');
       audio.autoplay = true; audio.setAttribute('playsinline', ''); audio.srcObject = stream;
       elements.add(audio); audioRoot.current?.appendChild(audio); applyVolume();
       void audio.play().catch(() => { if (!stopped) setStatus('audio-blocked'); });
     };
-    const subscribe = (publication: RemoteTrackPublication, participant: RemoteParticipant) => {
-      if (publication.kind !== Track.Kind.Audio) return;
-      if (/^(dj-|dj-worker-|stream-listener:)/.test(participant.identity) || /^(overlay-music|music)$/i.test(publication.trackName)) return;
-      publication.setSubscribed(true);
-    };
+
 
     const startPeerFallback = async () => {
       try {
@@ -57,28 +53,31 @@ export default function StreamVoices() {
         await new Promise<void>((resolve, reject) => {
           const active = new Peer(`hmo-stream-listener-${roomId}-${Math.random().toString(36).slice(2, 8)}`, { debug: 0 });
           peer = active;
-          active.on('open', () => resolve());
-          active.on('error', reject);
-          active.on('call', call => { call.answer(silentStream!); call.on('stream', attachPeerStream); call.on('close', () => peerCalls.delete(call.peer)); });
+          active.on('open', () => { setStatus('peer-signaling-connected'); resolve(); });
+          active.on('error', error => { setStatus('peer-signaling-error'); fetch('/api/client-log', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ area: 'overlay-voices', message: `PeerJS signaling error: ${String(error)}`, roomId, identity: active.id || null, userAgent: navigator.userAgent }) }).catch(() => {}); reject(error); });
+          active.on('call', call => { call.answer(silentStream!); call.on('stream', attachPeerStream); call.on('close', () => peerCalls.delete(call.peer)); call.on('error', () => peerCalls.delete(call.peer)); });
         });
         oscillator.stop(); await context.close().catch(() => {}); silentContext = undefined;
-        const register = () => fetch('/api/peer-voice/register', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ roomId, peerId: peer!.id, sourceKey }) }).catch(() => {});
+        const register = async () => { try { const response = await fetch('/api/peer-voice/register', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ roomId, peerId: peer!.id, sourceKey }) }); if (!response.ok) { const detail = await response.text().catch(() => ''); setStatus(`peer-register-${response.status}`); fetch('/api/client-log', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ area: 'overlay-voices', message: `Peer presence registration failed: HTTP ${response.status} ${detail}`, roomId, identity: peer?.id || null, userAgent: navigator.userAgent }) }).catch(() => {}); } } catch { setStatus('peer-register-network-error'); } };
         await register(); presenceTimer = setInterval(register, 5000);
         const discover = async () => {
           if (stopped || ended || !peer) return;
           try {
             const response = await fetch('/api/peer-voice/peers?' + new URLSearchParams({ roomId, sourceKey }), { cache: 'no-store' });
-            if (!response.ok) return;
+            if (!response.ok) { setStatus(`peer-discovery-${response.status}`); return; }
             const data = await response.json() as { peers?: string[] };
+            if (!(data.peers || []).some(id => id.startsWith(`hmo-voice-${roomId}-`))) setStatus('waiting-for-room-microphone');
             for (const remoteId of data.peers || []) {
               if (remoteId === peer.id || remoteId.startsWith('hmo-stream-listener-') || peerCalls.has(remoteId)) continue;
               if (/^(hmo-dj-|hmo-viewer-|hmo-screen-)/.test(remoteId)) continue;
               const call = peer.call(remoteId, silentStream!);
               if (!call) continue;
               peerCalls.set(remoteId, call);
-              call.on('stream', attachPeerStream);
-              call.on('close', () => peerCalls.delete(remoteId));
-              call.on('error', () => peerCalls.delete(remoteId));
+              let gotStream = false;
+              const callTimeout = setTimeout(() => { if (!gotStream && peerCalls.get(remoteId) === call) { peerCalls.delete(remoteId); try { call.close(); } catch {} setStatus('peer-call-timeout'); } }, 12000);
+              call.on('stream', stream => { gotStream = true; clearTimeout(callTimeout); attachPeerStream(stream); });
+              call.on('close', () => { clearTimeout(callTimeout); peerCalls.delete(remoteId); });
+              call.on('error', () => { clearTimeout(callTimeout); peerCalls.delete(remoteId); });
             }
           } catch {}
         };
@@ -89,48 +88,28 @@ export default function StreamVoices() {
       }
     };
 
-    const connect = async () => {
-      if (stopped || ended) return;
+    const validateSource = async () => {
       try {
-        setStatus('connecting');
-        const response = await fetch('/api/voice/stream-source?' + new URLSearchParams({ roomId, sourceKey }), { cache: 'no-store' });
+        const response = await fetch('/api/voice/stream-source?' + new URLSearchParams({ roomId, sourceKey, statusOnly: '1' }), { cache: 'no-store' });
         if ([401, 403, 410].includes(response.status)) { ended = true; setStatus('ended'); return; }
-        if (!response.ok) throw new Error('Voice listener is unavailable');
-        const credentials = await response.json();
-        if (credentials.expiresAt) expiryTimer = setTimeout(() => { ended = true; setStatus('ended'); clearAudio(); void room?.disconnect(); }, Math.max(0, credentials.expiresAt - Date.now()));
-        if (stopped || ended) return;
-        const active = new Room({ adaptiveStream: false, dynacast: false }); room = active;
-        active.on(RoomEvent.TrackPublished, subscribe);
-        active.on(RoomEvent.TrackSubscribed, track => {
-          if (track.kind !== Track.Kind.Audio || stopped) return;
-          const audio = track.attach(); audio.autoplay = true; elements.add(audio);
-          audioRoot.current?.appendChild(audio); applyVolume();
-          void audio.play().catch(() => { if (!stopped) setStatus('audio-blocked'); });
-        });
-        active.on(RoomEvent.TrackUnsubscribed, track => track.detach().forEach(audio => { elements.delete(audio); audio.remove(); }));
-        active.on(RoomEvent.Reconnecting, () => { if (!stopped) setStatus('reconnecting'); });
-        active.on(RoomEvent.Reconnected, () => { if (!stopped) setStatus('connected'); });
-        active.on(RoomEvent.Disconnected, () => { if (!stopped && !ended && !retry) retry = setTimeout(() => { retry = undefined; void connect(); }, 5000); });
-        await active.connect(credentials.url, credentials.token, { autoSubscribe: false });
-        if (stopped) { await active.disconnect(); return; }
-        active.remoteParticipants.forEach(p => p.trackPublications.forEach(pub => subscribe(pub, p)));
-        await active.startAudio(); setStatus('connected');
-      } catch {
-        if (room) await room.disconnect().catch(() => {});
-        if (!stopped && !ended) { setStatus('reconnecting'); if (!retry) retry = setTimeout(() => { retry = undefined; void connect(); }, 5000); }
-      }
+        if (!response.ok) { setStatus(`source-check-${response.status}`); return; }
+        const data = await response.json();
+        if (data.expiresAt) expiryTimer = setTimeout(() => { ended = true; setStatus('ended'); clearAudio(); }, Math.max(0, data.expiresAt - Date.now()));
+        setStatus('waiting-for-room-microphone');
+      } catch { setStatus('source-check-network-error'); }
     };
-    void connect(); void startPeerFallback();
+    void validateSource();
+    void startPeerFallback();
     const enabledTimer = setInterval(async () => {
       if (stopped || ended) return;
       try {
         const r = await fetch('/api/voice/stream-source?' + new URLSearchParams({ roomId, sourceKey, statusOnly: '1' }), { cache: 'no-store' });
-        if ([401, 403, 410].includes(r.status)) { ended = true; setStatus('ended'); clearAudio(); void room?.disconnect(); }
+        if ([401, 403, 410].includes(r.status)) { ended = true; setStatus('ended'); clearAudio(); }
       } catch {}
     }, 15000);
     return () => {
       stopped = true; clearInterval(enabledTimer);
-      if (expiryTimer) clearTimeout(expiryTimer); if (retry) clearTimeout(retry);
+      if (expiryTimer) clearTimeout(expiryTimer);
       if (peerPoll) clearInterval(peerPoll); if (presenceTimer) clearInterval(presenceTimer);
       window.removeEventListener('message', onMessage); clearAudio();
       peerCalls.forEach(call => { try { call.close(); } catch {} }); peerCalls.clear();
@@ -140,7 +119,6 @@ export default function StreamVoices() {
       }
       silentStream?.getTracks().forEach(track => track.stop());
       if (silentContext) void silentContext.close().catch(() => {});
-      void room?.disconnect();
     };
   }, [roomId, sourceKey]);
 
