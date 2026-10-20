@@ -114,7 +114,11 @@ export default function StreamVoices() {
         await active.connect(credentials.url, credentials.token, { autoSubscribe: false });
         if (stopped) { await active.disconnect(); return; }
         active.remoteParticipants.forEach(p => p.trackPublications.forEach(pub => subscribe(pub, p)));
-        await active.startAudio(); setStatus('connected');
+        // Autoplay policy failures must not tear down an otherwise healthy voice subscription.
+        // OBS/browser-source contexts can reject startAudio() until a gesture, while subscribed
+        // audio elements may still play under the host's autoplay policy. Keep the room connected.
+        try { await active.startAudio(); setStatus('connected'); }
+        catch { if (!stopped) setStatus('audio-blocked'); }
       } catch {
         if (room) await room.disconnect().catch(() => {});
         if (!stopped && !ended) { setStatus('reconnecting'); if (!retry) retry = setTimeout(() => { retry = undefined; void connect(); }, 5000); }
