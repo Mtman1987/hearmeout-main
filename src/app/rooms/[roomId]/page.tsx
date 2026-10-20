@@ -924,7 +924,7 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
 
     useEffect(() => {
         if (isUserLoading || !userId || !roomId) return;
-        if (voiceTokenRef.current || voiceFallbackActiveRef.current) return;
+        if (voiceFallbackActiveRef.current || (voiceTokenRef.current && !room.streamVoiceEnabled)) return;
         let isCancelled = false;
         const setup = async () => {
             const userPresence = {
@@ -1005,7 +1005,7 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
             }
             peerVoiceAudioRefs.current.clear();
         };
-    }, [isUserLoading, roomId, mintVoiceToken, startPeerVoiceFallback, userDisplayName, userId, userPhotoURL]);
+    }, [isUserLoading, roomId, mintVoiceToken, startPeerVoiceFallback, userDisplayName, userId, userPhotoURL, room.streamVoiceEnabled]);
 
     const livekitUrl = process.env.NEXT_PUBLIC_LIVEKIT_URL;
 
