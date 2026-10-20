@@ -9,7 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { Send, Info, ShieldAlert, Smile, Frown, Meh, LoaderCircle, MessageSquare, Radio, Hash } from "lucide-react";
+import { Send, Info, ShieldAlert, Smile, Frown, Meh, LoaderCircle, MessageSquare, Radio, Hash, Mic } from "lucide-react";
 import { runModeration } from "@/app/actions";
 import type { ModerateContentOutput } from "@/ai/flows/sentiment-based-moderation";
 import { useSession } from "@/hooks/use-session";
@@ -22,6 +22,7 @@ import BotPicker, {
   fetchAvailableRoomBots,
   type AvailableRoomBot,
 } from "./BotPicker";
+import StellaWakeTestListener from "./StellaWakeTestListener";
 
 type RoomBotPresence = {
   id?: string;
@@ -102,6 +103,7 @@ export default function ChatBox({ roomId, compact = false, onOpenSpaceChat, onOp
   const [input, setInput] = useState("");
   const [moderationResult, setModerationResult] = useState<ModerateContentOutput | null>(null);
   const [isPending, setIsPending] = useState(false);
+  const [showWakeWordTest, setShowWakeWordTest] = useState(false);
   const [messages, setMessages] = useState<AdminChatMessage[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [liveKitBots, setLiveKitBots] = useState<RoomBotDescriptor[]>([]);
@@ -321,6 +323,11 @@ export default function ChatBox({ roomId, compact = false, onOpenSpaceChat, onOp
                 onJoined={(bot) => { void postRoomNotice(`${bot.name} joined the room.`); }}
               />
             )}
+            {activeRoomId && (
+              <Button variant={showWakeWordTest ? "secondary" : "ghost"} size="icon" className="h-8 w-8" onClick={() => setShowWakeWordTest((value) => !value)} title={showWakeWordTest ? "Hide wake-word test" : "Show wake-word test"} aria-label={showWakeWordTest ? "Hide wake-word test" : "Show wake-word test"}>
+                <Mic className="h-4 w-4" />
+              </Button>
+            )}
             {!compact && (
               <>
                 <Button variant="ghost" size="icon" className="h-8 w-8" onClick={onOpenSpaceChat} title="Pop out HearMeOut chat">
@@ -338,6 +345,12 @@ export default function ChatBox({ roomId, compact = false, onOpenSpaceChat, onOp
         </div>
       </CardHeader>
       <CardContent className="flex-1 flex flex-col gap-3 overflow-hidden px-4 pb-0 pt-0">
+        {showWakeWordTest && activeRoomId && (
+          <StellaWakeTestListener
+            roomId={activeRoomId}
+            remoteParticipants={room ? Array.from(room.remoteParticipants.values()) : []}
+          />
+        )}
         <ScrollArea className="flex-1 pr-4 -mr-4" ref={scrollAreaRef}>
           <div className="space-y-4">
             {isLoading && <div className="flex justify-center items-center h-full"><LoaderCircle className="h-6 w-6 animate-spin text-primary" /></div>}
