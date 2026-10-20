@@ -144,12 +144,9 @@ async function speakThroughSayPlayer(body: BotCommandBody, payload: any) {
     };
   }
 
-  // Use the same StreamWeaver Say queue as !say instead of publishing persona
-  // audio to the LiveKit RTC track. StreamWeaver's active Say Player is the
-  // canonical browser-source broadcast path.
-  // Prefer the room-scoped listener. Some existing browser/OBS setups only
-  // listen on the persona's public Say Player, so retry there only when the
-  // room-scoped queue explicitly says nobody is listening.
+  // Use HearMeOut's hidden room Say Player only. Never divert room speech to
+  // the persona's public Say Player: that is a different audio path and will
+  // not reach this room's listener or its Discord voice bridge.
   const queueSpeech = async (tenantId: string) => {
     const response = await fetch(`${STREAMWEAVER_BASE_URL}/api/say/queue`, {
       method: 'POST',
@@ -170,23 +167,19 @@ async function speakThroughSayPlayer(body: BotCommandBody, payload: any) {
   let deliveryTenantId = sayStreamKey || personaId;
   let queuedResult = await queueSpeech(deliveryTenantId);
 
-  // The hidden HearMeOut listener polls every 500 ms. When a reply races its
-  // first poll, StreamWeaver can correctly report no listener for that instant.
-  // Retry the room stream once after one poll interval; keep StreamWeaver's
-  // active-consumer guard intact and never retry a queue that already succeeded.
+  // The room listener polls every second. Give its presence heartbeat time to
+  // register before reporting failure, but keep all attempts on the same room
+  // stream key. Falling back to personaId silently diverts speech away from the
+  // hidden HearMeOut player and makes replies disappear from the room/Discord VC.
   if (
     queuedResult.skipped
     && queuedResult.result?.reason === 'no-active-say-listener'
     && sayStreamKey
-    && sayStreamKey !== personaId
   ) {
-    await new Promise((resolve) => setTimeout(resolve, 650));
-    queuedResult = await queueSpeech(sayStreamKey);
-  }
-
-  if (queuedResult.skipped && sayStreamKey && personaId && sayStreamKey !== personaId) {
-    deliveryTenantId = personaId;
-    queuedResult = await queueSpeech(deliveryTenantId);
+    for (let attempt = 0; attempt < 3 && queuedResult.skipped; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 1100));
+      queuedResult = await queueSpeech(sayStreamKey);
+    }
   }
 
   const sayResponse = queuedResult.response;
