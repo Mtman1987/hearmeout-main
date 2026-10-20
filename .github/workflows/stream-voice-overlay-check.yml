@@ -1,0 +1,33 @@
+name: Stream voice overlay regression checks
+
+on:
+  pull_request:
+    paths:
+      - 'src/app/overlay/voices/[roomId]/page.tsx'
+      - 'src/app/api/peer-voice/peers/route.ts'
+      - 'src/app/api/peer-voice/register/route.ts'
+      - 'tests/stream-voice-overlay.test.cjs'
+      - '.github/workflows/stream-voice-overlay-check.yml'
+  push:
+    branches:
+      - main
+    paths:
+      - 'src/app/overlay/voices/[roomId]/page.tsx'
+      - 'src/app/api/peer-voice/peers/route.ts'
+      - 'src/app/api/peer-voice/register/route.ts'
+      - 'tests/stream-voice-overlay.test.cjs'
+      - '.github/workflows/stream-voice-overlay-check.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  stream-voice-regression:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Test stream voice overlay contracts
+        run: node --test tests/stream-voice-overlay.test.cjs
