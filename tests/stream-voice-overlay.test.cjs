@@ -9,6 +9,7 @@ const root = path.resolve(__dirname, '..');
 const overlay = fs.readFileSync(path.join(root, 'src/app/overlay/voices/[roomId]/page.tsx'), 'utf8');
 const peersRoute = fs.readFileSync(path.join(root, 'src/app/api/peer-voice/peers/route.ts'), 'utf8');
 const registerRoute = fs.readFileSync(path.join(root, 'src/app/api/peer-voice/register/route.ts'), 'utf8');
+const speechRoute = fs.readFileSync(path.join(root, 'src/app/api/voice/stream-speech/route.ts'), 'utf8');
 
 test('silent PeerJS sender track stays alive until the overlay is disposed', () => {
   const createStream = overlay.indexOf('silentStream = destination.stream');
@@ -18,7 +19,7 @@ test('silent PeerJS sender track stays alive until the overlay is disposed', () 
 
   const setup = overlay.slice(createStream, register);
   assert.doesNotMatch(setup, /oscillator\.stop\(\)|context\.close\(\)/,
-    'closing the AudioContext before calls are negotiated ends the silent sender track');
+    'closing the AudioContext before calls are negotiated ends the track before calls are negotiated');
   assert.match(overlay, /if \(silentContext\) void silentContext\.close\(\)\.catch\(\(\) => \{\}\)/,
     'the AudioContext must still be closed during component cleanup');
 });
@@ -34,4 +35,12 @@ test('overlay answers room publishers and initiates calls with its live silent s
   assert.match(overlay, /active\.on\('call', call => \{ call\.answer\(silentStream!\)/);
   assert.match(overlay, /peer\.call\(remoteId, silentStream!\)/);
   assert.match(overlay, /call\.on\('stream', stream => \{ gotStream = true; clearTimeout\(callTimeout\); attachPeerStream\(stream\); \}\)/);
+});
+
+test('stream overlay keeps both room-scoped and persona Say listeners active', () => {
+  assert.match(speechRoute, /async function touchSayListener\(tenantId: string\)/);
+  assert.match(speechRoute, /touchSayListener\(streamKey\(roomId, personaId\)\)/);
+  assert.match(speechRoute, /touchSayListener\(personaId\)/);
+  assert.match(speechRoute, /params\.get\('list'\) === '1'/);
+  assert.match(speechRoute, /api\/say\/next/);
 });
