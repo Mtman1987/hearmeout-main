@@ -57,7 +57,8 @@ export default function StreamVoices() {
           active.on('error', error => { setStatus('peer-signaling-error'); fetch('/api/client-log', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ area: 'overlay-voices', message: `PeerJS signaling error: ${String(error)}`, roomId, identity: active.id || null, userAgent: navigator.userAgent }) }).catch(() => {}); reject(error); });
           active.on('call', call => { call.answer(silentStream!); call.on('stream', attachPeerStream); call.on('close', () => peerCalls.delete(call.peer)); call.on('error', () => peerCalls.delete(call.peer)); });
         });
-        oscillator.stop(); await context.close().catch(() => {}); silentContext = undefined;
+        // Keep the silent sender track alive for the entire PeerJS session.
+        // Closing its AudioContext here ends the track before calls are negotiated.
         const register = async () => { try { const response = await fetch('/api/peer-voice/register', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ roomId, peerId: peer!.id, sourceKey }) }); if (!response.ok) { const detail = await response.text().catch(() => ''); setStatus(`peer-register-${response.status}`); fetch('/api/client-log', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ area: 'overlay-voices', message: `Peer presence registration failed: HTTP ${response.status} ${detail}`, roomId, identity: peer?.id || null, userAgent: navigator.userAgent }) }).catch(() => {}); } } catch { setStatus('peer-register-network-error'); } };
         await register(); presenceTimer = setInterval(register, 5000);
         const discover = async () => {
