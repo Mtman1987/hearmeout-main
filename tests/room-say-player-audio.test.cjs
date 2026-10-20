@@ -68,3 +68,12 @@ test('room header separates the visual overlay URL from the bot-and-microphone v
   assert.match(sourceRoute, /'source'/);
   assert.match(sourceRoute, /voiceSourceUrl\(roomId, config\.baseUrl\)/);
 });
+
+ 
+test('HearMeOut bot replies stay on the hidden room Say Player stream', () => {
+  const route = source('src/app/api/bot/commands/route.ts');
+  assert.match(route, /hidden room Say Player only/);
+  assert.match(route, /attempt < 3 && queuedResult\.skipped/);
+  assert.match(route, /queueSpeech\(sayStreamKey\)/);
+  assert.doesNotMatch(route, /deliveryTenantId = personaId;\s*queuedResult = await queueSpeech\(deliveryTenantId\)/);
+});
