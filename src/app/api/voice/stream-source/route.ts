@@ -43,7 +43,7 @@ export async function POST(request: NextRequest) {
   const body = await request.json().catch(() => ({}));
   const ownerId = internal ? String(body.ownerId || '') : session!.uid;
   const action = String(body.action || 'select');
-  if (!['create', 'select', 'off'].includes(action)) return NextResponse.json({ error: 'Invalid action' }, { status: 400, headers });
+  if (!['create', 'select', 'source', 'off'].includes(action)) return NextResponse.json({ error: 'Invalid action' }, { status: 400, headers });
   const roomId = action === 'create' ? `voice-${randomUUID()}` : String(body.roomId || '');
   if (!validVoiceRoomId(roomId)) return NextResponse.json({ error: 'Invalid room' }, { status: 400, headers });
   await ensureDb();
@@ -52,6 +52,15 @@ export async function POST(request: NextRequest) {
   if (action !== 'create' && !previous) return NextResponse.json({ error: 'Room not found' }, { status: 404, headers });
   if (previous && ((!previous.ownerId && !internal) || (previous.ownerId && previous.ownerId !== ownerId))) return NextResponse.json({ error: 'Only the room owner can broadcast it' }, { status: 403, headers });
   if (!internal && previous && !alive(previous)) return NextResponse.json({ error: 'This room expired. Create a new room.' }, { status: 410, headers });
+  if (action === 'source') {
+    if (!previous?.streamVoiceEnabled) return NextResponse.json({ error: 'Voice broadcast is disabled for this room' }, { status: 403, headers });
+    return NextResponse.json({
+      roomId,
+      name: previous.name || roomId,
+      sourceUrl: voiceSourceUrl(roomId, config.baseUrl),
+      expiresAt: effectiveRoomExpiry(previous.expiresAt, previous.createdAt),
+    }, { headers });
+  }
   if (action === 'off') { db.update('rooms', roomId, { streamVoiceEnabled: false }); return NextResponse.json({ disabled: true }, { headers }); }
   const password = String(body.password || previous?.password || '');
   if (!password.trim()) return NextResponse.json({ error: 'Set a room password before broadcasting voices' }, { status: 400, headers });

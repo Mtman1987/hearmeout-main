@@ -58,3 +58,13 @@ test('stream overlay consumes source-key protected bot Say audio without replaci
   assert.ok(overlay.includes('sayPoll = setInterval'));
   assert.match(overlay, /sayAudios\.forEach/);
 });
+
+test('room header separates the visual overlay URL from the bot-and-microphone voice source', () => {
+  const roomPage = source('src/app/rooms/[roomId]/page.tsx');
+  const sourceRoute = source('src/app/api/voice/stream-source/route.ts');
+  assert.match(roomPage, /copyVoiceSourceUrl/);
+  assert.match(roomPage, /action: 'source'/);
+  assert.match(roomPage, /includes room and bot voices/);
+  assert.match(sourceRoute, /'source'/);
+  assert.match(sourceRoute, /voiceSourceUrl\(roomId, config\.baseUrl\)/);
+});

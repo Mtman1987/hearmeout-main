@@ -460,6 +460,24 @@ function RoomHeader({ roomName, onToggleChat, showDJ, onToggleDJ, canBridge, sho
         }
     };
 
+    const copyVoiceSourceUrl = async () => {
+        try {
+            const response = await fetch('/api/voice/stream-source', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ action: 'source', roomId: params.roomId }),
+                cache: 'no-store',
+            });
+            const payload = await response.json().catch(() => ({}));
+            if (!response.ok || !payload?.sourceUrl) throw new Error(payload?.error || 'Voice broadcast is not enabled for this room.');
+            const copied = await copyTextToClipboard(String(payload.sourceUrl));
+            if (!copied) throw new Error('Clipboard permission was denied. Copy the voice-source URL from the setup page instead.');
+            toast({ title: 'Voice source URL copied', description: 'Use this separate OBS/browser source for room microphones and bot voices.' });
+        } catch (error) {
+            toast({ variant: 'destructive', title: 'Voice source unavailable', description: error instanceof Error ? error.message : String(error) });
+        }
+    };
+
     return (
         <header className="sticky top-0 z-30 flex h-16 items-center gap-4 border-b bg-background px-4 md:px-6">
             <SidebarTrigger className={isMobile ? "" : "hidden md:flex"} />
@@ -497,7 +515,10 @@ function RoomHeader({ roomName, onToggleChat, showDJ, onToggleDJ, canBridge, sho
                 )}
                 <Tooltip><TooltipTrigger asChild>
                     <Button variant="outline" size="icon" onClick={copyOverlayUrl}><Copy className="h-4 w-4" /></Button>
-                </TooltipTrigger><TooltipContent><p>Copy Overlay URL for OBS</p></TooltipContent></Tooltip>
+                </TooltipTrigger><TooltipContent><p>Copy visual/media overlay URL for OBS</p></TooltipContent></Tooltip>
+                <Tooltip><TooltipTrigger asChild>
+                    <Button variant="outline" size="icon" onClick={copyVoiceSourceUrl} aria-label="Copy voice source URL for OBS"><Radio className="h-4 w-4" /></Button>
+                </TooltipTrigger><TooltipContent><p>Copy voice source URL for OBS — includes room and bot voices</p></TooltipContent></Tooltip>
                 <Tooltip><TooltipTrigger asChild>
                     <Button variant="outline" size="icon" onClick={onToggleChat}><FrameIcon className="h-5 w-5" /></Button>
                 </TooltipTrigger><TooltipContent><p>Toggle Chat Sidebar</p></TooltipContent></Tooltip>
@@ -1307,4 +1328,3 @@ function RoomPageContent() {
 export default function RoomPage() {
     return <SidebarProvider><RoomPageContent /></SidebarProvider>;
 }
-
