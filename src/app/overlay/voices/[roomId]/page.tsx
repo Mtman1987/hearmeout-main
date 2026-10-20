@@ -37,7 +37,7 @@ export default function StreamVoices() {
     const attachPeerStream = (stream: MediaStream) => {
       if (stopped) return;
       const audio = document.createElement('audio');
-      audio.autoplay = true; audio.playsInline = true; audio.srcObject = stream;
+      audio.autoplay = true; audio.setAttribute('playsinline', ''); audio.srcObject = stream;
       elements.add(audio); audioRoot.current?.appendChild(audio); applyVolume();
       void audio.play().catch(() => { if (!stopped) setStatus('audio-blocked'); });
     };
