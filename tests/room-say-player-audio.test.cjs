@@ -44,3 +44,17 @@ test('room UI activates and plays the room-scoped bot speech queue', () => {
   assert.doesNotMatch(userCard, /participant\.metadata \? JSON\.parse/);
   assert.match(middleware, /api\/rooms\/persona-speech/);
 });
+
+
+test('stream overlay consumes source-key protected bot Say audio without replacing microphone audio', () => {
+  const route = source('src/app/api/voice/stream-speech/route.ts');
+  const overlay = source('src/app/overlay/voices/[roomId]/page.tsx');
+  assert.match(route, /validVoiceSource\(roomId, sourceKey\)/);
+  assert.match(route, /streamVoiceEnabled/);
+  assert.match(route, /rooms\/\$\{roomId\}\/users/);
+  assert.match(route, /api\/say\/next/);
+  assert.match(overlay, /api\/voice\/stream-speech/);
+  assert.match(overlay, /playNextSay/);
+  assert.match(overlay, /sayPoll = setInterval/);
+  assert.match(overlay, /sayAudios\.forEach/);
+});
