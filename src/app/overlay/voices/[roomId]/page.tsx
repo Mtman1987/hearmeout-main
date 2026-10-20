@@ -3,7 +3,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { useParams, useSearchParams } from 'next/navigation';
 import Peer, { MediaConnection } from 'peerjs';
-import { Room, RoomEvent, Track, RemoteParticipant, RemoteTrackPublication } from 'livekit-client';
 
 export default function StreamVoices() {
   const { roomId } = useParams<{ roomId: string }>();
@@ -17,8 +16,7 @@ export default function StreamVoices() {
     let expiryTimer: ReturnType<typeof setTimeout> | undefined;
     let peerPoll: ReturnType<typeof setInterval> | undefined;
     let presenceTimer: ReturnType<typeof setInterval> | undefined;
-    let retry: ReturnType<typeof setTimeout> | undefined;
-    let room: Room | undefined, peer: Peer | undefined;
+    let peer: Peer | undefined;
     let silentContext: AudioContext | undefined;
     let silentStream: MediaStream | undefined;
     const peerCalls = new Map<string, MediaConnection>();
@@ -43,11 +41,7 @@ export default function StreamVoices() {
       elements.add(audio); audioRoot.current?.appendChild(audio); applyVolume();
       void audio.play().catch(() => { if (!stopped) setStatus('audio-blocked'); });
     };
-    const subscribe = (publication: RemoteTrackPublication, participant: RemoteParticipant) => {
-      if (publication.kind !== Track.Kind.Audio) return;
-      if (/^(dj-|dj-worker-|stream-listener:)/.test(participant.identity) || /^(overlay-music|music)$/i.test(publication.trackName)) return;
-      publication.setSubscribed(true);
-    };
+
 
     const startPeerFallback = async () => {
       try {
@@ -115,7 +109,7 @@ export default function StreamVoices() {
     }, 15000);
     return () => {
       stopped = true; clearInterval(enabledTimer);
-      if (expiryTimer) clearTimeout(expiryTimer); if (retry) clearTimeout(retry);
+      if (expiryTimer) clearTimeout(expiryTimer);
       if (peerPoll) clearInterval(peerPoll); if (presenceTimer) clearInterval(presenceTimer);
       window.removeEventListener('message', onMessage); clearAudio();
       peerCalls.forEach(call => { try { call.close(); } catch {} }); peerCalls.clear();
@@ -125,7 +119,6 @@ export default function StreamVoices() {
       }
       silentStream?.getTracks().forEach(track => track.stop());
       if (silentContext) void silentContext.close().catch(() => {});
-      void room?.disconnect();
     };
   }, [roomId, sourceKey]);
 
