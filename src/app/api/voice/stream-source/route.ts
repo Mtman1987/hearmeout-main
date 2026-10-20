@@ -17,7 +17,18 @@ export async function GET(request: NextRequest) {
   if (request.nextUrl.searchParams.get('list') === '1') {
     const session = await getSession();
     if (!session) return NextResponse.json({ error: 'Sign in to HearMeOut' }, { status: 401, headers });
-    return NextResponse.json({ rooms: db.list('rooms').filter(r => r.data.ownerId === session.uid && alive(r.data)).map(r => ({ id: r.id, name: r.data.name || r.id, protected: !!r.data.password, password: r.data.password || '', broadcasting: !!r.data.streamVoiceEnabled })) }, { headers });
+    const isAdmin = !!session.user?.isAdmin;
+    const rooms = db.list('rooms').filter(r =>
+      alive(r.data) &&
+      (r.data.ownerId === session.uid || (isAdmin && r.id === 'mtman' && r.data.systemRoom === true))
+    ).map(r => ({
+      id: r.id,
+      name: r.id === 'mtman' ? 'mtman' : (r.data.name || r.id),
+      protected: !!r.data.password,
+      password: r.data.password || '',
+      broadcasting: !!r.data.streamVoiceEnabled,
+    }));
+    return NextResponse.json({ rooms }, { headers });
   }
   const roomId = request.nextUrl.searchParams.get('roomId') || '';
   const key = request.nextUrl.searchParams.get('sourceKey') || '';
@@ -41,14 +52,15 @@ export async function POST(request: NextRequest) {
   const session = internal ? null : await getSession();
   if (!internal && !session) return NextResponse.json({ error: 'Sign in to HearMeOut' }, { status: 401, headers });
   const body = await request.json().catch(() => ({}));
-  const ownerId = internal ? String(body.ownerId || '') : session!.uid;
   const action = String(body.action || 'select');
   if (!['create', 'select', 'source', 'off'].includes(action)) return NextResponse.json({ error: 'Invalid action' }, { status: 400, headers });
   const roomId = action === 'create' ? `voice-${randomUUID()}` : String(body.roomId || '');
   if (!validVoiceRoomId(roomId)) return NextResponse.json({ error: 'Invalid room' }, { status: 400, headers });
   await ensureDb();
-  if (!db.get('users', ownerId)) return NextResponse.json({ error: 'Room owner was not found' }, { status: 404, headers });
   const previous = db.get('rooms', roomId);
+  const adminManagingSystemRoom = !internal && !!session?.user?.isAdmin && roomId === 'mtman' && previous?.systemRoom === true;
+  const ownerId = internal ? String(body.ownerId || '') : (adminManagingSystemRoom ? String(previous?.ownerId || '') : session!.uid);
+  if (!db.get('users', ownerId)) return NextResponse.json({ error: 'Room owner was not found' }, { status: 404, headers });
   if (action !== 'create' && !previous) return NextResponse.json({ error: 'Room not found' }, { status: 404, headers });
   if (previous && ((!previous.ownerId && !internal) || (previous.ownerId && previous.ownerId !== ownerId))) return NextResponse.json({ error: 'Only the room owner can broadcast it' }, { status: 403, headers });
   if (!internal && previous && !alive(previous)) return NextResponse.json({ error: 'This room expired. Create a new room.' }, { status: 410, headers });
@@ -66,12 +78,13 @@ export async function POST(request: NextRequest) {
   if (!password.trim()) return NextResponse.json({ error: 'Set a room password before broadcasting voices' }, { status: 400, headers });
   const permanentLounge = internal && roomId === 'mtman' && body.permanentLounge === true;
   const now = new Date().toISOString();
+  const roomName = roomId === 'mtman' ? 'mtman' : String(body.name || previous?.name || 'Stream voice room').slice(0, 80);
   db.set('rooms', roomId, {
-    name: String(body.name || previous?.name || 'Stream voice room').slice(0, 80), ownerId, createdBy: ownerId,
+    name: roomName, ownerId, createdBy: ownerId,
     isPrivate: true, password, streamVoiceEnabled: true,
     ...(action === 'create' ? { createdAt: now, expiresAt: roomExpiryFrom(), playlist: [], isPlaying: false } : {}),
     ...(permanentLounge ? { createdAt: null, expiresAt: null, systemRoom: true, hidden: true } : {}),
     description: 'Live stream voice room. Your unmuted microphone is broadcast on stream.',
   }, { merge: true });
-  return NextResponse.json({ roomId, name: body.name || previous?.name || 'Stream voice room', roomUrl: `${config.baseUrl}/rooms/${roomId}`, sourceUrl: voiceSourceUrl(roomId, config.baseUrl) }, { headers });
+  return NextResponse.json({ roomId, name: roomName, roomUrl: `${config.baseUrl}/rooms/${roomId}`, sourceUrl: voiceSourceUrl(roomId, config.baseUrl) }, { headers });
 }
