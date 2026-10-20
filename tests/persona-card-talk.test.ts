@@ -91,8 +91,9 @@ test('bot talk details collapse behind the mic control without unmounting the Sa
   assert.match(userList, /volumesByPersona/);
 
   const commands = source('src/app/api/bot/commands/route.ts');
-  assert.match(commands, /queuedResult\.skipped && sayStreamKey && personaId/);
-  assert.match(commands, /deliveryTenantId = personaId/);
+  assert.match(commands, /attempt < 3 && queuedResult\.skipped/);
+  assert.match(commands, /queueSpeech\(sayStreamKey\)/);
+  assert.doesNotMatch(commands, /deliveryTenantId = personaId/);
 });
 
 test('Discord Activity panel is hidden by default and opened from the DJ card', () => {
