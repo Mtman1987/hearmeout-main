@@ -17,6 +17,26 @@ function streamKey(roomId: string, personaId: string): string {
   return `hmo-say-${clean(roomId, 96, 'room')}-${clean(personaId, 96, 'persona')}`.slice(0, 128);
 }
 
+// An active stream overlay is the public Say Player for both the room-scoped
+// stream and the persona's public stream. Touch both queue keys during roster
+// refresh so a reply arriving immediately after overlay startup cannot race
+// the first per-persona poll and be incorrectly dropped as "no listener".
+async function touchSayListener(tenantId: string): Promise<boolean> {
+  const url = new URL('/api/say/next', STREAMWEAVER_BASE_URL);
+  url.searchParams.set('tenantId', tenantId);
+  url.searchParams.set('latest', '1');
+  try {
+    const response = await fetch(url, {
+      headers: { Accept: 'application/json' },
+      cache: 'no-store',
+      signal: typeof AbortSignal.timeout === 'function' ? AbortSignal.timeout(4000) : undefined,
+    });
+    return response.ok;
+  } catch {
+    return false;
+  }
+}
+
 export async function GET(request: NextRequest) {
   const params = request.nextUrl.searchParams;
   const roomId = String(params.get('roomId') || '').trim().slice(0, 96);
@@ -44,7 +64,20 @@ export async function GET(request: NextRequest) {
         ))
         .map(({ id, data }) => String(data?.personaId || data?.ownerTenantId || id.replace(/^persona:/, '')).trim())
         .filter((id) => !!id && id.length <= 128);
-      return NextResponse.json({ ok: true, personas: Array.from(new Set(personas)) }, { headers });
+      const uniquePersonas = Array.from(new Set(personas));
+
+      // StreamWeaver only considers a Say queue active after /api/say/next is
+      // polled. The overlay's roster request is our earliest reliable heartbeat;
+      // mark both supported delivery keys before returning the roster.
+      const presenceChecks = uniquePersonas.flatMap((personaId) => [
+        touchSayListener(streamKey(roomId, personaId)),
+        touchSayListener(personaId),
+      ]);
+      const presenceResults = await Promise.all(presenceChecks);
+      if (presenceResults.some((active) => !active)) {
+        console.warn('[HearMeOut stream Say audio] One or more Say listener heartbeats failed.');
+      }
+      return NextResponse.json({ ok: true, personas: uniquePersonas }, { headers });
     }
 
     const personaId = String(params.get('personaId') || '').trim().slice(0, 128);
