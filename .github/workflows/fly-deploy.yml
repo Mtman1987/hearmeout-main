@@ -36,12 +36,11 @@ jobs:
           set -euo pipefail
           voice_secret="${HEARMEOUT_PERSONA_VOICE_SECRET:-${BOT_SECRET_KEY:-${STREAMWEAVER_SECRET:-}}}"
           if [ -z "$voice_secret" ]; then
-            flyctl secrets unset HEARMEOUT_PERSONA_VOICE_SECRET --app hearmeout-main || true
-            echo "::error::No existing shared persona voice credential is available in repository/organization secrets; refusing to create a mismatched credential."
-            exit 1
+            echo "::warning::No shared persona voice credential is available in GitHub Actions; leaving the existing Fly secret untouched and continuing deployment."
+          else
+            flyctl secrets set HEARMEOUT_PERSONA_VOICE_SECRET="$voice_secret" --app hearmeout-main
+            unset voice_secret
           fi
-          flyctl secrets set HEARMEOUT_PERSONA_VOICE_SECRET="$voice_secret" --app hearmeout-main
-          unset voice_secret
       - name: Deploy live app
         run: flyctl deploy . --remote-only --config fly.toml --build-arg BUILD_SHA=${GITHUB_SHA} --build-arg GITHUB_SHA=${GITHUB_SHA} --build-arg GH_SHA=${GITHUB_SHA} --yes
         env:
