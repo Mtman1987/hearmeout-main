@@ -804,6 +804,17 @@ function RoomContent({ room, roomId }: { room: RoomData; roomId: string }) {
                     }
                     audioEl.srcObject = stream;
                     audioEl.play().then(() => {
+                        fetch('/api/client-log', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                area: 'peer-voice-playback',
+                                message: 'audio.play() succeeded; audioTracks=' + JSON.stringify(stream.getAudioTracks().map(track => ({ readyState: track.readyState, enabled: track.enabled, muted: track.muted }))),
+                                roomId,
+                                identity: peerId,
+                                userAgent: navigator.userAgent,
+                            }),
+                        }).catch(() => {});
                         setPeerAudioBlocked(false);
                     }).catch((playbackError) => {
                         setPeerAudioBlocked(true);
