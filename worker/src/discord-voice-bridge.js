@@ -969,20 +969,27 @@ class VoiceBridge {
       throw new Error('Selected channel is not a voice channel');
     }
 
-    // Prefer LiveKit while it is available. If the quota or transport is down,
-    // keep the Discord connection and publish its mixed voice through PeerJS.
-    try {
-      await this.startPublisher();
-      await this.startListeners();
-      this.transport = 'livekit';
-    } catch (liveKitError) {
-      console.warn('[VoiceBridge:' + this.roomId + '] LiveKit setup failed; trying PeerJS fallback:', liveKitError?.message || liveKitError);
+    // Use PeerJS as the primary transport for the Discord bridge.
+    // LiveKit may complete signaling/setup while its media path is unusable;
+    // a setup-only fallback would then never activate and Discord return audio
+    // would remain stranded on LiveKit. Keep the existing LiveKit implementation
+    // available only as an explicit operator opt-in.
+    if (String(process.env.DISCORD_BRIDGE_TRANSPORT || 'peerjs').toLowerCase() === 'livekit') {
       try {
-        await this.cleanupLiveKitTransport();
-        await this.startPeerPublisher();
-      } catch (peerError) {
-        throw new Error('LiveKit setup failed (' + (liveKitError?.message || liveKitError) + '); PeerJS fallback failed (' + (peerError?.message || peerError) + ')');
+        await this.startPublisher();
+        await this.startListeners();
+        this.transport = 'livekit';
+      } catch (liveKitError) {
+        console.warn('[VoiceBridge:' + this.roomId + '] Explicit LiveKit setup failed; switching to PeerJS:', liveKitError?.message || liveKitError);
+        try {
+          await this.cleanupLiveKitTransport();
+          await this.startPeerPublisher();
+        } catch (peerError) {
+          throw new Error('LiveKit setup failed (' + (liveKitError?.message || liveKitError) + '); PeerJS fallback failed (' + (peerError?.message || peerError) + ')');
+        }
       }
+    } else {
+      await this.startPeerPublisher();
     }
 
     this.connection = joinVoiceChannel({
