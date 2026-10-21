@@ -85,11 +85,17 @@ test('worker build reports real Discord mute state and handles Stage suppression
 });
 
 
-test('Discord bridge falls back to PeerJS when LiveKit is unavailable', () => {
+test('Discord bridge uses PeerJS by default with an explicit LiveKit opt-in', () => {
   assert.match(bridge, /async startPeerPublisher\(\)/);
   assert.match(bridge, /this\.peerAudioSource\.onData\(/);
   assert.match(bridge, /hmo-zdiscord-/);
-  assert.match(bridge, /LiveKit setup failed; trying PeerJS fallback/);
+  const transportSetup = bridge.slice(
+    bridge.indexOf('// Use PeerJS as the primary transport for the Discord bridge.'),
+    bridge.indexOf('this.connection = joinVoiceChannel'),
+  );
+  assert.match(transportSetup, /DISCORD_BRIDGE_TRANSPORT \|\| 'peerjs'/);
+  assert.match(transportSetup, /else\s*\{\s*await this\.startPeerPublisher\(\);\s*\}/);
+  assert.match(transportSetup, /Explicit LiveKit setup failed; switching to PeerJS/);
   assert.match(bridge, /this\.stopped \|\| this\.liveKitCleanupInProgress \|\| this\.peerFallback/);
   assert.match(bridge, /RTCAudioSink/);
   assert.match(bridge, /transport: this\.peerFallback \? 'peerjs' : 'livekit'/);
