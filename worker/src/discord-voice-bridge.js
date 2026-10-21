@@ -280,7 +280,7 @@ class VoiceBridge {
       frameSize: SAMPLES_PER_FRAME,
     });
 
-    const userState = { opusStream, decoder, stopped: false };
+    const userState = { opusStream, decoder, stopped: false, decodedChunks: 0, decodedNonSilentChunks: 0, decodedPeak: 0 };
     this.userDecoders.set(userId, userState);
     this.discordMixSources.set(userId, new DiscordPcmJitterSource({
       frameBytes: BYTES_PER_FRAME,
@@ -295,6 +295,14 @@ class VoiceBridge {
       if (userState.stopped) return;
       const src = this.discordMixSources.get(userId);
       if (!src) return;
+      userState.decodedChunks += 1;
+      let peak = 0;
+      for (let i = 0; i + 1 < pcm.length; i += 2) {
+        const sample = Math.abs(pcm.readInt16LE(i));
+        if (sample > peak) peak = sample;
+      }
+      userState.decodedPeak = Math.max(userState.decodedPeak, peak);
+      if (peak > 128) userState.decodedNonSilentChunks += 1;
       src.push(pcm);
     });
     opusStream.on('close', () => this.handleMemberLeft(userId));
@@ -336,6 +344,10 @@ class VoiceBridge {
   async discordMixTick() {
     if (this.stopped || (!this.mixedSource && !this.peerAudioSource)) return;
 
+    const diagNow = Date.now();
+    if (!this._discordReturnAudioDiag) this._discordReturnAudioDiag = { since: diagNow, ticks: 0, ticksWithPcm: 0, publishedTicks: 0, peak: 0 };
+    const diag = this._discordReturnAudioDiag;
+    diag.ticks += 1;
     const frames = [];
     for (const src of this.discordMixSources.values()) {
       const frame = src.nextFrame();
@@ -359,7 +371,30 @@ class VoiceBridge {
     }
 
     const samples = new Int16Array(out.buffer, out.byteOffset, out.length / 2);
+    if (frames.length) diag.ticksWithPcm += 1;
+    let outputPeak = 0;
+    for (let i = 0; i < samples.length; i += 1) {
+      const sample = Math.abs(samples[i]);
+      if (sample > outputPeak) outputPeak = sample;
+    }
+    diag.peak = Math.max(diag.peak, outputPeak);
     if (this.peerAudioSource) {
+      diag.publishedTicks += 1;
+      if (diagNow - diag.since >= 5000) {
+        const users = [];
+        for (const [userId, state] of this.userDecoders) {
+          users.push({ userId, decodedChunks: state.decodedChunks, nonSilentChunks: state.decodedNonSilentChunks, peak: state.decodedPeak });
+          state.decodedChunks = 0;
+          state.decodedNonSilentChunks = 0;
+          state.decodedPeak = 0;
+        }
+        console.log('[VoiceBridge:' + this.roomId + '] Discord return-audio diagnostics', JSON.stringify({ transport: this.transport, peerId: this.peerId || null, users, mixerSources: this.discordMixSources.size, ticks: diag.ticks, ticksWithPcm: diag.ticksWithPcm, publishedTicks: diag.publishedTicks, outputPeak: diag.peak, publishErrors: this.discordCaptureErrors || 0 }));
+        diag.since = diagNow;
+        diag.ticks = 0;
+        diag.ticksWithPcm = 0;
+        diag.publishedTicks = 0;
+        diag.peak = 0;
+      }
       try {
         this.peerAudioSource.onData({
           samples,
@@ -934,20 +969,27 @@ class VoiceBridge {
       throw new Error('Selected channel is not a voice channel');
     }
 
-    // Prefer LiveKit while it is available. If the quota or transport is down,
-    // keep the Discord connection and publish its mixed voice through PeerJS.
-    try {
-      await this.startPublisher();
-      await this.startListeners();
-      this.transport = 'livekit';
-    } catch (liveKitError) {
-      console.warn('[VoiceBridge:' + this.roomId + '] LiveKit setup failed; trying PeerJS fallback:', liveKitError?.message || liveKitError);
+    // Use PeerJS as the primary transport for the Discord bridge.
+    // LiveKit may complete signaling/setup while its media path is unusable;
+    // a setup-only fallback would then never activate and Discord return audio
+    // would remain stranded on LiveKit. Keep the existing LiveKit implementation
+    // available only as an explicit operator opt-in.
+    if (String(process.env.DISCORD_BRIDGE_TRANSPORT || 'peerjs').toLowerCase() === 'livekit') {
       try {
-        await this.cleanupLiveKitTransport();
-        await this.startPeerPublisher();
-      } catch (peerError) {
-        throw new Error('LiveKit setup failed (' + (liveKitError?.message || liveKitError) + '); PeerJS fallback failed (' + (peerError?.message || peerError) + ')');
+        await this.startPublisher();
+        await this.startListeners();
+        this.transport = 'livekit';
+      } catch (liveKitError) {
+        console.warn('[VoiceBridge:' + this.roomId + '] Explicit LiveKit setup failed; switching to PeerJS:', liveKitError?.message || liveKitError);
+        try {
+          await this.cleanupLiveKitTransport();
+          await this.startPeerPublisher();
+        } catch (peerError) {
+          throw new Error('LiveKit setup failed (' + (liveKitError?.message || liveKitError) + '); PeerJS fallback failed (' + (peerError?.message || peerError) + ')');
+        }
       }
+    } else {
+      await this.startPeerPublisher();
     }
 
     this.connection = joinVoiceChannel({

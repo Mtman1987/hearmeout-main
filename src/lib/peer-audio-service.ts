@@ -244,7 +244,13 @@ export class PeerVoiceMesh {
     call.on('stream', (remoteStream) => {
       clearTimeout(timeout);
       this.callTimeouts.delete(remotePeerId);
-      this.report(`${direction} media stream connected`, remotePeerId);
+      const tracks = remoteStream.getAudioTracks().map((track) => ({ id: track.id, readyState: track.readyState, enabled: track.enabled, muted: track.muted }));
+      this.report(`${direction} media stream connected; audioTracks=${JSON.stringify(tracks)}`, remotePeerId);
+      for (const track of remoteStream.getAudioTracks()) {
+        track.addEventListener('unmute', () => this.report(`${direction} remote audio track unmuted; readyState=${track.readyState}; enabled=${track.enabled}`, remotePeerId));
+        track.addEventListener('mute', () => this.report(`${direction} remote audio track muted; readyState=${track.readyState}; enabled=${track.enabled}`, remotePeerId));
+        track.addEventListener('ended', () => this.report(`${direction} remote audio track ended`, remotePeerId));
+      }
       this.onRemoteStream?.(remotePeerId, remoteStream);
     });
     call.on('close', () => {
