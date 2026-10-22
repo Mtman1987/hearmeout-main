@@ -271,6 +271,9 @@ export default function WatchRoomClient({ sessionId, activityMode = false, canPa
   const ttsQueueRef = useRef<any[]>([]);
   const ttsPlayingRef = useRef(false);
   const localAudioUnlockedRef = useRef(false);
+  const playbackClientIdRef = useRef('watch-' + Math.random().toString(36).slice(2));
+  const musicEndWaitTimerRef = useRef<number | null>(null);
+  const currentRequestIdRef = useRef<string | null>(null);
   const [state, setState] = useState<WatchState | null>(null);
   const [query, setQuery] = useState('');
   const [connected, setConnected] = useState(false);
@@ -290,6 +293,7 @@ export default function WatchRoomClient({ sessionId, activityMode = false, canPa
   const [audioTracks, setAudioTracks] = useState<Array<{ index: number; name: string; language: string }>>([]);
   const [selectedAudioTrack, setSelectedAudioTrack] = useState(-1);
 
+  currentRequestIdRef.current = state?.current?.requestId || null;
   const currentItem = state?.current?.item;
   const activeEmbedFallback = embedFallback?.requestId === state?.current?.requestId ? embedFallback : null;
   const currentPlaybackUrl = activeEmbedFallback
@@ -351,7 +355,8 @@ export default function WatchRoomClient({ sessionId, activityMode = false, canPa
         body: JSON.stringify({
           action,
           position,
-          expectedRequestId: action === 'next' ? state?.current?.requestId : undefined,
+          expectedRequestId: action === 'next' || action === 'ended' ? state?.current?.requestId : undefined,
+          playerId: playbackClientIdRef.current,
           isHost: isHostControl,
           isAdmin: canPause || activityMode,
           platform: activityMode ? 'activity' : 'web',
@@ -1090,6 +1095,18 @@ export default function WatchRoomClient({ sessionId, activityMode = false, canPa
                   return;
                 }
                 if (requestId) prematureEndRecoveryCountsRef.current[requestId] = 0;
+                if (state?.current?.item?.type === 'music' && requestId) {
+                  setMediaStatus('Song finished; waiting for the other player');
+                  void sendControl('ended', 0);
+                  if (musicEndWaitTimerRef.current !== null) window.clearTimeout(musicEndWaitTimerRef.current);
+                  musicEndWaitTimerRef.current = window.setTimeout(() => {
+                    musicEndWaitTimerRef.current = null;
+                    if (currentRequestIdRef.current !== requestId) return;
+                    setMediaStatus('Advancing after the 3-minute wait limit');
+                    void sendControl('next', 0);
+                  }, 180000);
+                  return;
+                }
                 setMediaStatus('ended');
                 if (canSkip) nextItem();
               }}
