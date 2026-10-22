@@ -884,11 +884,6 @@ export default function WatchRoomClient({ sessionId, activityMode = false, canPa
   }, [state?.playback.status, state?.playback.position, state?.playback.updatedAt]);
 
   useEffect(() => {
-    const interval = window.setInterval(() => applyPlaybackState(), 1000);
-    return () => window.clearInterval(interval);
-  }, [state?.current?.requestId, state?.playback.status, state?.playback.position, state?.playback.updatedAt, embeddedMode]);
-
-  useEffect(() => {
     const video = videoRef.current;
     if (embeddedMode) {
       youtubeCommand('setVolume', [Math.round(playerGain(volume, currentItem) * 100)]);
