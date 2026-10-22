@@ -1321,7 +1321,7 @@ async function control(action, positionOverride) {
         : (media.currentTime || 0),
   };
   try {
-    const expectedRequestId = (action === 'next' || action === 'ended') && state && state.current ? state.current.requestId : '';
+    const expectedRequestId = (action === 'next' || action === 'ended' || action === 'checkpoint') && state && state.current ? state.current.requestId : '';
     const controlUrl = '/api/watch/sessions/' + sessionId + '/quick-control?action=' + encodeURIComponent(action) + '&position=' + encodeURIComponent(String(body.position || 0)) + '&expectedRequestId=' + encodeURIComponent(expectedRequestId) + '&playerId=' + encodeURIComponent(ACTIVITY_REQUESTER_ID) + '&format=json&platform=activity&isHost=true';
     const result = await api(controlUrl);
     render(result.session);
@@ -1935,6 +1935,10 @@ try {
   if (IS_DISCORD_ACTIVITY && params.get('guild_id')) setInterval(checkActivityBridgeBot, 30000);
   refresh();
   setInterval(refresh, 1000);
+  setInterval(() => {
+    if (!state?.current || state.playback?.status !== 'playing' || !media || media.paused || mediaIsBuffering) return;
+    control('checkpoint', Number(media.currentTime || 0)).catch(() => {});
+  }, 15000);
 } catch (err) {
   statusEl.textContent = 'Activity error';
   errorEl.textContent = err && err.message ? err.message : String(err);
