@@ -1240,7 +1240,6 @@ function render(nextState) {
       musicPlaybackMode = preferredMusicPlaybackMode(state.current.item);
       loadMedia(state.current.item);
     }
-    applyPlayback();
   } else {
     titleEl.textContent = 'Waiting for a request';
     mediaEl.textContent = 'Media: idle';
