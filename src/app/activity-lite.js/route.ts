@@ -1088,6 +1088,7 @@ async function loadMedia(item) {
   if (bufferWarmupTimer) clearTimeout(bufferWarmupTimer);
   bufferWarmupTimer = null;
   showLoading('Loading your stream…');
+  localPlaybackPaused = false;
   if (streamEndRecoveryTimer) clearTimeout(streamEndRecoveryTimer);
   streamEndRecoveryTimer = null;
   if (hls) {
@@ -1216,7 +1217,7 @@ function render(nextState) {
   empty.style.display = state.current ? 'none' : 'grid';
   popoutBtn.disabled = !state.current;
   if (playPauseBtn) {
-    const isPlaying = Boolean(state.current && state.playback?.status === 'playing');
+    const isPlaying = Boolean(state.current && !localPlaybackPaused);
     const label = isPlaying ? 'Pause' : 'Play';
     playPauseBtn.textContent = isPlaying ? '❚❚' : '▶';
     playPauseBtn.title = label;
