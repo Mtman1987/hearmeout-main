@@ -1017,6 +1017,7 @@ export async function requestWatchItem(params: {
 }
 
 function assertCanControlWatchSession(session: WatchSession, action: string, actor?: WatchControlActor) {
+  if (action === 'ended') return;
   const metadata = session.metadata || inferSessionMetadata(session.id, session.guildId, session.channelId);
   session.metadata = metadata;
   const scopeType = metadata.scopeType;
