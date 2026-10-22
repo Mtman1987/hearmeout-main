@@ -1076,6 +1076,7 @@ export default function WatchRoomClient({ sessionId, activityMode = false, canPa
                 const endedBeforeSharedTimeline = Boolean(
                   video
                   && requestId
+                  && state?.current?.item?.type !== 'music'
                   && state?.playback?.status === 'playing'
                   && Number.isFinite(duration)
                   && duration > 0
