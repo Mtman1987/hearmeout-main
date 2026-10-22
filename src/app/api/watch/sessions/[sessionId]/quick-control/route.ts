@@ -9,7 +9,7 @@ const CORS_HEADERS = {
   'access-control-allow-headers': 'content-type',
 };
 
-const ACTIONS = new Set(['play', 'pause', 'seek', 'next', 'jump', 'clear', 'mute', 'unmute', 'volume', 'auto-radio']);
+const ACTIONS = new Set(['play', 'pause', 'seek', 'next', 'jump', 'clear', 'mute', 'unmute', 'volume', 'auto-radio', 'ended']);
 
 export async function GET(request: Request, context: { params: Promise<{ sessionId: string }> }) {
   const { sessionId } = await context.params;
@@ -35,6 +35,7 @@ export async function GET(request: Request, context: { params: Promise<{ session
       isAdmin: ['1', 'true', 'yes'].includes(String(url.searchParams.get('isAdmin') || '').toLowerCase()),
       platform: (url.searchParams.get('platform') as any) || undefined,
       expectedRequestId: url.searchParams.get('expectedRequestId') || undefined,
+      playerId: url.searchParams.get('playerId') || undefined,
     });
   } catch (error: any) {
     const message = error?.message || 'Unable to update watch session';
