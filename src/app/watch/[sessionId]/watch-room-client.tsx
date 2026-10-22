@@ -452,7 +452,6 @@ export default function WatchRoomClient({ sessionId, activityMode = false, canPa
   async function playLocalAndRemote() {
     if (embeddedMode) {
       youtubeCommand('playVideo');
-      if (canPause) await sendControl('play', embeddedCurrentTimeRef.current || playbackPosition(state?.playback)).catch(() => {});
       return;
     }
     const video = videoRef.current;
@@ -464,17 +463,14 @@ export default function WatchRoomClient({ sessionId, activityMode = false, canPa
         setMediaStatus(`Play blocked: ${message}`);
       }
     }
-    if (canPause) await sendControl('play').catch(() => {});
   }
 
   async function pauseLocalAndRemote() {
     if (embeddedMode) {
       youtubeCommand('pauseVideo');
-      await sendControl('pause', embeddedCurrentTimeRef.current || playbackPosition(state?.playback)).catch(() => {});
       return;
     }
     videoRef.current?.pause();
-    await sendControl('pause').catch(() => {});
   }
 
   async function syncNativePlay() {
