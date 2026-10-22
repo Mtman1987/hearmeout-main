@@ -121,6 +121,8 @@ function isBrowserLimitedVideo(item: any) {
 
 function hlsFallbackUrlFor(item: any) {
   const playbackUrl = String(playbackUrlForItem(item) || '');
+  // Avoid server-side HLS generation for browser-compatible provider media.
+  if (!String(item?.overview || '').toLowerCase().includes('(mkv)')) return playbackUrl;
   const match = playbackUrl.match(/^\/activity-provider\/xtream\/(vod|series)\/(\d+)$/i);
   const episodeMatch = playbackUrl.match(/^\/activity-provider\/xtream\/episode\/(\d+-[a-z0-9]+)$/i);
   if (episodeMatch) return `/api/watch/xtream/hls/episode-${episodeMatch[1].toLowerCase()}/index.m3u8`;
