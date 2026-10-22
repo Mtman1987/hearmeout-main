@@ -1158,7 +1158,7 @@ function maybePrepareSharedHls(item: WatchCatalogItem) {
 
   const match = item.playbackUrl.match(/^\/activity-provider\/xtream\/(vod|series)\/(\d+)$/);
   const episodeMatch = item.playbackUrl.match(/^\/activity-provider\/xtream\/episode\/(\d+-[a-z0-9]+)$/i);
-  if (episodeMatch) {
+  if (episodeMatch && String(item.overview || '').toLowerCase().includes('(mkv)')) {
     fetch(`${getPublicBaseUrl()}/api/watch/xtream/hls/episode-${episodeMatch[1].toLowerCase()}/index.m3u8`).catch((error) => {
       console.error('[WatchRequest] Xtream episode HLS start failed:', error?.message || error);
     });
