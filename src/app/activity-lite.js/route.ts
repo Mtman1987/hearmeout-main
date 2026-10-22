@@ -571,6 +571,8 @@ function playbackUrlForItem(item) {
 
 function hlsFallbackUrlForItem(item) {
   const playbackUrl = String(playbackUrlForItem(item) || '');
+  // Let browser-compatible provider media play directly; only MKV needs server-side HLS conversion.
+  if (!String(item?.overview || '').toLowerCase().includes('(mkv)')) return playbackUrl;
   const match = playbackUrl.match(/^\\/activity-provider\\/xtream\\/(vod|series)\\/(\\d+)$/i);
   const episodeMatch = playbackUrl.match(/^\\/activity-provider\\/xtream\\/episode\\/(\\d+-[a-z0-9]+)$/i);
   if (episodeMatch) return '/api/watch/xtream/hls/episode-' + episodeMatch[1].toLowerCase() + '/index.m3u8';
