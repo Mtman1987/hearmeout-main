@@ -538,3 +538,21 @@ test('HearMeOut room bot invite always supplies explicit installation scopes', a
   assert.equal(invite.searchParams.get('integration_type'), '0');
   assert.equal(response.headers.get('cache-control'), 'no-store');
 });
+
+
+test('watch-party players keep local playback independent and coordinate music boundaries', () => {
+  const activity = readFileSync('src/app/activity-lite.js/route.ts', 'utf8');
+  const watchRoom = readFileSync('src/app/watch/[sessionId]/watch-room-client.tsx', 'utf8');
+  const service = readFileSync('src/lib/watch/watch-request-service.ts', 'utf8');
+
+  assert.match(activity, /control\('ended', 0\)/);
+  assert.match(activity, /180000/);
+  assert.match(activity, /control\('checkpoint'/);
+  assert.match(watchRoom, /sendControl\('ended', 0\)/);
+  assert.match(watchRoom, /180000/);
+  assert.match(watchRoom, /sendControl\('checkpoint'/);
+  assert.match(service, /action === 'ended'/);
+  assert.match(service, /action === 'checkpoint'/);
+  assert.match(service, /musicEndWait/);
+  assert.match(service, /firstPlayerId/);
+});
