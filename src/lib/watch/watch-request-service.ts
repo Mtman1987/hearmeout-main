@@ -75,6 +75,7 @@ type WatchSessionMetadata = {
   mediaKind: WatchMediaKind;
   createdAt: number;
   lastActiveAt: number;
+  musicEndWait?: { requestId: string; firstEndedAt: number; firstPlayerId: string };
 };
 
 type WatchSession = {
@@ -119,6 +120,7 @@ type WatchControlActor = {
   isAdmin?: boolean;
   platform?: 'room' | 'discord' | 'activity' | 'web' | 'admin' | 'twitch';
   expectedRequestId?: string;
+  playerId?: string;
 };
 
 const TEST_CATALOG: WatchCatalogItem[] = [
@@ -1364,8 +1366,30 @@ export async function controlWatchSession(sessionId: string, action: string, pos
     return session;
   }
 
+  if (action === 'ended') {
+    if (session.current?.item?.type !== 'music') return session;
+    if (actor?.expectedRequestId && session.current?.requestId !== actor.expectedRequestId) return session;
+    const now = Date.now();
+    const playerId = String(actor?.playerId || actor?.platform || 'player').slice(0, 120);
+    const wait = session.metadata?.musicEndWait;
+    if (wait?.requestId === session.current.requestId && wait.firstPlayerId !== playerId) {
+      action = 'next';
+    } else {
+      session.metadata = {
+        ...(session.metadata || inferSessionMetadata(session.id, session.guildId, session.channelId)),
+        musicEndWait: wait?.requestId === session.current.requestId
+          ? wait
+          : { requestId: session.current.requestId, firstEndedAt: now, firstPlayerId: playerId },
+      };
+      addEvent(session, `Player finished ${session.current.item.title}; waiting for the other player`);
+      saveWatchStateToDisk();
+      return session;
+    }
+  }
+
   if (action === 'next') {
     if (actor?.expectedRequestId && session.current?.requestId !== actor.expectedRequestId) return session;
+    if (session.metadata) delete session.metadata.musicEndWait;
     session.current = isTwitchMusicSession(session.id)
       ? session.queue.shift() || getBackupPlaylistRequest(session)
       : session.queue.shift() || await getAutoNextEpisodeRequest(session);
