@@ -102,6 +102,7 @@ let applying = false;
 let lastSeekApplyAt = 0;
 let lastNativePlaybackAuthorityKey = '';
 let mediaIsBuffering = false;
+let localPlaybackPaused = false;
 let muted = false;
 let autoplayBlocked = false;
 let soundActivatedByButton = false;
@@ -1338,7 +1339,8 @@ async function control(action, positionOverride) {
 function handleAction(action) {
   if (action === 'play-pause') {
     if (embeddedMode) {
-      youtubeCommand(state?.playback?.status === 'playing' ? 'pauseVideo' : 'playVideo');
+      youtubeCommand(localPlaybackPaused ? 'playVideo' : 'pauseVideo');
+      localPlaybackPaused = !localPlaybackPaused;
     } else if (media.paused) {
       startVideoPlayback();
     } else {
@@ -1734,6 +1736,7 @@ function onMediaPlay(event) {
 }
 function onMediaPlaying(event) {
   if (event.currentTarget !== media) return;
+  localPlaybackPaused = false;
   mediaIsBuffering = false;
   hideLoading();
   mediaEl.textContent = 'Media: playing';
@@ -1754,6 +1757,7 @@ function onMediaLoadedData(event) {
 }
 function onMediaPause(event) {
   if (event.currentTarget !== media) return;
+  localPlaybackPaused = true;
   if (!media.ended) {
     mediaEl.textContent = 'Media: paused';
   }
@@ -1898,9 +1902,11 @@ window.addEventListener('message', (event) => {
   if (payload.event !== 'onStateChange') return;
   const info = Number(payload.info);
   if (info === 1) {
+    localPlaybackPaused = false;
     mediaEl.textContent = 'Media: embedded video playing';
     syncEmbeddedNativePlayback('play');
   } else if (info === 2) {
+    localPlaybackPaused = true;
     mediaEl.textContent = 'Media: embedded video paused';
     syncEmbeddedNativePlayback('pause');
   } else if (info === 0) {
