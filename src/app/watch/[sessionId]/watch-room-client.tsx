@@ -355,7 +355,7 @@ export default function WatchRoomClient({ sessionId, activityMode = false, canPa
         body: JSON.stringify({
           action,
           position,
-          expectedRequestId: action === 'next' || action === 'ended' ? state?.current?.requestId : undefined,
+          expectedRequestId: action === 'next' || action === 'ended' || action === 'checkpoint' ? state?.current?.requestId : undefined,
           playerId: playbackClientIdRef.current,
           isHost: isHostControl,
           isAdmin: canPause || activityMode,
@@ -684,6 +684,15 @@ export default function WatchRoomClient({ sessionId, activityMode = false, canPa
   }, [sessionId]);
 
   useEffect(() => {
+    const interval = window.setInterval(() => {
+      const video = videoRef.current;
+      if (!state?.current || state.playback?.status !== 'playing' || !video || video.paused || video.readyState < 2) return;
+      void sendControl('checkpoint', Number(video.currentTime || 0));
+    }, 15000);
+    return () => window.clearInterval(interval);
+  }, [sessionId, state?.current?.requestId, state?.playback.status]);
+
+  useEffect(() => {
     try {
       setTtsOverlayEnabled(window.localStorage.getItem('hmo_watch_tts_overlay') === '1');
       const seen = JSON.parse(window.localStorage.getItem('hmo_watch_tts_seen') || '[]');
@@ -881,7 +890,7 @@ export default function WatchRoomClient({ sessionId, activityMode = false, canPa
 
   useEffect(() => {
     applyPlaybackState();
-  }, [state?.playback.status, state?.playback.position, state?.playback.updatedAt]);
+  }, [state?.current?.requestId, state?.playback.status]);
 
   useEffect(() => {
     const video = videoRef.current;
