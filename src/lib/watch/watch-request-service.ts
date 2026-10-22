@@ -1367,6 +1367,15 @@ export async function controlWatchSession(sessionId: string, action: string, pos
     return session;
   }
 
+  if (action === 'checkpoint') {
+    if (!session.current || (actor?.expectedRequestId && session.current.requestId !== actor.expectedRequestId)) return session;
+    const reported = Math.max(0, Number(position || 0));
+    session.playback.position = Math.max(Number(session.playback.position || 0), reported);
+    session.playback.updatedAt = Date.now();
+    saveWatchStateToDisk();
+    return session;
+  }
+
   if (action === 'ended') {
     if (session.current?.item?.type !== 'music') return session;
     if (actor?.expectedRequestId && session.current?.requestId !== actor.expectedRequestId) return session;
