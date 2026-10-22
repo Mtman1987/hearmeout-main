@@ -1337,10 +1337,13 @@ async function control(action, positionOverride) {
 
 function handleAction(action) {
   if (action === 'play-pause') {
-    const nextAction = state && state.playback && state.playback.status === 'playing' ? 'pause' : 'play';
-    control(nextAction).catch((err) => {
-      errorEl.textContent = err && err.message ? err.message : String(err);
-    });
+    if (embeddedMode) {
+      youtubeCommand(state?.playback?.status === 'playing' ? 'pauseVideo' : 'playVideo');
+    } else if (media.paused) {
+      startVideoPlayback();
+    } else {
+      media.pause();
+    }
     return;
   }
   if (action === 'sync-local') {
