@@ -9,7 +9,7 @@ const CORS_HEADERS = {
   'access-control-allow-headers': 'content-type',
 };
 
-const ACTIONS = new Set(['play', 'pause', 'seek', 'next', 'jump', 'clear', 'mute', 'unmute', 'volume', 'auto-radio', 'ended']);
+const ACTIONS = new Set(['play', 'pause', 'seek', 'next', 'jump', 'clear', 'mute', 'unmute', 'volume', 'auto-radio', 'ended', 'checkpoint']);
 
 export async function GET(request: Request, context: { params: Promise<{ sessionId: string }> }) {
   const { sessionId } = await context.params;
