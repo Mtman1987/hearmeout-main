@@ -134,6 +134,7 @@ let localAudioContext = null;
 let localAudioGain = null;
 const localAudioSources = new Map();
 let streamEndRecoveryTimer = null;
+let musicEndWaitTimer = null;
 let bufferWarmupTimer = null;
 const loadingSplash = document.getElementById('loading-splash');
 const loadingMessage = document.getElementById('loading-message');
@@ -1321,8 +1322,8 @@ async function control(action, positionOverride) {
         : (media.currentTime || 0),
   };
   try {
-    const expectedRequestId = action === 'next' && state && state.current ? state.current.requestId : '';
-    const controlUrl = '/api/watch/sessions/' + sessionId + '/quick-control?action=' + encodeURIComponent(action) + '&position=' + encodeURIComponent(String(body.position || 0)) + '&expectedRequestId=' + encodeURIComponent(expectedRequestId) + '&format=json&platform=activity&isHost=true';
+    const expectedRequestId = (action === 'next' || action === 'ended') && state && state.current ? state.current.requestId : '';
+    const controlUrl = '/api/watch/sessions/' + sessionId + '/quick-control?action=' + encodeURIComponent(action) + '&position=' + encodeURIComponent(String(body.position || 0)) + '&expectedRequestId=' + encodeURIComponent(expectedRequestId) + '&playerId=' + encodeURIComponent(ACTIVITY_REQUESTER_ID) + '&format=json&platform=activity&isHost=true';
     const result = await api(controlUrl);
     render(result.session);
     if (action === 'seek') mediaEl.textContent = 'Media: synced at ' + Math.round(body.position) + 's';
@@ -1801,6 +1802,22 @@ function onMediaEnded(event) {
     } else {
       errorEl.textContent = 'The media source ended early. The shared queue was preserved; press Play to retry.';
     }
+    return;
+  }
+  if (state?.current?.item?.type === 'music' && requestId) {
+    mediaEl.textContent = 'Media: song finished; waiting for the other player';
+    control('ended', 0).catch((err) => {
+      errorEl.textContent = err && err.message ? err.message : String(err);
+    });
+    if (musicEndWaitTimer) clearTimeout(musicEndWaitTimer);
+    musicEndWaitTimer = setTimeout(() => {
+      musicEndWaitTimer = null;
+      if (state?.current?.requestId !== requestId) return;
+      mediaEl.textContent = 'Media: advancing after the 3-minute wait limit';
+      control('next', 0).catch((err) => {
+        errorEl.textContent = err && err.message ? err.message : String(err);
+      });
+    }, 180000);
     return;
   }
   mediaEl.textContent = 'Media: ended';
