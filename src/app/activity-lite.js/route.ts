@@ -102,6 +102,7 @@ let applying = false;
 let lastSeekApplyAt = 0;
 let lastNativePlaybackAuthorityKey = '';
 let mediaIsBuffering = false;
+let localPlaybackPaused = false;
 let muted = false;
 let autoplayBlocked = false;
 let soundActivatedByButton = false;
@@ -134,6 +135,7 @@ let localAudioContext = null;
 let localAudioGain = null;
 const localAudioSources = new Map();
 let streamEndRecoveryTimer = null;
+let musicEndWaitTimer = null;
 let bufferWarmupTimer = null;
 const loadingSplash = document.getElementById('loading-splash');
 const loadingMessage = document.getElementById('loading-message');
@@ -569,6 +571,8 @@ function playbackUrlForItem(item) {
 
 function hlsFallbackUrlForItem(item) {
   const playbackUrl = String(playbackUrlForItem(item) || '');
+  // Let browser-compatible provider media play directly; only MKV needs server-side HLS conversion.
+  if (!String(item?.overview || '').toLowerCase().includes('(mkv)')) return playbackUrl;
   const match = playbackUrl.match(/^\\/activity-provider\\/xtream\\/(vod|series)\\/(\\d+)$/i);
   const episodeMatch = playbackUrl.match(/^\\/activity-provider\\/xtream\\/episode\\/(\\d+-[a-z0-9]+)$/i);
   if (episodeMatch) return '/api/watch/xtream/hls/episode-' + episodeMatch[1].toLowerCase() + '/index.m3u8';
@@ -1084,6 +1088,7 @@ async function loadMedia(item) {
   if (bufferWarmupTimer) clearTimeout(bufferWarmupTimer);
   bufferWarmupTimer = null;
   showLoading('Loading your stream…');
+  localPlaybackPaused = false;
   if (streamEndRecoveryTimer) clearTimeout(streamEndRecoveryTimer);
   streamEndRecoveryTimer = null;
   if (hls) {
@@ -1212,7 +1217,7 @@ function render(nextState) {
   empty.style.display = state.current ? 'none' : 'grid';
   popoutBtn.disabled = !state.current;
   if (playPauseBtn) {
-    const isPlaying = Boolean(state.current && state.playback?.status === 'playing');
+    const isPlaying = Boolean(state.current && !localPlaybackPaused);
     const label = isPlaying ? 'Pause' : 'Play';
     playPauseBtn.textContent = isPlaying ? '❚❚' : '▶';
     playPauseBtn.title = label;
@@ -1239,7 +1244,6 @@ function render(nextState) {
       musicPlaybackMode = preferredMusicPlaybackMode(state.current.item);
       loadMedia(state.current.item);
     }
-    applyPlayback();
   } else {
     titleEl.textContent = 'Waiting for a request';
     mediaEl.textContent = 'Media: idle';
@@ -1321,8 +1325,8 @@ async function control(action, positionOverride) {
         : (media.currentTime || 0),
   };
   try {
-    const expectedRequestId = action === 'next' && state && state.current ? state.current.requestId : '';
-    const controlUrl = '/api/watch/sessions/' + sessionId + '/quick-control?action=' + encodeURIComponent(action) + '&position=' + encodeURIComponent(String(body.position || 0)) + '&expectedRequestId=' + encodeURIComponent(expectedRequestId) + '&format=json&platform=activity&isHost=true';
+    const expectedRequestId = (action === 'next' || action === 'ended' || action === 'checkpoint') && state && state.current ? state.current.requestId : '';
+    const controlUrl = '/api/watch/sessions/' + sessionId + '/quick-control?action=' + encodeURIComponent(action) + '&position=' + encodeURIComponent(String(body.position || 0)) + '&expectedRequestId=' + encodeURIComponent(expectedRequestId) + '&playerId=' + encodeURIComponent(ACTIVITY_REQUESTER_ID) + '&format=json&platform=activity&isHost=true';
     const result = await api(controlUrl);
     render(result.session);
     if (action === 'seek') mediaEl.textContent = 'Media: synced at ' + Math.round(body.position) + 's';
@@ -1337,10 +1341,14 @@ async function control(action, positionOverride) {
 
 function handleAction(action) {
   if (action === 'play-pause') {
-    const nextAction = state && state.playback && state.playback.status === 'playing' ? 'pause' : 'play';
-    control(nextAction).catch((err) => {
-      errorEl.textContent = err && err.message ? err.message : String(err);
-    });
+    if (embeddedMode) {
+      youtubeCommand(localPlaybackPaused ? 'playVideo' : 'pauseVideo');
+      localPlaybackPaused = !localPlaybackPaused;
+    } else if (media.paused) {
+      startVideoPlayback();
+    } else {
+      media.pause();
+    }
     return;
   }
   if (action === 'sync-local') {
@@ -1731,6 +1739,7 @@ function onMediaPlay(event) {
 }
 function onMediaPlaying(event) {
   if (event.currentTarget !== media) return;
+  localPlaybackPaused = false;
   mediaIsBuffering = false;
   hideLoading();
   mediaEl.textContent = 'Media: playing';
@@ -1751,6 +1760,7 @@ function onMediaLoadedData(event) {
 }
 function onMediaPause(event) {
   if (event.currentTarget !== media) return;
+  localPlaybackPaused = true;
   if (!media.ended) {
     mediaEl.textContent = 'Media: paused';
   }
@@ -1801,6 +1811,22 @@ function onMediaEnded(event) {
     } else {
       errorEl.textContent = 'The media source ended early. The shared queue was preserved; press Play to retry.';
     }
+    return;
+  }
+  if (state?.current?.item?.type === 'music' && requestId) {
+    mediaEl.textContent = 'Media: song finished; waiting for the other player';
+    control('ended', 0).catch((err) => {
+      errorEl.textContent = err && err.message ? err.message : String(err);
+    });
+    if (musicEndWaitTimer) clearTimeout(musicEndWaitTimer);
+    musicEndWaitTimer = setTimeout(() => {
+      musicEndWaitTimer = null;
+      if (state?.current?.requestId !== requestId) return;
+      mediaEl.textContent = 'Media: advancing after the 3-minute wait limit';
+      control('next', 0).catch((err) => {
+        errorEl.textContent = err && err.message ? err.message : String(err);
+      });
+    }, 180000);
     return;
   }
   mediaEl.textContent = 'Media: ended';
@@ -1879,9 +1905,11 @@ window.addEventListener('message', (event) => {
   if (payload.event !== 'onStateChange') return;
   const info = Number(payload.info);
   if (info === 1) {
+    localPlaybackPaused = false;
     mediaEl.textContent = 'Media: embedded video playing';
     syncEmbeddedNativePlayback('play');
   } else if (info === 2) {
+    localPlaybackPaused = true;
     mediaEl.textContent = 'Media: embedded video paused';
     syncEmbeddedNativePlayback('pause');
   } else if (info === 0) {
@@ -1919,6 +1947,10 @@ try {
   if (IS_DISCORD_ACTIVITY && params.get('guild_id')) setInterval(checkActivityBridgeBot, 30000);
   refresh();
   setInterval(refresh, 1000);
+  setInterval(() => {
+    if (!state?.current || state.playback?.status !== 'playing' || !media || media.paused || mediaIsBuffering) return;
+    control('checkpoint', Number(media.currentTime || 0)).catch(() => {});
+  }, 15000);
 } catch (err) {
   statusEl.textContent = 'Activity error';
   errorEl.textContent = err && err.message ? err.message : String(err);

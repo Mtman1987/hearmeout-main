@@ -75,6 +75,7 @@ type WatchSessionMetadata = {
   mediaKind: WatchMediaKind;
   createdAt: number;
   lastActiveAt: number;
+  musicEndWait?: { requestId: string; firstEndedAt: number; firstPlayerId: string };
 };
 
 type WatchSession = {
@@ -119,6 +120,7 @@ type WatchControlActor = {
   isAdmin?: boolean;
   platform?: 'room' | 'discord' | 'activity' | 'web' | 'admin' | 'twitch';
   expectedRequestId?: string;
+  playerId?: string;
 };
 
 const TEST_CATALOG: WatchCatalogItem[] = [
@@ -1015,6 +1017,7 @@ export async function requestWatchItem(params: {
 }
 
 function assertCanControlWatchSession(session: WatchSession, action: string, actor?: WatchControlActor) {
+  if (action === 'ended' || action === 'checkpoint') return;
   const metadata = session.metadata || inferSessionMetadata(session.id, session.guildId, session.channelId);
   session.metadata = metadata;
   const scopeType = metadata.scopeType;
@@ -1155,7 +1158,7 @@ function maybePrepareSharedHls(item: WatchCatalogItem) {
 
   const match = item.playbackUrl.match(/^\/activity-provider\/xtream\/(vod|series)\/(\d+)$/);
   const episodeMatch = item.playbackUrl.match(/^\/activity-provider\/xtream\/episode\/(\d+-[a-z0-9]+)$/i);
-  if (episodeMatch) {
+  if (episodeMatch && String(item.overview || '').toLowerCase().includes('(mkv)')) {
     fetch(`${getPublicBaseUrl()}/api/watch/xtream/hls/episode-${episodeMatch[1].toLowerCase()}/index.m3u8`).catch((error) => {
       console.error('[WatchRequest] Xtream episode HLS start failed:', error?.message || error);
     });
@@ -1364,8 +1367,39 @@ export async function controlWatchSession(sessionId: string, action: string, pos
     return session;
   }
 
+  if (action === 'checkpoint') {
+    if (!session.current || (actor?.expectedRequestId && session.current.requestId !== actor.expectedRequestId)) return session;
+    const reported = Math.max(0, Number(position || 0));
+    session.playback.position = Math.max(Number(session.playback.position || 0), reported);
+    session.playback.updatedAt = Date.now();
+    saveWatchStateToDisk();
+    return session;
+  }
+
+  if (action === 'ended') {
+    if (session.current?.item?.type !== 'music') return session;
+    if (actor?.expectedRequestId && session.current?.requestId !== actor.expectedRequestId) return session;
+    const now = Date.now();
+    const playerId = String(actor?.playerId || actor?.platform || 'player').slice(0, 120);
+    const wait = session.metadata?.musicEndWait;
+    if (wait?.requestId === session.current.requestId && wait.firstPlayerId !== playerId) {
+      action = 'next';
+    } else {
+      session.metadata = {
+        ...(session.metadata || inferSessionMetadata(session.id, session.guildId, session.channelId)),
+        musicEndWait: wait?.requestId === session.current.requestId
+          ? wait
+          : { requestId: session.current.requestId, firstEndedAt: now, firstPlayerId: playerId },
+      };
+      addEvent(session, `Player finished ${session.current.item.title}; waiting for the other player`);
+      saveWatchStateToDisk();
+      return session;
+    }
+  }
+
   if (action === 'next') {
     if (actor?.expectedRequestId && session.current?.requestId !== actor.expectedRequestId) return session;
+    if (session.metadata) delete session.metadata.musicEndWait;
     session.current = isTwitchMusicSession(session.id)
       ? session.queue.shift() || getBackupPlaylistRequest(session)
       : session.queue.shift() || await getAutoNextEpisodeRequest(session);

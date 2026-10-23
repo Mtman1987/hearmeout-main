@@ -121,6 +121,8 @@ function isBrowserLimitedVideo(item: any) {
 
 function hlsFallbackUrlFor(item: any) {
   const playbackUrl = String(playbackUrlForItem(item) || '');
+  // Avoid server-side HLS generation for browser-compatible provider media.
+  if (!String(item?.overview || '').toLowerCase().includes('(mkv)')) return playbackUrl;
   const match = playbackUrl.match(/^\/activity-provider\/xtream\/(vod|series)\/(\d+)$/i);
   const episodeMatch = playbackUrl.match(/^\/activity-provider\/xtream\/episode\/(\d+-[a-z0-9]+)$/i);
   if (episodeMatch) return `/api/watch/xtream/hls/episode-${episodeMatch[1].toLowerCase()}/index.m3u8`;
@@ -271,6 +273,9 @@ export default function WatchRoomClient({ sessionId, activityMode = false, canPa
   const ttsQueueRef = useRef<any[]>([]);
   const ttsPlayingRef = useRef(false);
   const localAudioUnlockedRef = useRef(false);
+  const playbackClientIdRef = useRef('watch-' + Math.random().toString(36).slice(2));
+  const musicEndWaitTimerRef = useRef<number | null>(null);
+  const currentRequestIdRef = useRef<string | null>(null);
   const [state, setState] = useState<WatchState | null>(null);
   const [query, setQuery] = useState('');
   const [connected, setConnected] = useState(false);
@@ -290,6 +295,7 @@ export default function WatchRoomClient({ sessionId, activityMode = false, canPa
   const [audioTracks, setAudioTracks] = useState<Array<{ index: number; name: string; language: string }>>([]);
   const [selectedAudioTrack, setSelectedAudioTrack] = useState(-1);
 
+  currentRequestIdRef.current = state?.current?.requestId || null;
   const currentItem = state?.current?.item;
   const activeEmbedFallback = embedFallback?.requestId === state?.current?.requestId ? embedFallback : null;
   const currentPlaybackUrl = activeEmbedFallback
@@ -351,7 +357,8 @@ export default function WatchRoomClient({ sessionId, activityMode = false, canPa
         body: JSON.stringify({
           action,
           position,
-          expectedRequestId: action === 'next' ? state?.current?.requestId : undefined,
+          expectedRequestId: action === 'next' || action === 'ended' || action === 'checkpoint' ? state?.current?.requestId : undefined,
+          playerId: playbackClientIdRef.current,
           isHost: isHostControl,
           isAdmin: canPause || activityMode,
           platform: activityMode ? 'activity' : 'web',
@@ -447,7 +454,6 @@ export default function WatchRoomClient({ sessionId, activityMode = false, canPa
   async function playLocalAndRemote() {
     if (embeddedMode) {
       youtubeCommand('playVideo');
-      if (canPause) await sendControl('play', embeddedCurrentTimeRef.current || playbackPosition(state?.playback)).catch(() => {});
       return;
     }
     const video = videoRef.current;
@@ -459,17 +465,14 @@ export default function WatchRoomClient({ sessionId, activityMode = false, canPa
         setMediaStatus(`Play blocked: ${message}`);
       }
     }
-    if (canPause) await sendControl('play').catch(() => {});
   }
 
   async function pauseLocalAndRemote() {
     if (embeddedMode) {
       youtubeCommand('pauseVideo');
-      await sendControl('pause', embeddedCurrentTimeRef.current || playbackPosition(state?.playback)).catch(() => {});
       return;
     }
     videoRef.current?.pause();
-    await sendControl('pause').catch(() => {});
   }
 
   async function syncNativePlay() {
@@ -679,6 +682,15 @@ export default function WatchRoomClient({ sessionId, activityMode = false, canPa
   }, [sessionId]);
 
   useEffect(() => {
+    const interval = window.setInterval(() => {
+      const video = videoRef.current;
+      if (!state?.current || state.playback?.status !== 'playing' || !video || video.paused || video.readyState < 2) return;
+      void sendControl('checkpoint', Number(video.currentTime || 0));
+    }, 15000);
+    return () => window.clearInterval(interval);
+  }, [sessionId, state?.current?.requestId, state?.playback.status]);
+
+  useEffect(() => {
     try {
       setTtsOverlayEnabled(window.localStorage.getItem('hmo_watch_tts_overlay') === '1');
       const seen = JSON.parse(window.localStorage.getItem('hmo_watch_tts_seen') || '[]');
@@ -876,12 +888,7 @@ export default function WatchRoomClient({ sessionId, activityMode = false, canPa
 
   useEffect(() => {
     applyPlaybackState();
-  }, [state?.playback.status, state?.playback.position, state?.playback.updatedAt]);
-
-  useEffect(() => {
-    const interval = window.setInterval(() => applyPlaybackState(), 1000);
-    return () => window.clearInterval(interval);
-  }, [state?.current?.requestId, state?.playback.status, state?.playback.position, state?.playback.updatedAt, embeddedMode]);
+  }, [state?.current?.requestId, state?.playback.status]);
 
   useEffect(() => {
     const video = videoRef.current;
@@ -1069,6 +1076,7 @@ export default function WatchRoomClient({ sessionId, activityMode = false, canPa
                 const endedBeforeSharedTimeline = Boolean(
                   video
                   && requestId
+                  && state?.current?.item?.type !== 'music'
                   && state?.playback?.status === 'playing'
                   && Number.isFinite(duration)
                   && duration > 0
@@ -1090,6 +1098,18 @@ export default function WatchRoomClient({ sessionId, activityMode = false, canPa
                   return;
                 }
                 if (requestId) prematureEndRecoveryCountsRef.current[requestId] = 0;
+                if (state?.current?.item?.type === 'music' && requestId) {
+                  setMediaStatus('Song finished; waiting for the other player');
+                  void sendControl('ended', 0);
+                  if (musicEndWaitTimerRef.current !== null) window.clearTimeout(musicEndWaitTimerRef.current);
+                  musicEndWaitTimerRef.current = window.setTimeout(() => {
+                    musicEndWaitTimerRef.current = null;
+                    if (currentRequestIdRef.current !== requestId) return;
+                    setMediaStatus('Advancing after the 3-minute wait limit');
+                    void sendControl('next', 0);
+                  }, 180000);
+                  return;
+                }
                 setMediaStatus('ended');
                 if (canSkip) nextItem();
               }}
