@@ -5,6 +5,13 @@ import assert from 'node:assert/strict';
 
 const route = readFileSync(join(process.cwd(), 'src/app/api/watch/xtream/direct-test/[streamId]/route.ts'), 'utf8');
 
+test('Xtream direct-stream probe can choose a real VOD item automatically', () => {
+  assert.match(route, /getXtreamCatalog\(\)/);
+  assert.match(route, /requestedId\.toLowerCase\(\) === 'auto'/);
+  assert.match(route, /\^xtream-vod-\\d\+\$/);
+  assert.match(route, /selectedTitle/);
+});
+
 test('Xtream direct-stream probe checks byte-range playback without returning credentials', () => {
   assert.match(route, /getXtreamStreamUrl\('vod', id\)/);
   assert.match(route, /Range:\s*'bytes=0-63'/);
