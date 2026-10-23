@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { getXtreamStreamUrl } from '@/lib/watch/xtream-provider';
+import { getXtreamCatalog, getXtreamStreamUrl } from '@/lib/watch/xtream-provider';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -12,17 +12,44 @@ function safeContentType(value: string | null) {
 
 /**
  * Safe diagnostic probe: asks the configured provider for only the first 64
- * bytes of a VOD stream. Never returns the source URL or provider credentials.
- * This verifies server-to-provider range behavior, not browser CORS behavior.
+ * bytes of a VOD stream. The special "auto" ID selects the first real VOD
+ * entry from the provider catalog, so users don't have to find numeric IDs.
+ * Never returns the source URL or provider credentials.
  */
 export async function GET(
   _request: Request,
   context: { params: Promise<{ streamId: string }> },
 ) {
   const { streamId } = await context.params;
-  const id = String(streamId || '').replace(/[^0-9]/g, '');
-  if (!id || id.length > 20) {
-    return NextResponse.json({ ok: false, error: 'Provide a numeric VOD stream ID.' }, { status: 400, headers: NO_STORE });
+  const requestedId = String(streamId || '').trim();
+  let id = '';
+  let selectedTitle: string | undefined;
+
+  if (requestedId.toLowerCase() === 'auto') {
+    try {
+      const catalog = await getXtreamCatalog();
+      const candidate = catalog.find((item) => /^xtream-vod-\d+$/.test(item.id));
+      if (!candidate) {
+        return NextResponse.json({
+          ok: false,
+          error: 'No Xtream VOD movie was found in the configured catalog.',
+          notes: ['The catalog lookup did not find a real VOD item to probe.', 'No provider URL or credentials are returned.'],
+        }, { status: 200, headers: NO_STORE });
+      }
+      id = candidate.id.slice('xtream-vod-'.length);
+      selectedTitle = candidate.title;
+    } catch {
+      return NextResponse.json({
+        ok: false,
+        error: 'Could not read the configured provider catalog.',
+        notes: ['Check provider configuration and catalog availability.', 'No provider URL or credentials are returned.'],
+      }, { status: 200, headers: NO_STORE });
+    }
+  } else {
+    id = requestedId.replace(/[^0-9]/g, '');
+    if (!id || id.length > 20 || id !== requestedId) {
+      return NextResponse.json({ ok: false, error: 'Use "auto" or provide a numeric VOD stream ID.' }, { status: 400, headers: NO_STORE });
+    }
   }
 
   const controller = new AbortController();
@@ -67,6 +94,7 @@ export async function GET(
     return NextResponse.json({
       ok: streamReturned,
       streamId: id,
+      ...(selectedTitle ? { selectedTitle } : {}),
       upstreamStatus: response.status,
       contentType,
       contentLength: response.headers.get('content-length'),
@@ -88,6 +116,7 @@ export async function GET(
     return NextResponse.json({
       ok: false,
       streamId: id,
+      ...(selectedTitle ? { selectedTitle } : {}),
       error: controller.signal.aborted ? 'Provider probe timed out after 8 seconds.' : 'Provider probe failed; check provider configuration and stream ID.',
       detail: error instanceof Error ? error.name : 'UnknownError',
       notes: ['No provider URL or credentials are returned.'],
