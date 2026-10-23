@@ -1,0 +1,38 @@
+name: Inspect persistent data volumes (read-only)
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/inspect-persistent-volumes.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  inspect-volumes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Install flyctl
+        uses: superfly/flyctl-actions/setup-flyctl@master
+      - name: List volume and machine metadata only
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN_MAIN || secrets.FLY_API_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "${FLY_API_TOKEN:-}" ]; then
+            echo "No Fly API token is configured in repository Actions secrets."
+            exit 1
+          fi
+          for app in hearmeout-main streamweaver-new; do
+            echo "::group::App metadata: $app"
+            echo "--- Volumes ---"
+            timeout 25s flyctl volumes list --app "$app" || echo "VOLUME_LIST_FAILED app=$app"
+            echo "--- Machines ---"
+            timeout 25s flyctl machines list --app "$app" || echo "MACHINE_LIST_FAILED app=$app"
+            echo "::endgroup::"
+          done
+          echo "Read-only inventory complete. No machines were started, stopped, or changed; no volume data was read or uploaded."
