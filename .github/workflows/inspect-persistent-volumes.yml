@@ -13,11 +13,11 @@ permissions:
 jobs:
   inspect-volumes:
     runs-on: ubuntu-latest
-    timeout-minutes: 3
+    timeout-minutes: 4
     steps:
       - name: Install flyctl
         uses: superfly/flyctl-actions/setup-flyctl@master
-      - name: List volume and machine metadata only
+      - name: Inventory volume metadata and file names
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN_MAIN || secrets.FLY_API_TOKEN }}
         shell: bash
@@ -27,12 +27,11 @@ jobs:
             echo "No Fly API token is configured in repository Actions secrets."
             exit 1
           fi
-          for app in hearmeout-main streamweaver-new; do
-            echo "::group::App metadata: $app"
-            echo "--- Volumes ---"
-            timeout 25s flyctl volumes list --app "$app" || echo "VOLUME_LIST_FAILED app=$app"
-            echo "--- Machines ---"
-            timeout 25s flyctl machines list --app "$app" || echo "MACHINE_LIST_FAILED app=$app"
-            echo "::endgroup::"
-          done
-          echo "Read-only inventory complete. No machines were started, stopped, or changed; no volume data was read or uploaded."
+          echo "::group::HearMeOut volume metadata"
+          flyctl volumes list --app hearmeout-main
+          flyctl machines list --app hearmeout-main
+          echo "::endgroup::"
+          echo "::group::Read-only /data file inventory"
+          timeout 45s flyctl ssh console --app hearmeout-main -C 'find /data -xdev -maxdepth 4 -type f -printf "%p\t%s bytes\n" 2>/dev/null | sort | head -300'
+          echo "::endgroup::"
+          echo "Inventory complete. This workflow lists file paths and sizes only; it does not print file contents or modify the volume."
