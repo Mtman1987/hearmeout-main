@@ -1,4 +1,4 @@
-name: Recover HearMeOut player data (encrypted export)
+name: Inspect persistent data volumes (read-only)
 
 on:
   push:
@@ -11,13 +11,13 @@ permissions:
   contents: read
 
 jobs:
-  export-player-data:
+  inspect-volumes:
     runs-on: ubuntu-latest
-    timeout-minutes: 6
+    timeout-minutes: 3
     steps:
       - name: Install flyctl
         uses: superfly/flyctl-actions/setup-flyctl@master
-      - name: Read selected persistent data and encrypt it before upload
+      - name: List volume and machine metadata only
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN_MAIN || secrets.FLY_API_TOKEN }}
         shell: bash
@@ -27,36 +27,12 @@ jobs:
             echo "No Fly API token is configured in repository Actions secrets."
             exit 1
           fi
-          cat > /tmp/export-public.pem <<'PUBKEY'
-          -----BEGIN PUBLIC KEY-----
-          MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEAsy8quWVueuds6mXw2Lxd
-          m2CQlIlZuvll0Stp4+rUvfM/55cAe1Aqs9yASbYL5VhhyDy8VOxaT4Xrz5hhkJsW
-          Vn9+v+fz1hNjQt1BYo39LswVqWfGvALtC20AmwLHF7+QgvgEG/pLH2L1jDjSIjCB
-          R7PQFsRa1h+OLqhv4IVK6nOxcmpZ0iytcO7Ryupi+vyOIOqKRwY5oP/ZH6SV8aus
-          2pmxAOJHDjKgnM8e7CJu8OuwIposxu9sp0ng4jnlOoQx8EKZ58exz5vdqxur0E6b
-          xmfTLhQq1gjmpeZieyv2eO/0qXKM1EN8nrVVayJu536MGFoMbDVQmAg4SzVobK/K
-          HhvG+WZxgwvS9MMkvZNUWhS4L87LQ6I7loApVjN/sSPBwl1lVPH5z/NdCledLlT9
-          M+3NFx1rDnhTEh3t9KVHysmlrRhPmhUzSPDmq5gsyoCeA1wqVlcAewnIsCJvn6HS
-          AUesZ6Sja8yAzbzWz/RKzXGhUO9pFGogOlokNyrGiY2rAgMBAAE=
-          -----END PUBLIC KEY-----
-          PUBKEY
-          echo "Reading SQLite databases and player/watch state backups from /data; media segment caches are excluded."
-          timeout 90s flyctl ssh console --app hearmeout-main -C "sh -c 'tar -cf /tmp/hmo-player-data.tar -C /data app.db app.db.bak watch-state.json watch-state.json.bak recovery backups && base64 /tmp/hmo-player-data.tar'" > /tmp/hmo-player-data.b64
-          base64 -d /tmp/hmo-player-data.b64 > /tmp/hmo-player-data.tar
-          tar -tf /tmp/hmo-player-data.tar
-          gzip -c /tmp/hmo-player-data.tar > /tmp/hmo-player-data.tar.gz
-          rm -f /tmp/hmo-player-data.tar
-          openssl rand -hex 32 > /tmp/export-aes-password
-          openssl enc -aes-256-cbc -salt -pbkdf2 -in /tmp/hmo-player-data.tar.gz -out /tmp/hmo-player-data.tar.gz.enc -pass file:/tmp/export-aes-password
-          openssl pkeyutl -encrypt -pubin -inkey /tmp/export-public.pem -in /tmp/export-aes-password -out /tmp/hmo-player-data.key.enc
-          rm -f /tmp/hmo-player-data.b64 /tmp/hmo-player-data.tar.gz /tmp/export-aes-password
-          echo "Encrypted export ready. The archive and its encrypted key are uploaded separately; raw database contents are never placed in the public artifact."
-      - name: Upload encrypted recovery archive (1-day retention)
-        uses: actions/upload-artifact@v4
-        with:
-          name: hearmeout-player-data-encrypted
-          path: |
-            /tmp/hmo-player-data.tar.gz.enc
-            /tmp/hmo-player-data.key.enc
-          retention-days: 1
-          if-no-files-found: error
+          for app in hearmeout-main streamweaver-new; do
+            echo "::group::App metadata: $app"
+            echo "--- Volumes ---"
+            timeout 25s flyctl volumes list --app "$app" || echo "VOLUME_LIST_FAILED app=$app"
+            echo "--- Machines ---"
+            timeout 25s flyctl machines list --app "$app" || echo "MACHINE_LIST_FAILED app=$app"
+            echo "::endgroup::"
+          done
+          echo "Read-only inventory complete. No machines were started, stopped, or changed; no volume data was read or uploaded."
