@@ -32,6 +32,6 @@ jobs:
           flyctl machines list --app hearmeout-main
           echo "::endgroup::"
           echo "::group::Read-only /data file inventory"
-          timeout 45s flyctl ssh console --app hearmeout-main -C 'find /data -xdev -maxdepth 4 -type f -printf "%p\t%s bytes\n" 2>/dev/null | sort | head -300'
+          timeout 45s flyctl ssh console --app hearmeout-main -C 'find /data -xdev -maxdepth 4 -type f -printf "%p %s bytes\n"'
           echo "::endgroup::"
           echo "Inventory complete. This workflow lists file paths and sizes only; it does not print file contents or modify the volume."
