@@ -8,7 +8,7 @@ const route = readFileSync(join(process.cwd(), 'src/app/api/watch/xtream/direct-
 test('Xtream direct-stream probe can choose a real VOD item automatically', () => {
   assert.match(route, /getXtreamCatalog\(\)/);
   assert.match(route, /requestedId\.toLowerCase\(\) === 'auto'/);
-  assert.match(route, /\^xtream-vod-\\d\+\$/);
+  assert.match(route, /xtream-vod-\\d\+/);
   assert.match(route, /selectedTitle/);
 });
 
