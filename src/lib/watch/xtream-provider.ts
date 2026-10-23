@@ -537,7 +537,7 @@ export async function getXtreamStatus() {
   };
 }
 
-async function getXtreamCatalog() {
+export async function getXtreamCatalog() {
   if (isMockEnabled()) return MOCK_CATALOG;
   const hasXtreamConfig = Boolean(getConfig());
   const hasPlaylistConfig = Boolean(getPlaylistUrl());
