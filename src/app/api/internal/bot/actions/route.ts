@@ -49,7 +49,7 @@ const ACTIONS = new Set<HearMeOutAction>([
   'hmo.voice.bridge.control',
   'hmo.tts.speak',
 ]);
-const CONTROLS = new Set(['play', 'pause', 'next', 'clear', 'mute', 'unmute', 'volume']);
+const CONTROLS = new Set(['play', 'pause', 'next', 'clear', 'mute', 'unmute', 'volume', 'audio-track']);
 // SpaceMountain Lounge has separate permanent music and movie queues. Apollo is never a fallback.
 
 function isSpaceMountainLoungeSession(tenantId: string, sessionId: string) {
@@ -264,7 +264,7 @@ export async function POST(request: NextRequest) {
     const controlSessionId = isSpaceMountainLoungeSession(tenantId, sessionId)
       ? getSpaceMountainLoungeSessionId(sessionId, requestedLane)
       : sessionId;
-    if (isSpaceMountainLoungeSession(tenantId, sessionId)) {
+    if (isSpaceMountainLoungeSession(tenantId, sessionId) && control !== 'audio-track') {
       const payload = await loungeMediaAction({
         action,
         tenantId,

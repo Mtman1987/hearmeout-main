@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { preferredAudioTrackIndex } from '@/lib/audio-track-selection';
 import {
   resolveYoutubeStream,
   submitResolvedStream,
@@ -806,10 +807,20 @@ export default function WatchRoomClient({ sessionId, activityMode = false, canPa
                 }));
                 setAudioTracks(tracks);
                 if (!tracks.length) return;
-                const english = tracks.find((track: { name: string; language: string }) => /\benglish\b/i.test(track.name) || /^(?:en|eng)$/i.test(track.language));
-                const preferred = english?.index ?? Math.max(0, Number(hlsRef.current?.audioTrack || 0));
-                hlsRef.current.audioTrack = preferred;
-                setSelectedAudioTrack(preferred);
+                const preferred = preferredAudioTrackIndex(tracks);
+                console.info('[WatchRoom] HLS audio tracks discovered', {
+                  itemTitle: item?.title || null,
+                  tracks,
+                  selectedTrack: preferred,
+                  selection: preferred < 0 ? 'no-labelled-non-commentary-track' : 'non-commentary-preferred',
+                });
+                if (preferred >= 0) {
+                  hlsRef.current.audioTrack = preferred;
+                  setSelectedAudioTrack(preferred);
+                } else {
+                  setSelectedAudioTrack(-1);
+                  setMediaStatus('All available audio tracks are labelled as commentary; no track was changed');
+                }
               };
               hlsRef.current.on(Hls.Events.ERROR, (_event: unknown, data: any) => {
                 const detail = data?.details || data?.type || 'HLS playback error';
